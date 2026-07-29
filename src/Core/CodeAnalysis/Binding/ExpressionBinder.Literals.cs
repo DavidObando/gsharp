@@ -2234,17 +2234,18 @@ internal sealed partial class ExpressionBinder
             return new BoundStackAllocExpression(syntax, pointerType, elementType, count, isPointerForm: true, initializerElements);
         }
 
-        // Safe form: yield a Span<T> over the allocated memory. Open type
-        // parameters and same-compilation value types have no CLR Type during
-        // binding, so retain T symbolically over an object-erased reflection
-        // shape; signature/member-reference emit restores the real argument.
-        var spanOpen = typeof(System.Span<>);
-        var spanType = elementType.ClrType != null
-            ? (TypeSymbol)TypeSymbol.FromClrType(spanOpen.MakeGenericType(elementType.ClrType))
-            : ImportedTypeSymbol.GetConstructed(
-                spanOpen.MakeGenericType(typeof(object)),
-                spanOpen,
-                ImmutableArray.Create(elementType));
+        // Safe form: yield a Span<T> over the allocated memory. Keep the open
+        // type and concrete reflection argument in the resolver's load context;
+        // retain the bound element symbol so open/same-compilation arguments
+        // remain symbolic for emit.
+        var spanOpen = this.binderCtx.References.MapClrTypeToReferences(typeof(System.Span<>));
+        var elementClr = elementType.ClrType != null
+            ? this.binderCtx.References.MapClrTypeToReferences(elementType.ClrType)
+            : this.binderCtx.References.GetCoreType("System.Object");
+        var spanType = ImportedTypeSymbol.GetConstructed(
+            spanOpen.MakeGenericType(elementClr),
+            spanOpen,
+            ImmutableArray.Create(elementType));
         return new BoundStackAllocExpression(syntax, spanType, elementType, count, isPointerForm: false, initializerElements);
     }
 

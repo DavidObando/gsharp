@@ -6,10 +6,13 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -83,6 +86,53 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
         }
     }
 
+    [Fact]
+    public void ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998()
+    {
+        var fixtureDirectory = CreateArtifactDirectory(nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998));
+        var fixturePath = Path.Combine(fixtureDirectory, "ImportedTypes.dll");
+        string outputPath = null;
+
+        try
+        {
+            EmitFixture(fixturePath);
+            outputPath = CompileLibrary(
+                ImportedEnumSource,
+                nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998),
+                fixturePath);
+            IlVerifier.Verify(outputPath, new[] { fixturePath }, StackAllocIlVerifyIgnored);
+
+            using var loadContext = new AssemblyLoadContext(
+                nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998),
+                isCollectible: true);
+            try
+            {
+                var fixture = loadContext.LoadFromAssemblyPath(fixturePath);
+                var assembly = loadContext.LoadFromAssemblyPath(outputPath);
+                var probe = assembly.GetType("Probe.ImportedEnumProbe")
+                    ?? throw new InvalidOperationException("ImportedEnumProbe type not found.");
+                var enumType = fixture.GetType("ImportedTypes.ImportedEnum")
+                    ?? throw new InvalidOperationException("ImportedEnum type not found.");
+                var value = Enum.ToObject(enumType, 1);
+
+                Assert.Equal(value, probe.GetMethod("RoundTrip")!.Invoke(null, new[] { value }));
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            if (outputPath != null)
+            {
+                TryDeleteDirectory(Path.GetDirectoryName(outputPath)!);
+            }
+
+            TryDeleteDirectory(fixtureDirectory);
+        }
+    }
+
     private const string Source = """
         package Probe
 
@@ -101,20 +151,46 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
         }
         """;
 
-    private static string CompileLibrary(string source, string testName)
+    private const string ImportedEnumSource = """
+        package Probe
+        import ImportedTypes
+
+        public class ImportedEnumProbe {
+            shared {
+                public func RoundTrip(value ImportedEnum) ImportedEnum {
+                    var values = stackalloc [2]ImportedEnum
+                    values[1] = value
+                    return values[1]
+                }
+            }
+        }
+        """;
+
+    private const string ImportedEnumFixtureSource = """
+        namespace ImportedTypes;
+
+        public enum ImportedEnum : short
+        {
+            Zero,
+            One,
+        }
+        """;
+
+    private static string CompileLibrary(string source, string testName, params string[] references)
     {
-        var directory = Directory.CreateTempSubdirectory("gs_issue2852_").FullName;
+        var directory = CreateArtifactDirectory(testName);
         var sourcePath = Path.Combine(directory, "test.gs");
         var outputPath = Path.Combine(directory, "test.dll");
         File.WriteAllText(sourcePath, source);
 
-        var args = new[]
+        var args = new List<string>
         {
             "/out:" + outputPath,
             "/target:library",
             "/targetframework:net10.0",
-            sourcePath,
         };
+        args.AddRange(references.Select(reference => "/r:" + reference));
+        args.Add(sourcePath);
 
         using var compileOut = new StringWriter();
         using var compileErr = new StringWriter();
@@ -125,7 +201,7 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
         int exitCode;
         try
         {
-            exitCode = Program.Main(args);
+            exitCode = Program.Main(args.ToArray());
         }
         finally
         {
@@ -133,10 +209,37 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
             Console.SetError(previousErr);
         }
 
+        var diagnostics = compileOut.ToString() + compileErr.ToString();
+        Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
         Assert.True(
             exitCode == 0,
-            $"{testName}: gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            $"{testName}: gsc failed:\n{diagnostics}");
         return outputPath;
+    }
+
+    private static string CreateArtifactDirectory(string testName)
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue2852-artifacts",
+            testName,
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static void EmitFixture(string path)
+    {
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Select(reference => MetadataReference.CreateFromFile(reference));
+        var compilation = CSharpCompilation.Create(
+            "ImportedTypes",
+            new[] { CSharpSyntaxTree.ParseText(ImportedEnumFixtureSource) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var result = compilation.Emit(path);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
     }
 
     private static byte[] GetMethodIl(PEReader pe, MetadataReader metadata, string methodName)

@@ -892,7 +892,8 @@ internal sealed partial class MethodBodyEmitter
         var spanClr = node.ResultType.ClrType
             ?? throw new InvalidOperationException(
                 $"stackalloc result type '{node.ResultType.Name}' has no CLR reflection shape.");
-        var spanCtor = spanClr.GetConstructor(new[] { typeof(void).MakePointerType(), typeof(int) })
+        var voidPointer = this.outer.emitCtx.References.MapClrTypeToReferences(typeof(void).MakePointerType());
+        var spanCtor = spanClr.GetConstructor(new[] { voidPointer, this.outer.emitCtx.CoreInt32Type })
             ?? throw new InvalidOperationException(
                 $"'{node.ResultType.Name}' has no (void*, int) constructor.");
         this.il.OpCode(ILOpCode.Newobj);

@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -25,11 +26,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// a class instance by-reference across the P/Invoke boundary.
 /// </para>
 /// <para>
-/// Imported CLR struct types defer to the runtime's classification —
-/// <see cref="System.Runtime.InteropServices.Marshal.SizeOf(System.Type)"/>
-/// only succeeds for blittable types, so a successful call confirms the
-/// classification. The result is cached per type to keep the recursion
-/// cheap when a top-level signature visits the same field type twice.
+/// Imported CLR struct types use runtime marshalling classification for
+/// blittability. Unmanaged classification instead walks every instance field
+/// recursively because <see cref="System.Runtime.InteropServices.Marshal.SizeOf(System.Type)"/>
+/// can succeed for structs that contain managed references.
 /// </para>
 /// </remarks>
 internal sealed class BlittableDetector
@@ -164,15 +164,20 @@ internal sealed class BlittableDetector
             return IsBlittableStruct(structSym, visiting, unmanaged);
         }
 
-        // Imported CLR types: defer to the runtime's classification by
-        // attempting Marshal.SizeOf. A non-blittable type raises
-        // ArgumentException; blittable types return the size in bytes.
+        // Imported CLR types: unmanaged classification must inspect fields;
+        // Marshal.SizeOf can accept structs that still contain GC references.
+        // Blittability keeps the existing runtime marshalling classification.
         var clr = type.ClrType;
         if (clr != null && clr.IsValueType)
         {
             if (clr.IsEnum)
             {
                 return true;
+            }
+
+            if (unmanaged)
+            {
+                return IsImportedUnmanagedType(clr, new HashSet<Type>());
             }
 
             try
@@ -187,6 +192,55 @@ internal sealed class BlittableDetector
         }
 
         return false;
+    }
+
+    private static bool IsImportedUnmanagedType(Type type, HashSet<Type> visiting)
+    {
+        if (type == null
+            || type.IsByRef
+            || type.IsByRefLike
+            || !type.IsValueType
+            || (type.IsGenericType
+                && type.GetGenericTypeDefinition().FullName == "System.Nullable`1"))
+        {
+            return false;
+        }
+
+        if (type.IsPointer || type.IsFunctionPointer || type.IsEnum || type.IsPrimitive)
+        {
+            return true;
+        }
+
+        if (!visiting.Add(type))
+        {
+            return true;
+        }
+
+        try
+        {
+            var fields = type.GetFields(
+                System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic);
+
+            foreach (var field in fields)
+            {
+                if (!IsImportedUnmanagedType(field.FieldType, visiting))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
     }
 
     private static bool IsUnmanagedOnlyPrimitive(TypeSymbol type)
