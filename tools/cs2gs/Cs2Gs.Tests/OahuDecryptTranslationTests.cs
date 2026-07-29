@@ -796,7 +796,7 @@ namespace Demo
         Assert.Contains("Provider?.MaybeItems()?[0]", printed);
         Assert.Contains("p?.Items?[0]", printed);
         Assert.Contains("p?[0]?[0]", printed);
-        Assert.Contains("p?[0][0]", printed);
+        Assert.Contains("p?[0]!![0]", printed);
         Assert.Contains("return p?.Items?[0]", printed);
         AssertGscCompiles(printed, "GS0300");
     }
