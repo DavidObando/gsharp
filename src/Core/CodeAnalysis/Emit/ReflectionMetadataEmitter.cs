@@ -1055,7 +1055,8 @@ internal sealed class ReflectionMetadataEmitter
             this.customAttrEncoder.NextParameterHandle,
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
-            this.userTokens.GetUserStructMethodRef);
+            this.userTokens.GetUserStructMethodRef,
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
@@ -1871,17 +1872,18 @@ internal sealed class ReflectionMetadataEmitter
             // skipping the synthesized ToString body in that case. The two
             // skips are independent and compose (a zero-field data class
             // with a user ToString override reserves five rows).
-            // Issue #2864: an ABSTRACT data class skips `<Clone>$` (one fewer
-            // row) — see DataStructSynthesizer.EmitDataClassClone's matching
-            // early return, which exists because `newobj` of the abstract type
-            // itself is unverifiable and this emitter has no covariant-return
-            // support to declare the member abstract instead.
             if (c.IsData)
             {
+                // Issue #2871: `<Clone>$` is the third synthesized data-class
+                // row (after EqualityContract.get and the copy constructor).
+                // Record it during planning so derived covariant clones can
+                // emit a MethodImpl against the base slot regardless of body
+                // emission order. Abstract data classes still reserve and emit
+                // this row; their clone is abstract and has no body.
+                this.cache.DataClassCloneHandles[c] = MetadataTokens.MethodDefinitionHandle(methodRow + 2);
                 methodRow += 10
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
-                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0)
-                    - (c.IsAbstract ? 1 : 0);
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)

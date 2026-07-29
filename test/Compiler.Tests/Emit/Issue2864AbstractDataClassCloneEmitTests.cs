@@ -18,12 +18,11 @@ namespace GSharp.Compiler.Tests.Emit;
 /// (<c>StructSymbol.IsAbstract</c>, #987), and <c>newobj</c> of an abstract
 /// type is rejected by ilverify with <c>NewobjAbstractClass</c>.
 /// <para>
-/// <c>&lt;Clone&gt;$</c> exists purely for C# record shape compatibility and
-/// has no consumer inside gsc (G# has no <c>with</c> expression), so it is now
-/// omitted on an abstract data class. The matching MethodDef row reservation in
-/// <c>ReflectionMetadataEmitter.PlanClassMethods</c> must skip the same row —
-/// these facts pin that alignment, since a stale reservation silently shifts
-/// every later method token in the type.
+/// Issue #2871 restores the C# record shape: abstract data classes emit an
+/// abstract <c>&lt;Clone&gt;$</c>, and derived data classes bind their
+/// covariant-return clone to the base slot with MethodImpl metadata. The
+/// MethodDef planner must reserve that row so every later method token remains
+/// aligned.
 /// </para>
 /// </summary>
 public class Issue2864AbstractDataClassCloneEmitTests
@@ -56,10 +55,9 @@ public class Issue2864AbstractDataClassCloneEmitTests
     [Fact]
     public void AbstractDataClassWithUserMethods_KeepsMethodTokensAligned()
     {
-        // The reservation fix is the risky half: omitting the `<Clone>$` row
-        // without shrinking PlanClassMethods' reservation shifts every later
-        // MethodDef token in the type, which corrupts unrelated call sites
-        // rather than failing loudly.
+        // The planner and emitter must both include the abstract `<Clone>$`
+        // row. Any disagreement shifts every later MethodDef token in the type
+        // and corrupts unrelated call sites rather than failing locally.
         const string source = """
             package i2864b
 
@@ -121,8 +119,9 @@ public class Issue2864AbstractDataClassCloneEmitTests
 
         // `Leaf` synthesizes its OWN ToString, which overrides the base's
         // hand-written one — that is ordinary data-class behaviour. What
-        // matters here is that `Base` reserves 10 - 1 (ToString) - 1 (Clone)
-        // rows, so `Describe` and `Shout` still resolve to the right tokens.
+        // matters here is that `Base` reserves 10 - 1 (ToString) rows,
+        // including its abstract Clone row, so `Describe` and `Shout` still
+        // resolve to the right tokens.
         Assert.Equal("kind=leaf!|Leaf(Id=3)|3\n", CompileAndRun(source));
     }
 

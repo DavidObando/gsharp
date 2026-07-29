@@ -92,6 +92,7 @@ internal sealed class WellKnownReferences
     // as plain static helpers on `<Program>`.
     private MemberReferenceHandle? extensionAttributeCtorRef;
     private MemberReferenceHandle? compilerGeneratedAttributeCtorRef;
+    private MemberReferenceHandle? preserveBaseOverridesAttributeCtorRef;
     private MemberReferenceHandle? unsafeValueTypeAttributeCtorRef;
     private MemberReferenceHandle? fixedBufferAttributeCtorRef;
 
@@ -479,6 +480,35 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.compilerGeneratedAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// Returns the cached parameterless constructor for
+    /// <c>System.Runtime.CompilerServices.PreserveBaseOverridesAttribute</c>.
+    /// Covariant class overrides emitted through MethodImpl rows require this
+    /// marker so further-derived overrides preserve the full base slot chain.
+    /// </summary>
+    public MemberReferenceHandle GetPreserveBaseOverridesAttributeCtorRef()
+    {
+        if (this.preserveBaseOverridesAttributeCtorRef.HasValue)
+        {
+            return this.preserveBaseOverridesAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.PreserveBaseOverridesAttribute", requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.PreserveBaseOverridesAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.preserveBaseOverridesAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.preserveBaseOverridesAttributeCtorRef.Value;
     }
 
     /// <summary>

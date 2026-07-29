@@ -383,6 +383,14 @@ internal sealed class MetadataTokenCache
         = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
     /// <summary>
+    /// Gets the planned <c>&lt;Clone&gt;$</c> MethodDef for each data class.
+    /// Planned handles let covariant clone MethodImpl rows target a base clone
+    /// even when the base method body has not been emitted yet.
+    /// </summary>
+    public Dictionary<StructSymbol, MethodDefinitionHandle> DataClassCloneHandles { get; }
+        = new Dictionary<StructSymbol, MethodDefinitionHandle>();
+
+    /// <summary>
     /// Issue #420 (P3-7): structural cache key for MethodSpec rows whose
     /// generic arguments include user-defined type symbols. Uses reference
     /// equality on the contained <see cref="TypeSymbol"/> entries (declared
