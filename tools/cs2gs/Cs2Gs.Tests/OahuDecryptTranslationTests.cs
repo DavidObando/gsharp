@@ -757,7 +757,15 @@ namespace Demo
 {
     public class Provider
     {
+        public string[]? Items { get; set; }
         public string[]? MaybeItems() => null;
+
+        public string[]? this[int index] => null;
+    }
+
+    public readonly struct ValueProvider
+    {
+        public string[] this[int index] => System.Array.Empty<string>();
     }
 
     public class MetadataItems
@@ -767,12 +775,59 @@ namespace Demo
 
         public string? FirstAuthor => Artist?.Split(';')?[0];
         public string? MaybeFirst => Provider?.MaybeItems()?[0];
+        public string? MaybeMember(Provider? p) => p?.Items?[0];
+        public string? MaybeIndexer(Provider? p) => p?[0]?[0];
+        public string? ValueIndexer(ValueProvider? p) => p?[0]?[0];
+
+        public string? FlowNarrowedMember(Provider p)
+        {
+            if (p.Items is null)
+            {
+                return null;
+            }
+
+            return p?.Items?[0];
+        }
     }
 }");
 
         Assert.Contains("Artist?.Split(';')[0]", printed);
         Assert.DoesNotContain("Artist?.Split(';')?[0]", printed);
         Assert.Contains("Provider?.MaybeItems()?[0]", printed);
+        Assert.Contains("p?.Items?[0]", printed);
+        Assert.Contains("p?[0]?[0]", printed);
+        Assert.Contains("p?[0][0]", printed);
+        Assert.Contains("return p?.Items?[0]", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    [Fact]
+    public void NullConditionalIndex_RetainsSafeIndexForPromotedMemberBindings()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Provider
+    {
+        public string[] FieldItems = System.Array.Empty<string>();
+        public string[] PropertyItems { get; set; } = System.Array.Empty<string>();
+
+        public void Clear()
+        {
+            FieldItems = null;
+            PropertyItems = null;
+        }
+    }
+
+    public class C
+    {
+        public string Field(Provider p) => p?.FieldItems?[0];
+        public string Property(Provider p) => p?.PropertyItems?[0];
+    }
+}");
+
+        Assert.Contains("p?.FieldItems?[0]", printed);
+        Assert.Contains("p?.PropertyItems?[0]", printed);
         AssertGscCompiles(printed, "GS0300");
     }
 
