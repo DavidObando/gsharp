@@ -670,6 +670,32 @@ internal sealed class DataStructSynthesizer
 
     private void EmitDataClassClone(StructSymbol structSym, MethodDefinitionHandle copyConstructor)
     {
+        // Issue #2864: a data class is abstract when its effective member set
+        // still contains a no-body `open` member (StructSymbol.IsAbstract,
+        // #987). Emitting the ordinary copy-construct body there produced
+        // `newobj` of the abstract type itself, which ilverify rejects with
+        // NewobjAbstractClass.
+        //
+        // C# solves this by declaring `<Clone>$` abstract on the base and
+        // having each derived record override it with a COVARIANT return type
+        // (`Derived <Clone>$()` overriding `Base <Clone>$()`), which requires
+        // an explicit MethodImpl plus `PreserveBaseOverridesAttribute`. This
+        // emitter has no covariant-return support: every `<Clone>$` returns its
+        // own declaring type, so the signatures never match and the derived
+        // method silently lands in a fresh slot. Declaring the base one
+        // abstract would therefore leave it permanently unimplemented and the
+        // runtime would reject the derived type with a TypeLoadException.
+        //
+        // `<Clone>$` has no consumer inside gsc — it exists purely for C#
+        // record shape compatibility — so the correct narrow fix is to omit it
+        // on an abstract data class, exactly as an abstract type omits any
+        // other member it cannot implement. Concrete data classes are
+        // unaffected.
+        if (structSym.IsAbstract)
+        {
+            return;
+        }
+
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {

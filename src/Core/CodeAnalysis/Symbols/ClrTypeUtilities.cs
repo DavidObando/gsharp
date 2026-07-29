@@ -815,7 +815,19 @@ public static class ClrTypeUtilities
         }
         catch (Exception ex) when (IsMetadataLoadFailure(ex))
         {
-            return false;
+            // Issue #2863: MetadataLoadContext does not implement
+            // GetBaseDefinition() at all — it throws NotSupportedException for
+            // EVERY method, which IsMetadataLoadFailure classifies as a load
+            // failure. Returning the conservative "not an override" here made
+            // every imported member look like a fresh declaration, which in
+            // turn made every virtual imported property look abstract
+            // (PropertySymbol.IsAbstract) and every imported type that had one
+            // report GS0386 at its concrete use sites. Read the override bit
+            // straight out of the metadata instead: a method that introduces a
+            // new virtual slot carries `newslot`, while one that overrides an
+            // inherited slot does not. Interface implementations are emitted
+            // `virtual final newslot`, so they correctly stay non-overrides.
+            return IsOverrideFromMetadataAttributes(accessor);
         }
     }
 
@@ -1012,6 +1024,30 @@ public static class ClrTypeUtilities
         MemberCache<FieldInfo>.Cache.Clear();
         MemberCache<EventInfo>.Cache.Clear();
         MemberCache<ConstructorInfo>.Cache.Clear();
+    }
+
+    /// <summary>
+    /// Issue #2863: decides whether <paramref name="accessor"/> overrides an
+    /// inherited virtual slot using only <see cref="MethodBase.Attributes"/>,
+    /// which every metadata backend — including
+    /// <c>MetadataLoadContext</c> — supports. A method that introduces a new
+    /// virtual slot is emitted <c>virtual newslot</c>; a method that overrides
+    /// an inherited one is emitted <c>virtual</c> without <c>newslot</c>.
+    /// </summary>
+    /// <param name="accessor">The method to classify.</param>
+    /// <returns><c>true</c> when the method reuses an inherited virtual slot.</returns>
+    private static bool IsOverrideFromMetadataAttributes(MethodInfo accessor)
+    {
+        try
+        {
+            var attributes = accessor.Attributes;
+            return (attributes & MethodAttributes.Virtual) != 0
+                && (attributes & MethodAttributes.NewSlot) == 0;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
     }
 
     private static bool GenericArgumentsAreAssignable(Type target, Type source)

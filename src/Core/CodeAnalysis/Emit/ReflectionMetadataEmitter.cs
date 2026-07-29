@@ -1871,11 +1871,17 @@ internal sealed class ReflectionMetadataEmitter
             // skipping the synthesized ToString body in that case. The two
             // skips are independent and compose (a zero-field data class
             // with a user ToString override reserves five rows).
+            // Issue #2864: an ABSTRACT data class skips `<Clone>$` (one fewer
+            // row) — see DataStructSynthesizer.EmitDataClassClone's matching
+            // early return, which exists because `newobj` of the abstract type
+            // itself is unverifiable and this emitter has no covariant-return
+            // support to declare the member abstract instead.
             if (c.IsData)
             {
                 methodRow += 10
                     - (DataStructSynthesizer.HasZeroDeconstructionMembers(c) ? 1 : 0)
-                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0);
+                    - (DataStructSynthesizer.HasUserToStringOverride(c) ? 1 : 0)
+                    - (c.IsAbstract ? 1 : 0);
             }
 
             if (!c.Methods.IsDefaultOrEmpty)
