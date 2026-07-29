@@ -177,6 +177,12 @@ internal sealed class BlittableDetector
 
             if (unmanaged)
             {
+                if (clr.IsGenericType
+                    && clr.GetGenericTypeDefinition().FullName == "System.Nullable`1")
+                {
+                    return false;
+                }
+
                 return IsImportedUnmanagedType(clr, new HashSet<Type>());
             }
 
@@ -198,10 +204,7 @@ internal sealed class BlittableDetector
     {
         if (type == null
             || type.IsByRef
-            || type.IsByRefLike
-            || !type.IsValueType
-            || (type.IsGenericType
-                && type.GetGenericTypeDefinition().FullName == "System.Nullable`1"))
+            || type.IsByRefLike)
         {
             return false;
         }
@@ -209,6 +212,11 @@ internal sealed class BlittableDetector
         if (type.IsPointer || type.IsFunctionPointer || type.IsEnum || type.IsPrimitive)
         {
             return true;
+        }
+
+        if (!type.IsValueType)
+        {
+            return false;
         }
 
         if (!visiting.Add(type))

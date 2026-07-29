@@ -139,6 +139,48 @@ public class Issue2852GenericUnmanagedStackAllocTests
         Assert.Empty(GetDiagnostics(source));
     }
 
+    [Fact]
+    public void StackAlloc_ImportedStructContainingPointerAndFunctionPointerFields_Binds()
+    {
+        const string source = """
+            package p
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+            func F() {
+                var values = stackalloc [4]Issue2852ImportedPointerFields
+            }
+            """;
+
+        Assert.Empty(GetDiagnostics(source));
+    }
+
+    [Fact]
+    public void StackAlloc_ImportedStructContainingNullableField_Binds()
+    {
+        const string source = """
+            package p
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+            func F() {
+                var values = stackalloc [4]Issue2852ImportedNullableFieldStruct
+            }
+            """;
+
+        Assert.Empty(GetDiagnostics(source));
+    }
+
+    [Fact]
+    public void StackAlloc_TopLevelNullable_ReportsGS0399()
+    {
+        const string source = """
+            package p
+            import System
+            func F() {
+                var values = stackalloc [4]Nullable[int32]
+            }
+            """;
+
+        Assert.Contains(GetDiagnostics(source), d => d.Id == "GS0399");
+    }
+
     private static ImmutableArray<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
@@ -174,4 +216,16 @@ public struct Issue2852ImportedUnmanagedInner
 public struct Issue2852ImportedUnmanagedOuter
 {
     public Issue2852ImportedUnmanagedInner Inner { get; set; }
+}
+
+public unsafe struct Issue2852ImportedPointerFields
+{
+    public int* Pointer { get; set; }
+
+    public delegate* unmanaged<int, int> FunctionPointer { get; set; }
+}
+
+public struct Issue2852ImportedNullableFieldStruct
+{
+    public int? Value { get; set; }
 }

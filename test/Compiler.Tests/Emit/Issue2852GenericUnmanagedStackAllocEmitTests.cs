@@ -102,7 +102,7 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
                 fixturePath);
             IlVerifier.Verify(outputPath, new[] { fixturePath }, StackAllocIlVerifyIgnored);
 
-            using var loadContext = new AssemblyLoadContext(
+            var loadContext = new AssemblyLoadContext(
                 nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998),
                 isCollectible: true);
             try
