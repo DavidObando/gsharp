@@ -1385,6 +1385,8 @@ public sealed class Lowerer : BoundTreeRewriter
             case BoundThrowStatement:
             case BoundGotoStatement:
                 return true;
+            case BoundFixedStatement fixedStatement:
+                return EndsInUnconditionalTransfer(fixedStatement.Body);
             case BoundBlockStatement block:
                 // A trailing label is a reachable continuation for branches
                 // inside the block, so the block can fall through even when

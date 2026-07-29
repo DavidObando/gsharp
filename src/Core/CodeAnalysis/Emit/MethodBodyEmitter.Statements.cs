@@ -65,6 +65,11 @@ internal sealed partial class MethodBodyEmitter
         // Body executes with the pin held.
         this.EmitStatement(node.Body);
 
+        if (ControlFlowGraph.StatementDefinitelyReturns(node.Body))
+        {
+            return;
+        }
+
         // Release the pin on normal exit so the GC stops tracking the buffer.
         if (node.PinKind == FixedPinKind.PinnableReference)
         {
