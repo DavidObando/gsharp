@@ -1853,7 +1853,7 @@ internal sealed partial class MethodBodyEmitter
             // Issue #1613: same fix for byte/bool — ldind.u1 zero-extends.
             this.il.OpCode(ILOpCode.Ldind_u1);
         }
-        else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
+        else if (ReflectionMetadataEmitter.IsValueTypeSymbol(pointeeType))
         {
             this.il.OpCode(ILOpCode.Ldobj);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
@@ -1892,7 +1892,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Stind_i1);
         }
-        else if (pointeeType is StructSymbol { IsClass: false } || (clrType != null && clrType.IsValueType))
+        else if (ReflectionMetadataEmitter.IsValueTypeSymbol(pointeeType))
         {
             this.il.OpCode(ILOpCode.Stobj);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));

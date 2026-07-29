@@ -841,9 +841,7 @@ internal sealed partial class MethodBodyEmitter
                 "stackalloc count scratch slot was not pre-allocated by the method-body planner.");
         }
 
-        var elementClr = node.ElementType.ClrType
-            ?? throw new InvalidOperationException(
-                $"stackalloc element type '{node.ElementType.Name}' has no CLR type.");
+        var elementToken = this.outer.memberRefs.GetElementTypeToken(node.ElementType);
 
         // count -> scratch slot (single evaluation).
         this.EmitExpression(node.Count);
@@ -852,7 +850,7 @@ internal sealed partial class MethodBodyEmitter
         // bytes = count * sizeof(T); localloc -> void* (native int).
         this.il.LoadLocal(countSlot);
         this.il.OpCode(ILOpCode.Sizeof);
-        this.il.Token(this.outer.memberRefs.GetTypeReference(elementClr));
+        this.il.Token(elementToken);
         this.il.OpCode(ILOpCode.Mul);
         this.il.OpCode(ILOpCode.Conv_u);
         this.il.OpCode(ILOpCode.Localloc);
@@ -872,7 +870,7 @@ internal sealed partial class MethodBodyEmitter
                     // addr = base + i * sizeof(T).
                     this.il.LoadConstantI4(i);
                     this.il.OpCode(ILOpCode.Sizeof);
-                    this.il.Token(this.outer.memberRefs.GetTypeReference(elementClr));
+                    this.il.Token(elementToken);
                     this.il.OpCode(ILOpCode.Mul);
                     this.il.OpCode(ILOpCode.Conv_i);
                     this.il.OpCode(ILOpCode.Add);
@@ -891,12 +889,15 @@ internal sealed partial class MethodBodyEmitter
 
         // Safe form: construct a Span<T> over [ptr, count].
         this.il.LoadLocal(countSlot);
-        var spanClr = typeof(System.Span<>).MakeGenericType(elementClr);
-        var spanCtor = spanClr.GetConstructor(new[] { typeof(void).MakePointerType(), typeof(int) })
+        var spanClr = node.ResultType.ClrType
             ?? throw new InvalidOperationException(
-                $"System.Span<{elementClr.Name}> has no (void*, int) constructor.");
+                $"stackalloc result type '{node.ResultType.Name}' has no CLR reflection shape.");
+        var voidPointer = this.outer.emitCtx.References.MapClrTypeToReferences(typeof(void).MakePointerType());
+        var spanCtor = spanClr.GetConstructor(new[] { voidPointer, this.outer.emitCtx.CoreInt32Type })
+            ?? throw new InvalidOperationException(
+                $"'{node.ResultType.Name}' has no (void*, int) constructor.");
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(this.outer.memberRefs.GetCtorReference(spanCtor));
+        this.il.Token(this.outer.memberRefs.GetCtorReference(spanCtor, node.ResultType));
     }
 
     private void EmitLen(BoundLenExpression len)
