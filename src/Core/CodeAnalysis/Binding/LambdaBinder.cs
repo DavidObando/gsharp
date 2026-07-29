@@ -958,6 +958,15 @@ internal sealed class LambdaBinder
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(literal.Function.Parameters.Length);
         var replacementMap = new Dictionary<VariableSymbol, BoundExpression>();
         var adapterPrefix = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // Issue #2861: a nested literal inside the body captures the ORIGINAL
+        // parameter symbol, which does not exist in the adapter method. Such a
+        // capture needs a real variable to bind against, so the inline
+        // `BoundConversionExpression` replacement below is not usable for it —
+        // collect the nested captures up front and force the converted-local
+        // path for every parameter one of them captures.
+        var nestedCaptures = CollectNestedCapturedVariables(literal.Body);
+        var nestedSubstitution = new Dictionary<VariableSymbol, VariableSymbol>();
         for (var i = 0; i < literal.Function.Parameters.Length; i++)
         {
             var original = literal.Function.Parameters[i];
@@ -983,7 +992,8 @@ internal sealed class LambdaBinder
                     && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                         adapterParameterType,
                         original.Type))
-                || conversions.HasUserDefinedImplicitConversion(adapterParameterType, original.Type);
+                || conversions.HasUserDefinedImplicitConversion(adapterParameterType, original.Type)
+                || (original.RefKind == RefKind.None && nestedCaptures.Contains(original));
             if (bindConvertedLocal)
             {
                 var converted = conversions.BindConversion(
@@ -1000,6 +1010,10 @@ internal sealed class LambdaBinder
                     convertedLocal,
                     converted));
                 replacementMap[original] = new BoundVariableExpression(null, convertedLocal);
+                if (original.RefKind == RefKind.None && nestedCaptures.Contains(original))
+                {
+                    nestedSubstitution[original] = convertedLocal;
+                }
             }
             else
             {
@@ -1064,7 +1078,7 @@ internal sealed class LambdaBinder
         // unverifiable FieldAccess/MethodAccess IL site.
         adapterFunction.LexicalEnclosingType = literal.Function.LexicalEnclosingType;
 
-        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, adapterResultType)
+        var body = (BoundBlockStatement)new ErasedFunctionLiteralAdapterRewriter(replacementMap, nestedSubstitution, adapterResultType)
             .RewriteStatement(literal.Body);
         if (adapterPrefix.Count > 0)
         {
@@ -1945,6 +1959,26 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
+    /// Issue #2861: gathers every variable captured by a function literal (or
+    /// local function) nested inside <paramref name="body"/>, transitively.
+    /// The erased-adapter rewriter must know these up front because a captured
+    /// variable can only be replaced by another <em>variable</em>, never by the
+    /// inline conversion expression the adapter otherwise substitutes.
+    /// </summary>
+    /// <param name="body">The literal body to scan.</param>
+    /// <returns>The set of variables captured by nested literals.</returns>
+    private static HashSet<VariableSymbol> CollectNestedCapturedVariables(BoundStatement body)
+    {
+        var sink = new HashSet<VariableSymbol>();
+        if (body != null)
+        {
+            new NestedCaptureCollector(sink).RewriteStatement(body);
+        }
+
+        return sink;
+    }
+
+    /// <summary>
     /// Issue #1940: scans a generic local function's parameter types, return type, and body for any
     /// reference to a <paramref name="enclosingTypeParameters"/> member — a type parameter owned by an
     /// enclosing generic method or class rather than the local function's own <c>[T, U, …]</c> list.
@@ -2103,16 +2137,182 @@ internal sealed class LambdaBinder
         }
     }
 
+    /// <summary>
+    /// Issue #2861: collects the variables captured by function literals nested
+    /// inside a body. <see cref="BoundTreeRewriter"/> treats a literal as a leaf,
+    /// so this walker descends explicitly to reach literals-in-literals.
+    /// </summary>
+    private sealed class NestedCaptureCollector : BoundTreeRewriter
+    {
+        private readonly HashSet<VariableSymbol> sink;
+
+        public NestedCaptureCollector(HashSet<VariableSymbol> sink)
+        {
+            this.sink = sink;
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            foreach (var captured in node.CapturedVariables)
+            {
+                this.sink.Add(captured);
+            }
+
+            this.RewriteStatement(node.Body);
+            return node;
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            this.RewriteFunctionLiteralExpression(node.Literal);
+            return node;
+        }
+    }
+
+    /// <summary>
+    /// Issue #2861: replaces variable references inside a nested function
+    /// literal — body reads/writes and the literal's own
+    /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/> list —
+    /// when the erased adapter re-homed the captured parameter onto a
+    /// converted local declared in the adapter's prologue.
+    /// </summary>
+    private sealed class NestedCaptureSubstitutionRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<VariableSymbol, VariableSymbol> substitution;
+
+        private NestedCaptureSubstitutionRewriter(Dictionary<VariableSymbol, VariableSymbol> substitution)
+        {
+            this.substitution = substitution;
+        }
+
+        public static BoundFunctionLiteralExpression Rewrite(
+            BoundFunctionLiteralExpression literal,
+            Dictionary<VariableSymbol, VariableSymbol> substitution)
+        {
+            return (BoundFunctionLiteralExpression)new NestedCaptureSubstitutionRewriter(substitution)
+                .RewriteFunctionLiteralExpression(literal);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            var body = (BoundBlockStatement)this.RewriteStatement(node.Body);
+            var captured = node.CapturedVariables;
+            ImmutableArray<VariableSymbol>.Builder builder = null;
+            for (var i = 0; i < captured.Length; i++)
+            {
+                if (!this.substitution.TryGetValue(captured[i], out var replacement))
+                {
+                    builder?.Add(captured[i]);
+                    continue;
+                }
+
+                if (builder == null)
+                {
+                    builder = ImmutableArray.CreateBuilder<VariableSymbol>(captured.Length);
+                    for (var j = 0; j < i; j++)
+                    {
+                        builder.Add(captured[j]);
+                    }
+                }
+
+                builder.Add(replacement);
+            }
+
+            if (builder == null && ReferenceEquals(body, node.Body))
+            {
+                return node;
+            }
+
+            return new BoundFunctionLiteralExpression(
+                node.Syntax,
+                node.Function,
+                node.FunctionType,
+                body,
+                builder?.ToImmutable() ?? captured);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            var rewritten = (BoundFunctionLiteralExpression)this.RewriteFunctionLiteralExpression(node.Literal);
+            return ReferenceEquals(rewritten, node.Literal)
+                ? node
+                : new BoundLocalFunctionDeclaration(node.Syntax, rewritten);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+        {
+            return this.substitution.TryGetValue(node.Variable, out var replacement)
+                ? new BoundVariableExpression(node.Syntax, replacement)
+                : node;
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            var rewritten = (BoundAssignmentExpression)base.RewriteAssignmentExpression(node);
+            return this.substitution.TryGetValue(rewritten.Variable, out var replacement)
+                ? new BoundAssignmentExpression(rewritten.Syntax, replacement, rewritten.Expression)
+                : rewritten;
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            var rewritten = base.RewriteFieldAssignmentExpression(node);
+            if (rewritten is not BoundFieldAssignmentExpression fieldAssignment
+                || fieldAssignment.Receiver == null
+                || !this.substitution.TryGetValue(fieldAssignment.Receiver, out var replacement))
+            {
+                return rewritten;
+            }
+
+            return new BoundFieldAssignmentExpression(
+                fieldAssignment.Syntax,
+                replacement,
+                fieldAssignment.StructType,
+                fieldAssignment.Field,
+                fieldAssignment.Value,
+                fieldAssignment.ResultType);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
+        {
+            var rewritten = base.RewriteIndexAssignmentExpression(node);
+            if (rewritten is not BoundIndexAssignmentExpression indexAssignment
+                || indexAssignment.Target == null
+                || !this.substitution.TryGetValue(indexAssignment.Target, out var replacement))
+            {
+                return rewritten;
+            }
+
+            return new BoundIndexAssignmentExpression(
+                indexAssignment.Syntax,
+                replacement,
+                indexAssignment.Index,
+                indexAssignment.Value,
+                indexAssignment.Type);
+        }
+    }
+
     private sealed class ErasedFunctionLiteralAdapterRewriter : BoundTreeRewriter
     {
         private readonly Dictionary<VariableSymbol, BoundExpression> replacementMap;
+        private readonly Dictionary<VariableSymbol, VariableSymbol> nestedSubstitution;
         private readonly TypeSymbol adapterReturnType;
 
         public ErasedFunctionLiteralAdapterRewriter(
             Dictionary<VariableSymbol, BoundExpression> replacementMap,
+            Dictionary<VariableSymbol, VariableSymbol> nestedSubstitution,
             TypeSymbol adapterReturnType)
         {
             this.replacementMap = replacementMap;
+            this.nestedSubstitution = nestedSubstitution;
             this.adapterReturnType = adapterReturnType;
         }
 
@@ -2121,6 +2321,34 @@ internal sealed class LambdaBinder
             return this.replacementMap.TryGetValue(node.Variable, out var replacement)
                 ? replacement
                 : node;
+        }
+
+        // Issue #2861: BoundTreeRewriter treats a function literal as a leaf,
+        // so a nested lambda keeps reading — and keeps listing in its
+        // CapturedVariables — the ORIGINAL parameter symbol that the adapter
+        // replaced. The adapter method has no slot for that symbol, so emit
+        // fails with GS9998 "has no local slot or parameter index in the
+        // current method". Rewrite the nested literal against the converted
+        // locals the adapter prologue declares for exactly these captures.
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            return this.nestedSubstitution.Count == 0
+                ? node
+                : NestedCaptureSubstitutionRewriter.Rewrite(node, this.nestedSubstitution);
+        }
+
+        /// <inheritdoc/>
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            if (this.nestedSubstitution.Count == 0)
+            {
+                return node;
+            }
+
+            var rewritten = NestedCaptureSubstitutionRewriter.Rewrite(node.Literal, this.nestedSubstitution);
+            return ReferenceEquals(rewritten, node.Literal)
+                ? node
+                : new BoundLocalFunctionDeclaration(node.Syntax, rewritten);
         }
 
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
