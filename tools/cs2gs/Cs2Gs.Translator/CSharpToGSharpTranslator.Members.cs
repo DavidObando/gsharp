@@ -853,14 +853,19 @@ public sealed partial class CSharpToGSharpTranslator
             // member on a BASE interface (e.g. `void IBar.M(){}` where
             // `interface IBar : IFoo` and IFoo already declares `M`). The
             // clause-based scheme below wires exactly ONE interface slot per
-            // method, so it only applies when there is a SINGLE entry. Any
-            // multi-target shape falls back to the pre-#2010 (#1911) named/forced-
-            // public path: the method keeps its plain name with no clause, and
+            // method, so it only applies when there is a SINGLE entry. Imported
+            // generic interfaces also fall back because gsc currently erases
+            // their clause arguments while resolving the CLR slot (GS0494).
+            // Fallback keeps the pre-#2010 (#1911) named/forced-public path:
+            // the method keeps its plain name with no clause, and
             // gsc's ordinary implicit name+signature interface-dispatch matching
             // then satisfies every entry uniformly (no explicit MethodImpl row
-            // needed) — lossier, but preserves the existing multi-target behavior.
+            // needed).
             bool hasSingleExplicitInterfaceImpl = isExplicitInterfaceImpl &&
                 symbol.ExplicitInterfaceImplementations.Length == 1;
+            bool hasClauseCompatibleExplicitInterfaceImpl = hasSingleExplicitInterfaceImpl &&
+                (symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource) ||
+                 !symbol.ExplicitInterfaceImplementations[0].ContainingType.IsGenericType);
 
             if (isExplicitInterfaceImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
@@ -878,7 +883,7 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.MethodDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
             }
 
-            if (isExplicitInterfaceImpl && !hasSingleExplicitInterfaceImpl)
+            if (isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl)
             {
                 IMethodSymbol survivor = FindPriorCollidingSibling(symbol, node);
                 if (survivor != null)
@@ -886,7 +891,7 @@ public sealed partial class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceName(symbol)}' " +
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingName(survivor)}'; " +
-                        "one G# explicit-interface clause cannot represent this multi-target implementation, so the " +
+                        "a G# explicit-interface clause cannot safely represent this interface shape, so the " +
                         "colliding C# methods cannot both be emitted (would be an exact-signature duplicate, GS0264). This " +
                         "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
                         "by name; if the surviving sibling's body differs from this dropped declaration's body, any C# " +
@@ -900,9 +905,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // ADR-0149: the resolved explicit-interface qualifier clause type
-            // for a single-target explicit implementation, or null for an
-            // ordinary method / multi-target fallback.
-            GTypeReference explicitInterfaceType = hasSingleExplicitInterfaceImpl
+            // for a clause-compatible explicit implementation, or null for an
+            // ordinary method / safe fallback.
+            GTypeReference explicitInterfaceType = hasClauseCompatibleExplicitInterfaceImpl
                 ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
@@ -1067,7 +1072,7 @@ public sealed partial class CSharpToGSharpTranslator
                 body = null;
             }
 
-            // Issue #2010/#2362/#2822, ADR-0149: a single-target explicit
+            // Issue #2010/#2362/#2822, ADR-0149: a clause-compatible explicit
             // implementation now emits its own plain-named method carrying an
             // explicit-interface qualifier clause and is bound to its own CLR
             // interface slot via an explicit MethodImpl row at emit time — it
@@ -1077,9 +1082,8 @@ public sealed partial class CSharpToGSharpTranslator
             // unreachable through the class type). This matches C# semantics,
             // where an explicit impl is not publicly callable by the type name.
             //
-            // Multi-target fallbacks still rely on name-based dispatch and stay
-            // public. A single imported target now uses the clause too.
-            Visibility explicitInterfaceVisibility = isExplicitInterfaceImpl && !hasSingleExplicitInterfaceImpl
+            // Fallbacks still rely on name-based dispatch and stay public.
+            Visibility explicitInterfaceVisibility = isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 

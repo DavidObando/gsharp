@@ -3,9 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -669,10 +672,11 @@ namespace Demo
 
         // The IEnumerable<T> generator still lowers to sequence[T].
         Assert.Contains("func All() sequence[T]", printed);
+        AssertGscCompiles(printed);
     }
 
     [Fact]
-    public void GenericImportedExplicitInterfaceQualifier_IsPreserved()
+    public void GenericImportedExplicitInterfaceQualifier_FallsBackAndCompiles()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -685,7 +689,10 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("private func (IEquatable[T]) Equals(other T) bool -> true", printed);
+        Assert.Contains("func Equals(other T) bool -> true", printed);
+        Assert.DoesNotContain("(IEquatable[T])", printed);
+        Assert.DoesNotContain("private func Equals", printed);
+        AssertGscCompiles(printed);
     }
 
     /// <summary>
@@ -783,5 +790,43 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static void AssertGscCompiles(string source)
+    {
+        string compiler =
+            GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory) ??
+            GscInvoker.Resolve(null, "Debug", AppContext.BaseDirectory);
+        Assert.NotNull(compiler);
+
+        string directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "compile-tests",
+            "issue2822",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string sourcePath = Path.Combine(directory, "translated.gs");
+            File.WriteAllText(sourcePath, source);
+            GscResult result = new GscInvoker(compiler).Compile(
+                new[] { sourcePath },
+                Path.Combine(directory, "translated.dll"),
+                TargetKind.Library,
+                Array.Empty<string>());
+
+            Assert.True(result.Succeeded, result.Output);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 }

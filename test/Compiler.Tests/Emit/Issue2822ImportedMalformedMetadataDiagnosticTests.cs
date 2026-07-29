@@ -12,7 +12,7 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue2822ImportedMalformedMetadataDiagnosticTests
 {
     [Fact]
-    public void ImportedReturnTypeOnlyGetEnumeratorPair_ReportsStructuredDiagnostic()
+    public void InheritedImportedReturnTypeOnlyGetEnumeratorPair_ReportsStructuredDiagnostic()
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -29,10 +29,12 @@ public sealed class Issue2822ImportedMalformedMetadataDiagnosticTests
                 import System.Collections
                 import System.Collections.Generic
 
-                class Broken : IEnumerable[int32] {
+                open class Broken : IEnumerable[int32] {
                     func GetEnumerator() IEnumerator[int32] -> List[int32]().GetEnumerator()
                     func GetEnumerator() IEnumerator -> GetEnumerator()
                 }
+
+                class Derived : Broken {}
                 """);
 
             var libraryResult = RunCompiler(new[]
@@ -52,7 +54,7 @@ public sealed class Issue2822ImportedMalformedMetadataDiagnosticTests
                 package Issue2822.Consumer
                 import Issue2822.Library
 
-                func Consume(value Broken) {
+                func Consume(value Derived) {
                     for item in value {}
                 }
                 """);
@@ -70,10 +72,60 @@ public sealed class Issue2822ImportedMalformedMetadataDiagnosticTests
             Assert.NotEqual(0, consumerResult.ExitCode);
             Assert.Contains("consumer.gs(5,", output, StringComparison.Ordinal);
             Assert.Contains("GS0501", output, StringComparison.Ordinal);
-            Assert.Contains("Broken", output, StringComparison.Ordinal);
+            Assert.Contains("Derived", output, StringComparison.Ordinal);
             Assert.Contains("GetEnumerator", output, StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
             Assert.DoesNotContain("AmbiguousMatchException", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public void ImportedGenericZeroArgOverload_DoesNotObscureNonGenericEnumerator()
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue2822-artifacts",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var consumerSourcePath = Path.Combine(directory, "consumer.gs");
+            var consumerPath = Path.Combine(directory, "Issue2822.Consumer.dll");
+            File.WriteAllText(consumerSourcePath, """
+                package Issue2822.Consumer
+                import GSharp.Compiler.Tests.Emit
+
+                func Consume(value Issue2822LegalEnumerable) int32 {
+                    var total = 0
+                    for item in value {
+                        total = total + item
+                    }
+                    return total
+                }
+                """);
+
+            var consumerResult = RunCompiler(new[]
+            {
+                "/out:" + consumerPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                "/reference:" + typeof(Issue2822LegalEnumerable).Assembly.Location,
+                consumerSourcePath,
+            });
+            Assert.True(
+                consumerResult.ExitCode == 0,
+                $"consumer compile failed\n{consumerResult.Stdout}\n{consumerResult.Stderr}");
         }
         finally
         {
