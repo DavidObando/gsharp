@@ -1776,6 +1776,25 @@ internal sealed class MemberLookup
                 }
 
                 return false;
+            case PointerTypeSymbol pointer:
+                // Issue #2838: `*T` under `T : unmanaged` — canonically the
+                // pointer bound by `fixed p *T = span` — has a null ClrType
+                // because its pointee is an open type parameter. Without this
+                // case the argument produced no erased CLR type at all, so
+                // `TryLookupFunction` bailed out before overload resolution ran
+                // and an imported generic call over the pointer (e.g.
+                // `Vector256.Load(p)`) dead-ended with GS0159. Erase the pointee
+                // and re-form the pointer so the candidate's `!!0*` parameter can
+                // unify; symbolic recovery downstream re-derives the real type
+                // argument for the MethodSpec.
+                if (TryProjectErasedClrType(pointer.PointeeType, out var pointeeErased)
+                    && !pointeeErased.IsByRef)
+                {
+                    erased = pointeeErased.MakePointerType();
+                    return true;
+                }
+
+                return false;
             case SequenceTypeSymbol seq:
                 // Issue #1320: `sequence[T]` (an iterator return, alias for
                 // `IEnumerable<T>`) over a same-compilation user element type has
@@ -4643,6 +4662,25 @@ internal sealed class MemberLookup
                 UnifyForMethodTypeArgs(openPointee, actual, openMethod, result);
             }
 
+            return;
+        }
+
+        if (openClr.IsPointer)
+        {
+            // Issue #2838: `Vector256.Load[T](*T source)` called with a `*T`
+            // argument. Without this case an open pointer parameter matched
+            // none of the structural forms above, so `T` was never recovered
+            // and the MethodSpec fell back to the erased `object` — emitting
+            // `Vector256::Load<System.Object>`, which is not even a
+            // constructible instantiation. Mirrors the by-ref case: unify
+            // through the pointee, tolerating an actual that is already the
+            // pointee rather than a pointer.
+            var openPointerPointee = openClr.GetElementType();
+            UnifyForMethodTypeArgs(
+                openPointerPointee,
+                actual is PointerTypeSymbol actualPointer ? actualPointer.PointeeType : actual,
+                openMethod,
+                result);
             return;
         }
 

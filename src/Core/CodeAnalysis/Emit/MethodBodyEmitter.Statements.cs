@@ -178,7 +178,17 @@ internal sealed partial class MethodBodyEmitter
         this.il.StoreLocal(sourceSlot);
         this.il.LoadLocalAddress(sourceSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getPinnableReference)); // -> T&
+
+        // Issue #2838: encode the parent through the SYMBOLIC source type, not
+        // the `MethodInfo` alone. For `fixed p *T = span` inside a generic
+        // method, `sourceClr` is the erased `Span<object>` (an open type
+        // argument has no reference-context CLR type), so the plain MemberRef
+        // path emitted `Span<object>::GetPinnableReference()` against a
+        // `Span<!!T>` receiver — verifier-rejected `StackUnexpected`.
+        // `GetMethodEntityHandle` re-encodes the parent TypeSpec from the
+        // symbol's real type arguments, and falls through to the plain
+        // MemberRef when the container is non-generic or fully closed.
+        this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getPinnableReference, node.PinnedSource.Type)); // -> T&
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
         this.il.LoadLocal(pinnedSlot);
         this.il.OpCode(ILOpCode.Conv_u);
