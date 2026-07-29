@@ -492,6 +492,53 @@ public sealed class TriageBuilder
     }
 
     /// <summary>
+    /// Issue #2867: builds a triage artifact for a mirrored test project that
+    /// BUILT and RAN but whose tests failed. Reporting this as
+    /// <c>LIBRARY-BUILD-FAILED</c> points investigation at the
+    /// translator/emitter ("a real regression, not translation pending") when
+    /// the actual signal is a runtime test failure, and is the same class of
+    /// misleading degradation as #2842. The diagnostic id is
+    /// <c>LIBRARY-TESTS-FAILED</c>.
+    /// </summary>
+    /// <param name="output">The captured <c>dotnet test</c> output.</param>
+    /// <param name="gsFile">The emitted G# library file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityLibraryTestFailure(string output, string gsFile = null)
+    {
+        string message = string.IsNullOrWhiteSpace(output) ? "(no test output captured)" : output.Trim();
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "LIBRARY-TESTS-FAILED",
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "LibraryTestRun",
+            Snippet = Truncate(message),
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            message);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
     /// Builds a triage artifact for an unhandled exception thrown by a stage
     /// itself, rather than a diagnostic the stage reported normally (issue
     /// #1750). The offending construct <c>kind</c> is the exception's runtime

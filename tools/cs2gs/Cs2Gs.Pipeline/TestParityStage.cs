@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -96,6 +97,21 @@ public sealed class TestParityStage : IMigrationStage
         return StageOutcome.Passed();
     }
 
+    /// <summary>
+    /// Issue #2867: detects the VSTest run summary that only ever appears once
+    /// the test project has built and its tests have actually executed.
+    /// </summary>
+    /// <param name="output">The captured <c>dotnet test</c> output.</param>
+    /// <returns><see langword="true"/> when a test run completed.</returns>
+    internal static bool CompletedTestRun(string output)
+    {
+        return !string.IsNullOrEmpty(output)
+            && Regex.IsMatch(
+                output,
+                @"^\s*(Passed|Failed)!\s+-\s+Failed:",
+                RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    }
+
     private static bool IsStdoutEligible(StageExecutionContext context) =>
         context.App.TargetKind == TargetKind.Exe &&
         !string.IsNullOrEmpty(context.App.StdoutGolden) &&
@@ -119,14 +135,23 @@ public sealed class TestParityStage : IMigrationStage
             context.Options.Config,
             context.Options.GeneratedProjectPaths);
         this.Note(context, result.Output ?? string.Empty);
-        return result.ExitCode == 0
-            ? StageOutcome.Passed()
-            : StageOutcome.Failed(new[]
-            {
-                context.Triage.TestParityLibraryBuildFailure(
-                    result.Output ?? "dotnet test failed without output.",
-                    EmittedGsRelative(context)),
-            });
+        if (result.ExitCode == 0)
+        {
+            return StageOutcome.Passed();
+        }
+
+        // Issue #2867: a non-zero `dotnet test` exit means EITHER the project
+        // failed to build OR it built, ran, and the tests failed. Only the
+        // former is a translator/SDK regression; conflating them sends triage
+        // after the emitter when the real signal is a runtime failure, and
+        // discards the per-test outcomes.
+        string output = result.Output ?? "dotnet test failed without output.";
+        return StageOutcome.Failed(new[]
+        {
+            CompletedTestRun(output)
+                ? context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context))
+                : context.Triage.TestParityLibraryBuildFailure(output, EmittedGsRelative(context)),
+        });
     }
 
     private static bool IsTestProject(string projectPath)
