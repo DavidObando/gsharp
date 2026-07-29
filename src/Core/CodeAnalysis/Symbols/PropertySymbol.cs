@@ -29,6 +29,11 @@ public sealed class PropertySymbol : Symbol
     /// <param name="isInitOnly">Whether the property's setter is an <c>init</c>-only accessor (issue #946).</param>
     /// <param name="getterAccessibility">The getter accessibility, or the property accessibility when omitted.</param>
     /// <param name="setterAccessibility">The setter accessibility, or the property accessibility when omitted.</param>
+    /// <param name="metadataIsAbstract">
+    /// The abstractness read straight out of metadata for an imported property, or
+    /// <see langword="null"/> for a source-declared property whose abstractness is inferred
+    /// from its declaration shape (issue #2874).
+    /// </param>
     public PropertySymbol(
         string name,
         TypeSymbol type,
@@ -43,7 +48,8 @@ public sealed class PropertySymbol : Symbol
         PropertyDeclarationSyntax declaration = null,
         bool isInitOnly = false,
         Accessibility? getterAccessibility = null,
-        Accessibility? setterAccessibility = null)
+        Accessibility? setterAccessibility = null,
+        bool? metadataIsAbstract = null)
         : base(name)
     {
         Type = type;
@@ -59,6 +65,7 @@ public sealed class PropertySymbol : Symbol
         IsInitOnly = isInitOnly;
         GetterAccessibility = getterAccessibility ?? accessibility;
         SetterAccessibility = setterAccessibility ?? accessibility;
+        MetadataIsAbstract = metadataIsAbstract;
     }
 
     /// <inheritdoc/>
@@ -102,12 +109,27 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets a value indicating whether this property overrides a base property.</summary>
     public bool IsOverride { get; }
 
+    /// <summary>
+    /// Gets the abstractness read straight out of metadata for an imported property, or
+    /// <see langword="null"/> when this property was declared in source (issue #2874).
+    /// </summary>
+    /// <remarks>
+    /// An imported property carries no body syntax, so the source-shape inference below
+    /// classified every virtual, non-overriding imported property (for example one that
+    /// implements an interface member, which is emitted <c>virtual newslot</c>) as abstract.
+    /// That propagated to <see cref="StructSymbol.IsAbstract"/> and made the whole imported
+    /// type unconstructible with <c>GS0386</c>. Metadata already records the answer exactly,
+    /// so imported properties bypass the inference entirely.
+    /// </remarks>
+    public bool? MetadataIsAbstract { get; }
+
     /// <summary>Gets a value indicating whether this property declares an abstract accessor slot.</summary>
     public bool IsAbstract =>
-        IsVirtual
-        && !IsOverride
-        && !IsAutoProperty
-        && ((HasGetter && GetterBodySyntax == null) || (HasSetter && SetterBodySyntax == null));
+        MetadataIsAbstract
+        ?? (IsVirtual
+            && !IsOverride
+            && !IsAutoProperty
+            && ((HasGetter && GetterBodySyntax == null) || (HasSetter && SetterBodySyntax == null)));
 
     /// <summary>Gets the setter parameter name (defaults to "value").</summary>
     public string SetterParameterName { get; }

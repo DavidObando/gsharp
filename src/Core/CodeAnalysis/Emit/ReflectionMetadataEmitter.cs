@@ -4851,9 +4851,22 @@ internal sealed class ReflectionMetadataEmitter
     // maintained predicate.
     internal static bool ArgIsSymbolicUserDefined(TypeSymbol arg)
     {
+        // Issue #2876: an IMPORTED data type's semantic aggregate is also a
+        // StructSymbol (see ImportedTypeSymbol.BuildSemanticAggregate, which
+        // passes `clrType: type`), yet it is fully reflection-resolvable and
+        // therefore NOT symbolic. Symbolic encoding exists precisely because a
+        // same-compilation user type has no CLR backing yet, which is exactly
+        // the `ClrType == null` case — the identical guard already used by
+        // TypeSymbol.IsSameCompilationUserTypeTopLevel for these same four
+        // symbol kinds. Without it, a lambda over an imported data class made
+        // its whole function type look symbolic, so
+        // EmitFunctionToDelegateConversion discarded the real target delegate
+        // and materialised the natural `Func`/`Action` shape instead — pushing
+        // a `Func<T,bool>` where a `Predicate<T>` was expected (unverifiable
+        // IL, ilverify StackUnexpected).
         if (arg is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol)
         {
-            return true;
+            return arg.ClrType == null;
         }
 
         // Issue #833: an in-scope generic type parameter (MVar/Var) carried
