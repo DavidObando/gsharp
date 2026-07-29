@@ -48,6 +48,19 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2840 / #2841: a nullable wrapper over a REFERENCE type is a
+        // binder-level annotation only — it erases to the underlying type's CLR
+        // representation — so the delegate-materialisation arms below classify
+        // on the unwrapped views. Both a structural function type and a named
+        // delegate are unconditionally reference types (each materialises as a
+        // delegate instance), so `((P…) -> R)?` and `D?` share the identical
+        // representation with their bare forms. Genuine `Nullable<T>` value
+        // shapes are left wrapped and fall through to the value-type arms
+        // further down. The null-guarded adaptation helpers already tolerate a
+        // null source, so a possibly-null function value stays correct.
+        var delegateSourceType = UnwrapReferenceNullableForDelegateShape(conv.Expression.Type);
+        var delegateTargetType = UnwrapReferenceNullableForDelegateShape(conv.Type);
+
         // Issue #1330: a function literal converted to a delegate type closed
         // over an in-scope generic type parameter (e.g. `Comparison[TResult]`,
         // the parameter of `Comparer[TResult].Create(...)`). The target has no
@@ -56,8 +69,8 @@ internal sealed partial class MethodBodyEmitter
         // Materialise the delegate with a `.ctor` MemberRef parented at the
         // constructed `Comparison<!TResult>` TypeSpec so the runtime instance
         // matches the callee's reified parameter.
-        if (conv.Expression.Type is FunctionTypeSymbol constructedDelegateSource
-            && conv.Type is ImportedTypeSymbol constructedDelegateTarget
+        if (delegateSourceType is FunctionTypeSymbol constructedDelegateSource
+            && delegateTargetType is ImportedTypeSymbol constructedDelegateTarget
             && constructedDelegateTarget.OpenDefinition != null
             && constructedDelegateTarget.HasSubstitutableTypeArgument
             && ClrTypeUtilities.IsDelegateType(constructedDelegateTarget.ClrType))
@@ -84,10 +97,8 @@ internal sealed partial class MethodBodyEmitter
         // a reference type (a sealed class deriving from
         // `System.MulticastDelegate`), so the materialisation is byte-identical
         // to the bare-`D` case.
-        var namedTargetDelegate = conv.Type as DelegateTypeSymbol
-            ?? (conv.Type as NullableTypeSymbol)?.UnderlyingType as DelegateTypeSymbol;
-        if (conv.Expression.Type is FunctionTypeSymbol namedSourceFn
-            && namedTargetDelegate != null)
+        if (delegateSourceType is FunctionTypeSymbol namedSourceFn
+            && delegateTargetType is DelegateTypeSymbol namedTargetDelegate)
         {
             this.EmitFunctionToNamedDelegateConversion(conv.Expression, namedSourceFn, namedTargetDelegate);
             return;
@@ -97,8 +108,8 @@ internal sealed partial class MethodBodyEmitter
         // delegate while its original body expects the equivalent structural
         // function. Rebuild the value over the named delegate's Invoke target
         // so the adapter body and its outer delegate constructor both verify.
-        if (conv.Type is FunctionTypeSymbol delegateTargetFn
-            && conv.Expression.Type is ImportedTypeSymbol { ClrType: Type importedDelegateSource }
+        if (delegateTargetType is FunctionTypeSymbol delegateTargetFn
+            && delegateSourceType is ImportedTypeSymbol { ClrType: Type importedDelegateSource }
             && ClrTypeUtilities.IsDelegateType(importedDelegateSource))
         {
             var invoke = importedDelegateSource.GetMethod("Invoke")
@@ -120,11 +131,11 @@ internal sealed partial class MethodBodyEmitter
         // argument position; routing it through EmitConversion makes
         // assignment, return, and cast positions emit the same delegate
         // instantiation IL.
-        if (conv.Expression.Type is FunctionTypeSymbol sourceFn
-            && conv.Type?.ClrType != null
-            && ClrTypeUtilities.IsDelegateType(conv.Type.ClrType))
+        if (delegateSourceType is FunctionTypeSymbol sourceFn
+            && delegateTargetType?.ClrType != null
+            && ClrTypeUtilities.IsDelegateType(delegateTargetType.ClrType))
         {
-            this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, conv.Type.ClrType);
+            this.EmitFunctionToDelegateConversion(conv.Expression, sourceFn, delegateTargetType.ClrType);
             return;
         }
 
@@ -139,8 +150,8 @@ internal sealed partial class MethodBodyEmitter
         // return type built over a bare type parameter `T`, whose ClrType is
         // null during binding so the concrete CLR-delegate path above cannot
         // fire.
-        if (conv.Expression.Type is FunctionTypeSymbol fnNoOpFrom
-            && conv.Type is FunctionTypeSymbol fnNoOpTo
+        if (delegateSourceType is FunctionTypeSymbol fnNoOpFrom
+            && delegateTargetType is FunctionTypeSymbol fnNoOpTo
             && IsRepresentationPreservingFunctionConversion(fnNoOpFrom, fnNoOpTo))
         {
             this.EmitExpression(conv.Expression);
@@ -587,6 +598,30 @@ internal sealed partial class MethodBodyEmitter
 
         throw new NotSupportedException(
             $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+    }
+
+    /// <summary>
+    /// Issue #2840 / #2841: strips reference-nullable wrappers so the
+    /// delegate-materialisation arms of <see cref="EmitConversion"/> see the
+    /// bare function / delegate shape. A <see cref="NullableTypeSymbol"/> over a
+    /// reference type is a binder-level annotation that erases to the underlying
+    /// type's CLR representation, so a <c>D?</c> or <c>((P…) -&gt; R)?</c> slot
+    /// materialises byte-identically to its bare form. Genuine
+    /// <c>Nullable&lt;T&gt;</c> value shapes are left wrapped so they keep
+    /// reaching the value-type arms.
+    /// </summary>
+    /// <param name="type">The declared source or target type of the conversion.</param>
+    /// <returns>The unwrapped type, or <paramref name="type"/> when no reference-nullable wrapper applies.</returns>
+    private static TypeSymbol UnwrapReferenceNullableForDelegateShape(TypeSymbol type)
+    {
+        while (type is NullableTypeSymbol nullable
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(nullable)
+            && nullable.UnderlyingType != null)
+        {
+            type = nullable.UnderlyingType;
+        }
+
+        return type;
     }
 
     // Issues #1356/#2542/#2618: reference nullability erases from parameter and
