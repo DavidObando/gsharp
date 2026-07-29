@@ -790,19 +790,24 @@ internal sealed partial class MethodBodyEmitter
         if (b.Left.Type is StructSymbol ds && ds.IsData && b.Right.Type == ds &&
             (b.Op.Kind == BoundBinaryOperatorKind.Equals || b.Op.Kind == BoundBinaryOperatorKind.NotEquals))
         {
-            var structTypeDef = this.outer.cache.StructTypeDefs[ds];
+            // Issue #2866: an imported data class/struct has no row in
+            // StructTypeDefs (it is only a semantic aggregate projected off
+            // an ImportedTypeSymbol), so the indexer threw KeyNotFound. Route
+            // through GetElementTypeToken, which resolves a locally declared
+            // struct to its TypeDef and an imported one to a TypeRef/TypeSpec,
+            // and only compute it when a `box` is actually emitted.
             this.EmitExpression(b.Left);
             if (!ds.IsClass)
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(structTypeDef);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(ds));
             }
 
             this.EmitExpression(b.Right);
             if (!ds.IsClass)
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(structTypeDef);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(ds));
             }
 
             this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
