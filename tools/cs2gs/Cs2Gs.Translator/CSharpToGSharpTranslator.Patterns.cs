@@ -494,8 +494,11 @@ public sealed partial class CSharpToGSharpTranslator
                 receiver = parenthesized.Expression;
             }
 
-            return receiver is ConditionalAccessExpressionSyntax conditionalAccess
-                && this.context.GetTypeInfo(conditionalAccess.Expression).Type is INamedTypeSymbol
+            ConditionalAccessExpressionSyntax enclosingAccess = receiver.Ancestors()
+                .OfType<ConditionalAccessExpressionSyntax>()
+                .FirstOrDefault(access => access.WhenNotNull.DescendantNodesAndSelf().Contains(receiver));
+            return enclosingAccess != null
+                && this.context.GetTypeInfo(enclosingAccess.Expression).Type is INamedTypeSymbol
                     { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
                     ? new NonNullAssertionExpression(translated)
                     : translated;
