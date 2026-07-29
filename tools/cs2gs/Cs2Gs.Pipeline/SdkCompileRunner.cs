@@ -713,10 +713,11 @@ public sealed class SdkCompileRunner
         }
     }
 
-    private static IReadOnlyList<(string Path, byte[] Original)> PrepareTemporaryBuildProps(
+    internal static IReadOnlyList<(string Path, byte[] Original)> PrepareTemporaryBuildProps(
         IEnumerable<string> generatedProjectPaths)
     {
         var prepared = new List<(string Path, byte[] Original)>();
+        string mirrorRoot = ResolveMirrorRoot(generatedProjectPaths);
         try
         {
             foreach (string projectDirectory in generatedProjectPaths
@@ -748,17 +749,31 @@ public sealed class SdkCompileRunner
                 }
 
                 System.Xml.Linq.XNamespace ns = document.Root.Name.Namespace;
+
+                // Issue #2868: mirror each project's repo-relative directory
+                // under `$(Cs2GsArtifactRoot)/bin`, which then acts as the
+                // migrated repo root. A flat `bin/$(MSBuildProjectName)/`
+                // layout collapses the repo structure, so any test that
+                // locates a sibling project's output by walking up from its own
+                // assembly directory (the standard E2E pattern —
+                // `../../../../../src/App/bin/$(Config)/$(TFM)/app.dll`) can
+                // never resolve it, no matter how correct the translation is.
+                // Keeping everything under `bin/` also preserves the existing
+                // "search `<artifactDir>/bin` recursively" contract.
+                string mirroredDirectory = MirroredProjectDirectory(projectDirectory, mirrorRoot);
+
                 document.Root.Add(new System.Xml.Linq.XElement(
                     ns + "PropertyGroup",
                     new System.Xml.Linq.XElement(
                         ns + "BaseOutputPath",
-                        "$(Cs2GsArtifactRoot)/bin/$(MSBuildProjectName)/"),
+                        "$(Cs2GsArtifactRoot)/bin/" + mirroredDirectory + "/bin/"),
                     new System.Xml.Linq.XElement(
                         ns + "BaseIntermediateOutputPath",
-                        "$(Cs2GsArtifactRoot)/obj/$(MSBuildProjectName)/"),
+                        "$(Cs2GsArtifactRoot)/obj/" + mirroredDirectory + "/obj/"),
                     new System.Xml.Linq.XElement(
                         ns + "MSBuildProjectExtensionsPath",
-                        "$(Cs2GsArtifactRoot)/obj/$(MSBuildProjectName)/")));
+                        "$(Cs2GsArtifactRoot)/obj/" + mirroredDirectory + "/obj/")));
+
                 document.Save(propsPath, System.Xml.Linq.SaveOptions.DisableFormatting);
                 prepared.Add((propsPath, original));
             }
@@ -770,6 +785,92 @@ public sealed class SdkCompileRunner
         }
 
         return prepared;
+    }
+
+    /// <summary>
+    /// Issue #2868: resolves the migrated repo root shared by every mirrored
+    /// project — the longest common directory prefix of the complete
+    /// source-to-generated project map, which by construction is the root the
+    /// mirror was written under. Each project's path relative to it is the
+    /// repo-relative directory reproduced inside the artifact tree. With a
+    /// single project there is no sibling to resolve, so its own parent
+    /// directory serves as the root.
+    /// </summary>
+    /// <param name="generatedProjectPaths">The complete generated project path set.</param>
+    /// <returns>The mirrored repo root, or <see langword="null"/> when it cannot be determined.</returns>
+    internal static string ResolveMirrorRoot(IEnumerable<string> generatedProjectPaths)
+    {
+        List<string> directories = (generatedProjectPaths ?? Enumerable.Empty<string>())
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(path => Path.GetDirectoryName(Path.GetFullPath(path)))
+            .Where(directory => !string.IsNullOrEmpty(directory))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (directories.Count == 0)
+        {
+            return null;
+        }
+
+        if (directories.Count == 1)
+        {
+            return Path.GetDirectoryName(directories[0]);
+        }
+
+        string[] candidate = directories[0].Split(Path.DirectorySeparatorChar);
+        int shared = candidate.Length;
+        foreach (string directory in directories.Skip(1))
+        {
+            string[] parts = directory.Split(Path.DirectorySeparatorChar);
+            int index = 0;
+            while (index < shared
+                && index < parts.Length
+                && string.Equals(candidate[index], parts[index], StringComparison.OrdinalIgnoreCase))
+            {
+                index++;
+            }
+
+            shared = index;
+        }
+
+        return shared == 0
+            ? null
+            : string.Join(Path.DirectorySeparatorChar.ToString(), candidate.Take(shared));
+    }
+
+    /// <summary>
+    /// Issue #2868: the repo-relative directory that <paramref name="projectDirectory"/>
+    /// is reproduced at inside the artifact tree, expressed with forward
+    /// slashes for MSBuild.
+    /// </summary>
+    /// <param name="projectDirectory">The mirrored project's directory.</param>
+    /// <param name="mirrorRoot">The mirrored repo root, or <see langword="null"/>.</param>
+    /// <returns>The repo-relative directory, never empty.</returns>
+    internal static string MirroredProjectDirectory(string projectDirectory, string mirrorRoot)
+    {
+        string relative = string.IsNullOrEmpty(mirrorRoot)
+            ? Path.GetFileName(projectDirectory)
+            : Path.GetRelativePath(mirrorRoot, projectDirectory);
+        relative = (relative ?? string.Empty).Replace('\\', '/').Trim('/');
+        return relative.Length == 0 || relative == "."
+            ? Path.GetFileName(projectDirectory)
+            : relative;
+    }
+
+    internal static void RestoreTemporaryBuildProps(
+        IEnumerable<(string Path, byte[] Original)> temporaryBuildProps)
+    {
+        foreach ((string Path, byte[] Original) temporary in temporaryBuildProps.Reverse())
+        {
+            if (temporary.Original is null)
+            {
+                File.Delete(temporary.Path);
+            }
+            else
+            {
+                File.WriteAllBytes(temporary.Path, temporary.Original);
+            }
+        }
     }
 
     private static string FindInheritedBuildProps(string projectDirectory)
@@ -787,22 +888,6 @@ public sealed class SdkCompileRunner
         }
 
         return null;
-    }
-
-    private static void RestoreTemporaryBuildProps(
-        IEnumerable<(string Path, byte[] Original)> temporaryBuildProps)
-    {
-        foreach ((string Path, byte[] Original) temporary in temporaryBuildProps.Reverse())
-        {
-            if (temporary.Original is null)
-            {
-                File.Delete(temporary.Path);
-            }
-            else
-            {
-                File.WriteAllBytes(temporary.Path, temporary.Original);
-            }
-        }
     }
 
     private static string ResolveTargetPath(
