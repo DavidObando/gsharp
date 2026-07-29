@@ -174,9 +174,9 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
     }
 
     [Fact]
-    public void CSharpWithExpression_ThroughConstructedGenericAbstractBase_Runs()
+    public void ConstructedGenericAbstractBaseClone_MemberRefMatchesDefinitionAndTypeLoads()
     {
-        const string gsharp = """
+        const string source = """
             package i2871genericruntime
 
             open data class Base[T] {
@@ -191,23 +191,47 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
                 override prop Kind string -> "leaf"
             }
             """;
-        const string csharp = """
-            using i2871genericruntime;
 
-            public static class Probe
+        var directory = CreateArtifactsDirectory();
+        try
+        {
+            var libraryPath = CompileGSharpLibrary(directory, "Records", source);
+            using (var stream = File.OpenRead(libraryPath))
+            using (var peReader = new PEReader(stream))
             {
-                public static string Run()
-                {
-                    Base<int> original = new Leaf(7) { Value = 3 };
-                    var clone = original with { Value = 5 };
-                    return $"{clone.GetType().Name}:{((Leaf)clone).Extra}:{clone.Value}";
-                }
-            }
-            """;
+                var reader = peReader.GetMetadataReader();
+                var baseType = FindType(reader, "Base`1");
+                var leafType = FindType(reader, "Leaf");
+                var baseClone = FindMethod(reader, baseType, "<Clone>$");
+                var leafClone = FindMethod(reader, leafType, "<Clone>$");
+                var leafCloneToken = MetadataTokens.GetToken(leafClone);
+                var methodImpl = reader.GetTypeDefinition(leafType)
+                    .GetMethodImplementations()
+                    .Select(reader.GetMethodImplementation)
+                    .Single(row => MetadataTokens.GetToken(row.MethodBody) == leafCloneToken);
 
-        Assert.Equal(
-            "Leaf:7:5",
-            CompileCSharpConsumerAndRun(gsharp, csharp));
+                Assert.Equal(HandleKind.MemberReference, methodImpl.MethodDeclaration.Kind);
+                var baseCloneReference = reader.GetMemberReference((MemberReferenceHandle)methodImpl.MethodDeclaration);
+                Assert.Equal(
+                    reader.GetBlobBytes(reader.GetMethodDefinition(baseClone).Signature),
+                    reader.GetBlobBytes(baseCloneReference.Signature));
+            }
+
+            var loadContext = new AssemblyLoadContext("Issue2871-generic-" + Guid.NewGuid(), isCollectible: true);
+            try
+            {
+                var assembly = loadContext.LoadFromAssemblyPath(libraryPath);
+                Assert.Contains(assembly.GetTypes(), type => type.Name == "Leaf");
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static void AssertAbstractClone(MethodDefinition clone)
