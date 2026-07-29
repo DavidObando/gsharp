@@ -211,7 +211,7 @@ namespace LibA
     }
 
     [Fact]
-    public void CrossProject_NamedDelegateParameter_StillReceivesRequiredAssertion()
+    public void CrossProject_NonGenericDelegateParameter_PromotedBySibling_DoesNotAssert()
     {
         const string libB = @"
 namespace LibB
@@ -242,20 +242,9 @@ namespace LibA
 
         (string printedB, string printedA) = TranslateTwoProjects(libB, libA);
 
-        // Issue #2835: `Callback` is source-declared, so it keeps its nominal
-        // name instead of erasing to `() -> void`. That made the ORIGINAL
-        // assertion here (`DoesNotContain("callback Callback?")`) vacuously
-        // true — the nominal name could never appear under erasure — and it
-        // hid the fact that LibB's parameter IS promoted to `Callback?`.
-        //
-        // With the name visible, the real, PRE-EXISTING inconsistency shows:
-        // sibling-promotion awareness resolves the generic
-        // `Callback[T]` case (see the sibling test below, which correctly
-        // does NOT assert) but not this non-generic one, so LibA still emits a
-        // spurious `!!` into an already-nullable parameter. Tracked by issue
-        // #2836; these assertions pin today's behaviour so the fix is visible.
         Assert.Contains("func Accept(callback Callback?)", Compact(printedB));
-        Assert.Contains("service.Accept(callback!!)", Compact(printedA));
+        Assert.Contains("service.Accept(callback)", Compact(printedA));
+        Assert.DoesNotContain("service.Accept(callback!!)", Compact(printedA));
     }
 
     [Fact]
@@ -290,10 +279,7 @@ namespace LibA
 
         (string printedB, string printedA) = TranslateTwoProjects(libB, libA);
 
-        // Issue #2835: source-declared delegates keep their nominal name, so
-        // the sibling-driven promotion reads `Callback[T]?` rather than the
-        // erased `((T) -> void)?`.
-        Assert.Contains("callback Callback[T]?", Compact(printedB));
+        Assert.Contains("func Accept(callback Callback[T]?)", Compact(printedB));
         Assert.Contains("service.Accept(callback)", Compact(printedA));
         Assert.DoesNotContain("service.Accept(callback!!)", Compact(printedA));
     }
