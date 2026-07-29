@@ -32,7 +32,7 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            var dataCloneAncestor = structSymbol.DataCloneAncestor;
+            var dataCloneAncestor = structSymbol.GetDataCloneAncestor();
             if (!structSymbol.IsData && dataCloneAncestor?.IsAbstract == true)
             {
                 // Synthesized record clones are not FunctionSymbols, so the

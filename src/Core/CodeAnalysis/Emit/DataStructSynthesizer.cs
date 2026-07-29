@@ -737,7 +737,7 @@ internal sealed class DataStructSynthesizer
     private bool TryResolveBaseCloneToken(StructSymbol structSym, out EntityHandle cloneToken)
     {
         cloneToken = default;
-        var baseClass = structSym.DataCloneAncestor;
+        var baseClass = structSym.GetDataCloneAncestor();
         if (baseClass == null)
         {
             return false;

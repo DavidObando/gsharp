@@ -355,7 +355,7 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return (!IsData && DataCloneAncestor?.IsAbstract == true)
+            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties();
         }
@@ -372,26 +372,6 @@ public sealed class StructSymbol : TypeSymbol
             }
 
             return GetSubstitutedBaseClass();
-        }
-    }
-
-    /// <summary>
-    /// Gets the nearest base class that declares the synthesized data-class
-    /// clone slot, skipping non-data intermediary classes.
-    /// </summary>
-    internal StructSymbol DataCloneAncestor
-    {
-        get
-        {
-            for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
-            {
-                if (ancestor.IsData)
-                {
-                    return ancestor;
-                }
-            }
-
-            return null;
         }
     }
 
@@ -1624,6 +1604,24 @@ public sealed class StructSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Gets the nearest base class that declares the synthesized data-class
+    /// clone slot, skipping non-data intermediary classes.
+    /// </summary>
+    /// <returns>The nearest data-class ancestor, or null when none exists.</returns>
+    internal StructSymbol GetDataCloneAncestor()
+    {
+        for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        {
+            if (ancestor.IsData)
+            {
+                return ancestor;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
