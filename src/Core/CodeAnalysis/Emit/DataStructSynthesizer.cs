@@ -630,8 +630,7 @@ internal sealed class DataStructSynthesizer
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
-            if (structSym.BaseClass?.IsData == true
-                && this.dataClassCopyConstructors.TryGetValue(structSym.BaseClass, out var baseCopyConstructor))
+            if (this.TryResolveBaseCopyConstructorToken(structSym, out var baseCopyConstructor))
             {
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
@@ -738,8 +737,8 @@ internal sealed class DataStructSynthesizer
     private bool TryResolveBaseCloneToken(StructSymbol structSym, out EntityHandle cloneToken)
     {
         cloneToken = default;
-        var baseClass = structSym.BaseClass;
-        if (baseClass?.IsData != true)
+        var baseClass = structSym.GetDataCloneAncestor();
+        if (baseClass == null)
         {
             return false;
         }
@@ -780,6 +779,34 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => this.encodeTypeSymbol(r.Type(), baseClass.Definition), _ => { });
         cloneToken = this.resolveUserMethodRef(baseClass, baseClone, "<Clone>$", signature);
+        return true;
+    }
+
+    private bool TryResolveBaseCopyConstructorToken(StructSymbol structSym, out EntityHandle copyConstructorToken)
+    {
+        copyConstructorToken = default;
+        var baseClass = structSym.BaseClass;
+        if (baseClass?.IsData != true)
+        {
+            return false;
+        }
+
+        var baseDefinition = baseClass.Definition ?? baseClass;
+        if (!this.dataClassCopyConstructors.TryGetValue(baseDefinition, out var baseCopyConstructor))
+        {
+            return false;
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(baseClass))
+        {
+            copyConstructorToken = baseCopyConstructor;
+            return true;
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), baseDefinition));
+        copyConstructorToken = this.resolveUserMethodRef(baseClass, baseCopyConstructor, ".ctor", signature);
         return true;
     }
 

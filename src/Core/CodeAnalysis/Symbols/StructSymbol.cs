@@ -320,8 +320,10 @@ public sealed class StructSymbol : TypeSymbol
     /// Gets a value indicating whether this class is abstract — issue #987. A
     /// class is abstract when its effective member set (own + inherited, after
     /// override resolution) contains at least one abstract method (a no-body
-    /// <c>open func</c>). Such a type cannot be instantiated and is emitted with
-    /// <c>TypeAttributes.Abstract</c>. Always <c>false</c> for value-type structs.
+    /// <c>open func</c>), or when a non-data class inherits an abstract
+    /// synthesized record clone. Such a type cannot be instantiated and is
+    /// emitted with <c>TypeAttributes.Abstract</c>. Always <c>false</c> for
+    /// value-type structs.
     /// </summary>
     public bool IsAbstract
     {
@@ -353,7 +355,9 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return !GetUnimplementedAbstractMethods().IsDefaultOrEmpty || HasUnimplementedAbstractProperties();
+            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
+                || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
+                || HasUnimplementedAbstractProperties();
         }
     }
 
@@ -369,6 +373,23 @@ public sealed class StructSymbol : TypeSymbol
 
             return GetSubstitutedBaseClass();
         }
+    }
+
+    /// <summary>
+    /// Gets the nearest base class that declares the synthesized data-class
+    /// clone slot, skipping non-data intermediary classes.
+    /// </summary>
+    internal StructSymbol GetDataCloneAncestor()
+    {
+        for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        {
+            if (ancestor.IsData)
+            {
+                return ancestor;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
