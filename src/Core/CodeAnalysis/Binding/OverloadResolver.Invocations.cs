@@ -68,10 +68,10 @@ internal sealed partial class OverloadResolver
         TypeSymbol receiverType;
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            receiverLoad = BuildImplicitFieldLoad(implicitField);
-            receiverType = implicitField.Field.Type;
+            receiverLoad = BuildImplicitFieldLoad(implicitField, narrowedTargetType);
+            receiverType = receiverLoad.Type;
         }
-        else if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad))
+        else if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad, narrowedTargetType))
         {
             receiverLoad = memberLoad;
             receiverType = memberLoad.Type ?? narrowedTargetType ?? variable.Type;
@@ -161,12 +161,15 @@ internal sealed partial class OverloadResolver
     /// symbol may be a base class, producing the correct base field token when
     /// the access originates from a derived method.
     /// </summary>
-    private static BoundExpression BuildImplicitFieldLoad(ImplicitFieldVariableSymbol implicitField) =>
+    private static BoundExpression BuildImplicitFieldLoad(
+        ImplicitFieldVariableSymbol implicitField,
+        TypeSymbol narrowedType = null) =>
         new BoundFieldAccessExpression(
             null,
             new BoundVariableExpression(null, implicitField.Receiver),
             implicitField.StructType,
-            implicitField.Field);
+            implicitField.Field,
+            narrowedType);
 
     private bool TryBindNullableDelegateInvocation(
         VariableSymbol variable,
@@ -521,7 +524,11 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
-    private bool TryBuildImplicitMemberLoad(VariableSymbol variable, TextLocation location, out BoundExpression load)
+    private bool TryBuildImplicitMemberLoad(
+        VariableSymbol variable,
+        TextLocation location,
+        out BoundExpression load,
+        TypeSymbol narrowedType = null)
     {
         load = null;
         switch (variable)
@@ -536,7 +543,8 @@ internal sealed partial class OverloadResolver
                     null,
                     new BoundVariableExpression(null, instanceField.Receiver),
                     instanceField.StructType,
-                    instanceField.Field);
+                    instanceField.Field,
+                    narrowedType);
                 return true;
             case ImplicitPropertyVariableSymbol prop:
                 if (!prop.Property.HasGetter)
@@ -550,7 +558,8 @@ internal sealed partial class OverloadResolver
                     null,
                     new BoundVariableExpression(null, prop.Receiver),
                     prop.StructType,
-                    prop.Property);
+                    prop.Property,
+                    narrowedType);
                 return true;
             case ImplicitStaticPropertyVariableSymbol staticProp:
                 if (!staticProp.Property.HasGetter)

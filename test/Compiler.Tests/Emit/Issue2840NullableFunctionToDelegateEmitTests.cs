@@ -55,14 +55,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 f = (s Src) -> System.Console.WriteLine(s.N)
                 var d System.Action[Src]? = f
                 if d != nil {
-                    // Invoked through a non-nullable local: directly invoking a
-                    // NARROWED nullable imported generic delegate whose type
-                    // argument is source-declared emits an `Invoke` MemberRef
-                    // parented at the erased `Action<object>`. That is a
-                    // separate, pre-existing defect (it reproduces with no
-                    // conversion at all) and is tracked on its own issue.
-                    let invoke System.Action[Src] = d
-                    invoke(Src())
+                    d(Src())
                 }
             }
             """;
@@ -298,8 +291,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 d(Src())
                 var n System.Action[Src]? = f
                 if n != nil {
-                    let invoke System.Action[Src] = n
-                    invoke(Src())
+                    n(Src())
                 }
             }
             """;
