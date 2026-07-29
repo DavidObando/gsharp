@@ -355,7 +355,7 @@ public sealed class StructSymbol : TypeSymbol
                 return effectiveProperties.Values.Any(property => property.IsAbstract);
             }
 
-            return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
+            return (!IsData && DataCloneAncestor?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
                 || HasUnimplementedAbstractProperties();
         }
@@ -379,17 +379,20 @@ public sealed class StructSymbol : TypeSymbol
     /// Gets the nearest base class that declares the synthesized data-class
     /// clone slot, skipping non-data intermediary classes.
     /// </summary>
-    internal StructSymbol GetDataCloneAncestor()
+    internal StructSymbol DataCloneAncestor
     {
-        for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        get
         {
-            if (ancestor.IsData)
+            for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
             {
-                return ancestor;
+                if (ancestor.IsData)
+                {
+                    return ancestor;
+                }
             }
-        }
 
-        return null;
+            return null;
+        }
     }
 
     /// <summary>Gets the interfaces this type implements (Phase 3.B.4). Populated by the binder after the symbol is constructed; defaults to empty.</summary>
