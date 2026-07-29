@@ -765,11 +765,6 @@ namespace Demo
         public string[]? this[int index] => null;
     }
 
-    public class NonNullableProvider
-    {
-        public string[] this[int index] => System.Array.Empty<string>();
-    }
-
     public readonly struct ValueProvider
     {
         public string[] this[int index] => System.Array.Empty<string>();
@@ -784,8 +779,6 @@ namespace Demo
         public string? MaybeFirst => Provider?.MaybeItems()?[0];
         public string? MaybeMember(Provider? p) => p?.Items?[0];
         public string? MaybeIndexer(Provider? p) => p?[0]?[0];
-        public string? ClassIndexer(NonNullableProvider? p) => p?[1]?[2];
-        public string? ValueIndexer(ValueProvider? p) => p?[3]?[4];
         public string[]? NullableValueProperty(Provider? p) => p?.MaybeValue?[5];
         public string[]? NullableValueMethod(Provider? p) => p?.MaybeValueResult()?[6];
 
@@ -806,11 +799,40 @@ namespace Demo
         Assert.Contains("Provider?.MaybeItems()?[0]", printed);
         Assert.Contains("p?.Items?[0]", printed);
         Assert.Contains("p?[0]?[0]", printed);
-        Assert.Contains("p?[1]!![2]", printed);
-        Assert.Contains("p?[3]!![4]", printed);
         Assert.Contains("p?.MaybeValue?[5]", printed);
         Assert.Contains("p?.MaybeValueResult()?[6]", printed);
         Assert.Contains("return p?.Items?[0]", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    [Fact]
+    public void NullConditionalIndex_PreservesLiftedReceiverNullPropagation()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class ClassProvider
+    {
+        public string[] Items => System.Array.Empty<string>();
+        public string[] this[int index] => System.Array.Empty<string>();
+    }
+
+    public readonly struct ValueProvider
+    {
+        public string[] this[int index] => System.Array.Empty<string>();
+    }
+
+    public class C
+    {
+        public string? ClassReceiver(ClassProvider? p) => p?[1]?[2];
+        public string? ValueReceiver(ValueProvider? p) => p?[3]?[4];
+    }
+}");
+
+        Assert.Contains("p?[1]?[2]", printed);
+        Assert.Contains("p?[3]?[4]", printed);
+        Assert.DoesNotContain("!!", printed);
         AssertGscCompiles(printed, "GS0300");
     }
 

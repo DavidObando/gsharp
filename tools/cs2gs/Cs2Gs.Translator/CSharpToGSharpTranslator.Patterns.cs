@@ -260,7 +260,7 @@ public sealed partial class CSharpToGSharpTranslator
                         return this.TranslateNonNullableConditionalIndex(
                             conditionalAccess.WhenNotNull,
                             conditionalIndexBinding,
-                            this.TranslateConditionalIndexReceiver(conditionalAccess.Expression));
+                            this.TranslateExpression(conditionalAccess.Expression));
                     }
 
                     return new ConditionalAccessExpression(
@@ -483,19 +483,12 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax result = FindConditionalAccessResult(receiver);
             TypeInfo resultTypeInfo = this.context.GetTypeInfo(result);
             ITypeSymbol resultType = resultTypeInfo.Type ?? resultTypeInfo.ConvertedType;
-            return resultType is INamedTypeSymbol
+            return FindLeadingElementBinding(receiver) != null
+                || resultType is INamedTypeSymbol
                     { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
                 || this.NullableReferenceValueMayBeNull(result)
                 || this.ReceiverValueIsPromotedNullable(result)
                 || this.ReceiverIsNullableReferenceFieldOrProperty(result);
-        }
-
-        private GExpression TranslateConditionalIndexReceiver(ExpressionSyntax receiver)
-        {
-            GExpression translated = this.TranslateExpression(receiver);
-            return FindLeadingElementBinding(receiver) != null
-                    ? new NonNullAssertionExpression(translated)
-                    : translated;
         }
 
         private static ExpressionSyntax FindConditionalAccessResult(ExpressionSyntax expression) =>
