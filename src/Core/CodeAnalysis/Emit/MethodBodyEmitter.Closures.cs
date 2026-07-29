@@ -299,6 +299,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2840: the source function type has no `ClrType` whenever ANY
+        // type in its signature is declared in the compilation being emitted
+        // (e.g. `(Src) -> void` for a source class `Src`), because
+        // MapToReferenceClrType has no MetadataLoadContext Type for it. The
+        // value is still a delegate at runtime, so take its `Invoke` MemberRef
+        // from the reified `Func<Src>`/`Action<Src>` TypeSpec instead —
+        // precisely what the CLR-delegate sibling
+        // (EmitFunctionToDelegateConversion) already does for this shape.
+        if (sourceFn != null && this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(sourceFn))
+        {
+            this.EmitNullGuardedDelegateToDelegateAdaptation(
+                source,
+                this.outer.memberRefs.GetFunctionDelegateInvokeRef(sourceFn),
+                ctorHandle);
+            return;
+        }
+
         throw new NotSupportedException(
             $"Cannot convert function value of type '{sourceFn?.Name}' to named delegate '{targetDelegate.Name}'.");
     }

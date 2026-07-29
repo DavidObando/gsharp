@@ -1492,7 +1492,17 @@ public sealed class Conversion
         // (issue #1121) never ran for a `D?` target, and every delegate
         // conversion path downstream tested the still-wrapped
         // `NullableTypeSymbol`, so a lambda bound fine against `D` but not `D?`.
-        if (type is DelegateTypeSymbol)
+        //
+        // Issue #2840: a structural function type `(P…) -> R` is likewise always
+        // a reference type — it materialises as a delegate instance. Its
+        // `ClrType` is only available when EVERY type in its signature is
+        // CLR-backed, so a single source-declared class anywhere in the
+        // parameter or return list (e.g. `(Src) -> void`) leaves it null and the
+        // fallback below reported it as non-reference. That silently disabled
+        // the `T? -> U?` reference arm, so `((Src) -> void)?` would not convert
+        // to `Action[Src]?` even though the bare, non-nullable conversion was
+        // fine.
+        if (type is DelegateTypeSymbol or FunctionTypeSymbol)
         {
             return true;
         }
