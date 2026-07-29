@@ -490,9 +490,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(receiver);
             return this.context.GetTypeInfo(receiver).Type is INamedTypeSymbol
-                {
-                    OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
-                }
+                { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
                     ? new NonNullAssertionExpression(translated)
                     : translated;
         }
