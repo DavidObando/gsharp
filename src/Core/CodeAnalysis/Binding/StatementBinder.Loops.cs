@@ -215,6 +215,16 @@ internal sealed partial class StatementBinder
     {
         var collection = bindExpression(syntax.Collection);
 
+        if (collection.Type?.ClrType is { } collectionClrType &&
+            MemberLookup.HasAmbiguousParameterlessPublicInstanceMethod(collectionClrType, "GetEnumerator"))
+        {
+            Diagnostics.ReportAmbiguousImportedMember(
+                syntax.Collection.Location,
+                collection.Type,
+                "GetEnumerator");
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
         // Decide iteration strategy and element/key types based on the
         // collection type.
         ForRangeKind iterationKind;

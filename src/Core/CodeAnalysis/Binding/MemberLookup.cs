@@ -148,6 +148,23 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Detects imported metadata that declares more than one public
+    /// parameterless instance method with the same name.
+    /// </summary>
+    /// <param name="clrType">The imported CLR type.</param>
+    /// <param name="name">The method name.</param>
+    /// <returns>Whether reflection lookup by name and empty parameter list is ambiguous.</returns>
+    public static bool HasAmbiguousParameterlessPublicInstanceMethod(Type clrType, string name)
+    {
+        return ClrTypeUtilities.SafeGetMethods(
+                clrType,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Count(method =>
+                string.Equals(method.Name, name, StringComparison.Ordinal) &&
+                method.GetParameters().Length == 0) > 1;
+    }
+
+    /// <summary>
     /// Enumerates every public instance method on <paramref name="clrType"/>,
     /// its base chain, and its transitive implemented interfaces with the given
     /// <paramref name="name"/>.

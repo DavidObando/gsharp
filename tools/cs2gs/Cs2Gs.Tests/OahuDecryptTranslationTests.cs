@@ -625,8 +625,9 @@ namespace Demo
     /// Defect #914-2: a C# iterator method declared to return
     /// <c>IEnumerator&lt;T&gt;</c> maps to the G# return type
     /// <c>IEnumerator[T]</c> (NOT <c>sequence[T]</c>), so it satisfies
-    /// <c>IEnumerable[T].GetEnumerator</c> and forms the dual-GetEnumerator bridge
-    /// with the non-generic <c>func GetEnumerator() IEnumerator</c> (issue #985).
+    /// <c>IEnumerable[T].GetEnumerator</c>. The explicit non-generic
+    /// <c>IEnumerable.GetEnumerator</c> keeps its qualifier so imported metadata
+    /// never contains a return-type-only public overload pair (issue #2822).
     /// A method returning <c>IEnumerable&lt;T&gt;</c> still maps to
     /// <c>sequence[T]</c>.
     /// </summary>
@@ -661,11 +662,30 @@ namespace Demo
         Assert.Contains("func GetEnumerator() IEnumerator[T]", printed);
         Assert.DoesNotContain("func GetEnumerator() sequence[T]", printed);
 
-        // The non-generic bridge is retained (expression-bodied → arrow form).
-        Assert.Contains("func GetEnumerator() IEnumerator -> GetEnumerator()", printed);
+        // The non-generic explicit implementation keeps its qualifier and
+        // C#-faithful private visibility.
+        Assert.Contains("private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()", printed);
+        Assert.DoesNotContain("\n    func GetEnumerator() IEnumerator ->", printed);
 
         // The IEnumerable<T> generator still lowers to sequence[T].
         Assert.Contains("func All() sequence[T]", printed);
+    }
+
+    [Fact]
+    public void GenericImportedExplicitInterfaceQualifier_IsPreserved()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+
+    public class Value<T> : IEquatable<T>
+    {
+        bool IEquatable<T>.Equals(T other) => true;
+    }
+}");
+
+        Assert.Contains("private func (IEquatable[T]) Equals(other T) bool -> true", printed);
     }
 
     /// <summary>

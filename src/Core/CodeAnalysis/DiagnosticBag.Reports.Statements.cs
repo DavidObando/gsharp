@@ -99,6 +99,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.InvalidCompoundAssignmentOperatorShape, operatorName);
 
     /// <summary>
+    /// Issue #2822: reports imported metadata whose public parameterless
+    /// members cannot be distinguished by reflection.
+    /// </summary>
+    /// <param name="location">The consuming source location.</param>
+    /// <param name="type">The malformed imported type.</param>
+    /// <param name="memberName">The ambiguous member name.</param>
+    public void ReportAmbiguousImportedMember(TextLocation location, TypeSymbol type, string memberName)
+    => Report(location, DiagnosticDescriptors.AmbiguousImportedMember, type.Name, memberName);
+
+    /// <summary>
     /// Issue #946: reports that an <c>init</c>-only property was assigned
     /// outside of object initialization. An <c>init</c>-only property may only
     /// be assigned in the declaring type's constructor(s), in an object/
