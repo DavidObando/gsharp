@@ -1386,8 +1386,6 @@ public sealed partial class CSharpToGSharpTranslator
             bool isFlowNarrowedLocal = argumentLocal != null
                 && this.IsDominatedByNullCheckGuard(argument.Expression, argumentLocal);
             bool targetIsPromotedMigratedSibling = argumentOperation?.Parameter is { } siblingParameter
-                && (siblingParameter.Type.TypeKind != TypeKind.Delegate
-                    || siblingParameter.Type is INamedTypeSymbol { IsGenericType: true })
                 && !SymbolEqualityComparer.Default.Equals(
                     siblingParameter.ContainingAssembly,
                     this.context.Compilation.Assembly)
