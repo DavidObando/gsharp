@@ -254,12 +254,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (conditionalAccess.Expression is ConditionalAccessExpressionSyntax previousAccess
                         && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
-                            is ElementBindingExpressionSyntax elementBinding
+                            is ElementBindingExpressionSyntax conditionalIndexBinding
                         && !this.ConditionalAccessResultIsNullable(previousAccess))
                     {
                         return this.TranslateNonNullableConditionalIndex(
                             conditionalAccess.WhenNotNull,
-                            elementBinding,
+                            conditionalIndexBinding,
                             this.TranslateExpression(previousAccess));
                     }
 
