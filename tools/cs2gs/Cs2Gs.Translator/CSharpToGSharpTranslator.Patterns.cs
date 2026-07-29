@@ -252,15 +252,15 @@ public sealed partial class CSharpToGSharpTranslator
                         return delegateInvokeResult;
                     }
 
-                    if (conditionalAccess.Expression is ConditionalAccessExpressionSyntax previousAccess
+                    if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression)
                         && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
                             is ElementBindingExpressionSyntax conditionalIndexBinding
-                        && !this.ConditionalAccessResultIsNullable(previousAccess))
+                        && !this.ConditionalIndexReceiverIsNullable(conditionalAccess.Expression))
                     {
                         return this.TranslateNonNullableConditionalIndex(
                             conditionalAccess.WhenNotNull,
                             conditionalIndexBinding,
-                            this.TranslateExpression(previousAccess));
+                            this.TranslateExpression(conditionalAccess.Expression));
                     }
 
                     return new ConditionalAccessExpression(
@@ -478,13 +478,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private bool ConditionalAccessResultIsNullable(
-            ConditionalAccessExpressionSyntax conditionalAccess)
-        {
-            ExpressionSyntax result = conditionalAccess.WhenNotNull;
-            return this.NullableReferenceValueMayBeNull(result)
-                || this.ReceiverValueIsPromotedNullable(result);
-        }
+        private bool ConditionalIndexReceiverIsNullable(ExpressionSyntax receiver) =>
+            this.NullableReferenceValueMayBeNull(receiver)
+                || this.ReceiverValueIsPromotedNullable(receiver);
 
         // A constant pattern whose expression is actually a bare/qualified TYPE
         // reference (Roslyn parses `is T`/`not T` after a pattern combinator as a

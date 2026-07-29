@@ -770,8 +770,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Artist?.Split(\";\")[0]", printed);
-        Assert.DoesNotContain("Artist?.Split(\";\")?[0]", printed);
+        Assert.Contains("Artist?.Split(';')[0]", printed);
+        Assert.DoesNotContain("Artist?.Split(';')?[0]", printed);
         Assert.Contains("Provider?.MaybeItems()?[0]", printed);
         AssertGscCompiles(printed, "GS0300");
     }
