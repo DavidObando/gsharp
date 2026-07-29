@@ -54,7 +54,7 @@ namespace Core
 }";
 
     [Fact]
-    public void ObliviousDataTaintedInProject_ToObliviousCore_ForgivesPromotedMemberRead()
+    public void ObliviousDataTaintedInProject_ToObliviousCore_PreservesTaintThroughLocalReturn()
     {
         LoadedCSharpProject data = LoadOblivious(DataWithInProjectTaint, "Data");
         LoadedCSharpProject core = LoadOblivious(
@@ -64,11 +64,13 @@ namespace Core
 
         string printed = TranslateProject(core, new[] { core.Compilation, data.Compilation });
 
-        Assert.Contains("let reason = conversion.FailureReason!!", Compact(printed));
+        string compact = Compact(printed);
+        Assert.Contains("let reason = conversion.FailureReason!!", compact);
+        Assert.Contains("return reason!!", compact);
     }
 
     [Fact]
-    public void ObliviousDataTaintedInProject_ToNullableEnabledCore_ForgivesPromotedMemberRead()
+    public void ObliviousDataTaintedInProject_ToNullableEnabledCore_KeepsLocalNonNullable()
     {
         LoadedCSharpProject data = LoadOblivious(DataWithInProjectTaint, "Data");
         LoadedCSharpProject core = LoadEnabled(
@@ -78,11 +80,13 @@ namespace Core
 
         string printed = TranslateProject(core, new[] { core.Compilation, data.Compilation });
 
-        Assert.Contains("let reason = conversion.FailureReason!!", Compact(printed));
+        string compact = Compact(printed);
+        Assert.Contains("let reason = conversion.FailureReason!!", compact);
+        Assert.DoesNotContain("return reason!!", compact);
     }
 
     [Fact]
-    public void ObliviousData_ToObliviousMidTaint_ToNullableEnabledApp_ForgivesReceiverAndMemberRead()
+    public void ObliviousData_ToObliviousMidTaint_ToNullableEnabledApp_PreservesDistinctContracts()
     {
         const string dataSource = @"
 namespace Data
@@ -140,11 +144,16 @@ namespace App
                 mid.Compilation.ToMetadataReference(),
             });
 
-        string printed = TranslateProject(
-            app,
-            new[] { app.Compilation, mid.Compilation, data.Compilation });
+        var compilations = new[] { app.Compilation, mid.Compilation, data.Compilation };
+        string printedData = TranslateProject(data, compilations);
+        string printedApp = TranslateProject(app, compilations);
 
-        Assert.Contains("let reason = conversion!!.FailureReason!!", Compact(printed));
+        Assert.Contains("prop FailureReason string?", Compact(printedData));
+
+        string compactApp = Compact(printedApp);
+        Assert.Contains("func Read(conversion Conversion?)", compactApp);
+        Assert.Contains("let reason = conversion!!.FailureReason!!", compactApp);
+        Assert.DoesNotContain("return reason!!", compactApp);
     }
 
     private static LoadedCSharpProject LoadOblivious(
