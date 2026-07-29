@@ -336,13 +336,24 @@ internal sealed class MemberDefEmitter
                 ? MethodAttributes.Private
                 : AccessibilityMap.ToMethodVisibility(prop.GetterAccessibility))
             | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
-        if (prop.IsVirtual)
-        {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
-        }
-        else if (prop.IsOverride)
+
+        // Issue #2870: `IsVirtual` (declared `open`) and `IsOverride` are
+        // INDEPENDENT — an `open override prop` is both — so the override test
+        // has to come first. An override reuses the base virtual slot and must
+        // NOT carry NewSlot, whether or not it is itself further overridable.
+        // The implementation assembly happens to route computed-body accessors
+        // through FunctionEmitter and got this right; this fallback path is
+        // what a metadata-only (reference assembly) emit uses for every
+        // property, so the two assemblies disagreed on the vtable layout and
+        // consumers of the reference assembly saw the override as a fresh
+        // virtual — which made the declaring type look abstract (GS0386).
+        if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
+        }
+        else if (prop.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
         else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
         {
@@ -447,13 +458,17 @@ internal sealed class MemberDefEmitter
                 ? MethodAttributes.Private
                 : AccessibilityMap.ToMethodVisibility(prop.SetterAccessibility))
             | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
-        if (prop.IsVirtual)
-        {
-            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
-        }
-        else if (prop.IsOverride)
+
+        // Issue #2870: see the matching comment in EmitPropertyGetter — the
+        // override test must precede the virtual test, since an
+        // `open override prop` is both.
+        if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
+        }
+        else if (prop.IsVirtual)
+        {
+            methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
         else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
         {
