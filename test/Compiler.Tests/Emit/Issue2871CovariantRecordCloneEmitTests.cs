@@ -11,9 +11,12 @@ using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using GSharp.Compiler;
+using GSharp.Core.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
+using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 
 namespace GSharp.Compiler.Tests.Emit;
 
@@ -136,6 +139,77 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
             CompileCSharpConsumerAndRun(gsharp, csharp));
     }
 
+    [Fact]
+    public void ConcreteNonDataSubclass_OfAbstractDataClass_ReportsCloneDiagnostic()
+    {
+        var syntax = GsSyntaxTree.Parse(SourceText.From(
+            """
+            package i2871nondataderived
+
+            open data class Base {
+                open prop Kind string {
+                    get;
+                }
+            }
+
+            class Leaf : Base {
+                override prop Kind string -> "leaf"
+            }
+            """));
+        var compilation = new GsCompilation(syntax);
+
+        using var output = new MemoryStream();
+        var result = compilation.Emit(
+            output,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: "Issue2871.NonDataDerived");
+
+        Assert.False(result.Success);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic =>
+                diagnostic.Id == "GS0387"
+                && diagnostic.Message.Contains("<Clone>$", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CSharpWithExpression_ThroughConstructedGenericAbstractBase_Runs()
+    {
+        const string gsharp = """
+            package i2871genericruntime
+
+            open data class Base[T] {
+                prop Value T { get; init; }
+
+                open prop Kind string {
+                    get;
+                }
+            }
+
+            data class Leaf(Extra int32) : Base[int32] {
+                override prop Kind string -> "leaf"
+            }
+            """;
+        const string csharp = """
+            using i2871genericruntime;
+
+            public static class Probe
+            {
+                public static string Run()
+                {
+                    Base<int> original = new Leaf(7) { Value = 3 };
+                    var clone = original with { Value = 5 };
+                    return $"{clone.GetType().Name}:{((Leaf)clone).Extra}:{clone.Value}";
+                }
+            }
+            """;
+
+        Assert.Equal(
+            "Leaf:7:5",
+            CompileCSharpConsumerAndRun(gsharp, csharp));
+    }
+
     private static void AssertAbstractClone(MethodDefinition clone)
     {
         Assert.True((clone.Attributes & MethodAttributes.Abstract) != 0);
@@ -232,7 +306,8 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
             var loadContext = new AssemblyLoadContext("Issue2871-" + Guid.NewGuid(), isCollectible: true);
             try
             {
-                _ = loadContext.LoadFromAssemblyPath(libraryPath);
+                var libraryAssembly = loadContext.LoadFromAssemblyPath(libraryPath);
+                _ = libraryAssembly.GetTypes();
                 var consumerAssembly = loadContext.LoadFromAssemblyPath(consumerPath);
                 return (string)consumerAssembly.GetType("Probe", throwOnError: true)!
                     .GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!

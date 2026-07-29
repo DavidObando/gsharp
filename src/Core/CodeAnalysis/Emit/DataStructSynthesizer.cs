@@ -778,7 +778,7 @@ internal sealed class DataStructSynthesizer
 
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
-            .Parameters(0, r => this.encodeTypeSymbol(r.Type(), baseClass), _ => { });
+            .Parameters(0, r => this.encodeTypeSymbol(r.Type(), baseClass.Definition), _ => { });
         cloneToken = this.resolveUserMethodRef(baseClass, baseClone, "<Clone>$", signature);
         return true;
     }
