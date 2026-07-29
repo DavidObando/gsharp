@@ -87,9 +87,9 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
     }
 
     [Fact]
-    public void ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998()
+    public void ImportedEnumStackAlloc_UnderReference_CompilesCleanly()
     {
-        var fixtureDirectory = CreateArtifactDirectory(nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998));
+        var fixtureDirectory = CreateArtifactDirectory(nameof(ImportedEnumStackAlloc_UnderReference_CompilesCleanly));
         var fixturePath = Path.Combine(fixtureDirectory, "ImportedTypes.dll");
         string outputPath = null;
 
@@ -98,12 +98,12 @@ public class Issue2852GenericUnmanagedStackAllocEmitTests
             EmitFixture(fixturePath);
             outputPath = CompileLibrary(
                 ImportedEnumSource,
-                nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998),
+                nameof(ImportedEnumStackAlloc_UnderReference_CompilesCleanly),
                 fixturePath);
             IlVerifier.Verify(outputPath, new[] { fixturePath }, StackAllocIlVerifyIgnored);
 
             var loadContext = new AssemblyLoadContext(
-                nameof(ImportedEnumStackAlloc_UnderReference_CompilesWithoutGS9998),
+                nameof(ImportedEnumStackAlloc_UnderReference_CompilesCleanly),
                 isCollectible: true);
             try
             {
