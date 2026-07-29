@@ -797,12 +797,33 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the type is enumerable.</returns>
     public static bool TryGetClrEnumerableElementType(Type clrType, out Type elementType)
     {
-        foreach (var iface in EnumerateSelfAndInterfaces(clrType))
+        // Issue #2859: walk the interface closure transitively. `GetInterfaces()`
+        // on a type projected through a MetadataLoadContext does not always
+        // expand an interface's own base interfaces, so a class that declares
+        // only `IReadOnlyCollection[T]` (as every cs2gs-translated collection
+        // does) would otherwise never surface the `IEnumerable[T]` it derives.
+        var seen = new HashSet<Type>();
+        var pending = new Queue<Type>(EnumerateSelfAndInterfaces(clrType));
+        while (pending.Count > 0)
         {
+            Type iface = pending.Dequeue();
+            if (iface == null || !seen.Add(iface))
+            {
+                continue;
+            }
+
             if (iface.IsGenericType && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
             {
                 elementType = iface.GetGenericArguments()[0];
                 return true;
+            }
+
+            if (!ReferenceEquals(iface, clrType))
+            {
+                foreach (Type nested in iface.GetInterfaces())
+                {
+                    pending.Enqueue(nested);
+                }
             }
         }
 
@@ -836,12 +857,12 @@ internal sealed class MemberLookup
         }
 
         var enumeratorType = getEnumerator.ReturnType;
-        var moveNext = enumeratorType.GetMethod(
-            "MoveNext",
-            BindingFlags.Instance | BindingFlags.Public,
-            binder: null,
-            types: Type.EmptyTypes,
-            modifiers: null);
+
+        // Issue #2859: `MoveNext`/`Current` live on the base `IEnumerator`
+        // interface when the enumerator is an `IEnumerator[T]`, and
+        // `Type.GetMethod` does not search an interface's base interfaces.
+        var moveNext = SafeGetMethodIncludingSelfAndInterfaces(
+            enumeratorType, "MoveNext", Type.EmptyTypes);
         if (moveNext?.ReturnType.IsSameAs(typeof(bool)) != true)
         {
             elementType = null;
@@ -877,6 +898,17 @@ internal sealed class MemberLookup
         if (currentField != null)
         {
             elementType = currentField.FieldType;
+            return true;
+        }
+
+        // Issue #2859: an `IEnumerator[T]` declares `Current` on itself but a
+        // non-generic `IEnumerator` receiver (or an interface whose `Current`
+        // is inherited) needs the base-interface walk that `Type.GetProperty`
+        // skips for interface types.
+        var inheritedCurrent = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
+        if (inheritedCurrent != null)
+        {
+            elementType = inheritedCurrent.PropertyType;
             return true;
         }
 
@@ -2021,25 +2053,47 @@ internal sealed class MemberLookup
     /// Probes a user-defined <see cref="StructSymbol"/> for the
     /// duck-typed enumerable shape (<c>GetEnumerator() → MoveNext() / Current</c>).
     /// </summary>
+    /// <remarks>
+    /// Issue #2859: the enumerator returned by <c>GetEnumerator()</c> does not
+    /// have to be a user-declared type. The overwhelmingly common shape — the
+    /// one cs2gs emits for every C# class that implements
+    /// <c>IEnumerable&lt;T&gt;</c> — returns an imported
+    /// <c>IEnumerator[T]</c> (or a BCL struct enumerator such as
+    /// <c>List[T].Enumerator</c>). Those enumerators expose <c>Current</c> as a
+    /// property rather than a field, so the user-declared probe below cannot
+    /// see them; before this fix `for x in userList` fell through to the
+    /// indexer probe and reported <c>GS0116</c>. The lowerer's
+    /// <c>TryBuildMoveNextAndCurrent</c> already handles CLR enumerators, so
+    /// accepting them here is all that was missing.
+    /// </remarks>
     /// <param name="type">The user struct symbol to probe.</param>
     /// <param name="elementType">The element <see cref="TypeSymbol"/>, on success.</param>
     /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
     public static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol elementType)
     {
-        if (TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) &&
-            getEnumerator.Parameters.Length == 0 &&
-            getEnumerator.Type is StructSymbol enumeratorType &&
-            TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
-            moveNext.Parameters.Length == 0 &&
-            moveNext.Type == TypeSymbol.Bool &&
-            enumeratorType.TryGetField("Current", out var currentField))
+        elementType = null;
+        if (!TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) ||
+            getEnumerator.Parameters.Length != 0 ||
+            getEnumerator.Type is null)
         {
-            elementType = currentField.Type;
-            return true;
+            return false;
         }
 
-        elementType = null;
-        return false;
+        if (getEnumerator.Type is StructSymbol enumeratorType)
+        {
+            if (TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
+                moveNext.Parameters.Length == 0 &&
+                moveNext.Type == TypeSymbol.Bool &&
+                enumeratorType.TryGetField("Current", out var currentField))
+            {
+                elementType = currentField.Type;
+                return true;
+            }
+
+            return false;
+        }
+
+        return TryGetClrEnumeratorElementType(getEnumerator.Type, out elementType);
     }
 
     /// <summary>
@@ -3826,6 +3880,57 @@ internal sealed class MemberLookup
             projectedType = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Issue #2859: resolves the element type of an imported (CLR) enumerator
+    /// such as <c>IEnumerator[T]</c> or <c>List[T].Enumerator</c>. Prefers the
+    /// symbolic type argument over the reflected <c>Current</c> property
+    /// because a constructed generic closed over a same-compilation type is
+    /// deliberately erased to the <c>&lt;object&gt;</c> shape on
+    /// <see cref="TypeSymbol.ClrType"/> (#313/#939).
+    /// </summary>
+    /// <param name="enumeratorType">The enumerator type returned by <c>GetEnumerator()</c>.</param>
+    /// <param name="elementType">The element <see cref="TypeSymbol"/>, on success.</param>
+    /// <returns><see langword="true"/> when the enumerator shape matches.</returns>
+    private static bool TryGetClrEnumeratorElementType(TypeSymbol enumeratorType, out TypeSymbol elementType)
+    {
+        elementType = null;
+        Type enumeratorClr = enumeratorType.ClrType;
+        if (enumeratorClr == null)
+        {
+            return false;
+        }
+
+        MethodInfo moveNext = SafeGetMethodIncludingSelfAndInterfaces(
+            enumeratorClr, "MoveNext", Type.EmptyTypes);
+        PropertyInfo current = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorClr, "Current");
+        if (moveNext == null || current == null)
+        {
+            return false;
+        }
+
+        if (enumeratorType is ImportedTypeSymbol imported &&
+            imported.HasSubstitutableTypeArgument &&
+            imported.OpenDefinition != null &&
+            !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            PropertyInfo openCurrent = SafeGetPropertyIncludingSelfAndInterfaces(
+                imported.OpenDefinition, "Current");
+            if (openCurrent != null)
+            {
+                TypeSymbol mapped = MapOpenClrTypeToSymbolic(
+                    openCurrent.PropertyType, imported.OpenDefinition, imported.TypeArguments);
+                if (mapped != null && mapped != TypeSymbol.Error)
+                {
+                    elementType = mapped;
+                    return true;
+                }
+            }
+        }
+
+        elementType = TypeSymbol.FromClrType(current.PropertyType);
+        return elementType != null && elementType != TypeSymbol.Error;
     }
 
     private static PropertyInfo[] CollectVisibleClrIndexers(TypeSymbol targetType, Type clrTarget)
