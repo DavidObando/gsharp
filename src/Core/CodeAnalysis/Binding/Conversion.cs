@@ -1483,6 +1483,20 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #2841: a user-declared named delegate (ADR-0059 / issue #255) is
+        // emitted as a sealed class deriving from `System.MulticastDelegate`, so
+        // it is unconditionally a reference type. Like `StructSymbol`/
+        // `InterfaceSymbol` above it carries NO `ClrType` at bind time (its
+        // TypeDef only exists after emit), so the CLR-backing fallback below
+        // cannot recognise it. Without this arm the `T -> U?` reference-wrap arm
+        // (issue #1121) never ran for a `D?` target, and every delegate
+        // conversion path downstream tested the still-wrapped
+        // `NullableTypeSymbol`, so a lambda bound fine against `D` but not `D?`.
+        if (type is DelegateTypeSymbol)
+        {
+            return true;
+        }
+
         // Issue #2188: a reference-constrained type parameter (`[T class …]`,
         // i.e. `HasReferenceTypeConstraint`, or a class-base constraint such as
         // `[T Box]`) is PROVABLY a reference type. It therefore participates in
