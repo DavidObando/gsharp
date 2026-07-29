@@ -488,6 +488,7 @@ internal sealed class WellKnownReferences
     /// Covariant class overrides emitted through MethodImpl rows require this
     /// marker so further-derived overrides preserve the full base slot chain.
     /// </summary>
+    /// <returns>The cached constructor reference.</returns>
     public MemberReferenceHandle GetPreserveBaseOverridesAttributeCtorRef()
     {
         if (this.preserveBaseOverridesAttributeCtorRef.HasValue)
