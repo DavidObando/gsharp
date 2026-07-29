@@ -362,18 +362,12 @@ internal sealed class FunctionEmitter
                 // at the last-visited BoundNode (or the function's syntax).
                 try
                 {
-                    emitter.EmitBlock(body);
+                    emitter.EmitMethodBody(body, alwaysAppendRet: function.Type == TypeSymbol.Void);
                 }
                 catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
                 {
                     var anchor = emitter.CurrentAnchor ?? function.Declaration ?? body.Syntax;
                     EmitDiagnosticException.Wrap(anchor, ex);
-                }
-
-                // Always cap with a trailing ret. Lowering does not guarantee one for void.
-                if (function.Type == TypeSymbol.Void)
-                {
-                    il.OpCode(ILOpCode.Ret);
                 }
 
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);

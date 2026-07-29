@@ -352,17 +352,6 @@ public sealed class ControlFlowGraph
                         statements.Add(statement);
                         break;
                     case BoundNodeKind.PatternSwitchStatement:
-                        statements.Add(statement);
-
-                        // An exhaustive switch (default present and every arm
-                        // returns/throws) terminates the block like a return;
-                        // otherwise it falls through to the next statement.
-                        if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
-                        {
-                            StartBlock();
-                        }
-
-                        break;
                     case BoundNodeKind.FixedStatement:
                         statements.Add(statement);
 
@@ -478,20 +467,6 @@ public sealed class ControlFlowGraph
                             Connect(current, end);
                             break;
                         case BoundNodeKind.PatternSwitchStatement:
-                            // An exhaustive switch (default present and every arm
-                            // returns/throws) terminates control like a return and
-                            // connects to the end block. A non-exhaustive switch may
-                            // fall through to the next statement (issue #1596).
-                            if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
-                            {
-                                Connect(current, end);
-                            }
-                            else if (isLastStatementInBlock)
-                            {
-                                Connect(current, next);
-                            }
-
-                            break;
                         case BoundNodeKind.FixedStatement:
                             if (StatementDefinitelyReturns(statement))
                             {

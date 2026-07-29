@@ -47,7 +47,7 @@ public class Issue2843FixedDefiniteReturnEmitTests
             public var result = F([]int32{1, 2, 3})
             """;
 
-        var assembly = CompileAndRun(Source);
+        var assembly = CompileAndRun(Source, verifyIl: true);
 
         Assert.Equal(3, GetField(assembly, "result"));
     }
@@ -71,7 +71,7 @@ public class Issue2843FixedDefiniteReturnEmitTests
             public var result = F([]int32{1, 2})
             """;
 
-        var assembly = CompileAndRun(Source);
+        var assembly = CompileAndRun(Source, verifyIl: true);
 
         Assert.Equal(2, GetField(assembly, "result"));
     }
@@ -104,6 +104,81 @@ public class Issue2843FixedDefiniteReturnEmitTests
 
         Assert.Equal(1, GetField(assembly, "whenTrue"));
         Assert.Equal(2, GetField(assembly, "whenFalse"));
+    }
+
+    [Fact]
+    public void ThrowAsSoleExitInsideFixed_EmitsAndRuns()
+    {
+        const string Source = """
+            package Issue2843.Throw
+            import System
+
+            func F(xs []int32) int32 {
+                unsafe {
+                    fixed p *int32 = xs {
+                        throw InvalidOperationException("boom")
+                    }
+                }
+            }
+
+            public var result = 0
+            try {
+                F([]int32{1})
+            } catch (ex InvalidOperationException) {
+                result = 1
+            }
+            """;
+
+        var assembly = CompileAndRun(Source, verifyIl: true);
+
+        Assert.Equal(1, GetField(assembly, "result"));
+    }
+
+    [Fact]
+    public void DeadCodeAfterReturningFixed_EmitsAndRuns()
+    {
+        const string Source = """
+            package Issue2843.FixedDeadCode
+
+            func F(xs []int32, condition bool) int32 {
+                unsafe {
+                    fixed p *int32 = xs {
+                        if condition {
+                            return 1
+                        }
+                        return 2
+                    }
+                }
+                var unreachable = 3
+            }
+
+            public var whenTrue = F([]int32{1}, true)
+            public var whenFalse = F([]int32{1}, false)
+            """;
+
+        var assembly = CompileAndRun(Source, verifyIl: true);
+
+        Assert.Equal(1, GetField(assembly, "whenTrue"));
+        Assert.Equal(2, GetField(assembly, "whenFalse"));
+    }
+
+    [Fact]
+    public void DeadCodeAfterReturn_EmitsAndRuns()
+    {
+        const string Source = """
+            package Issue2843.PlainDeadCode
+
+            func F() int32 {
+                return 1
+                var unreachable = 3
+            }
+
+            public var result = F()
+            """;
+
+        var assembly = CompileAndRun(Source, verifyIl: true);
+
+        Assert.Equal(1, GetField(assembly, "result"));
     }
 
     [Fact]
