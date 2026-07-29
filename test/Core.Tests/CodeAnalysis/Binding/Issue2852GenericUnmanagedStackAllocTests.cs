@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -154,7 +155,7 @@ public class Issue2852GenericUnmanagedStackAllocTests
     }
 
     [Fact]
-    public void StackAlloc_ImportedStructContainingNullableField_Binds()
+    public void StackAlloc_ImportedStructContainingNullableField_ReportsGS0399()
     {
         const string source = """
             package p
@@ -164,21 +165,53 @@ public class Issue2852GenericUnmanagedStackAllocTests
             }
             """;
 
-        Assert.Empty(GetDiagnostics(source));
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0399");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS9998");
     }
 
     [Fact]
-    public void StackAlloc_TopLevelNullable_ReportsGS0399()
+    public void StackAlloc_ImportedOpenGenericDefinition_ReportsGS0399()
     {
         const string source = """
+            package definitions
+            struct Empty[T] {}
+
             package p
-            import System
+            import definitions
             func F() {
-                var values = stackalloc [4]Nullable[int32]
+                var values = stackalloc [4]Empty
             }
             """;
 
-        Assert.Contains(GetDiagnostics(source), d => d.Id == "GS0399");
+        var diagnostics = GetDiagnostics(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0399");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS9998");
+    }
+
+    [Fact]
+    public void Classifier_ImportedGenericParameter_IsNotUnmanaged()
+    {
+        var genericParameter = typeof(Issue2852ImportedUnmanagedGenericHost<>).GetGenericArguments()[0];
+        var type = TypeSymbol.FromClrType(genericParameter);
+
+        Assert.False(new BlittableDetector().IsUnmanaged(type));
+    }
+
+    [Fact]
+    public void Classifier_ImportedOpenGenericDefinition_IsNotUnmanaged()
+    {
+        var type = TypeSymbol.FromClrType(typeof(Issue2852ImportedEmptyGenericStruct<>));
+
+        Assert.False(new BlittableDetector().IsUnmanaged(type));
+    }
+
+    [Fact]
+    public void Classifier_ClosedImportedGenericStruct_RemainsUnmanaged()
+    {
+        var type = TypeSymbol.FromClrType(typeof(Issue2852ImportedEmptyGenericStruct<int>));
+
+        Assert.True(new BlittableDetector().IsUnmanaged(type));
     }
 
     private static ImmutableArray<Diagnostic> GetDiagnostics(string source)
@@ -228,4 +261,13 @@ public unsafe struct Issue2852ImportedPointerFields
 public struct Issue2852ImportedNullableFieldStruct
 {
     public int? Value { get; set; }
+}
+
+public struct Issue2852ImportedEmptyGenericStruct<T>
+{
+}
+
+public struct Issue2852ImportedUnmanagedGenericHost<T>
+    where T : unmanaged
+{
 }

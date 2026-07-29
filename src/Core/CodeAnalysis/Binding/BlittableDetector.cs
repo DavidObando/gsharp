@@ -161,6 +161,11 @@ internal sealed class BlittableDetector
 
         if (type is StructSymbol structSym)
         {
+            if (structSym.IsGenericDefinition)
+            {
+                return false;
+            }
+
             return IsBlittableStruct(structSym, visiting, unmanaged);
         }
 
@@ -168,6 +173,11 @@ internal sealed class BlittableDetector
         // Marshal.SizeOf can accept structs that still contain GC references.
         // Blittability keeps the existing runtime marshalling classification.
         var clr = type.ClrType;
+        if (clr?.IsGenericParameter == true || clr?.ContainsGenericParameters == true)
+        {
+            return false;
+        }
+
         if (clr != null && clr.IsValueType)
         {
             if (clr.IsEnum)
@@ -204,7 +214,9 @@ internal sealed class BlittableDetector
     {
         if (type == null
             || type.IsByRef
-            || type.IsByRefLike)
+            || type.IsByRefLike
+            || type.IsGenericParameter
+            || type.ContainsGenericParameters)
         {
             return false;
         }
@@ -215,6 +227,14 @@ internal sealed class BlittableDetector
         }
 
         if (!type.IsValueType)
+        {
+            return false;
+        }
+
+        // C# excludes Nullable<T> from the unmanaged-type set. That applies
+        // recursively too: a struct containing an int? field is not unmanaged.
+        if (type.IsGenericType
+            && type.GetGenericTypeDefinition().FullName == "System.Nullable`1")
         {
             return false;
         }
