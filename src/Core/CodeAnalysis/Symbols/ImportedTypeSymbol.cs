@@ -377,7 +377,8 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 isVirtual: (getter ?? setter)?.IsVirtual == true,
                 isOverride: ClrTypeUtilities.SafeIsOverride(getter ?? setter),
                 isStatic: (getter ?? setter)?.IsStatic == true,
-                isInitOnly: setter != null && IsInitOnlySetter(setter)));
+                isInitOnly: setter != null && IsInitOnlySetter(setter),
+                metadataIsAbstract: (getter ?? setter)?.IsAbstract == true));
         }
 
         var primaryConstructorParameters = BuildPrimaryConstructorParameters(
