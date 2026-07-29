@@ -27,6 +27,14 @@ namespace Cs2Gs.Pipeline;
 /// </summary>
 public sealed class TranslateStage : IMigrationStage
 {
+    /// <summary>
+    /// The maximum number of individual C# binding errors written to
+    /// <c>translate.log</c> by <see cref="NoteCSharpBindingErrors"/>; a project
+    /// bound against a stale reference assembly can report hundreds of
+    /// cascading errors and the log is a diagnostic aid, not a build log.
+    /// </summary>
+    private const int CSharpBindingErrorNoteLimit = 25;
+
     /// <inheritdoc/>
     public MigrationStageKind Kind => MigrationStageKind.Translate;
 
@@ -114,6 +122,7 @@ public sealed class TranslateStage : IMigrationStage
         // best-effort append-only text log TestParityStage's Note already
         // uses for non-fatal, informational events (test-parity.log).
         NoteNuGetAuditAdvisories(context, project);
+        NoteCSharpBindingErrors(context, project);
 
         var usedOutputPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (context.Options.OutputLayout == MigrationOutputLayout.DiagnosticRun)
@@ -542,6 +551,86 @@ public sealed class TranslateStage : IMigrationStage
             Note(context, "NuGet audit advisory (CS2GS0003, non-fatal): " + advisory.GetMessage());
         }
     }
+
+    /// <summary>
+    /// Issue #2842: records every ordinary C# compiler error the loaded project
+    /// reported into the per-app <c>translate.log</c> and onto stderr.
+    /// <para>
+    /// The <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/> gate above is
+    /// deliberately narrow — it stops only when MSBuild could not open the
+    /// project at all — because some corpus fixtures carry a deliberate C#
+    /// error to exercise a later stage (<c>CompileGap-Library</c>'s
+    /// <c>Residual.Probe</c>). The cost of that narrowness was that a project
+    /// whose C# genuinely does NOT bind was translated anyway, silently and
+    /// with no signal: <c>CSharpProjectLoader.SignificantDiagnostics</c>
+    /// already collected the errors into
+    /// <see cref="LoadedCSharpProject.LoadDiagnostics"/>, but nothing past the
+    /// workspace gate ever looked at them.
+    /// </para>
+    /// <para>
+    /// That is not a cosmetic gap. cs2gs resolves a <c>ProjectReference</c> to
+    /// the sibling's on-disk reference assembly
+    /// (<c>obj/&lt;Config&gt;/ref/X.dll</c>), so a STALE build artifact makes a
+    /// member vanish while its containing type still resolves. Roslyn then
+    /// hands the translator an error type with a null symbol, every
+    /// nullability predicate keyed on that symbol answers "no", and the
+    /// migration emits G# that is subtly wrong in a way whose only visible
+    /// symptom is an inexplicable <c>gsc</c> diagnostic in an unrelated place.
+    /// That is exactly how issue #2842 presented: a stale <c>Oahu.Data</c>
+    /// reference assembly turned <c>conversion.FailureReason</c> into an
+    /// unbound expression, which suppressed the <c>!!</c> forgiveness and
+    /// produced <c>GS0156</c> hundreds of lines downstream.
+    /// </para>
+    /// <para>
+    /// Reporting is non-fatal so the deliberate-error fixtures keep exercising
+    /// the stages after this one, and no triage artifact is produced so run
+    /// fingerprints and the gap ledger are unchanged.
+    /// </para>
+    /// </summary>
+    private static void NoteCSharpBindingErrors(StageExecutionContext context, LoadedCSharpProject project)
+    {
+        List<Diagnostic> errors = project.LoadDiagnostics
+            .Where(IsCSharpCompilerError)
+            .ToList();
+        if (errors.Count == 0)
+        {
+            return;
+        }
+
+        string header =
+            $"C# binding errors ({errors.Count}, non-fatal): the loaded C# project does not bind cleanly, so the " +
+            "emitted G# is translated from partially-unbound syntax and may be silently wrong. A common cause " +
+            "is a STALE build artifact — cs2gs binds each ProjectReference against the sibling's on-disk " +
+            "reference assembly (obj/<Config>/ref/*.dll), so rebuild the C# solution in the same configuration " +
+            "and re-run.";
+        Note(context, header);
+        foreach (Diagnostic error in errors.Take(CSharpBindingErrorNoteLimit))
+        {
+            Note(context, $"  {error.Id} {error.Location.GetLineSpan()}: {error.GetMessage()}");
+        }
+
+        if (errors.Count > CSharpBindingErrorNoteLimit)
+        {
+            Note(context, $"  ... and {errors.Count - CSharpBindingErrorNoteLimit} more.");
+        }
+
+        string warning =
+            $"cs2gs: warning: {context.App.Id}: {errors.Count} C# binding error(s) in the source project; " +
+            $"translated G# may be wrong (first: {errors[0].Id} {errors[0].GetMessage()}). " +
+            "See translate.log; rebuild the C# solution if its build artifacts are stale.";
+        Console.Error.WriteLine(warning);
+    }
+
+    /// <summary>
+    /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own
+    /// loader diagnostics share the <c>CS</c> prefix (<c>CS2GS0001</c>
+    /// workspace-load failure, <c>CS2GS0003</c> NuGet audit advisory) and are
+    /// already handled by their own gates, so they are excluded here.
+    /// </summary>
+    private static bool IsCSharpCompilerError(Diagnostic diagnostic) =>
+        diagnostic.Severity == DiagnosticSeverity.Error
+        && diagnostic.Id.StartsWith("CS", StringComparison.Ordinal)
+        && !diagnostic.Id.StartsWith("CS2GS", StringComparison.Ordinal);
 
     /// <summary>
     /// A best-effort, append-only per-app text log — the Translate-stage
