@@ -836,7 +836,7 @@ internal sealed partial class StatementBinder
                 // (a `modreq(InAttribute)` ref-return); the method-reference
                 // encoder reproduces that modreq (see EncodeReturnClr).
                 pinKind = FixedPinKind.PinnableReference;
-                elementType = TypeSymbol.FromClrType(pinnableElementClr);
+                elementType = ResolvePinnableElementType(source.Type, pinnableElementClr);
                 pinnedUnderlying = ByRefTypeSymbol.Get(elementType);
             }
             else
@@ -948,6 +948,52 @@ internal sealed partial class StatementBinder
         method = found;
         elementClrType = found.ReturnType.GetElementType();
         return elementClrType != null;
+    }
+
+    // Issue #2838: recover the SYMBOLIC element type of a span-like pin source.
+    // `TryGetPinnableReference` resolves through `sourceType.ClrType`, which for
+    // a `Span[T]` inside a generic method is the type-erased `Span<object>` — so
+    // its ref-return element is `System.Object`, not `T`. Binding the pointer as
+    // `*object` produced a `pinned object&` local and, because an erased pointee
+    // is not recognized as a value type, an 8-byte pointer-arithmetic stride for
+    // every instantiation. Re-resolve the method on the OPEN definition (whose
+    // ref-return is `!0`) and map that back through the receiver's real type
+    // arguments. Falls back to the CLR element type for non-generic and fully
+    // closed sources, preserving existing behavior.
+    private static TypeSymbol ResolvePinnableElementType(TypeSymbol sourceType, System.Type pinnableElementClr)
+    {
+        if (sourceType is ImportedTypeSymbol { OpenDefinition: not null } imported
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            System.Reflection.MethodInfo openMethod = null;
+            try
+            {
+                openMethod = imported.OpenDefinition.GetMethod(
+                    "GetPinnableReference",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                    binder: null,
+                    types: System.Type.EmptyTypes,
+                    modifiers: null);
+            }
+            catch (System.Reflection.AmbiguousMatchException)
+            {
+                openMethod = null;
+            }
+
+            var openElement = openMethod?.ReturnType.IsByRef == true
+                ? openMethod.ReturnType.GetElementType()
+                : null;
+            if (openElement != null)
+            {
+                var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openElement, imported);
+                if (mapped != null)
+                {
+                    return mapped;
+                }
+            }
+        }
+
+        return TypeSymbol.FromClrType(pinnableElementClr);
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)

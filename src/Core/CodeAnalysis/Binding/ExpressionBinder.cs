@@ -1415,6 +1415,23 @@ internal sealed partial class ExpressionBinder
             return GetEffectiveArgumentClrTypeForOverloadResolution(byRef.PointeeType)?.MakeByRefType();
         }
 
+        // Issue #2838: a pointer whose pointee has no CLR identity — canonically
+        // `*T` under `T : unmanaged`, produced by `fixed p *T = span` — likewise
+        // rides through its pointee's erasure. Without this the pointer argument
+        // yielded no effective CLR type at all, so overload resolution never ran
+        // and an imported generic call over it (e.g. `Vector256.Load(p)`) dead-
+        // ended with GS0159. The inferred `object` erasure is re-projected back
+        // to the symbolic type argument by the same recovery step that handles
+        // every other erased inference.
+        if (typeSymbol is PointerTypeSymbol pointer)
+        {
+            var pointeeClr = GetEffectiveArgumentClrTypeForOverloadResolution(pointer.PointeeType);
+            if (pointeeClr != null && !pointeeClr.IsByRef)
+            {
+                return pointeeClr.MakePointerType();
+            }
+        }
+
         // Issue #2182: a G# slice `[]T` whose element type has no CLR backing
         // (a generic type parameter, or another same-compilation user type)
         // has a null `ClrType`, so `GetEffectiveArgumentClrType` returned null

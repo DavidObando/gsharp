@@ -458,6 +458,10 @@ internal sealed partial class ExpressionBinder
 
     private static int StaticPointeeSize(TypeSymbol pointee)
     {
+        // Issue #2838: an open type parameter has no compile-time size, so
+        // IsStructPointee must route it to the runtime `sizeof` opcode instead.
+        System.Diagnostics.Debug.Assert(pointee is not TypeParameterSymbol, "open type-parameter pointee reached StaticPointeeSize");
+
         if (pointee == TypeSymbol.Int8 || pointee == TypeSymbol.UInt8 || pointee == TypeSymbol.Bool)
         {
             return 1;
@@ -485,12 +489,24 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// ADR-0122 §4 / issue #1034. Returns whether <paramref name="pointee"/> is a
-    /// user/value struct pointee whose unmanaged size is not a known compile-time
-    /// constant — so pointer arithmetic must scale by the emitted CIL
-    /// <c>sizeof</c> opcode rather than a literal.
+    /// pointee whose unmanaged size is not a known compile-time constant — so
+    /// pointer arithmetic must scale by the emitted CIL <c>sizeof</c> opcode
+    /// rather than a literal.
+    /// <para>
+    /// Issue #2838: an open type parameter (<c>*T</c> under
+    /// <c>where T : unmanaged</c>) belongs in this bucket. A
+    /// <c>TypeParameterSymbol</c> carries no <see cref="TypeSymbol.ClrType"/>
+    /// at all, so it matched neither the struct case nor the value-type case
+    /// and fell through to <see cref="StaticPointeeSize"/>, silently scaling by
+    /// <c>nint.Size</c> (8) for EVERY instantiation. That produced no
+    /// diagnostic and no exception, just wrong answers for any <c>T</c> whose
+    /// size is not 8. The size is only known per-instantiation at runtime, so
+    /// it must always come from <c>sizeof !!T</c>.
+    /// </para>
     /// </summary>
     private static bool IsStructPointee(TypeSymbol pointee) =>
-        pointee is StructSymbol { IsClass: false }
+        pointee is TypeParameterSymbol
+        || pointee is StructSymbol { IsClass: false }
         || (pointee is not StructSymbol and not PointerTypeSymbol
             && pointee?.ClrType is { IsValueType: true }
             && !TypeSymbol.IsLegalPointeeType(pointee));
