@@ -252,6 +252,17 @@ public sealed partial class CSharpToGSharpTranslator
                         return delegateInvokeResult;
                     }
 
+                    if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression)
+                        && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
+                            is ElementBindingExpressionSyntax conditionalIndexBinding
+                        && !this.ConditionalIndexReceiverIsNullable(conditionalAccess.Expression))
+                    {
+                        return this.TranslateNonNullableConditionalIndex(
+                            conditionalAccess.WhenNotNull,
+                            conditionalIndexBinding,
+                            this.TranslateExpression(conditionalAccess.Expression));
+                    }
+
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
                         this.TranslateExpression(conditionalAccess.WhenNotNull));
@@ -290,7 +301,14 @@ public sealed partial class CSharpToGSharpTranslator
                         ? this.TranslateIndexArgumentWithNullForgiveness(
                             elementBinding.ArgumentList.Arguments[0])
                         : new IdentifierExpression("nil");
-                    return new IndexExpression(new ConditionalReceiverExpression(), bindingIndex);
+                    GExpression bindingReceiver =
+                        this.state.ConditionalElementReceivers.TryGetValue(
+                            elementBinding,
+                            out GExpression elementReceiver)
+                                ? elementReceiver
+                                : this.state.ConditionalReceiverReplacement ??
+                                    new ConditionalReceiverExpression();
+                    return new IndexExpression(bindingReceiver, bindingIndex);
 
                 case TypeOfExpressionSyntax typeOf:
                     return new TypeOfExpression(this.MapTypeOfOperand(typeOf.Type));
@@ -427,6 +445,61 @@ public sealed partial class CSharpToGSharpTranslator
                     return new IdentifierExpression("nil");
             }
         }
+
+        private static ElementBindingExpressionSyntax FindLeadingElementBinding(
+            ExpressionSyntax expression) =>
+            expression switch
+            {
+                ElementBindingExpressionSyntax elementBinding => elementBinding,
+                ParenthesizedExpressionSyntax parenthesized =>
+                    FindLeadingElementBinding(parenthesized.Expression),
+                InvocationExpressionSyntax invocation =>
+                    FindLeadingElementBinding(invocation.Expression),
+                MemberAccessExpressionSyntax memberAccess =>
+                    FindLeadingElementBinding(memberAccess.Expression),
+                ElementAccessExpressionSyntax elementAccess =>
+                    FindLeadingElementBinding(elementAccess.Expression),
+                _ => null,
+            };
+
+        private GExpression TranslateNonNullableConditionalIndex(
+            ExpressionSyntax continuation,
+            ElementBindingExpressionSyntax elementBinding,
+            GExpression receiver)
+        {
+            this.state.ConditionalElementReceivers.Add(elementBinding, receiver);
+            try
+            {
+                return this.TranslateExpression(continuation);
+            }
+            finally
+            {
+                this.state.ConditionalElementReceivers.Remove(elementBinding);
+            }
+        }
+
+        private bool ConditionalIndexReceiverIsNullable(ExpressionSyntax receiver)
+        {
+            ExpressionSyntax result = FindConditionalAccessResult(receiver);
+            TypeInfo resultTypeInfo = this.context.GetTypeInfo(result);
+            ITypeSymbol resultType = resultTypeInfo.Type ?? resultTypeInfo.ConvertedType;
+            return FindLeadingElementBinding(receiver) != null
+                || resultType is INamedTypeSymbol
+                    { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                || this.NullableReferenceValueMayBeNull(result)
+                || this.ReceiverValueIsPromotedNullable(result)
+                || this.ReceiverIsNullableReferenceFieldOrProperty(result);
+        }
+
+        private static ExpressionSyntax FindConditionalAccessResult(ExpressionSyntax expression) =>
+            expression switch
+            {
+                ParenthesizedExpressionSyntax parenthesized =>
+                    FindConditionalAccessResult(parenthesized.Expression),
+                ConditionalAccessExpressionSyntax conditionalAccess =>
+                    FindConditionalAccessResult(conditionalAccess.WhenNotNull),
+                _ => expression,
+            };
 
         // A constant pattern whose expression is actually a bare/qualified TYPE
         // reference (Roslyn parses `is T`/`not T` after a pattern combinator as a

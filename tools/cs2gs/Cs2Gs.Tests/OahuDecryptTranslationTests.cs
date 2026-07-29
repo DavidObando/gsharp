@@ -743,6 +743,130 @@ namespace Demo
     }
 
     /// <summary>
+    /// Oahu.Decrypt's <c>Artist?.Split(';')?[0]</c> uses a second safe index
+    /// even though <c>String.Split</c> returns a non-null array. Keep null
+    /// propagation from <c>Artist</c>, but render the dependent index as ordinary
+    /// <c>[0]</c>; a genuinely nullable chain result must retain <c>?[0]</c>.
+    /// </summary>
+    [Fact]
+    public void NullConditionalIndex_UsesImmediateChainResultNullability()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Provider
+    {
+        public string[]? Items { get; set; }
+        public string[]? MaybeItems() => null;
+        public ValueProvider? MaybeValue { get; set; }
+        public ValueProvider? MaybeValueResult() => null;
+
+        public string[]? this[int index] => null;
+    }
+
+    public readonly struct ValueProvider
+    {
+        public string[] this[int index] => System.Array.Empty<string>();
+    }
+
+    public class MetadataItems
+    {
+        public string? Artist { get; set; }
+        public Provider? Provider { get; set; }
+
+        public string? FirstAuthor => Artist?.Split(';')?[0];
+        public string? MaybeFirst => Provider?.MaybeItems()?[0];
+        public string? MaybeMember(Provider? p) => p?.Items?[0];
+        public string? MaybeIndexer(Provider? p) => p?[0]?[0];
+        public string[]? NullableValueProperty(Provider? p) => p?.MaybeValue?[5];
+        public string[]? NullableValueMethod(Provider? p) => p?.MaybeValueResult()?[6];
+
+        public string? FlowNarrowedMember(Provider p)
+        {
+            if (p.Items is null)
+            {
+                return null;
+            }
+
+            return p?.Items?[0];
+        }
+    }
+}");
+
+        Assert.Contains("Artist?.Split(';')[0]", printed);
+        Assert.DoesNotContain("Artist?.Split(';')?[0]", printed);
+        Assert.Contains("Provider?.MaybeItems()?[0]", printed);
+        Assert.Contains("p?.Items?[0]", printed);
+        Assert.Contains("p?[0]?[0]", printed);
+        Assert.Contains("p?.MaybeValue?[5]", printed);
+        Assert.Contains("p?.MaybeValueResult()?[6]", printed);
+        Assert.Contains("return p?.Items?[0]", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    [Fact]
+    public void NullConditionalIndex_PreservesLiftedReceiverNullPropagation()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class ClassProvider
+    {
+        public string[] Items => System.Array.Empty<string>();
+        public string[] this[int index] => System.Array.Empty<string>();
+    }
+
+    public readonly struct ValueProvider
+    {
+        public string[] this[int index] => System.Array.Empty<string>();
+    }
+
+    public class C
+    {
+        public string? ClassReceiver(ClassProvider? p) => p?[1]?[2];
+        public string? ValueReceiver(ValueProvider? p) => p?[3]?[4];
+    }
+}");
+
+        Assert.Contains("p?[1]?[2]", printed);
+        Assert.Contains("p?[3]?[4]", printed);
+        Assert.DoesNotContain("!!", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    [Fact]
+    public void NullConditionalIndex_RetainsSafeIndexForPromotedMemberBindings()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Provider
+    {
+        public string[] FieldItems = System.Array.Empty<string>();
+        public string[] PropertyItems { get; set; } = System.Array.Empty<string>();
+
+        public void Clear()
+        {
+            FieldItems = null;
+            PropertyItems = null;
+        }
+    }
+
+    public class C
+    {
+        public string Field(Provider p) => p?.FieldItems?[0];
+        public string Property(Provider p) => p?.PropertyItems?[0];
+    }
+}");
+
+        Assert.Contains("p?.FieldItems?[0]", printed);
+        Assert.Contains("p?.PropertyItems?[0]", printed);
+        AssertGscCompiles(printed, "GS0300");
+    }
+
+    /// <summary>
     /// A tuple literal element is a value position: a declared-nullable
     /// (<c>T?</c>) operand flow-proven non-null by a preceding guard must be
     /// emitted with the G# non-null assertion (<c>x!!</c>), because G# does not
@@ -792,7 +916,7 @@ namespace Demo
         return printed;
     }
 
-    private static void AssertGscCompiles(string source)
+    private static void AssertGscCompiles(string source, params string[] forbiddenDiagnostics)
     {
         string compiler =
             GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory) ??
@@ -817,6 +941,10 @@ namespace Demo
                 Array.Empty<string>());
 
             Assert.True(result.Succeeded, result.Output);
+            foreach (string diagnostic in forbiddenDiagnostics)
+            {
+                Assert.DoesNotContain(diagnostic, result.Output);
+            }
         }
         finally
         {
