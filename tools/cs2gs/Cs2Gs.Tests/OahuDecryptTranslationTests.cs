@@ -3,9 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -625,8 +628,9 @@ namespace Demo
     /// Defect #914-2: a C# iterator method declared to return
     /// <c>IEnumerator&lt;T&gt;</c> maps to the G# return type
     /// <c>IEnumerator[T]</c> (NOT <c>sequence[T]</c>), so it satisfies
-    /// <c>IEnumerable[T].GetEnumerator</c> and forms the dual-GetEnumerator bridge
-    /// with the non-generic <c>func GetEnumerator() IEnumerator</c> (issue #985).
+    /// <c>IEnumerable[T].GetEnumerator</c>. The explicit non-generic
+    /// <c>IEnumerable.GetEnumerator</c> keeps its qualifier so imported metadata
+    /// never contains a return-type-only public overload pair (issue #2822).
     /// A method returning <c>IEnumerable&lt;T&gt;</c> still maps to
     /// <c>sequence[T]</c>.
     /// </summary>
@@ -661,11 +665,34 @@ namespace Demo
         Assert.Contains("func GetEnumerator() IEnumerator[T]", printed);
         Assert.DoesNotContain("func GetEnumerator() sequence[T]", printed);
 
-        // The non-generic bridge is retained (expression-bodied → arrow form).
-        Assert.Contains("func GetEnumerator() IEnumerator -> GetEnumerator()", printed);
+        // The non-generic explicit implementation keeps its qualifier and
+        // C#-faithful private visibility.
+        Assert.Contains("private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()", printed);
+        Assert.DoesNotContain("\n    func GetEnumerator() IEnumerator ->", printed);
 
         // The IEnumerable<T> generator still lowers to sequence[T].
         Assert.Contains("func All() sequence[T]", printed);
+        AssertGscCompiles(printed);
+    }
+
+    [Fact]
+    public void GenericImportedExplicitInterfaceQualifier_FallsBackAndCompiles()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+
+    public class Value<T> : IEquatable<T>
+    {
+        bool IEquatable<T>.Equals(T other) => true;
+    }
+}");
+
+        Assert.Contains("func Equals(other T) bool -> true", printed);
+        Assert.DoesNotContain("(IEquatable[T])", printed);
+        Assert.DoesNotContain("private func Equals", printed);
+        AssertGscCompiles(printed);
     }
 
     /// <summary>
@@ -763,5 +790,43 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static void AssertGscCompiles(string source)
+    {
+        string compiler =
+            GscInvoker.Resolve(null, "Release", AppContext.BaseDirectory) ??
+            GscInvoker.Resolve(null, "Debug", AppContext.BaseDirectory);
+        Assert.NotNull(compiler);
+
+        string directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "compile-tests",
+            "issue2822",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string sourcePath = Path.Combine(directory, "translated.gs");
+            File.WriteAllText(sourcePath, source);
+            GscResult result = new GscInvoker(compiler).Compile(
+                new[] { sourcePath },
+                Path.Combine(directory, "translated.dll"),
+                TargetKind.Library,
+                Array.Empty<string>());
+
+            Assert.True(result.Succeeded, result.Output);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 }

@@ -148,6 +148,94 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Resolves the public, non-generic, parameterless <c>GetEnumerator</c>
+    /// method used by both binding and lowering.
+    /// </summary>
+    /// <param name="clrType">The imported CLR type.</param>
+    /// <param name="isAmbiguous">Whether one declaration level contains multiple matching methods.</param>
+    /// <returns>The selected method, or <see langword="null"/>.</returns>
+    public static MethodInfo ResolveGetEnumerator(Type clrType, out bool isAmbiguous)
+    {
+        static List<MethodInfo> GetDeclaredCandidates(Type type) =>
+            ClrTypeUtilities.SafeGetMethods(
+                    type,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(method =>
+                    string.Equals(method.Name, "GetEnumerator", StringComparison.Ordinal) &&
+                    !method.IsGenericMethod &&
+                    method.GetParameters().Length == 0)
+                .ToList();
+
+        static Type GetBaseTypeSafe(Type type)
+        {
+            try
+            {
+                return type.BaseType;
+            }
+            catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+            {
+                return null;
+            }
+        }
+
+        isAmbiguous = false;
+        if (clrType == null)
+        {
+            return null;
+        }
+
+        for (var current = clrType; current != null; current = GetBaseTypeSafe(current))
+        {
+            var candidates = GetDeclaredCandidates(current);
+            if (candidates.Count > 1)
+            {
+                isAmbiguous = true;
+                return null;
+            }
+
+            if (candidates.Count == 1)
+            {
+                return candidates[0];
+            }
+        }
+
+        MethodInfo genericEnumerable = null;
+        MethodInfo nonGenericEnumerable = null;
+        MethodInfo fallback = null;
+        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
+        {
+            var candidates = GetDeclaredCandidates(iface);
+            if (candidates.Count > 1)
+            {
+                isAmbiguous = true;
+                return null;
+            }
+
+            if (candidates.Count == 0)
+            {
+                continue;
+            }
+
+            var candidate = candidates[0];
+            if (iface.IsGenericType &&
+                iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IEnumerable`1")
+            {
+                genericEnumerable ??= candidate;
+            }
+            else if (iface.FullName == "System.Collections.IEnumerable")
+            {
+                nonGenericEnumerable ??= candidate;
+            }
+            else
+            {
+                fallback ??= candidate;
+            }
+        }
+
+        return genericEnumerable ?? nonGenericEnumerable ?? fallback;
+    }
+
+    /// <summary>
     /// Enumerates every public instance method on <paramref name="clrType"/>,
     /// its base chain, and its transitive implemented interfaces with the given
     /// <paramref name="name"/>.
@@ -740,12 +828,7 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
     public static bool TryGetClrPatternEnumerableElementType(Type clrType, out Type elementType)
     {
-        var getEnumerator = clrType.GetMethod(
-            "GetEnumerator",
-            BindingFlags.Instance | BindingFlags.Public,
-            binder: null,
-            types: Type.EmptyTypes,
-            modifiers: null);
+        var getEnumerator = ResolveGetEnumerator(clrType, out _);
         if (getEnumerator == null)
         {
             elementType = null;

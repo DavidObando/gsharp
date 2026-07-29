@@ -840,17 +840,11 @@ public sealed partial class CSharpToGSharpTranslator
             // diagnostic, full fidelity, and each keeps its unqualified source
             // name for diagnostics/reflection/display.
             //
-            // When the implemented interface is an EXTERNAL (BCL/imported) CLR
-            // interface, this new mechanism does not apply — the existing #985
-            // covariant-return-bridge machinery in gsc's binder already handles
-            // that shape (e.g. `IEnumerator IEnumerable.GetEnumerator()`
-            // alongside `IEnumerator<T> GetEnumerator()`), and it keys on the
-            // method keeping its ORIGINAL (un-mangled) simple name plus a
-            // return-type-only signature difference from its public sibling.
-            // Adding a clause would not help there (no G# `interface` exists for
-            // an external CLR interface to name in G# source), so the #1911
-            // "force public, drop on exact-signature collision" handling is
-            // preserved unchanged for external interfaces.
+            // Issue #2822: imported CLR interfaces use the same clause. gsc can
+            // resolve imported qualifier types and emit MethodImpl rows, so
+            // dropping `IEnumerable.` from `IEnumerable.GetEnumerator()` is both
+            // unnecessary and harmful: it creates two public GetEnumerator
+            // methods distinguished only by return type.
             bool isExplicitInterfaceImpl = symbol != null && symbol.ExplicitInterfaceImplementations.Length > 0;
 
             // Issue #2010 follow-up: Roslyn's ExplicitInterfaceImplementations
@@ -859,18 +853,19 @@ public sealed partial class CSharpToGSharpTranslator
             // member on a BASE interface (e.g. `void IBar.M(){}` where
             // `interface IBar : IFoo` and IFoo already declares `M`). The
             // clause-based scheme below wires exactly ONE interface slot per
-            // method, so it only applies when there is a SINGLE entry and it
-            // is a G# user interface. Any other shape (mixed user+external, or
-            // >1 user entries) falls back to the pre-#2010 (#1911) named/forced-
-            // public path: the method keeps its plain name with no clause, and
+            // method, so it only applies when there is a SINGLE entry. Imported
+            // generic interfaces also fall back because gsc currently erases
+            // their clause arguments while resolving the CLR slot (GS0494).
+            // Fallback keeps the pre-#2010 (#1911) named/forced-public path:
+            // the method keeps its plain name with no clause, and
             // gsc's ordinary implicit name+signature interface-dispatch matching
             // then satisfies every entry uniformly (no explicit MethodImpl row
-            // needed) — lossier (loses C#'s "not publicly callable by name"
-            // semantics) but correct, and consistent with the existing
-            // external-interface handling.
-            bool isUserInterfaceExplicitImpl = isExplicitInterfaceImpl &&
-                symbol.ExplicitInterfaceImplementations.Length == 1 &&
-                symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource);
+            // needed).
+            bool hasSingleExplicitInterfaceImpl = isExplicitInterfaceImpl &&
+                symbol.ExplicitInterfaceImplementations.Length == 1;
+            bool hasClauseCompatibleExplicitInterfaceImpl = hasSingleExplicitInterfaceImpl &&
+                (symbol.ExplicitInterfaceImplementations[0].ContainingType.Locations.Any(l => l.IsInSource) ||
+                 !symbol.ExplicitInterfaceImplementations[0].ContainingType.IsGenericType);
 
             if (isExplicitInterfaceImpl && symbol.ExplicitInterfaceImplementations.Length > 1 &&
                 symbol.ExplicitInterfaceImplementations.All(e => e.ContainingType.Locations.Any(l => l.IsInSource)))
@@ -888,7 +883,7 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.MethodDeclaration), multiEntryMessage, node.GetLocation(), TranslationSeverity.Info));
             }
 
-            if (isExplicitInterfaceImpl && !isUserInterfaceExplicitImpl)
+            if (isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl)
             {
                 IMethodSymbol survivor = FindPriorCollidingSibling(symbol, node);
                 if (survivor != null)
@@ -896,15 +891,12 @@ public sealed partial class CSharpToGSharpTranslator
                     string message =
                         $"explicit interface implementation '{symbol.ContainingType.Name}.{FormatExplicitInterfaceName(symbol)}' " +
                         $"shares its name and signature with '{symbol.ContainingType.Name}.{FormatSiblingName(survivor)}'; " +
-                        "G# has no explicit-interface-implementation surface for EXTERNAL interfaces (ADR-0091), so the " +
-                        "two C# methods cannot both be emitted (would be an exact-signature duplicate, GS0264). This " +
+                        "a G# explicit-interface clause cannot safely represent this interface shape, so the " +
+                        "colliding C# methods cannot both be emitted (would be an exact-signature duplicate, GS0264). This " +
                         "declaration is dropped in favor of the surviving sibling, which already satisfies the interface " +
                         "by name; if the surviving sibling's body differs from this dropped declaration's body, any C# " +
                         "call through the interface-typed reference that previously reached this body now silently " +
-                        "observes the surviving method's body instead (semantic loss, known gap, issue #1911). This " +
-                        "diagnostic covers only EXTERNAL/BCL interfaces — a same-signature collision between two G# " +
-                        "user-interface explicit implementations is fully supported (issue #2010/#2362, ADR-0149 " +
-                        "explicit-interface clause).";
+                        "observes the surviving method's body instead (semantic loss, known gap, issue #1911).";
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.MethodDeclaration), message, node.GetLocation(), TranslationSeverity.Unsupported));
 
@@ -913,10 +905,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // ADR-0149: the resolved explicit-interface qualifier clause type
-            // for a G# user-interface explicit implementation, or null for an
-            // ordinary method / an external-interface explicit implementation
-            // (which keeps the pre-#2010 name-based dispatch, no clause).
-            GTypeReference explicitInterfaceType = isUserInterfaceExplicitImpl
+            // for a clause-compatible explicit implementation, or null for an
+            // ordinary method / safe fallback.
+            GTypeReference explicitInterfaceType = hasClauseCompatibleExplicitInterfaceImpl
                 ? this.typeMapper.Map(symbol.ExplicitInterfaceImplementations[0].ContainingType, this.context, node.GetLocation())
                 : null;
 
@@ -1081,7 +1072,7 @@ public sealed partial class CSharpToGSharpTranslator
                 body = null;
             }
 
-            // Issue #2010/#2362, ADR-0149: a G# user-interface explicit
+            // Issue #2010/#2362/#2822, ADR-0149: a clause-compatible explicit
             // implementation now emits its own plain-named method carrying an
             // explicit-interface qualifier clause and is bound to its own CLR
             // interface slot via an explicit MethodImpl row at emit time — it
@@ -1091,13 +1082,8 @@ public sealed partial class CSharpToGSharpTranslator
             // unreachable through the class type). This matches C# semantics,
             // where an explicit impl is not publicly callable by the type name.
             //
-            // Issue #1911: an EXTERNAL (BCL/imported) interface explicit
-            // implementation still relies on the pre-existing name-based
-            // #985 covariant-return-bridge slot-filling, which requires the
-            // method to be public — mapping Roslyn's `Private` straight
-            // through would fail `ilverify` ("Class implements interface but
-            // not method"), so it is still forced public here.
-            Visibility explicitInterfaceVisibility = isExplicitInterfaceImpl && !isUserInterfaceExplicitImpl
+            // Fallbacks still rely on name-based dispatch and stay public.
+            Visibility explicitInterfaceVisibility = isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl
                 ? Visibility.Default
                 : MapVisibility(symbol, this.context, node);
 

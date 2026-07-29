@@ -21,7 +21,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <c>ICollection&lt;T&gt;</c>) silently crashed the emit phase with MSB4181
 /// because the lowerer could not resolve <c>GetEnumerator()</c> on interface types.
 ///
-/// The fix teaches <c>Lowerer.ResolveGetEnumerator</c> to search implemented
+/// The fix teaches <c>MemberLookup.ResolveGetEnumerator</c> to search implemented
 /// interfaces when the type itself does not directly declare the method.
 /// </summary>
 public class Issue538ForInEnumerableEmitTests
