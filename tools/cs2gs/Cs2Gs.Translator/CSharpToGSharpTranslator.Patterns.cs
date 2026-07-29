@@ -489,8 +489,14 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateConditionalIndexReceiver(ExpressionSyntax receiver)
         {
             GExpression translated = this.TranslateExpression(receiver);
-            return this.context.GetTypeInfo(receiver).Type is INamedTypeSymbol
-                { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+            while (receiver is ParenthesizedExpressionSyntax parenthesized)
+            {
+                receiver = parenthesized.Expression;
+            }
+
+            return receiver is ConditionalAccessExpressionSyntax conditionalAccess
+                && this.context.GetTypeInfo(conditionalAccess.Expression).Type is INamedTypeSymbol
+                    { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
                     ? new NonNullAssertionExpression(translated)
                     : translated;
         }
