@@ -77,8 +77,17 @@ internal sealed partial class MethodBodyEmitter
         // `ldnull/ldftn/newobj` (or closure `dup/ldftn/newobj`) sequence
         // but referencing the delegate's emitted ctor MethodDef handle
         // instead of a CLR ConstructorInfo.
+        //
+        // Issue #2841: a `D?` target reaches here too. A nullable wrapper over
+        // a REFERENCE type is a binder-level annotation that erases to the
+        // underlying type's CLR representation, and a named delegate is always
+        // a reference type (a sealed class deriving from
+        // `System.MulticastDelegate`), so the materialisation is byte-identical
+        // to the bare-`D` case.
+        var namedTargetDelegate = conv.Type as DelegateTypeSymbol
+            ?? (conv.Type as NullableTypeSymbol)?.UnderlyingType as DelegateTypeSymbol;
         if (conv.Expression.Type is FunctionTypeSymbol namedSourceFn
-            && conv.Type is DelegateTypeSymbol namedTargetDelegate)
+            && namedTargetDelegate != null)
         {
             this.EmitFunctionToNamedDelegateConversion(conv.Expression, namedSourceFn, namedTargetDelegate);
             return;
