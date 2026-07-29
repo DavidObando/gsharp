@@ -2168,10 +2168,12 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        // The element type must be unmanaged/blittable: the buffer is raw,
-        // contiguous, GC-untracked stack memory, so a managed reference (or a
-        // type structurally containing one) cannot live in it.
-        if (!TypeSymbol.IsLegalPointeeType(elementType) || elementType.ClrType == null)
+        // The element type must be unmanaged: the buffer is raw, contiguous,
+        // GC-untracked stack memory, so a managed reference (or a type
+        // structurally containing one) cannot live in it. Reuse the generic
+        // constraint classifier so `T unmanaged` is accepted while `T struct`
+        // and unconstrained `T` remain rejected.
+        if (!Binder.IsUnmanagedTypeForConstraint(elementType))
         {
             Diagnostics.ReportStackAllocElementTypeNotBlittable(syntax.ElementTypeIdentifier.Location, elementType.Name);
             return new BoundErrorExpression(null);
@@ -2232,8 +2234,17 @@ internal sealed partial class ExpressionBinder
             return new BoundStackAllocExpression(syntax, pointerType, elementType, count, isPointerForm: true, initializerElements);
         }
 
-        // Safe form: yield a Span<T> over the allocated memory.
-        var spanType = TypeSymbol.FromClrType(typeof(System.Span<>).MakeGenericType(elementType.ClrType));
+        // Safe form: yield a Span<T> over the allocated memory. Open type
+        // parameters and same-compilation value types have no CLR Type during
+        // binding, so retain T symbolically over an object-erased reflection
+        // shape; signature/member-reference emit restores the real argument.
+        var spanOpen = typeof(System.Span<>);
+        var spanType = elementType.ClrType != null
+            ? (TypeSymbol)TypeSymbol.FromClrType(spanOpen.MakeGenericType(elementType.ClrType))
+            : ImportedTypeSymbol.GetConstructed(
+                spanOpen.MakeGenericType(typeof(object)),
+                spanOpen,
+                ImmutableArray.Create(elementType));
         return new BoundStackAllocExpression(syntax, spanType, elementType, count, isPointerForm: false, initializerElements);
     }
 
