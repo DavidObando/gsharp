@@ -290,6 +290,11 @@ internal sealed class InterfaceImplEmitter
 
             foreach (var iface in structSymbol.Interfaces)
             {
+                if (!DeclarationBinder.TypeSignaturesEquivalent(prop.ExplicitInterfaceClauseTarget, iface))
+                {
+                    continue;
+                }
+
                 // Issue #2362: InterfaceSymbol.Construct does not substitute
                 // Properties onto a constructed generic instance (see
                 // InterfaceSymbol.TryResolveMembers) — `ExplicitInterfaceMember`
@@ -1096,7 +1101,10 @@ internal sealed class InterfaceImplEmitter
                 PropertySymbol implProp = null;
                 foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
-                    if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp))
+                    if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)
+                        && DeclarationBinder.TypeSignaturesEquivalent(
+                            explicitCandidate.ExplicitInterfaceClauseTarget,
+                            iface))
                     {
                         implProp = explicitCandidate;
                         break;
@@ -1105,12 +1113,14 @@ internal sealed class InterfaceImplEmitter
 
                 if (implProp == null)
                 {
+                    var typeParameterMap = DeclarationBinder.BuildInterfaceTypeParameterMap(iface);
                     foreach (var candidate in structSymbol.StaticProperties)
                     {
-                        // PropertySymbol.Type is a compiler TypeSymbol, not a CLR
-                        // reflection Type; keep symbol identity plus name fallback.
                         if (candidate.Name == slotProp.Name
-                            && (ReferenceEquals(candidate.Type, slotProp.Type) || candidate.Type?.Name == slotProp.Type?.Name))
+                            && DeclarationBinder.TypeSignaturesEquivalent(
+                                slotProp.Type,
+                                candidate.Type,
+                                typeParameterMap))
                         {
                             implProp = candidate;
                             break;

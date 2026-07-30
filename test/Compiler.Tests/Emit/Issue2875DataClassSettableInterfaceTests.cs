@@ -176,6 +176,30 @@ public class Issue2875DataClassSettableInterfaceTests
         }
     }
 
+    [Fact]
+    public void GSharpInitOnlyInterface_ValidImplementationsVerifyAndLoad()
+    {
+        const string source = """
+            package S7
+
+            interface IBox {
+                prop Value int32 { get; init; }
+            }
+
+            class ImplicitBox : IBox {
+                prop Value int32 { get; init; }
+            }
+
+            class ExplicitBox : IBox {
+                private prop (IBox) Value int32 { get; init; }
+            }
+
+            data class PositionalBox(Value int32) : IBox
+            """;
+
+        CompileVerifyAndLoad(source);
+    }
+
     private static string CompileExpectingFailure(string source, string referencePath = null)
     {
         var directory = CreateWorkDirectory();
@@ -243,6 +267,7 @@ public class Issue2875DataClassSettableInterfaceTests
 
             Assert.True(exitCode == 0, "gsc failed:\n" + output);
             IlVerifier.Verify(outputPath);
+            _ = System.Reflection.Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -261,6 +286,31 @@ public class Issue2875DataClassSettableInterfaceTests
             Assert.True(process.WaitForExit(30_000), "Emitted program timed out.");
             Assert.True(process.ExitCode == 0, $"Program exited {process.ExitCode}:\n{stderr}");
             return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void CompileVerifyAndLoad(string source)
+    {
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var outputPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+
+            var (exitCode, output) = Compile(
+                "/out:" + outputPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                sourcePath);
+
+            Assert.True(exitCode == 0, "gsc failed:\n" + output);
+            IlVerifier.Verify(outputPath);
+            _ = System.Reflection.Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
         }
         finally
         {

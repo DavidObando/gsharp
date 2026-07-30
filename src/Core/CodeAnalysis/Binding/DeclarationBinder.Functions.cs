@@ -1845,10 +1845,8 @@ internal sealed partial class DeclarationBinder
     private static PropertySymbol TryResolveExplicitInterfaceStaticPropertyImplementation(
         StructSymbol structSymbol,
         InterfaceSymbol iface,
-        PropertySymbol iprop,
-        out bool setterKindMismatch)
+        PropertySymbol iprop)
     {
-        setterKindMismatch = false;
         if (structSymbol.StaticProperties.IsDefaultOrEmpty)
         {
             return null;
@@ -1859,7 +1857,6 @@ internal sealed partial class DeclarationBinder
             if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop)
                 && TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
             {
-                setterKindMismatch = InterfacePropertySetterKindsMismatch(iprop, candidate);
                 return candidate;
             }
 
@@ -1887,7 +1884,6 @@ internal sealed partial class DeclarationBinder
             }
 
             candidate.ExplicitInterfaceMember = iprop;
-            setterKindMismatch = InterfacePropertySetterKindsMismatch(iprop, candidate);
             return candidate;
         }
 
@@ -1904,7 +1900,7 @@ internal sealed partial class DeclarationBinder
     /// open definition itself), matching that method's "no substitution"
     /// convention.
     /// </summary>
-    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
+    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
     {
         var def = iface.Definition;
         if (def == null || ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty)
@@ -2271,7 +2267,7 @@ internal sealed partial class DeclarationBinder
                 implementation.Type,
                 BuildInterfaceTypeParameterMap(iface));
 
-    private static bool TypeSignaturesEquivalent(
+    internal static bool TypeSignaturesEquivalent(
         TypeSymbol a,
         TypeSymbol b,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)

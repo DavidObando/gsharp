@@ -372,7 +372,7 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void ExplicitProperties_ForTwoConstructionsOfSameGenericInterface_BindIndependently()
+    public void ExplicitProperties_ForTwoConstructionsOfSameGenericInterface_EmitAndLoad()
     {
         const string source = """
             package Test
@@ -385,7 +385,7 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        Assert.Empty(Bind(source));
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
@@ -463,5 +463,19 @@ public class Issue2150DataClassInterfacePropertyTests
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         return compilation.GlobalScope.Diagnostics.ToList();
+    }
+
+    private static void AssertEmitsAndLoads(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        using var peStream = new MemoryStream();
+
+        var result = compilation.Emit(peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        _ = System.Reflection.Assembly.Load(peStream.ToArray()).GetTypes();
     }
 }

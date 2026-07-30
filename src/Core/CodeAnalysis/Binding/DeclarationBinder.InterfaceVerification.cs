@@ -1297,24 +1297,8 @@ internal sealed partial class DeclarationBinder
                 // own declared name — already resolved and linked by
                 // ResolveExplicitInterfaceClauses. Skip the name-based
                 // lookup entirely once found.
-                var explicitImplementation = TryResolveExplicitInterfaceStaticPropertyImplementation(
-                    structSymbol,
-                    iface,
-                    iprop,
-                    out var explicitSetterKindMismatch);
-                if (explicitImplementation != null)
+                if (TryResolveExplicitInterfaceStaticPropertyImplementation(structSymbol, iface, iprop) != null)
                 {
-                    if (explicitSetterKindMismatch)
-                    {
-                        ReportInterfacePropertySetterKindMismatch(
-                            syntax,
-                            structSymbol,
-                            iface.Name,
-                            iprop.Name,
-                            iprop.IsInitOnly,
-                            explicitImplementation);
-                    }
-
                     continue;
                 }
 
@@ -1359,16 +1343,6 @@ internal sealed partial class DeclarationBinder
                         iface.Name,
                         iprop.Name,
                         "setter");
-                }
-                else if (setterIsAbstract && InterfacePropertySetterKindsMismatch(iprop, match))
-                {
-                    ReportInterfacePropertySetterKindMismatch(
-                        syntax,
-                        structSymbol,
-                        iface.Name,
-                        iprop.Name,
-                        iprop.IsInitOnly,
-                        match);
                 }
             }
         }
