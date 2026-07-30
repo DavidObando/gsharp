@@ -403,6 +403,15 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #2849: the target carries the authoritative narrowed delegate
+        // type; an earlier function projection may still reflect an erased CLR
+        // placeholder.
+        var functionType = MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+            call.Target.Type,
+            out var targetFunctionType)
+            ? targetFunctionType
+            : call.FunctionType;
+
         // ADR-0087 §3 R6: a delegate whose parameter or return types carry
         // symbolic types (e.g. `func(T) U` or `async () -> T`) is
         // encoded as a reified `GENERICINST<Func`N><…>` shape. Dispatch
@@ -410,20 +419,20 @@ internal sealed partial class MethodBodyEmitter
         // delegate (e.g. `Func<int, int>`) resolves the MemberRef to
         // its concrete `Invoke` slot, so no `Delegate.DynamicInvoke`
         // marshalling is needed.
-        if (this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(call.FunctionType))
+        if (this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(functionType))
         {
             this.EmitExpression(call.Target);
             this.EmitImportedCallArguments(call.Arguments, call.ArgumentRefKinds);
 
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetFunctionDelegateInvokeRef(call.FunctionType));
+            this.il.Token(this.outer.memberRefs.GetFunctionDelegateInvokeRef(functionType));
             return;
         }
 
         this.EmitExpression(call.Target);
         this.EmitImportedCallArguments(call.Arguments, call.ArgumentRefKinds);
 
-        var delegateType = this.outer.signatures.ResolveDelegateClrType(call.FunctionType);
+        var delegateType = this.outer.signatures.ResolveDelegateClrType(functionType);
 
         var invoke = delegateType.GetMethod("Invoke")
             ?? throw new InvalidOperationException(

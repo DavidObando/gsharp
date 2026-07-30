@@ -534,9 +534,21 @@ internal sealed partial class OverloadResolver
         switch (variable)
         {
             case ImplicitStaticFieldVariableSymbol staticField:
-                load = staticField.InterfaceType != null
-                    ? new BoundFieldAccessExpression(null, staticField.Field, staticField.InterfaceType)
-                    : new BoundFieldAccessExpression(null, receiver: null, staticField.StructType, staticField.Field);
+                if (staticField.InterfaceType != null)
+                {
+                    // Interface static fields are not smart-cast-stable.
+                    load = new BoundFieldAccessExpression(null, staticField.Field, staticField.InterfaceType);
+                }
+                else
+                {
+                    load = new BoundFieldAccessExpression(
+                        null,
+                        receiver: null,
+                        staticField.StructType,
+                        staticField.Field,
+                        narrowedType);
+                }
+
                 return true;
             case ImplicitFieldVariableSymbol instanceField:
                 load = new BoundFieldAccessExpression(
@@ -573,7 +585,8 @@ internal sealed partial class OverloadResolver
                     null,
                     receiver: null,
                     staticProp.StructType,
-                    staticProp.Property);
+                    staticProp.Property,
+                    narrowedType);
                 return true;
             default:
                 return false;

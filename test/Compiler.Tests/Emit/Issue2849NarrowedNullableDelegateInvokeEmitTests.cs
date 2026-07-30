@@ -27,6 +27,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             import System
 
             class Src { prop N int32 -> 2 }
+            struct Pt { var X int32 }
 
             func Main() {
                 let f System.Action[Src] = (s Src) -> System.Console.WriteLine(s.N)
@@ -49,10 +50,26 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
                 if bcl != nil {
                     bcl(1)
                 }
+
+                let writePt System.Action[Pt] = (p Pt) -> System.Console.WriteLine(p.X)
+                var ptAction System.Action[Pt]? = writePt
+                if ptAction != nil {
+                    var q Pt
+                    q.X = 5
+                    ptAction(q)
+                }
+
+                let readPt System.Func[Pt,int32] = (p Pt) -> p.X + 1
+                var ptFunc System.Func[Pt,int32]? = readPt
+                if ptFunc != nil {
+                    var q Pt
+                    q.X = 6
+                    System.Console.WriteLine(ptFunc(q))
+                }
             }
             """;
 
-        Assert.Equal("2\n2\n2\n1\n", CompileAndRun(source));
+        Assert.Equal("2\n2\n2\n1\n5\n7\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -130,6 +147,61 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
     }
 
     [Fact]
+    public void EndToEnd_IsNarrowedImportedDelegate_VerifiesAndRuns()
+    {
+        const string source = """
+            package i2849isnarrowed
+            import System
+
+            class Src { prop N int32 -> 8 }
+
+            func Run(value object) {
+                if value is System.Action[Src] {
+                    value(Src())
+                }
+            }
+
+            func Main() {
+                let write System.Action[Src] = (s Src) -> System.Console.WriteLine(s.N)
+                Run(write)
+            }
+            """;
+
+        Assert.Equal("8\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void EndToEnd_QualifiedStableMemberPath_VerifiesAndRuns()
+    {
+        const string source = """
+            package i2849qualified
+            import System
+
+            class Src { prop N int32 -> 7 }
+
+            class Inner {
+                let H System.Action[Src]?
+                init(h System.Action[Src]?) { H = h }
+            }
+
+            class Outer {
+                let B Inner
+                init(b Inner) { B = b }
+            }
+
+            func Main() {
+                let write System.Action[Src] = (s Src) -> System.Console.WriteLine(s.N)
+                let outer = Outer(Inner(write))
+                if outer.B.H != nil {
+                    outer.B.H(Src())
+                }
+            }
+            """;
+
+        Assert.Equal("7\n", CompileAndRun(source));
+    }
+
+    [Fact]
     public void EndToEnd_CrossAssemblyImportedAndNamedDelegates_VerifyAndRun()
     {
         const string library = """
@@ -172,6 +244,34 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             """;
 
         Assert.Equal("23\n24\n", CompileAndRun(consumer, library, "i2849matrixlib"));
+    }
+
+    [Fact]
+    public void EndToEnd_CrossAssemblyNamedDelegateWithConsumerSourceType_VerifiesAndRuns()
+    {
+        const string library = """
+            package i2849lib2
+
+            type Handler[T] = delegate func(value T) void
+            """;
+
+        const string consumer = """
+            package i2849use2
+            import System
+            import i2849lib2
+
+            class Src { prop N int32 -> 9 }
+
+            func Main() {
+                let handler Handler[Src] = (s Src) -> System.Console.WriteLine(s.N)
+                var optional Handler[Src]? = handler
+                if optional != nil {
+                    optional(Src())
+                }
+            }
+            """;
+
+        Assert.Equal("9\n", CompileAndRun(consumer, library, "i2849lib2"));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
