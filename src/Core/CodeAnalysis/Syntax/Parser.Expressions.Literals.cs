@@ -1375,9 +1375,8 @@ public partial class Parser
             // ADR-0055: a hole is `expr [ , alignment ] [ : format ]`. Split
             // the captured hole text into its expression / alignment / format
             // clauses with a delimiter-aware scanner that ignores `,`/`:`
-            // nested inside (), [], {}, or string/char literals so that
-            // `a.GetType()`, `dict["k"]`, and `cond ? "a" : "b"` (parenthesized)
-            // are not mis-split.
+            // nested inside (), [], {}, string/char literals, comments, or a
+            // top-level conditional expression.
             SplitHole(fragment.Text, out var exprText, out var alignmentText, out var formatText);
 
             // ADR-0055 §C: anchor diagnostics on the hole itself (using the
@@ -1433,17 +1432,41 @@ public partial class Parser
     }
 
     // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`
-    // (alignment) and first top-level `:` (format), tracking ()/[]/{} depth
-    // and skipping nested "…"/'…' literals. The expression clause is the text
-    // before whichever delimiter appears first.
+    // (alignment) and first top-level `:` (format), tracking ()/[]/{} depth,
+    // top-level conditional expressions, and nested literals/comments. The
+    // expression clause is the text before whichever delimiter appears first.
     private static void SplitHole(string hole, out string expr, out string alignment, out string format)
     {
         var depth = 0;
+        var conditionalDepth = 0;
         var commaIndex = -1;
         var colonIndex = -1;
         for (var i = 0; i < hole.Length; i++)
         {
             var c = hole[i];
+            if (c == '/' && i + 1 < hole.Length && hole[i + 1] == '/')
+            {
+                i += 2;
+                while (i < hole.Length && hole[i] != '\r' && hole[i] != '\n')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            if (c == '/' && i + 1 < hole.Length && hole[i + 1] == '*')
+            {
+                i += 2;
+                while (i + 1 < hole.Length && !(hole[i] == '*' && hole[i + 1] == '/'))
+                {
+                    i++;
+                }
+
+                i++;
+                continue;
+            }
+
             if (c == '"' || c == '\'')
             {
                 // Skip the nested literal, honoring `""`/`\` escapes loosely.
@@ -1470,14 +1493,28 @@ public partial class Parser
             {
                 depth--;
             }
-            else if (depth == 0 && c == ',' && commaIndex < 0 && colonIndex < 0)
+            else if (depth == 0
+                && c == '?'
+                && (i == 0 || hole[i - 1] != '?')
+                && (i + 1 >= hole.Length || (hole[i + 1] != '?' && hole[i + 1] != '.' && hole[i + 1] != '[')))
+            {
+                conditionalDepth++;
+            }
+            else if (depth == 0 && c == ',' && conditionalDepth == 0 && commaIndex < 0 && colonIndex < 0)
             {
                 commaIndex = i;
             }
             else if (depth == 0 && c == ':' && colonIndex < 0)
             {
-                colonIndex = i;
-                break;
+                if (conditionalDepth > 0)
+                {
+                    conditionalDepth--;
+                }
+                else
+                {
+                    colonIndex = i;
+                    break;
+                }
             }
         }
 

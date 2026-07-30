@@ -138,6 +138,23 @@ describe('gsharp.tmLanguage.json', () => {
     expect(missing).toEqual([]);
   });
 
+  it('keeps ternary colons in interpolation expressions', () => {
+    const patterns = grammar.repository['interpolation-braced'].patterns.map(
+      (p: {include?: string}) => p.include,
+    );
+    expect(patterns.indexOf('#interpolation-conditional')).toBeLessThan(
+      patterns.indexOf('#interpolation-format'),
+    );
+
+    const conditional = grammar.repository['interpolation-conditional'];
+    const beginsConditional = new RegExp(`^(?:${conditional.begin})`);
+    expect(beginsConditional.test('?')).toBe(true);
+    expect(beginsConditional.test('??')).toBe(false);
+    expect(beginsConditional.test('?.')).toBe(false);
+    expect(beginsConditional.test('?[')).toBe(false);
+    expect(conditional.end).toBe(':');
+  });
+
   it('highlights all built-in primitive type names', () => {
     const typeMatchers = repositoryMatchStrings('types').map(
       (m) => new RegExp(m),

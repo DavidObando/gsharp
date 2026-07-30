@@ -138,6 +138,7 @@ Alignment  := [ "-" ] DecimalDigits      -- constant; '-' left-justifies (C# par
 ```
 
 The `,`/`:` separators are recognized only at the top level of the hole (a `,`/`:` nested inside `()`, `[]`, or `{}`, or inside a string/char literal, is part of the expression).
+For a top-level ternary, its matching `:` remains part of the expression; a later top-level `:` starts the format clause. Thus `${ok ? 1 : 2:D4}` and `${(ok ? 1 : 2):D4}` are both legal and equivalent.
 
 A `${ … }` hole is scanned by a delimiter-aware sub-scanner: it tracks `()`/`[]`/`{}` nesting, skips nested `"…"`/`'…'` literals (recursively, so an inner interpolation is handled) and `//` / `/* */` comments, and **permits newlines**, so a hole may span multiple lines and may contain indexers (`${dict["k"]}`), ternaries (`${cond ? "a" : "b"}`), calls, and nested interpolations. The hole ends at the matching top-level `}`. There is no `{{`/`}}` escaping — a literal `$` is written `$$`, and braces that are not part of a `${ … }` hole are taken verbatim.
 
