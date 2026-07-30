@@ -18,7 +18,7 @@ public class Issue2853EllipsisLoopCaptureInterpreterTests
     [Fact]
     public void ClosureCapturesValueFromCreatingIteration()
     {
-        var tree = SyntaxTree.Parse(
+        AssertEvaluates(
             """
             func capture() int32 {
                 var callback = () -> { return -1 }
@@ -31,10 +31,54 @@ public class Issue2853EllipsisLoopCaptureInterpreterTests
             }
 
             capture()
-            """);
-        var result = new Compilation(tree).Evaluate(new Dictionary<VariableSymbol, object>());
+            """,
+            expected: 0);
+    }
+
+    [Fact]
+    public void CapturedWriteAdvancesLoopControlVariable()
+    {
+        AssertEvaluates(
+            """
+            func countIterations() int32 {
+                var iterations = 0
+                for i in 0 ... 5 {
+                    var bump = () -> { i = i + 1 }
+                    bump()
+                    iterations = iterations + 1
+                }
+
+                return iterations
+            }
+
+            countIterations()
+            """,
+            expected: 3);
+    }
+
+    [Fact]
+    public void CapturedFunctionLocalWritesSharedCell()
+    {
+        AssertEvaluates(
+            """
+            func mutate() int32 {
+                var value = 20
+                var bump = () -> { value = value + 1 }
+                bump()
+                return value
+            }
+
+            mutate()
+            """,
+            expected: 21);
+    }
+
+    private static void AssertEvaluates(string source, int expected)
+    {
+        var result = new Compilation(SyntaxTree.Parse(source))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(0, result.Value);
+        Assert.Equal(expected, result.Value);
     }
 }

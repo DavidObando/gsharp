@@ -301,7 +301,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // }
         var isCaptured = CaptureBoxingRewriter.IsCaptured(node.Body, node.Variable);
         var controlVariable = isCaptured
-            ? new LocalVariableSymbol("$ellipsis", isReadOnly: false, type: TypeSymbol.Int32)
+            ? new LocalVariableSymbol("ellipsis", isReadOnly: false, type: TypeSymbol.Int32)
             : node.Variable;
         var variableDeclaration = new BoundVariableDeclaration(null, controlVariable, node.LowerBound);
         var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int32);

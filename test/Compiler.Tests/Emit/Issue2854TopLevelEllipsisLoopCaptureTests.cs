@@ -3,9 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using GSharp.Compiler;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -30,14 +34,48 @@ public class Issue2854TopLevelEllipsisLoopCaptureTests
 
             let result = callback()
             Console.WriteLine(result)
+            result
             """;
 
-        Assert.Equal("0\n", CompileAndRun(Source));
+        AssertEnginesAgree(Source, expected: 0, nameof(TopLevelClosureCapturesIterationVariable));
     }
 
-    private static string CompileAndRun(string source)
+    [Fact]
+    public void TopLevelForInCapturedWriteUsesSharedCell()
     {
-        var directory = Path.Combine(AppContext.BaseDirectory, nameof(Issue2854TopLevelEllipsisLoopCaptureTests));
+        const string Source = """
+            package Issue2854ForIn
+            import System
+
+            var source = []int32{7, 8}
+            var total = 0
+            for value in source {
+                var bump = () -> { value = value + 100 }
+                bump()
+                total = total + value
+            }
+
+            let result = total
+            Console.WriteLine(result)
+            result
+            """;
+
+        AssertEnginesAgree(Source, expected: 215, nameof(TopLevelForInCapturedWriteUsesSharedCell));
+    }
+
+    private static void AssertEnginesAgree(string source, int expected, string testName)
+    {
+        var evaluation = new Compilation(SyntaxTree.Parse(source))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+
+        Assert.Empty(evaluation.Diagnostics);
+        Assert.Equal(expected, evaluation.Value);
+        Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
+    }
+
+    private static string CompileAndRun(string source, string testName)
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, nameof(Issue2854TopLevelEllipsisLoopCaptureTests), testName);
         Directory.CreateDirectory(directory);
         var sourcePath = Path.Combine(directory, "test.gs");
         var assemblyPath = Path.Combine(directory, "test.dll");

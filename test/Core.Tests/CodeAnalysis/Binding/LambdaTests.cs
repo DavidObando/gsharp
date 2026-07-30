@@ -14,7 +14,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Phase 4.7 — first-class function types (<c>func(T) R</c>), function literals,
-/// indirect calls, and by-value closure capture (interpreter-only).
+/// indirect calls, and closure capture.
 /// </summary>
 public class LambdaTests
 {
@@ -53,11 +53,8 @@ f()
     }
 
     [Fact]
-    public void Closure_ValueCaptureSnapshotsAtLiteralEvaluation()
+    public void Closure_CapturedLocalSharesVariableCell()
     {
-        // Captured *locals* are snapshotted at literal-evaluation time. Globals
-        // are intentionally not captured (read live at call time). Use a helper
-        // function to exercise local-capture semantics.
         var result = Evaluate(@"
 func makeReader() () -> int32 {
     var n = 1
@@ -69,7 +66,7 @@ let r = makeReader()
 r()
 ");
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(1, result.Value);
+        Assert.Equal(99, result.Value);
     }
 
     [Fact]

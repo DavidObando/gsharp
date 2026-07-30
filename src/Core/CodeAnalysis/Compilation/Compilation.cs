@@ -311,6 +311,11 @@ public class Compilation
             return new EvaluationResult(allWarnings.Concat(allErrors).ToImmutableArray(), null);
         }
 
+        // Keep interpreted closure cells aligned with emitted closure cells.
+        program = Lowering.CaptureBoxingRewriter.Lower(
+            program,
+            (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
+
         var evaluator = new Evaluator(program, variables);
         try
         {

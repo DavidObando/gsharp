@@ -18,7 +18,7 @@ public class Issue2854TopLevelEllipsisLoopCaptureInterpreterTests
     [Fact]
     public void TopLevelClosureCapturesIterationVariable()
     {
-        var tree = SyntaxTree.Parse(
+        AssertEvaluates(
             """
             var callback = () -> { return -1 }
 
@@ -28,10 +28,34 @@ public class Issue2854TopLevelEllipsisLoopCaptureInterpreterTests
 
             let result = callback()
             result
-            """);
-        var result = new Compilation(tree).Evaluate(new Dictionary<VariableSymbol, object>());
+            """,
+            expected: 0);
+    }
+
+    [Fact]
+    public void TopLevelForInCapturedWriteUsesSharedCell()
+    {
+        AssertEvaluates(
+            """
+            var source = []int32{7, 8}
+            var total = 0
+            for value in source {
+                var bump = () -> { value = value + 100 }
+                bump()
+                total = total + value
+            }
+
+            total
+            """,
+            expected: 215);
+    }
+
+    private static void AssertEvaluates(string source, int expected)
+    {
+        var result = new Compilation(SyntaxTree.Parse(source))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(0, result.Value);
+        Assert.Equal(expected, result.Value);
     }
 }

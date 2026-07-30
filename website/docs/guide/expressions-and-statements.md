@@ -106,6 +106,10 @@ for i in 0...10 {
 }
 ```
 
+Captured variables introduced by collection `for-in` and numeric ellipsis
+loops are fresh for each iteration. A variable declared in a three-part loop
+(`for var i = 0; i < n; i++`) is shared by every closure created by that loop.
+
 ## Goto and labels
 
 A label can prefix any statement, and `goto name` jumps to a label in the same function. Labels can be forward-referenced; duplicates and missing labels are diagnosed. Use this mostly for translated C# or low-level control flow — structured `if`, `switch`, and loops remain clearer for hand-written code.

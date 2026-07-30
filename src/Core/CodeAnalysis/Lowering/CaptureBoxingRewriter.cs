@@ -134,6 +134,14 @@ internal static class CaptureBoxingRewriter
             return program;
         }
 
+        var statement = program.Statement;
+        if (program.EntryPoint != null
+            && program.Functions.TryGetValue(program.EntryPoint, out var entryPointBody)
+            && ReferenceEquals(statement, entryPointBody))
+        {
+            statement = newFunctions[program.EntryPoint];
+        }
+
         var combinedStructs = program.Structs.AddRange(newStructs);
 
         var result = new BoundProgram(
@@ -142,7 +150,7 @@ internal static class CaptureBoxingRewriter
             program.Diagnostics,
             newFunctions.ToImmutable(),
             program.EntryPoint,
-            program.Statement,
+            statement,
             combinedStructs,
             program.Interfaces,
             program.Enums,
