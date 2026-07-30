@@ -10,6 +10,18 @@ namespace GSharp.Interpreter.Tests;
 public class GSharpReplTests
 {
     [Fact]
+    public void Snapshot_DisplaysConstructedSourceGenericType()
+    {
+        var engine = new SessionEngine();
+
+        Assert.False(engine.Evaluate("class Box[T] {}").HasError);
+        Assert.False(engine.Evaluate("let box = Box[int32]()").HasError);
+
+        var variable = Assert.Single(engine.Snapshot().Variables);
+        Assert.Contains("Box[int32]", variable.Display);
+    }
+
+    [Fact]
     public void Evaluate_SimpleExpression_ReturnsValue()
     {
         var cell = new SessionEngine().Evaluate("1 + 2");

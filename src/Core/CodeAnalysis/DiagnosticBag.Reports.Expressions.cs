@@ -78,7 +78,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location.</param>
     /// <param name="type">The actual type.</param>
     public void ReportTypeNotIndexable(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.TypeNotIndexable, type.Name);
+    => Report(location, DiagnosticDescriptors.TypeNotIndexable, type);
 
     /// <summary>
     /// Reports that a built-in intrinsic was applied to an unsupported argument type.
@@ -87,7 +87,7 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The intrinsic name.</param>
     /// <param name="type">The actual argument type.</param>
     public void ReportIntrinsicArgumentType(TextLocation location, string name, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.IntrinsicArgumentType, name, type.Name);
+    => Report(location, DiagnosticDescriptors.IntrinsicArgumentType, name, type);
 
     /// <summary>
     /// Reports that an expression must have a value.
@@ -404,7 +404,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the range expression.</param>
     /// <param name="type">The non-sliceable target type.</param>
     public void ReportTypeNotSliceable(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.TypeNotSliceable, type.Name);
+    => Report(location, DiagnosticDescriptors.TypeNotSliceable, type);
 
     /// <summary>GS9002: Argument must be passed by reference.</summary>
     /// <param name="location">The text location of the argument.</param>

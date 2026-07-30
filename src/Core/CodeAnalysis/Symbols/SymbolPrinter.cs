@@ -2,8 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
 using System.IO;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.IO;
 
@@ -74,7 +74,7 @@ public static class SymbolPrinter
         if (symbol.Type != null)
         {
             writer.WriteSpace();
-            writer.WriteIdentifier(symbol.Type.Name);
+            symbol.Type.WriteTo(writer);
         }
     }
 
@@ -115,7 +115,7 @@ public static class SymbolPrinter
 
     private static void WriteTypeTo(TypeSymbol symbol, TextWriter writer)
     {
-        writer.WriteIdentifier(symbol.Name);
+        writer.WriteIdentifier(SymbolDisplay.ToTypeDisplayString(symbol));
     }
 
     private static void WriteEnumMemberTo(EnumMemberSymbol symbol, TextWriter writer)

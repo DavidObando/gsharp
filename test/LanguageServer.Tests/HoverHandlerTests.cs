@@ -14,6 +14,18 @@ namespace GSharp.LanguageServer.Tests;
 public class HoverHandlerTests
 {
     [Fact]
+    public void ComputeHover_DisplaysConstructedSourceGenericType()
+    {
+        const string source = "class Box[T] {}\nfunc main() {\n    let box = Box[int32]()\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var hover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "box"));
+
+        Assert.NotNull(hover);
+        Assert.Contains("Box[int32]", hover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_HonorsCancellation()
     {
         // Issue #1662: ComputeHover accepted a CancellationToken but never observed it. On a

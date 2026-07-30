@@ -34,7 +34,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the using keyword.</param>
     /// <param name="type">The non-disposable type.</param>
     public void ReportTypeNotDisposable(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.TypeNotDisposable, type.Name);
+    => Report(location, DiagnosticDescriptors.TypeNotDisposable, type);
 
     /// <summary>
     /// Reports that the keyworkd can only be used inside of loops.
@@ -106,7 +106,7 @@ public sealed partial class DiagnosticBag
     /// <param name="type">The malformed imported type.</param>
     /// <param name="memberName">The ambiguous member name.</param>
     public void ReportAmbiguousImportedMember(TextLocation location, TypeSymbol type, string memberName)
-    => Report(location, DiagnosticDescriptors.AmbiguousImportedMember, type.Name, memberName);
+    => Report(location, DiagnosticDescriptors.AmbiguousImportedMember, type, memberName);
 
     /// <summary>
     /// Issue #946: reports that an <c>init</c>-only property was assigned
@@ -182,7 +182,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the operand.</param>
     /// <param name="type">The offending operand type.</param>
     public void ReportLockTargetMustBeReferenceType(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.LockTargetMustBeReferenceType, type.Name);
+    => Report(location, DiagnosticDescriptors.LockTargetMustBeReferenceType, type);
 
     /// <summary>
     /// Reports that a generic local-function declaration (<c>let Name[T, ...] = func (...) ... { ... }</c>,
@@ -404,7 +404,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the offending assignment.</param>
     /// <param name="type">The read-only span type being written through.</param>
     public void ReportCannotAssignReadOnlySpanElement(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.CannotAssignReadOnlySpanElement, type.Name);
+    => Report(location, DiagnosticDescriptors.CannotAssignReadOnlySpanElement, type);
 
     /// <summary>
     /// ADR-0060 §5: reports an assignment to an <c>in</c> parameter inside the function body.
@@ -538,7 +538,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The collection expression location.</param>
     /// <param name="type">The collection type.</param>
     public void ReportTypeNotIterable(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.TypeNotIterable, type.Name);
+    => Report(location, DiagnosticDescriptors.TypeNotIterable, type);
 
     /// <summary>
     /// Reports that <c>await using let</c> appears outside an <c>async</c> function.
@@ -553,7 +553,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location of the await using keyword.</param>
     /// <param name="type">The non-async-disposable type.</param>
     public void ReportTypeNotAsyncDisposable(TextLocation location, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.TypeNotAsyncDisposable, type.Name);
+    => Report(location, DiagnosticDescriptors.TypeNotAsyncDisposable, type);
 
     /// <summary>
     /// ADR-0070 / issue #707: GS0293 — a labeled <c>break</c> or <c>continue</c>
