@@ -258,12 +258,6 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 |----|----------|-------------|-----------------|
 | GS0226 | Error | Cannot assign through a read-only span element (`ReadOnlySpan[T]` is read-only). | `var s ReadOnlySpan[int32] = arr` then `s[0] = 1` — a `ReadOnlySpan[T]` indexer is `ref readonly T`; use `Span[T]` to write. |
 
-### Nullable delegate invocation diagnostics (GS0502)
-
-| ID | Severity | Description | Example trigger |
-|----|----------|-------------|-----------------|
-| GS0502 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `handler(value)` when `handler` is still nullable; use `handler?(value)` or capture a proven non-null value in a stable local first. |
-
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 
 | ID | Severity | Description | Example trigger |

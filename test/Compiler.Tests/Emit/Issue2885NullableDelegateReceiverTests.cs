@@ -41,7 +41,7 @@ public class Issue2885NullableDelegateReceiverTests
         var errors = compilation.BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
 
         var diagnostic = Assert.Single(errors);
-        Assert.Equal("GS0502", diagnostic.Id);
+        Assert.Equal("GS0503", diagnostic.Id);
         Assert.Equal(receiverName, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.Contains($"'{receiverName}'", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains($"{receiverName}?(...)", diagnostic.Message, StringComparison.Ordinal);
