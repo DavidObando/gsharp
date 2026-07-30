@@ -512,22 +512,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        FunctionTypeSymbol functionType;
-        if (callableType is FunctionTypeSymbol fts)
-        {
-            functionType = fts;
-        }
-        else if (callableType is DelegateTypeSymbol nds)
-        {
-            functionType = nds.EquivalentFunctionType;
-        }
-        else if (callableType.ClrType is System.Type memberClrType
-            && ClrTypeUtilities.IsDelegateType(memberClrType)
-            && MemberLookup.TryGetDelegateFunctionType(memberClrType, out var clrFn))
-        {
-            functionType = clrFn;
-        }
-        else
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
         {
             return false;
         }
