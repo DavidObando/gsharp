@@ -954,7 +954,7 @@ properties cannot declare `init` accessors.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `handler(value)` when `handler` is still nullable; use `handler?(value)` or capture a proven non-null value in a stable local first. |
+| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `handler(value)` when `handler` is still nullable; bind it with `if let`, or assert non-null with `!!` before calling. |
 
 ## Unconstrained nullable sequence element (GS0508)
 

@@ -512,16 +512,18 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
-        {
-            return false;
-        }
-
-        if (ce.NullableQuestionToken == null && effectiveMemberType is NullableTypeSymbol)
+        if (ce.NullableQuestionToken == null
+            && effectiveMemberType is NullableTypeSymbol nullableEffectiveMember
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableEffectiveMember.UnderlyingType, out _))
         {
             Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
             result = new BoundErrorExpression(null);
             return true;
+        }
+
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
+        {
+            return false;
         }
 
         if (callableType is DelegateTypeSymbol namedDelegate)
@@ -742,7 +744,11 @@ internal sealed partial class ExpressionBinder
             _ => TypeSymbol.FromClrType(memberClrType),
         };
 
-        if (ce.NullableQuestionToken == null && memberTypeSymbol is NullableTypeSymbol)
+        BoundExpression delegateLoad = ApplyMemberNarrowing(
+            new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
+        var effectiveMemberType = delegateLoad.Type;
+
+        if (ce.NullableQuestionToken == null && effectiveMemberType is NullableTypeSymbol)
         {
             Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
             result = new BoundErrorExpression(null);
@@ -754,8 +760,6 @@ internal sealed partial class ExpressionBinder
         // either MemberInfo shape, and EmitClrPropertyAccess already handles
         // both (including the value-type-receiver `ldloca` step we need for
         // a CLR struct field).
-        var delegateLoad = new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol);
-
         // Strip nullable annotation when dispatching through Invoke.
         var underlyingDelegateClr = memberClrType;
 
@@ -763,9 +767,9 @@ internal sealed partial class ExpressionBinder
         BoundExpression invokeReceiver = delegateLoad;
         if (ce.NullableQuestionToken != null)
         {
-            var captureType = memberTypeSymbol is NullableTypeSymbol nullableMember
+            var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
                 ? nullableMember.UnderlyingType
-                : memberTypeSymbol;
+                : effectiveMemberType;
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);

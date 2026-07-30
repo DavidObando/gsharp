@@ -4,13 +4,18 @@
 
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using GSharp.Compiler;
-using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
+using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
+using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 
 namespace GSharp.Compiler.Tests.Emit;
 
@@ -37,15 +42,234 @@ public class Issue2885NullableDelegateReceiverTests
         string receiverName)
     {
         var source = BuildRejectedSource(receiverShape, typeArgument);
-        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
+        var compilation = new GsCompilation(GsSyntaxTree.Parse(SourceText.From(source)));
         var errors = compilation.BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
 
         var diagnostic = Assert.Single(errors);
         Assert.Equal("GS0503", diagnostic.Id);
         Assert.Equal(receiverName, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.Contains($"'{receiverName}'", diagnostic.Message, StringComparison.Ordinal);
-        Assert.Contains($"{receiverName}?(...)", diagnostic.Message, StringComparison.Ordinal);
-        Assert.Contains("stable non-null local", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("'if let'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("'!!'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("stable non-null local", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void QualifiedGSharpDelegateMembers_WithoutNarrowing_ReportNullableReceiver()
+    {
+        const string importedDelegate = """
+            package Issue2885Qualified
+            import System
+
+            class Holder {
+                var Mutable System.Action[int32]?
+            }
+
+            func RunQualified(holder Holder) {
+                if holder.Mutable != nil {
+                    holder.Mutable(1)
+                }
+            }
+            """;
+        AssertSingleGs0503(importedDelegate, "Mutable");
+
+        const string namedDelegate = """
+            package Issue2885QualifiedNamed
+
+            type Handler = delegate func(value int32) void
+
+            class Holder {
+                var Named Handler?
+            }
+
+            func RunQualified(holder Holder) {
+                if holder.Named != nil {
+                    holder.Named(1)
+                }
+            }
+            """;
+        AssertSingleGs0503(namedDelegate, "Named");
+    }
+
+    [Theory]
+    [InlineData("array-index", "arr[0]")]
+    [InlineData("call-result", "Get()")]
+    [InlineData("explicit-invoke", "d")]
+    [InlineData("named-delegate", "h")]
+    public void OtherNullableDelegateCallPaths_ReportNullableReceiver(string shape, string receiverName)
+    {
+        var source = shape switch
+        {
+            "array-index" => """
+                package Issue2885Array
+                import System
+
+                func RunArray() {
+                    let arr = [1]System.Action[int32]?
+                    arr[0](1)
+                }
+                """,
+            "call-result" => """
+                package Issue2885Result
+                import System
+
+                func Get() System.Action[int32]? -> nil
+                func RunResult() { Get()(1) }
+                """,
+            "explicit-invoke" => """
+                package Issue2885Invoke
+                import System
+
+                func RunInvoke(d System.Action[int32]?) { d.Invoke(1) }
+                """,
+            "named-delegate" => """
+                package Issue2885Named
+
+                type Handler = delegate func(value int32) void
+                func RunNamed(h Handler?) { h(1) }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+
+        AssertSingleGs0503(source, receiverName);
+    }
+
+    [Fact]
+    public void ImportedClrDelegateMembers_RespectStability()
+    {
+        const string fixture = """
+            #nullable enable
+            using System;
+
+            namespace Issue2885Fixture;
+
+            public sealed class Box
+            {
+                public Action<int>? Mutable;
+                public readonly Action<int>? Readonly;
+                public Action<int>? GetOnly { get; }
+
+                public Box(Action<int>? value)
+                {
+                    Mutable = value;
+                    Readonly = value;
+                    GetOnly = value;
+                }
+            }
+            """;
+        const string rejected = """
+            package Issue2885ImportedRejected
+            import Issue2885Fixture
+
+            func RunImported(box Box) {
+                if box.Mutable != nil {
+                    box.Mutable(1)
+                }
+            }
+            """;
+        AssertSingleGs0503(rejected, "Mutable", fixture);
+
+        const string accepted = """
+            package Issue2885ImportedAccepted
+            import System
+            import Issue2885Fixture
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                let box = Box(write)
+                if box.Readonly != nil {
+                    box.Readonly(41)
+                }
+                if box.GetOnly != nil {
+                    box.GetOnly(42)
+                }
+                if let mutable = box.Mutable {
+                    mutable(43)
+                }
+                box.Mutable!!(44)
+            }
+            """;
+
+        Assert.Equal("41\n42\n43\n44\n", CompileAndRun(accepted, "imported-stable", fixture));
+    }
+
+    [Fact]
+    public void IfLetAndNullAssertion_RemediesVerifyLoadAndRunAcrossCallPaths()
+    {
+        const string source = """
+            package Issue2885Remedies
+            import System
+
+            type Handler = delegate func(value int32) void
+
+            func Get(write System.Action[int32]) System.Action[int32]? -> write
+            func WriteNamed(value int32) { Console.WriteLine(value) }
+
+            class Holder {
+                var Mutable System.Action[int32]?
+                var Named Handler?
+
+                func RunBare() {
+                    if let handler = Mutable {
+                        handler(41)
+                    }
+                    Mutable!!(42)
+                }
+            }
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                let holder = Holder()
+                holder.Mutable = write
+                let named Handler = WriteNamed
+                holder.Named = named
+
+                holder.RunBare()
+                if let qualified = holder.Mutable {
+                    qualified(43)
+                }
+                holder.Mutable!!(44)
+                if let qualifiedNamed = holder.Named {
+                    qualifiedNamed(45)
+                }
+                holder.Named!!(46)
+
+                let arr = [1]System.Action[int32]?
+                arr[0] = write
+                if let indexed = arr[0] {
+                    indexed(47)
+                }
+                arr[0]!!(48)
+
+                if let returned = Get(write) {
+                    returned(49)
+                }
+                Get(write)!!(50)
+
+                var direct System.Action[int32]? = write
+                if let invoked = direct {
+                    invoked.Invoke(51)
+                }
+                direct!!.Invoke(52)
+            }
+            """;
+
+        Assert.Equal(
+            "41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n",
+            CompileAndRun(source, "remedies"));
+    }
+
+    [Theory]
+    [InlineData("mutable-field")]
+    [InlineData("custom-property")]
+    [InlineData("shared-var")]
+    [InlineData("shared-let")]
+    [InlineData("invalidated-local")]
+    public void IfLetAndNullAssertion_RemediesRunForOriginalReceiverShapes(string receiverShape)
+    {
+        Assert.Equal(
+            "61\n62\n",
+            CompileAndRun(BuildRemedySource(receiverShape), "remedy-" + receiverShape));
     }
 
     [Theory]
@@ -192,7 +416,141 @@ public class Issue2885NullableDelegateReceiverTests
             """;
     }
 
-    private static string CompileAndRun(string source, string caseName)
+    private static string BuildRemedySource(string receiverShape)
+    {
+        var body = receiverShape switch
+        {
+            "mutable-field" => """
+                class Holder {
+                    var Mutable System.Action[int32]?
+
+                    init(value System.Action[int32]) { Mutable = value }
+
+                    func Run() {
+                        if let handler = Mutable {
+                            handler(61)
+                        }
+                        Mutable!!(62)
+                    }
+                }
+
+                func Main() { Holder(Write).Run() }
+                """,
+            "custom-property" => """
+                class Holder {
+                    var Backing System.Action[int32]?
+                    prop Custom System.Action[int32]? -> Backing
+
+                    init(value System.Action[int32]) { Backing = value }
+
+                    func Run() {
+                        if let handler = Custom {
+                            handler(61)
+                        }
+                        Custom!!(62)
+                    }
+                }
+
+                func Main() { Holder(Write).Run() }
+                """,
+            "shared-var" => """
+                class Holder {
+                    shared {
+                        var SharedVar System.Action[int32]?
+
+                        func Run() {
+                            if let handler = SharedVar {
+                                handler(61)
+                            }
+                            SharedVar!!(62)
+                        }
+                    }
+                }
+
+                func Main() {
+                    Holder.SharedVar = Write
+                    Holder.Run()
+                }
+                """,
+            "shared-let" => """
+                class Holder {
+                    shared {
+                        let SharedLet System.Action[int32]? = Write
+
+                        func Run() {
+                            if let handler = SharedLet {
+                                handler(61)
+                            }
+                            SharedLet!!(62)
+                        }
+                    }
+                }
+
+                func Main() { Holder.Run() }
+                """,
+            "invalidated-local" => """
+                func Run(incoming System.Action[int32]?) {
+                    var handler System.Action[int32]? = Write
+                    if handler != nil {
+                        handler = incoming
+                        if let narrowed = handler {
+                            narrowed(61)
+                        }
+                        handler!!(62)
+                    }
+                }
+
+                func Main() { Run(Write) }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(receiverShape), receiverShape, null),
+        };
+
+        return $$"""
+            package Issue2885RemedyShape
+            import System
+
+            func Write(value int32) { Console.WriteLine(value) }
+
+            {{body}}
+            """;
+    }
+
+    private static void AssertSingleGs0503(string source, string receiverName, string fixtureSource = null)
+    {
+        if (fixtureSource == null)
+        {
+            var compilation = new GsCompilation(GsSyntaxTree.Parse(SourceText.From(source)));
+            AssertGs0503(compilation, receiverName);
+            return;
+        }
+
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue2885-bind-fixtures",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var fixturePath = Path.Combine(directory, "Issue2885Fixture.dll");
+            EmitCSharpFixture(fixturePath, fixtureSource);
+            using var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+            var compilation = new GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(source)));
+            AssertGs0503(compilation, receiverName);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void AssertGs0503(GsCompilation compilation, string receiverName)
+    {
+        var diagnostic = Assert.Single(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("GS0503", diagnostic.Id);
+        Assert.Contains($"'{receiverName}'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    private static string CompileAndRun(string source, string caseName, string fixtureSource = null)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -204,6 +562,12 @@ public class Issue2885NullableDelegateReceiverTests
             var sourcePath = Path.Combine(directory, "test.gs");
             var assemblyPath = Path.Combine(directory, "test.dll");
             File.WriteAllText(sourcePath, source);
+            string fixturePath = null;
+            if (fixtureSource != null)
+            {
+                fixturePath = Path.Combine(directory, "Issue2885Fixture.dll");
+                EmitCSharpFixture(fixturePath, fixtureSource);
+            }
 
             using var stdout = new StringWriter();
             using var stderr = new StringWriter();
@@ -213,13 +577,19 @@ public class Issue2885NullableDelegateReceiverTests
             Console.SetError(stderr);
             try
             {
-                var exitCode = Program.Main(new[]
+                var arguments = new List<string>
                 {
                     "/out:" + assemblyPath,
                     "/target:exe",
                     "/targetframework:net10.0",
-                    sourcePath,
-                });
+                };
+                if (fixturePath != null)
+                {
+                    arguments.Add("/reference:" + fixturePath);
+                }
+
+                arguments.Add(sourcePath);
+                var exitCode = Program.Main(arguments.ToArray());
                 Assert.True(exitCode == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
             }
             finally
@@ -228,7 +598,9 @@ public class Issue2885NullableDelegateReceiverTests
                 Console.SetError(previousErr);
             }
 
-            IlVerifier.Verify(assemblyPath);
+            IlVerifier.Verify(
+                assemblyPath,
+                additionalReferences: fixturePath == null ? null : new[] { fixturePath });
 
             using var process = Process.Start(new ProcessStartInfo("dotnet")
             {
@@ -261,5 +633,23 @@ public class Issue2885NullableDelegateReceiverTests
             {
             }
         }
+    }
+
+    private static void EmitCSharpFixture(string path, string source)
+    {
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(reference => MetadataReference.CreateFromFile(reference));
+        var compilation = CSharpCompilation.Create(
+            "Issue2885Fixture",
+            new[] { CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest)) },
+            references,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable));
+        using var stream = File.Create(path);
+        var result = compilation.Emit(stream);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
     }
 }

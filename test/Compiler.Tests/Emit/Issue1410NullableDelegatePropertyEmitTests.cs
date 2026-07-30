@@ -5,6 +5,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -187,6 +191,28 @@ public class Issue1410NullableDelegatePropertyEmitTests
             """;
 
         Assert.Equal("fallback\ncalled\nvalue\n", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void NullableReferenceReturningDelegateProperty_PlainCallReportsNullableReceiver()
+    {
+        const string source = """
+            package P
+
+            class Box {
+                prop Text (() -> string)? { get; set }
+            }
+
+            func Main() {
+                let empty = Box()
+                empty.Text()
+            }
+            """;
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
+        var diagnostic = Assert.Single(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("GS0503", diagnostic.Id);
+        Assert.Equal("Text", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
     }
 
     [Fact]

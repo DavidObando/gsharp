@@ -858,6 +858,14 @@ internal sealed partial class OverloadResolver
             return nullableDelegateCall;
         }
 
+        if (symbol is VariableSymbol directDelegateVar
+            && (narrowedCallTargetType ?? directDelegateVar.Type) is NullableTypeSymbol nullableCallTarget
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableCallTarget.UnderlyingType, out _))
+        {
+            Diagnostics.ReportNullableDelegateReceiverInvocation(syntax.Identifier.Location, directDelegateVar.Name);
+            return new BoundErrorExpression(null);
+        }
+
         // Phase 4.7: invoking a function-typed variable goes through the
         // indirect-call path. Sites like `add(1, 2)` where `add` is `let
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
@@ -970,12 +978,6 @@ internal sealed partial class OverloadResolver
             && delegateTargetType.ClrType is System.Type delegateClrType
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
-            if (delegateTargetType is NullableTypeSymbol)
-            {
-                Diagnostics.ReportNullableDelegateReceiverInvocation(syntax.Identifier.Location, delegateVar.Name);
-                return new BoundErrorExpression(null);
-            }
-
             // Issue #2799 follow-up: the receiver load must honor every
             // implicit-member variable kind, not only a plain local/parameter
             // (a bare `BoundVariableExpression`) and the field-like event's
