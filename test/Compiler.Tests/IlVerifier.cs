@@ -159,6 +159,14 @@ internal static class IlVerifier
                 .ToString();
             throw new XunitException(message);
         }
+
+        var successMarker = $"All Classes and Methods in {assemblyPath} Verified.";
+        if (!stdout.Contains(successMarker, StringComparison.Ordinal))
+        {
+            throw new XunitException(
+                $"ilverify exited successfully without confirming verification of '{assemblyPath}'.{Environment.NewLine}" +
+                stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd());
+        }
     }
 
     /// <summary>
@@ -408,6 +416,11 @@ internal static class IlVerifier
             if (string.IsNullOrEmpty(path))
             {
                 return;
+            }
+
+            if (!File.Exists(path))
+            {
+                throw new XunitException($"ilverify: reference assembly not found at '{path}'");
             }
 
             // ilverify treats the verified assembly itself as the "primary"

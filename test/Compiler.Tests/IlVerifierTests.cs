@@ -64,6 +64,18 @@ public class IlVerifierTests
     }
 
     [Fact]
+    public void Verify_MissingReference_Throws()
+    {
+        var bogus = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            $"does-not-exist-{Guid.NewGuid():N}.dll");
+        var exception = Assert.Throws<XunitException>(
+            () => IlVerifier.Verify(typeof(IlVerifierTests).Assembly.Location, new[] { bogus }));
+
+        Assert.Contains("reference assembly not found", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Verify_RespectsSkipEnvVar()
     {
         var prev = Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY");
