@@ -484,10 +484,24 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // Issue #2849: derive both argument conversions and Invoke shape from
+        // the narrowed stable member read, not the nullable declaration.
+        BoundExpression memberLoad = matchedField != null
+            ? isStatic
+                ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
+                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
+            : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
+        memberLoad = ApplyMemberNarrowing(memberLoad);
+        var effectiveMemberType = memberLoad switch
+        {
+            BoundFieldAccessExpression { NarrowedType: TypeSymbol narrowedField } => narrowedField,
+            BoundPropertyAccessExpression { NarrowedType: TypeSymbol narrowedProperty } => narrowedProperty,
+            _ => memberType,
+        };
         var callableType = ce.NullableQuestionToken != null
-            && memberType is NullableTypeSymbol nullableMember
+            && effectiveMemberType is NullableTypeSymbol nullableMember
             ? nullableMember.UnderlyingType
-            : memberType;
+            : effectiveMemberType;
 
         if (isStatic)
         {
@@ -498,22 +512,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        FunctionTypeSymbol functionType;
-        if (callableType is FunctionTypeSymbol fts)
-        {
-            functionType = fts;
-        }
-        else if (callableType is DelegateTypeSymbol nds)
-        {
-            functionType = nds.EquivalentFunctionType;
-        }
-        else if (callableType.ClrType is System.Type memberClrType
-            && ClrTypeUtilities.IsDelegateType(memberClrType)
-            && MemberLookup.TryGetDelegateFunctionType(memberClrType, out var clrFn))
-        {
-            functionType = clrFn;
-        }
-        else
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
         {
             return false;
         }
@@ -532,14 +531,9 @@ internal sealed partial class ExpressionBinder
                 return true;
             }
 
-            BoundExpression namedMemberLoad = matchedField != null
-                ? isStatic
-                    ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
-                    : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
-                : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
             result = BuildDelegateMemberInvocation(
                 ce,
-                namedMemberLoad,
+                memberLoad,
                 callableType,
                 functionType,
                 namedArguments,
@@ -610,11 +604,6 @@ internal sealed partial class ExpressionBinder
             convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]));
         }
 
-        BoundExpression memberLoad = matchedField != null
-            ? isStatic
-                ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
-                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
-            : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
         result = BuildDelegateMemberInvocation(
             ce,
             memberLoad,

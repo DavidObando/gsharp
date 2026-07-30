@@ -983,18 +983,25 @@ internal sealed partial class OverloadResolver
             // resolves each such symbol to the correct field/property access
             // (the same helper the structural `FunctionTypeSymbol` path uses),
             // leaving locals/parameters to the bare-variable fallback.
+            // Issue #2849: preserve the narrowed receiver type on every load
+            // shape so emit can parent Invoke at the reified generic TypeSpec
+            // instead of the nullable declaration's erased ClrType.
             BoundExpression receiver;
             if (delegateVar is ImplicitFieldVariableSymbol clrImplicitField)
             {
-                receiver = BuildImplicitFieldLoad(clrImplicitField);
+                receiver = BuildImplicitFieldLoad(clrImplicitField, narrowedCallTargetType);
             }
-            else if (TryBuildImplicitMemberLoad(delegateVar, syntax.Identifier.Location, out var clrMemberLoad))
+            else if (TryBuildImplicitMemberLoad(
+                delegateVar,
+                syntax.Identifier.Location,
+                out var clrMemberLoad,
+                narrowedCallTargetType))
             {
                 receiver = clrMemberLoad;
             }
             else
             {
-                receiver = new BoundVariableExpression(null, delegateVar);
+                receiver = new BoundVariableExpression(null, delegateVar, narrowedCallTargetType);
             }
 
             // Issue #2796 / #2798: a null-conditional raise `Evt?(args)` of a
