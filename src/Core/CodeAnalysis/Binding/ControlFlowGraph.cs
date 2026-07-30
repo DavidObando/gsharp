@@ -51,13 +51,7 @@ public sealed class ControlFlowGraph
     /// <param name="body">The bound block statement.</param>
     /// <returns>The control flow graph.</returns>
     public static ControlFlowGraph Create(BoundBlockStatement body)
-    {
-        var basicBlockBuilder = new BasicBlockBuilder();
-        var blocks = basicBlockBuilder.Build(body);
-
-        var graphBuilder = new GraphBuilder();
-        return graphBuilder.Build(blocks);
-    }
+        => Create(body, treatThrowsAsTerminators: false);
 
     /// <summary>
     /// Reports whether all paths in a bound block statement return or not.
@@ -67,9 +61,9 @@ public sealed class ControlFlowGraph
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
         // This projection is intentionally limited to definite-return. Other
-        // data-flow analyzers call Create(body) and still treat fixed/scope as
-        // opaque, so their escaping-goto behavior is unchanged.
-        var graph = Create(ProjectSequentialRegionsForDefiniteReturn(body));
+        // data-flow analyzers call Create(body) and still treat these compound
+        // statements as opaque, so their region-specific behavior is unchanged.
+        var graph = Create(ProjectRegionsForDefiniteReturn(body), treatThrowsAsTerminators: true);
 
         foreach (var branch in graph.End.Incoming)
         {
@@ -199,9 +193,20 @@ public sealed class ControlFlowGraph
         }
     }
 
-    private static BoundBlockStatement ProjectSequentialRegionsForDefiniteReturn(BoundStatement statement)
+    private static ControlFlowGraph Create(BoundBlockStatement body, bool treatThrowsAsTerminators)
+    {
+        var basicBlockBuilder = new BasicBlockBuilder(treatThrowsAsTerminators);
+        var blocks = basicBlockBuilder.Build(body);
+
+        var graphBuilder = new GraphBuilder();
+        return graphBuilder.Build(blocks);
+    }
+
+    private static BoundBlockStatement ProjectRegionsForDefiniteReturn(BoundStatement statement)
     {
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
+        var labelOrdinal = 0;
+        var choiceOrdinal = 0;
         Add(statement);
         return new BoundBlockStatement(null, builder.ToImmutable());
 
@@ -227,11 +232,245 @@ public sealed class ControlFlowGraph
                     // Its task join and failure rethrow remain emit-time behavior.
                     Add(scopeStatement.Body);
                     break;
+                case BoundPatternSwitchStatement switchStatement:
+                    AddPatternSwitch(switchStatement);
+                    break;
+                case BoundSelectStatement selectStatement:
+                    AddSelect(selectStatement);
+                    break;
                 default:
                     builder.Add(current);
                     break;
             }
         }
+
+        void AddPatternSwitch(BoundPatternSwitchStatement switchStatement)
+        {
+            var endLabel = NewLabel("switchEnd");
+            var arms = new List<(BoundPatternSwitchArm Arm, BoundLabel Label)>();
+            var literalDiscriminant = switchStatement.Discriminant as BoundLiteralExpression;
+            BoundPatternSwitchArm defaultArm = null;
+            BoundLabel defaultLabel = null;
+            var dispatchComplete = false;
+
+            foreach (var arm in switchStatement.Arms)
+            {
+                if (arm.IsDefault)
+                {
+                    defaultArm = arm;
+                    defaultLabel = NewLabel("switchDefault");
+                    continue;
+                }
+
+                if (arm.Guard is BoundLiteralExpression { Value: false })
+                {
+                    continue;
+                }
+
+                if (literalDiscriminant != null
+                    && TryMatchLiteralPattern(arm.Pattern, literalDiscriminant.Value, out var matches))
+                {
+                    if (!matches)
+                    {
+                        continue;
+                    }
+
+                    if (arm.Guard == null || arm.Guard is BoundLiteralExpression { Value: true })
+                    {
+                        var matchingArmLabel = NewLabel("switchArm");
+                        arms.Add((arm, matchingArmLabel));
+                        builder.Add(new BoundGotoStatement(null, matchingArmLabel));
+                        dispatchComplete = true;
+                        break;
+                    }
+                }
+
+                var armLabel = NewLabel("switchArm");
+                arms.Add((arm, armLabel));
+                if (arm.Pattern is BoundDiscardPattern && arm.Guard == null)
+                {
+                    builder.Add(new BoundGotoStatement(null, armLabel));
+                    dispatchComplete = true;
+                    break;
+                }
+
+                builder.Add(new BoundConditionalGotoStatement(null, armLabel, NewChoice()));
+            }
+
+            if (!dispatchComplete)
+            {
+                builder.Add(new BoundGotoStatement(null, defaultArm == null ? endLabel : defaultLabel));
+            }
+
+            foreach (var (arm, armLabel) in arms)
+            {
+                builder.Add(new BoundLabelStatement(null, armLabel));
+                Add(arm.Body);
+                builder.Add(new BoundGotoStatement(null, endLabel));
+            }
+
+            if (defaultArm != null)
+            {
+                builder.Add(new BoundLabelStatement(null, defaultLabel));
+                Add(defaultArm.Body);
+                builder.Add(new BoundGotoStatement(null, endLabel));
+            }
+
+            builder.Add(new BoundLabelStatement(null, endLabel));
+        }
+
+        void AddSelect(BoundSelectStatement selectStatement)
+        {
+            var dispatchLabel = NewLabel("selectDispatch");
+            var endLabel = NewLabel("selectEnd");
+            var cases = new List<(BoundSelectCase Case, BoundLabel Label)>();
+            BoundSelectCase defaultCase = null;
+            BoundLabel defaultLabel = null;
+
+            builder.Add(new BoundLabelStatement(null, dispatchLabel));
+            foreach (var @case in selectStatement.Cases)
+            {
+                if (@case.IsDefault)
+                {
+                    defaultCase = @case;
+                    defaultLabel = NewLabel("selectDefault");
+                    continue;
+                }
+
+                var caseLabel = NewLabel("selectCase");
+                cases.Add((@case, caseLabel));
+                builder.Add(new BoundConditionalGotoStatement(null, caseLabel, NewChoice()));
+            }
+
+            builder.Add(new BoundGotoStatement(null, defaultCase == null ? dispatchLabel : defaultLabel));
+
+            foreach (var (@case, caseLabel) in cases)
+            {
+                builder.Add(new BoundLabelStatement(null, caseLabel));
+                Add(@case.Body);
+                builder.Add(new BoundGotoStatement(null, endLabel));
+            }
+
+            if (defaultCase != null)
+            {
+                builder.Add(new BoundLabelStatement(null, defaultLabel));
+                Add(defaultCase.Body);
+                builder.Add(new BoundGotoStatement(null, endLabel));
+            }
+
+            builder.Add(new BoundLabelStatement(null, endLabel));
+        }
+
+        BoundLabel NewLabel(string name)
+            => new($"<>definiteReturn_{name}_{labelOrdinal++}");
+
+        BoundExpression NewChoice()
+            => new BoundVariableExpression(
+                null,
+                new LocalVariableSymbol($"<>definiteReturnChoice{choiceOrdinal++}", isReadOnly: true, TypeSymbol.Bool));
+
+        static bool TryMatchLiteralPattern(BoundPattern pattern, object value, out bool matches)
+        {
+            switch (pattern)
+            {
+                case BoundConstantPattern { Value: BoundLiteralExpression constant }:
+                    matches = LiteralEquals(value, constant.Value);
+                    return true;
+                case BoundDiscardPattern:
+                    matches = true;
+                    return true;
+                case BoundTypePattern when value == null:
+                    matches = false;
+                    return true;
+                case BoundRelationalPattern { Value: BoundLiteralExpression right } nanRelational
+                    when IsNaN(value) || IsNaN(right.Value):
+                    matches = nanRelational.Op.Kind == BoundBinaryOperatorKind.NotEquals;
+                    return nanRelational.Op.Kind is BoundBinaryOperatorKind.Equals
+                        or BoundBinaryOperatorKind.NotEquals
+                        or BoundBinaryOperatorKind.Less
+                        or BoundBinaryOperatorKind.LessOrEquals
+                        or BoundBinaryOperatorKind.Greater
+                        or BoundBinaryOperatorKind.GreaterOrEquals;
+                case BoundRelationalPattern { Value: BoundLiteralExpression right } relational
+                    when TryCompareLiterals(value, right.Value, out var comparison):
+                    switch (relational.Op.Kind)
+                    {
+                        case BoundBinaryOperatorKind.Equals:
+                            matches = comparison == 0;
+                            return true;
+                        case BoundBinaryOperatorKind.NotEquals:
+                            matches = comparison != 0;
+                            return true;
+                        case BoundBinaryOperatorKind.Less:
+                            matches = comparison < 0;
+                            return true;
+                        case BoundBinaryOperatorKind.LessOrEquals:
+                            matches = comparison <= 0;
+                            return true;
+                        case BoundBinaryOperatorKind.Greater:
+                            matches = comparison > 0;
+                            return true;
+                        case BoundBinaryOperatorKind.GreaterOrEquals:
+                            matches = comparison >= 0;
+                            return true;
+                        default:
+                            matches = false;
+                            return false;
+                    }
+
+                case BoundBinaryPattern binary
+                    when TryMatchLiteralPattern(binary.Left, value, out var left)
+                        && TryMatchLiteralPattern(binary.Right, value, out var right):
+                    matches = binary.IsConjunction ? left && right : left || right;
+                    return true;
+                case BoundNotPattern notPattern
+                    when TryMatchLiteralPattern(notPattern.Pattern, value, out var inner):
+                    matches = !inner;
+                    return true;
+                default:
+                    matches = false;
+                    return false;
+            }
+        }
+
+        static bool TryCompareLiterals(object left, object right, out int comparison)
+        {
+            left = UnwrapEnum(left);
+            right = UnwrapEnum(right);
+            if (left == null || right == null || IsNaN(left) || IsNaN(right))
+            {
+                comparison = 0;
+                return false;
+            }
+
+            if (left.GetType() == right.GetType() && left is IComparable comparable)
+            {
+                comparison = comparable.CompareTo(right);
+                return true;
+            }
+
+            comparison = 0;
+            return false;
+        }
+
+        static bool LiteralEquals(object left, object right)
+        {
+            left = UnwrapEnum(left);
+            right = UnwrapEnum(right);
+            return !IsNaN(left) && !IsNaN(right) && Equals(left, right);
+        }
+
+        static object UnwrapEnum(object value)
+            => value is Enum enumValue
+                ? Convert.ChangeType(
+                    enumValue,
+                    Enum.GetUnderlyingType(enumValue.GetType()),
+                    System.Globalization.CultureInfo.InvariantCulture)
+                : value;
+
+        static bool IsNaN(object value)
+            => (value is float floatValue && float.IsNaN(floatValue))
+                || (value is double doubleValue && double.IsNaN(doubleValue));
     }
 
     /// <summary>
@@ -361,6 +600,19 @@ public sealed class ControlFlowGraph
     {
         private readonly List<BoundStatement> statements = [];
         private readonly List<BasicBlock> blocks = [];
+        private readonly bool treatThrowsAsTerminators;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BasicBlockBuilder"/> class.
+        /// </summary>
+        public BasicBlockBuilder()
+        {
+        }
+
+        internal BasicBlockBuilder(bool treatThrowsAsTerminators)
+        {
+            this.treatThrowsAsTerminators = treatThrowsAsTerminators;
+        }
 
         /// <summary>
         /// Builds a basic block from the provided bound block statement and adds
@@ -399,8 +651,15 @@ public sealed class ControlFlowGraph
                         }
 
                         break;
-                    case BoundNodeKind.TryStatement:
                     case BoundNodeKind.ThrowStatement:
+                        statements.Add(statement);
+                        if (treatThrowsAsTerminators)
+                        {
+                            StartBlock();
+                        }
+
+                        break;
+                    case BoundNodeKind.TryStatement:
                     case BoundNodeKind.GoStatement:
                     case BoundNodeKind.ChannelSendStatement:
                     case BoundNodeKind.SelectStatement:
