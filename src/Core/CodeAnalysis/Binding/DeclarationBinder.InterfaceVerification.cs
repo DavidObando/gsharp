@@ -32,6 +32,18 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            var dataCloneAncestor = structSymbol.GetDataCloneAncestor();
+            if (!structSymbol.IsData && dataCloneAncestor?.IsAbstract == true)
+            {
+                // Synthesized record clones are not FunctionSymbols, so the
+                // ordinary abstract-member walk cannot see this slot.
+                Diagnostics.ReportAbstractMemberNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    dataCloneAncestor.Name,
+                    "<Clone>$");
+            }
+
             foreach (var abstractMethod in structSymbol.GetUnimplementedAbstractMethods())
             {
                 // Skip abstract methods declared directly on this class — those

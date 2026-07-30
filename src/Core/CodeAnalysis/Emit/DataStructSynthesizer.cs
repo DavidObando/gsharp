@@ -100,8 +100,8 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, EntityHandle> resolveUserTypeToken;
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
+    private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassCopyConstructors = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
@@ -122,7 +122,8 @@ internal sealed class DataStructSynthesizer
         Func<ParameterHandle> nextParameterHandle,
         Func<StructSymbol, EntityHandle> resolveUserTypeToken,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
-        Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef)
+        Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
+        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -135,6 +136,7 @@ internal sealed class DataStructSynthesizer
         this.resolveUserTypeToken = resolveUserTypeToken ?? throw new ArgumentNullException(nameof(resolveUserTypeToken));
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
+        this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
     }
 
     /// <summary>
@@ -497,7 +499,6 @@ internal sealed class DataStructSynthesizer
             var equalityContractGetter = this.EmitDataClassEqualityContractGetter(structSym);
             this.equalityContractGetters[structSym] = equalityContractGetter;
             var copyConstructor = this.EmitDataClassCopyConstructor(structSym);
-            this.dataClassCopyConstructors[structSym] = copyConstructor;
             this.EmitDataClassClone(structSym, copyConstructor);
         }
 
@@ -620,15 +621,20 @@ internal sealed class DataStructSynthesizer
             this.nextParameterHandle());
     }
 
-    private MethodDefinitionHandle EmitDataClassCopyConstructor(StructSymbol structSym)
+    /// <summary>
+    /// Emits the copy constructor shared by data classes and non-data
+    /// intermediary classes in a data-class inheritance chain.
+    /// </summary>
+    /// <param name="structSym">The class whose fields are copied.</param>
+    /// <returns>The emitted copy-constructor MethodDef.</returns>
+    public MethodDefinitionHandle EmitDataClassCopyConstructor(StructSymbol structSym)
     {
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
-            if (structSym.BaseClass?.IsData == true
-                && this.dataClassCopyConstructors.TryGetValue(structSym.BaseClass, out var baseCopyConstructor))
+            if (this.TryResolveBaseCopyConstructorToken(structSym, out var baseCopyConstructor))
             {
                 il.LoadArgument(1);
                 il.OpCode(ILOpCode.Call);
@@ -659,45 +665,30 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
         var visibility = IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
-        return this.emitCtx.Metadata.AddMethodDefinition(
+        var copyConstructor = this.emitCtx.Metadata.AddMethodDefinition(
             visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
             this.nextParameterHandle());
+
+        if (this.cache.DataClassCopyConstructorHandles.TryGetValue(structSym, out var plannedCopyConstructor)
+            && copyConstructor != plannedCopyConstructor)
+        {
+            throw new InvalidOperationException(
+                $"Class '{structSym.Name}' copy-constructor MethodDef row {MetadataTokens.GetRowNumber(copyConstructor)} did not match the planned row {MetadataTokens.GetRowNumber(plannedCopyConstructor)}.");
+        }
+
+        return copyConstructor;
     }
 
     private void EmitDataClassClone(StructSymbol structSym, MethodDefinitionHandle copyConstructor)
     {
-        // Issue #2864: a data class is abstract when its effective member set
-        // still contains a no-body `open` member (StructSymbol.IsAbstract,
-        // #987). Emitting the ordinary copy-construct body there produced
-        // `newobj` of the abstract type itself, which ilverify rejects with
-        // NewobjAbstractClass.
-        //
-        // C# solves this by declaring `<Clone>$` abstract on the base and
-        // having each derived record override it with a COVARIANT return type
-        // (`Derived <Clone>$()` overriding `Base <Clone>$()`), which requires
-        // an explicit MethodImpl plus `PreserveBaseOverridesAttribute`. This
-        // emitter has no covariant-return support: every `<Clone>$` returns its
-        // own declaring type, so the signatures never match and the derived
-        // method silently lands in a fresh slot. Declaring the base one
-        // abstract would therefore leave it permanently unimplemented and the
-        // runtime would reject the derived type with a TypeLoadException.
-        //
-        // `<Clone>$` has no consumer inside gsc — it exists purely for C#
-        // record shape compatibility — so the correct narrow fix is to omit it
-        // on an abstract data class, exactly as an abstract type omits any
-        // other member it cannot implement. Concrete data classes are
-        // unaffected.
-        if (structSym.IsAbstract)
-        {
-            return;
-        }
+        var hasBaseClone = this.TryResolveBaseCloneToken(structSym, out var baseClone);
 
         int bodyOffset = -1;
-        if (!this.emitCtx.MetadataOnly)
+        if (!structSym.IsAbstract && !this.emitCtx.MetadataOnly)
         {
             var il = new InstructionEncoder(new BlobBuilder());
             il.LoadArgument(0);
@@ -711,22 +702,126 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(0, r => this.encodeTypeSymbol(r.Type(), structSym), _ => { });
         var attributes = MethodAttributes.Public | MethodAttributes.HideBySig;
-        if (!IsDataObjectOverrideFinal(structSym))
+        if (structSym.IsAbstract || hasBaseClone || !IsDataObjectOverrideFinal(structSym))
         {
-            attributes |= MethodAttributes.Virtual;
-            if (structSym.BaseClass?.IsData != true)
-            {
-                attributes |= MethodAttributes.NewSlot;
-            }
+            // Covariant returns differ at the CLR-signature level. Match
+            // Roslyn: emit a new virtual slot, then bind it explicitly to the
+            // base clone with a MethodImpl row.
+            attributes |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
 
-        this.emitCtx.Metadata.AddMethodDefinition(
+        if (structSym.IsAbstract)
+        {
+            attributes |= MethodAttributes.Abstract;
+        }
+
+        var cloneMethod = this.emitCtx.Metadata.AddMethodDefinition(
             attributes,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
             this.emitCtx.Metadata.GetOrAddString("<Clone>$"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
             this.nextParameterHandle());
+
+        if (this.cache.DataClassCloneHandles.TryGetValue(structSym, out var plannedClone)
+            && cloneMethod != plannedClone)
+        {
+            throw new InvalidOperationException(
+                $"Data class '{structSym.Name}' <Clone>$ MethodDef row {MetadataTokens.GetRowNumber(cloneMethod)} did not match the planned row {MetadataTokens.GetRowNumber(plannedClone)}.");
+        }
+
+        if (hasBaseClone)
+        {
+            this.emitCtx.Metadata.AddMethodImplementation(
+                this.cache.StructTypeDefs[structSym],
+                cloneMethod,
+                baseClone);
+
+            var valueBlob = new BlobBuilder();
+            valueBlob.WriteUInt16(0x0001);
+            valueBlob.WriteUInt16(0);
+            this.emitCtx.Metadata.AddCustomAttribute(
+                cloneMethod,
+                this.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
+                this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+        }
+    }
+
+    private bool TryResolveBaseCloneToken(StructSymbol structSym, out EntityHandle cloneToken)
+    {
+        cloneToken = default;
+        var baseClass = structSym.GetDataCloneAncestor();
+        if (baseClass == null)
+        {
+            return false;
+        }
+
+        if (baseClass.ClrType is { } importedBase)
+        {
+            var candidates = ClrTypeUtilities.SafeGetMethods(
+                    importedBase,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(method =>
+                    method.Name == "<Clone>$"
+                    && !method.IsGenericMethod
+                    && method.GetParameters().Length == 0
+                    && method.IsVirtual
+                    && ClrTypeUtilities.AreSame(method.ReturnType, importedBase))
+                .ToArray();
+            if (candidates.Length != 1)
+            {
+                return false;
+            }
+
+            cloneToken = this.resolveImportedMethodRef(candidates[0], baseClass);
+            return true;
+        }
+
+        if (!this.cache.DataClassCloneHandles.TryGetValue(baseClass.Definition, out var baseClone))
+        {
+            return false;
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(baseClass))
+        {
+            cloneToken = baseClone;
+            return true;
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => this.encodeTypeSymbol(r.Type(), baseClass.Definition), _ => { });
+        cloneToken = this.resolveUserMethodRef(baseClass, baseClone, "<Clone>$", signature);
+        return true;
+    }
+
+    private bool TryResolveBaseCopyConstructorToken(StructSymbol structSym, out EntityHandle copyConstructorToken)
+    {
+        copyConstructorToken = default;
+        var baseClass = structSym.BaseClass;
+        if (baseClass == null)
+        {
+            return false;
+        }
+
+        var baseDefinition = baseClass.Definition ?? baseClass;
+        if (!this.cache.DataClassCopyConstructorHandles.TryGetValue(baseDefinition, out var baseCopyConstructor))
+        {
+            throw new InvalidOperationException(
+                $"Class '{structSym.Name}' has no planned copy constructor for direct base '{baseClass.Name}'.");
+        }
+
+        if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(baseClass))
+        {
+            copyConstructorToken = baseCopyConstructor;
+            return true;
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), baseDefinition));
+        copyConstructorToken = this.resolveUserMethodRef(baseClass, baseCopyConstructor, ".ctor", signature);
+        return true;
     }
 
     /// <summary>
