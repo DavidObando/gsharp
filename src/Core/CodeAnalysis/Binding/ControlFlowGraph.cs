@@ -66,7 +66,10 @@ public sealed class ControlFlowGraph
     /// <returns>Whether all its paths return or not.</returns>
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
-        var graph = Create(body);
+        // This projection is intentionally limited to definite-return. Other
+        // data-flow analyzers call Create(body) and still treat fixed/scope as
+        // opaque, so their escaping-goto behavior is unchanged.
+        var graph = Create(ProjectSequentialRegionsForDefiniteReturn(body));
 
         foreach (var branch in graph.End.Incoming)
         {
@@ -193,6 +196,41 @@ public sealed class ControlFlowGraph
             default:
                 return statement.Kind == BoundNodeKind.ReturnStatement
                     || statement.Kind == BoundNodeKind.ThrowStatement;
+        }
+    }
+
+    private static BoundBlockStatement ProjectSequentialRegionsForDefiniteReturn(BoundStatement statement)
+    {
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
+        Add(statement);
+        return new BoundBlockStatement(null, builder.ToImmutable());
+
+        void Add(BoundStatement current)
+        {
+            switch (current)
+            {
+                case BoundBlockStatement block:
+                    foreach (var nested in block.Statements)
+                    {
+                        Add(nested);
+                    }
+
+                    break;
+                case BoundFixedStatement fixedStatement:
+                    // Fixed executes its body once; pin setup and normal-exit
+                    // release remain emit concerns. Escaping exits currently
+                    // skip that release epilogue (#2900).
+                    Add(fixedStatement.Body);
+                    break;
+                case BoundScopeStatement scopeStatement:
+                    // Scope also executes its body once in normal control flow.
+                    // Its task join and failure rethrow remain emit-time behavior.
+                    Add(scopeStatement.Body);
+                    break;
+                default:
+                    builder.Add(current);
+                    break;
+            }
         }
     }
 
