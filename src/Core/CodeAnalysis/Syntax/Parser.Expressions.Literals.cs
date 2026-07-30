@@ -1372,12 +1372,17 @@ public partial class Parser
                 continue;
             }
 
-            // ADR-0055: a hole is `expr [ , alignment ] [ : format ]`. Split
-            // the captured hole text into its expression / alignment / format
-            // clauses with a delimiter-aware scanner that ignores `,`/`:`
-            // nested inside (), [], {}, string/char literals, comments, or a
-            // top-level conditional expression.
-            SplitHole(fragment.Text, out var exprText, out var alignmentText, out var formatText);
+            // ADR-0055: let the real expression parser find where the
+            // expression ends, then split the simple alignment/format tail.
+            // This keeps hole disambiguation in sync with every expression
+            // form, including ternaries and nullable-element array literals.
+            var probeParser = new Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length);
+            _ = probeParser.ParseExpression();
+            var expressionLength = probeParser.Current.Kind == SyntaxKind.CommaToken
+                || probeParser.Current.Kind == SyntaxKind.ColonToken
+                    ? probeParser.Current.Position - fragment.Position
+                    : fragment.Text.Length;
+            SplitTail(fragment.Text, expressionLength, out var exprText, out var alignmentText, out var formatText);
 
             // ADR-0055 §C: anchor diagnostics on the hole itself (using the
             // hole's true source offset) rather than the whole string token.
@@ -1412,6 +1417,9 @@ public partial class Parser
             // against the SAME outer SyntaxTree, so its Position is already the true
             // absolute offset in the outer file — no padded-copy allocation or re-lex
             // of the file prefix is needed (that was O(fileSize) per hole).
+            // Do not reuse the probe tree: its window includes alignment/format text
+            // lexed as code, so filtering its diagnostics would change malformed-hole
+            // recovery. Reparse only the bounded expression instead.
             var innerParser = new Parser(syntaxTree, fragment.Position, fragment.Position + exprText.Length);
             var innerRoot = innerParser.ParseCompilationUnit();
             Diagnostics.AddRange(innerParser.Diagnostics);
@@ -1431,112 +1439,34 @@ public partial class Parser
         return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
     }
 
-    // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`
-    // (alignment) and first top-level `:` (format), tracking ()/[]/{} depth,
-    // top-level conditional expressions, and nested literals/comments. The
-    // expression clause is the text before whichever delimiter appears first.
-    private static void SplitHole(string hole, out string expr, out string alignment, out string format)
+    private static void SplitTail(
+        string hole,
+        int expressionLength,
+        out string expr,
+        out string alignment,
+        out string format)
     {
-        var depth = 0;
-        var conditionalDepth = 0;
-        var commaIndex = -1;
-        var colonIndex = -1;
-        for (var i = 0; i < hole.Length; i++)
-        {
-            var c = hole[i];
-            if (c == '/' && i + 1 < hole.Length && hole[i + 1] == '/')
-            {
-                i += 2;
-                while (i < hole.Length && hole[i] != '\r' && hole[i] != '\n')
-                {
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (c == '/' && i + 1 < hole.Length && hole[i + 1] == '*')
-            {
-                i += 2;
-                while (i + 1 < hole.Length && !(hole[i] == '*' && hole[i + 1] == '/'))
-                {
-                    i++;
-                }
-
-                i++;
-                continue;
-            }
-
-            if (c == '"' || c == '\'')
-            {
-                // Skip the nested literal, honoring `""`/`\` escapes loosely.
-                var quote = c;
-                i++;
-                while (i < hole.Length && hole[i] != quote)
-                {
-                    if (hole[i] == '\\' && i + 1 < hole.Length)
-                    {
-                        i++;
-                    }
-
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (c == '(' || c == '[' || c == '{')
-            {
-                depth++;
-            }
-            else if (c == ')' || c == ']' || c == '}')
-            {
-                depth--;
-            }
-            else if (depth == 0
-                && c == '?'
-                && (i == 0 || hole[i - 1] != '?')
-                && (i + 1 >= hole.Length || (hole[i + 1] != '?' && hole[i + 1] != '.' && hole[i + 1] != '[')))
-            {
-                conditionalDepth++;
-            }
-            else if (depth == 0 && c == ',' && conditionalDepth == 0 && commaIndex < 0 && colonIndex < 0)
-            {
-                commaIndex = i;
-            }
-            else if (depth == 0 && c == ':' && colonIndex < 0)
-            {
-                if (conditionalDepth > 0)
-                {
-                    conditionalDepth--;
-                }
-                else
-                {
-                    colonIndex = i;
-                    break;
-                }
-            }
-        }
-
+        expr = hole.Substring(0, expressionLength);
         alignment = null;
         format = null;
-        if (commaIndex < 0 && colonIndex < 0)
+        if (expressionLength >= hole.Length)
         {
-            expr = hole;
             return;
         }
 
-        var exprEnd = commaIndex >= 0 ? commaIndex : colonIndex;
-        expr = hole.Substring(0, exprEnd);
-        if (commaIndex >= 0)
+        if (hole[expressionLength] == ',')
         {
-            var alignEnd = colonIndex >= 0 ? colonIndex : hole.Length;
-            alignment = hole.Substring(commaIndex + 1, alignEnd - commaIndex - 1);
+            var colonIndex = hole.IndexOf(':', expressionLength + 1);
+            var alignmentEnd = colonIndex >= 0 ? colonIndex : hole.Length;
+            alignment = hole.Substring(expressionLength + 1, alignmentEnd - expressionLength - 1);
+            if (colonIndex >= 0)
+            {
+                format = hole.Substring(colonIndex + 1);
+            }
         }
-
-        if (colonIndex >= 0)
+        else
         {
-            format = hole.Substring(colonIndex + 1);
+            format = hole.Substring(expressionLength + 1);
         }
     }
 

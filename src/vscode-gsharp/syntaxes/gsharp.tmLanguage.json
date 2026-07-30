@@ -106,7 +106,7 @@
     },
     "interpolation-conditional": {
       "name": "meta.conditional.interpolation.gsharp",
-      "begin": "\\?(?![?.\\[])",
+      "begin": "(?<!\\?)\\?(?![?.\\[])",
       "end": ":",
       "patterns": [
         { "include": "#interpolation-conditional" },

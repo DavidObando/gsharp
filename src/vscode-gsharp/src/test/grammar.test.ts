@@ -147,11 +147,12 @@ describe('gsharp.tmLanguage.json', () => {
     );
 
     const conditional = grammar.repository['interpolation-conditional'];
-    const beginsConditional = new RegExp(`^(?:${conditional.begin})`);
-    expect(beginsConditional.test('?')).toBe(true);
-    expect(beginsConditional.test('??')).toBe(false);
-    expect(beginsConditional.test('?.')).toBe(false);
-    expect(beginsConditional.test('?[')).toBe(false);
+    const beginsConditional = new RegExp(conditional.begin);
+    expect('ok ? 1 : 2'.search(beginsConditional)).toBe(3);
+    expect(beginsConditional.test('a ?? b:D4')).toBe(false);
+    expect(beginsConditional.test('a ?. b')).toBe(false);
+    expect(beginsConditional.test('a ?[0]')).toBe(false);
+    expect('a ? b : c ? d : e'.search(beginsConditional)).toBe(2);
     expect(conditional.end).toBe(':');
   });
 

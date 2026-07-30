@@ -42,6 +42,20 @@ public class Issue2856InterpolationTernaryTests
     }
 
     [Fact]
+    public void TopLevelTernary_WithAlignmentAndFormat_Evaluates()
+    {
+        var result = Evaluate("""
+            let ok = true
+            let aligned = "[${ok ? 1 : 2,6}]"
+            let formatted = "[${ok ? 1 : 2,6:D4}]"
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("[     1]", Value(result, "aligned"));
+        Assert.Equal("[  0001]", Value(result, "formatted"));
+    }
+
+    [Fact]
     public void NestedTopLevelTernaries_Evaluate()
     {
         var result = Evaluate("""
@@ -134,13 +148,28 @@ public class Issue2856InterpolationTernaryTests
         Assert.Equal("7", Value(result, "text"));
     }
 
-    [Fact]
-    public void RangeInsideIndexBrackets_RemainsExpression_Guard()
+    [Theory]
+    [InlineData("let text = \"${[]int32?{1, 2, 3}.Length:D4}\"", "0003")]
+    [InlineData("let text = \"${[3]int32?{1, 2, 3}.Length:D4}\"", "0003")]
+    [InlineData("let text = \"${[]string?{\"a\", \"b\"}.Length:D4}\"", "0002")]
+    public void NullableElementArrayLiteral_WithFormat_RemainsSupported_Guard(
+        string declaration,
+        string expected)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(
-            "let text = \"${values[1..3]}\""));
+        var result = Evaluate(declaration);
 
-        Assert.Empty(tree.Diagnostics);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(expected, Value(result, "text"));
+    }
+
+    [Fact]
+    public void NullableElementArrayLiteral_WithAlignment_RemainsSupported_Guard()
+    {
+        var result = Evaluate(
+            "let text = \"[${[]int32?{1, 2, 3}.Length,6}]\"");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("[     3]", Value(result, "text"));
     }
 
     private static (ImmutableArray<Diagnostic> Diagnostics, Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
