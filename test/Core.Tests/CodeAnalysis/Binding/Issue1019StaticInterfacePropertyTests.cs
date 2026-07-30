@@ -124,6 +124,65 @@ struct AppleData : IData {
     }
 
     [Fact]
+    public void Implementer_StaticSetterKindMismatch_ReportsGS0502()
+    {
+        var source = @"
+sealed interface IData {
+  shared {
+    prop Tag int32 { get; init; }
+  }
+}
+
+struct AppleData : IData {
+  shared {
+    prop Tag int32 { get; set; }
+  }
+}
+";
+        var diagnostic = Assert.Single(Evaluate(source).Diagnostics);
+        Assert.Equal("GS0502", diagnostic.Id);
+    }
+
+    [Fact]
+    public void ExplicitStaticSetterKindMismatch_ReportsOnlyGS0502()
+    {
+        var source = @"
+sealed interface IData {
+  shared {
+    prop Tag int32 { get; init; }
+  }
+}
+
+struct AppleData : IData {
+  shared {
+    private prop (IData) Tag int32 { get; set; }
+  }
+}
+";
+        var diagnostic = Assert.Single(Evaluate(source).Diagnostics);
+        Assert.Equal("GS0502", diagnostic.Id);
+    }
+
+    [Fact]
+    public void ConstructedGenericInterface_MatchingStaticProperty_NoDiagnostics()
+    {
+        var source = @"
+sealed interface IData[T] {
+  shared {
+    prop Tag T { get; }
+  }
+}
+
+struct AppleData : IData[int32] {
+  shared {
+    prop Tag int32 -> 1
+  }
+}
+";
+        Assert.Empty(Evaluate(source).Diagnostics);
+    }
+
+    [Fact]
     public void DefaultBodiedStaticInterfaceProperty_Binds()
     {
         // Issue #1030: default-bodied (with accessor bodies) static-virtual

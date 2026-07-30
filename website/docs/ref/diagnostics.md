@@ -1671,13 +1671,17 @@ files produce one `GS0366` per legacy occurrence with **no cascade
 errors** — the parser binds the recovered shape to the same
 `MapTypeSymbol` so downstream binding proceeds unchanged.
 
-## Init-only interface implementation mismatch (GS0502)
+## Interface property setter-kind mismatch (GS0502)
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0502 | Error | An init-only property or positional data member is used to implement an interface property that requires an ordinary setter. |
+| GS0502 | Error | A property implementation uses `init` where its interface requires `set`, or vice versa. |
 
 An `init` accessor has a different CLR signature from `set` because its return
-type carries `modreq(IsExternalInit)`. A positional `data class` or `data
-struct` member is init-only, so it can satisfy a get-only interface property
-but not a settable one. Declare the property explicitly with a `set` accessor.
+type carries `modreq(IsExternalInit)`. The accessor kinds must match in either
+direction. A positional `data class` or `data struct` member is init-only, so
+it can satisfy a get-only interface property but not a settable one. Declare
+the property explicitly with a `set` accessor. Do not change a G# interface to
+`init` as a workaround yet; issue
+[#2887](https://github.com/DavidObando/gsharp/issues/2887) tracks invalid
+metadata emitted for G# interface `init` accessors.

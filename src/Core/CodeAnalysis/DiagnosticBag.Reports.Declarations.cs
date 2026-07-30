@@ -1059,8 +1059,8 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DuplicateExplicitInterfaceImplementation, interfaceName, memberName);
 
     /// <summary>
-    /// Issue #2875: reports an init-only implementation for an interface
-    /// property that requires an ordinary setter.
+    /// Issue #2875: reports a setter-kind mismatch between an interface
+    /// property and its implementation.
     /// </summary>
     /// <param name="location">The implementing type's source location.</param>
     /// <param name="typeName">The implementing type.</param>
@@ -1068,19 +1068,28 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The implementing member.</param>
     /// <param name="interfaceName">The required interface.</param>
     /// <param name="propertyName">The required interface property.</param>
-    public void ReportInterfaceSetterNotImplementedByInitOnlyProperty(
+    /// <param name="implementationAccessor">The implementation accessor kind.</param>
+    /// <param name="requiredAccessor">The interface accessor kind.</param>
+    /// <param name="fix">The corrective action.</param>
+    public void ReportInterfacePropertySetterKindMismatch(
         TextLocation location,
         string typeName,
         string memberKind,
         string memberName,
         string interfaceName,
-        string propertyName)
+        string propertyName,
+        string implementationAccessor,
+        string requiredAccessor,
+        string fix)
     => Report(
         location,
-        DiagnosticDescriptors.InterfaceSetterNotImplementedByInitOnlyProperty,
+        DiagnosticDescriptors.InterfacePropertySetterKindMismatch,
         typeName,
         memberKind,
         memberName,
         interfaceName,
-        propertyName);
+        propertyName,
+        implementationAccessor,
+        requiredAccessor,
+        fix);
 }

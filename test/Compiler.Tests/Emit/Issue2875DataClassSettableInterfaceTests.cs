@@ -3,8 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -32,7 +36,7 @@ public class Issue2875DataClassSettableInterfaceTests
 
         Assert.Contains("GS0502", output, StringComparison.Ordinal);
         Assert.Contains(
-            "Type 'Box' cannot use positional member 'Value' to implement settable interface property 'IBox.Value' because the member is init-only; declare property 'Value' explicitly with a 'set' accessor.",
+            "Type 'Box' cannot use positional member 'Value' to implement interface property 'IBox.Value' because the member uses accessor 'init' but the interface requires 'set'; declare property 'Value' explicitly with a 'set' accessor.",
             output,
             StringComparison.Ordinal);
     }
@@ -104,7 +108,75 @@ public class Issue2875DataClassSettableInterfaceTests
         Assert.Contains("IBox4.Value", output, StringComparison.Ordinal);
     }
 
-    private static string CompileExpectingFailure(string source)
+    [Fact]
+    public void PositionalDataClassMember_GenericSettableInterfaceProperty_ReportsGS0502AndDoesNotEmit()
+    {
+        const string source = """
+            package S5
+
+            interface IBox[T] {
+                prop Value T { get; set; }
+            }
+
+            data class Box(Value int32) : IBox[int32]
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Contains("GS0502", output, StringComparison.Ordinal);
+        Assert.Contains("IBox[int32].Value", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedInitOnlyInterfaces_OrdinarySetters_ReportGS0502AndDoNotEmit()
+    {
+        const string source = """
+            package S6
+            import CsInit
+
+            class Box : IBox {
+                prop Value int32 { get; set; }
+            }
+
+            class Item {
+            }
+
+            class GenericBox : IGenericBox[Item] {
+                prop Value Item { get; set; }
+            }
+            """;
+
+        var fixtureDirectory = CreateWorkDirectory();
+        try
+        {
+            var referencePath = CompileCSharpFixture(
+                fixtureDirectory,
+                """
+                namespace CsInit;
+                public interface IBox
+                {
+                    int Value { get; init; }
+                }
+
+                public interface IGenericBox<T>
+                {
+                    T Value { get; init; }
+                }
+                """);
+
+            var output = CompileExpectingFailure(source, referencePath);
+
+            Assert.Equal(2, output.Split("GS0502", StringSplitOptions.None).Length - 1);
+            Assert.Contains("uses accessor 'set'", output, StringComparison.Ordinal);
+            Assert.Contains("requires 'init'", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(fixtureDirectory, recursive: true);
+        }
+    }
+
+    private static string CompileExpectingFailure(string source, string referencePath = null)
     {
         var directory = CreateWorkDirectory();
         try
@@ -113,11 +185,19 @@ public class Issue2875DataClassSettableInterfaceTests
             var outputPath = Path.Combine(directory, "test.dll");
             File.WriteAllText(sourcePath, source);
 
-            var (exitCode, output) = Compile(
+            var arguments = new List<string>
+            {
                 "/out:" + outputPath,
                 "/target:library",
                 "/targetframework:net10.0",
-                sourcePath);
+            };
+            if (referencePath != null)
+            {
+                arguments.Add("/r:" + referencePath);
+            }
+
+            arguments.Add(sourcePath);
+            var (exitCode, output) = Compile(arguments.ToArray());
 
             Assert.NotEqual(0, exitCode);
             Assert.False(File.Exists(outputPath), "gsc must not emit an assembly after GS0502");
@@ -127,6 +207,23 @@ public class Issue2875DataClassSettableInterfaceTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    private static string CompileCSharpFixture(string directory, string source)
+    {
+        var outputPath = Path.Combine(directory, "CsInit.dll");
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
+            .Split(Path.PathSeparator)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "CsInit",
+            new[] { CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest)) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using var output = File.Create(outputPath);
+        var result = compilation.Emit(output);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        return outputPath;
     }
 
     private static string CompileVerifyAndRun(string source)

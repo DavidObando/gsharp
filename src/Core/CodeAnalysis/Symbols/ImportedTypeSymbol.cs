@@ -322,6 +322,19 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
     }
 
+    internal static bool IsInitOnlySetter(MethodInfo setter)
+    {
+        try
+        {
+            var requiredModifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
+            return requiredModifiers.Any(m => string.Equals(m.FullName, "System.Runtime.CompilerServices.IsExternalInit", StringComparison.Ordinal));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
     {
         if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
@@ -656,19 +669,6 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         var accessor = property.GetMethod ?? property.SetMethod;
         return accessor == null ? Accessibility.Private : MapAccessibility(accessor);
-    }
-
-    private static bool IsInitOnlySetter(MethodInfo setter)
-    {
-        try
-        {
-            var requiredModifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
-            return requiredModifiers.Any(m => string.Equals(m.FullName, "System.Runtime.CompilerServices.IsExternalInit", StringComparison.Ordinal));
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static bool IsInParameter(ParameterInfo parameter)
