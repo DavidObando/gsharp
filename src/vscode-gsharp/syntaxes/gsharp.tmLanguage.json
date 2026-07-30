@@ -95,9 +95,24 @@
         "0": { "name": "punctuation.definition.interpolation.end.gsharp" }
       },
       "patterns": [
+        { "include": "#interpolation-conditional" },
         { "include": "#interpolation-format" },
         { "include": "#interpolation-alignment" },
         { "include": "#interpolation-nested-braces" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-nested-brackets" },
+        { "include": "source.gsharp" }
+      ]
+    },
+    "interpolation-conditional": {
+      "name": "meta.conditional.interpolation.gsharp",
+      "begin": "(?<!\\?)\\?(?![?.\\[])",
+      "end": ":",
+      "patterns": [
+        { "include": "#interpolation-conditional" },
+        { "include": "#interpolation-nested-braces" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-nested-brackets" },
         { "include": "source.gsharp" }
       ]
     },
@@ -117,7 +132,32 @@
       "begin": "\\{",
       "end": "\\}",
       "patterns": [
+        { "include": "#interpolation-conditional" },
         { "include": "#interpolation-nested-braces" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-nested-brackets" },
+        { "include": "source.gsharp" }
+      ]
+    },
+    "interpolation-nested-parentheses": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        { "include": "#interpolation-conditional" },
+        { "include": "#interpolation-nested-braces" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-nested-brackets" },
+        { "include": "source.gsharp" }
+      ]
+    },
+    "interpolation-nested-brackets": {
+      "begin": "\\[",
+      "end": "\\]",
+      "patterns": [
+        { "include": "#interpolation-conditional" },
+        { "include": "#interpolation-nested-braces" },
+        { "include": "#interpolation-nested-parentheses" },
+        { "include": "#interpolation-nested-brackets" },
         { "include": "source.gsharp" }
       ]
     },

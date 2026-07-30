@@ -1372,13 +1372,24 @@ public partial class Parser
                 continue;
             }
 
-            // ADR-0055: a hole is `expr [ , alignment ] [ : format ]`. Split
-            // the captured hole text into its expression / alignment / format
-            // clauses with a delimiter-aware scanner that ignores `,`/`:`
-            // nested inside (), [], {}, or string/char literals so that
-            // `a.GetType()`, `dict["k"]`, and `cond ? "a" : "b"` (parenthesized)
-            // are not mis-split.
-            SplitHole(fragment.Text, out var exprText, out var alignmentText, out var formatText);
+            // ADR-0055: let the real expression parser find where the
+            // expression ends, then split the simple alignment/format tail.
+            // This keeps hole disambiguation in sync with every expression
+            // form, including ternaries and nullable-element array literals.
+            var expressionLength = fragment.Text.Length;
+
+            // No separator character means the expression necessarily fills the hole.
+            if (fragment.Text.IndexOf(',') >= 0 || fragment.Text.IndexOf(':') >= 0)
+            {
+                var probeParser = new Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length);
+                _ = probeParser.ParseExpression();
+                expressionLength = probeParser.Current.Kind == SyntaxKind.CommaToken
+                    || probeParser.Current.Kind == SyntaxKind.ColonToken
+                        ? probeParser.Current.Position - fragment.Position
+                        : fragment.Text.Length;
+            }
+
+            SplitTail(fragment.Text, expressionLength, out var exprText, out var alignmentText, out var formatText);
 
             // ADR-0055 §C: anchor diagnostics on the hole itself (using the
             // hole's true source offset) rather than the whole string token.
@@ -1413,6 +1424,9 @@ public partial class Parser
             // against the SAME outer SyntaxTree, so its Position is already the true
             // absolute offset in the outer file — no padded-copy allocation or re-lex
             // of the file prefix is needed (that was O(fileSize) per hole).
+            // Do not reuse the probe tree: its window includes alignment/format text
+            // lexed as code, so filtering its diagnostics would change malformed-hole
+            // recovery. Reparse only the bounded expression instead.
             var innerParser = new Parser(syntaxTree, fragment.Position, fragment.Position + exprText.Length);
             var innerRoot = innerParser.ParseCompilationUnit();
             Diagnostics.AddRange(innerParser.Diagnostics);
@@ -1432,74 +1446,34 @@ public partial class Parser
         return new InterpolatedStringExpressionSyntax(syntaxTree, token, segments.ToImmutable());
     }
 
-    // ADR-0055 delimiter-aware hole splitter. Finds the first top-level `,`
-    // (alignment) and first top-level `:` (format), tracking ()/[]/{} depth
-    // and skipping nested "…"/'…' literals. The expression clause is the text
-    // before whichever delimiter appears first.
-    private static void SplitHole(string hole, out string expr, out string alignment, out string format)
+    private static void SplitTail(
+        string hole,
+        int expressionLength,
+        out string expr,
+        out string alignment,
+        out string format)
     {
-        var depth = 0;
-        var commaIndex = -1;
-        var colonIndex = -1;
-        for (var i = 0; i < hole.Length; i++)
-        {
-            var c = hole[i];
-            if (c == '"' || c == '\'')
-            {
-                // Skip the nested literal, honoring `""`/`\` escapes loosely.
-                var quote = c;
-                i++;
-                while (i < hole.Length && hole[i] != quote)
-                {
-                    if (hole[i] == '\\' && i + 1 < hole.Length)
-                    {
-                        i++;
-                    }
-
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (c == '(' || c == '[' || c == '{')
-            {
-                depth++;
-            }
-            else if (c == ')' || c == ']' || c == '}')
-            {
-                depth--;
-            }
-            else if (depth == 0 && c == ',' && commaIndex < 0 && colonIndex < 0)
-            {
-                commaIndex = i;
-            }
-            else if (depth == 0 && c == ':' && colonIndex < 0)
-            {
-                colonIndex = i;
-                break;
-            }
-        }
-
+        expr = hole.Substring(0, expressionLength);
         alignment = null;
         format = null;
-        if (commaIndex < 0 && colonIndex < 0)
+        if (expressionLength >= hole.Length)
         {
-            expr = hole;
             return;
         }
 
-        var exprEnd = commaIndex >= 0 ? commaIndex : colonIndex;
-        expr = hole.Substring(0, exprEnd);
-        if (commaIndex >= 0)
+        if (hole[expressionLength] == ',')
         {
-            var alignEnd = colonIndex >= 0 ? colonIndex : hole.Length;
-            alignment = hole.Substring(commaIndex + 1, alignEnd - commaIndex - 1);
+            var colonIndex = hole.IndexOf(':', expressionLength + 1);
+            var alignmentEnd = colonIndex >= 0 ? colonIndex : hole.Length;
+            alignment = hole.Substring(expressionLength + 1, alignmentEnd - expressionLength - 1);
+            if (colonIndex >= 0)
+            {
+                format = hole.Substring(colonIndex + 1);
+            }
         }
-
-        if (colonIndex >= 0)
+        else
         {
-            format = hole.Substring(colonIndex + 1);
+            format = hole.Substring(expressionLength + 1);
         }
     }
 
