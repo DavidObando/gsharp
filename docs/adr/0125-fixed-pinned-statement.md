@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043)
+- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900)
 
 ## Context
 
@@ -95,6 +95,13 @@ allocates both IL slots; `EncodeLocalVariableType` detects `PinnedTypeSymbol`
 and sets the local-signature **`pinned`** flag. The emitter mirrors the C#
 compiler's codegen exactly:
 
+The pin prologue runs before a protected body. The body is a CLR
+`try` region and the release is its `finally` handler, so normal fallthrough,
+`break`, `continue`, `goto`, `return`, and exceptions all clear the pinned
+local before control reaches an external target. Region-crossing branches emit
+`leave`; value returns first store their result in an emitter-planned local and
+then `leave` to a `ret` outside the protected region.
+
 **Array/slice** (`T[] pinned`):
 
 ```
@@ -105,7 +112,10 @@ NULL:     ldc.i4.0; conv.u; stloc ptr       // empty/null ⇒ null pointer
           br AFTER
 NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>; conv.u; stloc ptr
 AFTER:    <body>
-          ldnull; stloc pinned              // release
+          leave DONE
+FINALLY:  ldnull; stloc pinned              // release on every exit
+          endfinally
+DONE:
 ```
 
 **String** (`string pinned`):
@@ -115,8 +125,9 @@ EmitExpr(source); dup; stloc pinned; conv.i
 dup; brfalse SKIP
 call get_OffsetToStringData; add            // skip the string header
 SKIP: conv.u; stloc ptr
-<body>
-ldnull; stloc pinned                        // release
+try { <body> } finally {
+    ldnull; stloc pinned                     // release on every exit
+}
 ```
 
 `RuntimeHelpers.OffsetToStringData` is `[Obsolete]`, so the property getter is
@@ -132,8 +143,9 @@ EmitExpr(span); stloc src                    // spill the source for addressing
 ldloca src; call instance T& GetPinnableReference()
 stloc pinned                                 // T& pinned = ref
 ldloc pinned; conv.u; stloc ptr
-<body>
-ldc.i4.0; conv.u; stloc pinned               // release (null the pinned ref)
+try { <body> } finally {
+    ldc.i4.0; conv.u; stloc pinned            // release on every exit
+}
 ```
 
 The source value is spilled to a synthetic local so its address can feed the

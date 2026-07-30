@@ -572,6 +572,7 @@ internal sealed class ConstructorBodyEmitter
             EmitDiagnosticException.Wrap(anchor, ex);
         }
 
+        emitter.EmitFixedReturnEpilogue();
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }
@@ -648,6 +649,7 @@ internal sealed class ConstructorBodyEmitter
 
         il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
+        emitter.EmitFixedReturnEpilogue();
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }

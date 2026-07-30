@@ -39,8 +39,9 @@ internal sealed partial class MethodBodyEmitter
 
     // ADR-0125 / issue #1026: emits a `fixed` (pinning) statement. Pins the
     // managed buffer into a CLR pinned local, derives the unmanaged `*T`
-    // pointer to element 0, emits the body, then releases the pin (nulls the
-    // pinned local) on normal block exit — mirroring C#'s codegen. Pointer /
+    // pointer to element 0, then emits the body inside a try/finally that
+    // releases the pin (nulls the pinned local) on every exit — mirroring
+    // C#'s codegen. Pointer /
     // pinned-local IL is unverifiable by design (see ADR-0125 / ADR-0122);
     // the emit tests assert runtime behaviour and ignore the specific ilverify
     // codes the pattern triggers.
@@ -62,10 +63,17 @@ internal sealed partial class MethodBodyEmitter
             this.EmitFixedStringPin(node, pinnedSlot, pointerSlot);
         }
 
-        // Body executes with the pin held.
-        this.EmitStatement(node.Body);
+        var tryStart = this.il.DefineLabel();
+        var finallyStart = this.il.DefineLabel();
+        var finallyEnd = this.il.DefineLabel();
 
-        // Release the pin on normal exit so the GC stops tracking the buffer.
+        this.il.MarkLabel(tryStart);
+        this.EmitProtectedRegion((BoundBlockStatement)node.Body);
+        this.il.Branch(ILOpCode.Leave, finallyEnd);
+
+        this.il.MarkLabel(finallyStart);
+
+        // Release the pin on normal, branch, return, and exceptional exits.
         if (node.PinKind == FixedPinKind.PinnableReference)
         {
             // The pinned local is a managed by-ref (`T& pinned`); release it by
@@ -81,6 +89,10 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Ldnull);
             this.il.StoreLocal(pinnedSlot);
         }
+
+        this.il.OpCode(ILOpCode.Endfinally);
+        this.il.MarkLabel(finallyEnd);
+        this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
     }
 
     // Array-pin form: pin the array reference (`T[] pinned`) and derive

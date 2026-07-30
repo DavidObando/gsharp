@@ -4076,6 +4076,8 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots = new();
         private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = new();
         private readonly Dictionary<VariableSymbol, object> constValues = new();
+        private bool hasFixedReturns;
+        private int fixedReturnSlot = -1;
 
         public MethodBodyEmitSession(ReflectionMetadataEmitter outer, InstructionEncoder il)
         {
@@ -4106,6 +4108,16 @@ internal sealed class ReflectionMetadataEmitter
         /// <param name="function">The owning function, or <see langword="null"/> for synthesized bodies.</param>
         public void Plan(BoundBlockStatement body, FunctionSymbol function = null)
         {
+            if (TryGetFixedReturnType(body, out var fixedReturnType))
+            {
+                this.hasFixedReturns = true;
+                if (fixedReturnType != null && this.fixedReturnSlot < 0)
+                {
+                    this.fixedReturnSlot = this.localTypes.Count;
+                    this.localTypes.Add(fixedReturnType);
+                }
+            }
+
             this.outer.methodBodyPlanner.CollectLocalsAndLabels(
                 body,
                 function,
@@ -4129,6 +4141,63 @@ internal sealed class ReflectionMetadataEmitter
                 this.nullableCoalesceSpillSlots,
                 this.Il,
                 this.stackAllocResultSlots);
+        }
+
+        private static bool TryGetFixedReturnType(BoundStatement statement, out TypeSymbol returnType)
+        {
+            TypeSymbol foundType = null;
+            var found = Find(statement, insideFixed: false);
+            returnType = foundType;
+            return found;
+
+            bool Find(BoundStatement current, bool insideFixed)
+            {
+                switch (current)
+                {
+                    case BoundReturnStatement returnStatement when insideFixed:
+                        foundType ??= returnStatement.Expression?.Type;
+                        return true;
+                    case BoundBlockStatement block:
+                        var found = false;
+                        foreach (var nested in block.Statements)
+                        {
+                            found |= Find(nested, insideFixed);
+                        }
+
+                        return found;
+                    case BoundFixedStatement fixedStatement:
+                        return Find(fixedStatement.Body, insideFixed: true);
+                    case BoundTryStatement tryStatement:
+                        var tryFound = Find(tryStatement.TryBlock, insideFixed);
+                        foreach (var clause in tryStatement.CatchClauses)
+                        {
+                            tryFound |= Find(clause.Body, insideFixed);
+                        }
+
+                        return tryFound
+                            | (tryStatement.FinallyBlock != null && Find(tryStatement.FinallyBlock, insideFixed));
+                    case BoundScopeStatement scopeStatement:
+                        return Find(scopeStatement.Body, insideFixed);
+                    case BoundSelectStatement selectStatement:
+                        var selectFound = false;
+                        foreach (var arm in selectStatement.Cases)
+                        {
+                            selectFound |= Find(arm.Body, insideFixed);
+                        }
+
+                        return selectFound;
+                    case BoundPatternSwitchStatement switchStatement:
+                        var switchFound = false;
+                        foreach (var arm in switchStatement.Arms)
+                        {
+                            switchFound |= Find(arm.Body, insideFixed);
+                        }
+
+                        return switchFound;
+                    default:
+                        return false;
+                }
+            }
         }
 
         /// <summary>Encodes the collected locals into a standalone signature (default when there are none).</summary>
@@ -4194,7 +4263,9 @@ internal sealed class ReflectionMetadataEmitter
                 iteratorEmitCtx: iteratorEmitCtx,
                 constValues: this.constValues,
                 enclosingClosure: enclosingClosure,
-                stackAllocResultSlots: this.stackAllocResultSlots);
+                stackAllocResultSlots: this.stackAllocResultSlots,
+                hasFixedReturns: this.hasFixedReturns,
+                fixedReturnSlot: this.fixedReturnSlot);
         }
     }
 
