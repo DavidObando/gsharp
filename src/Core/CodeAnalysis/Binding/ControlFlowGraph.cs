@@ -60,6 +60,8 @@ public sealed class ControlFlowGraph
     /// <returns>Whether all its paths return or not.</returns>
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
+        body = body.DefiniteReturnAnalysisBody ?? body;
+
         // This projection is intentionally limited to definite-return. Other
         // data-flow analyzers call Create(body) and still treat these compound
         // statements as opaque, so their region-specific behavior is unchanged.
@@ -207,17 +209,32 @@ public sealed class ControlFlowGraph
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
         var labelOrdinal = 0;
         var choiceOrdinal = 0;
+        BoundLabel methodExitLabel = null;
+        BoundReturnStatement methodExitReturn = null;
+
+        if (statement is BoundBlockStatement functionBody
+            && functionBody.Statements.Length >= 3
+            && functionBody.Statements[0] is BoundVariableDeclaration returnTempDeclaration
+            && functionBody.Statements[^2] is BoundLabelStatement exitLabel
+            && functionBody.Statements[^1] is BoundReturnStatement { Expression: BoundVariableExpression returnExpression } exitReturn
+            && returnTempDeclaration.Variable.Name == "$returnTemp"
+            && ReferenceEquals(returnTempDeclaration.Variable, returnExpression.Variable))
+        {
+            methodExitLabel = exitLabel.Label;
+            methodExitReturn = exitReturn;
+        }
+
         Add(statement);
         return new BoundBlockStatement(null, builder.ToImmutable());
 
-        void Add(BoundStatement current)
+        void Add(BoundStatement current, Action<BoundStatement> routeTransfer = null)
         {
             switch (current)
             {
                 case BoundBlockStatement block:
                     foreach (var nested in block.Statements)
                     {
-                        Add(nested);
+                        Add(nested, routeTransfer);
                     }
 
                     break;
@@ -225,18 +242,40 @@ public sealed class ControlFlowGraph
                     // Fixed executes its body once; pin setup and normal-exit
                     // release remain emit concerns. Escaping exits currently
                     // skip that release epilogue (#2900).
-                    Add(fixedStatement.Body);
+                    Add(fixedStatement.Body, routeTransfer);
                     break;
                 case BoundScopeStatement scopeStatement:
                     // Scope also executes its body once in normal control flow.
                     // Its task join and failure rethrow remain emit-time behavior.
-                    Add(scopeStatement.Body);
+                    Add(scopeStatement.Body, routeTransfer);
                     break;
                 case BoundPatternSwitchStatement switchStatement:
-                    AddPatternSwitch(switchStatement);
+                    AddPatternSwitch(switchStatement, routeTransfer);
                     break;
                 case BoundSelectStatement selectStatement:
-                    AddSelect(selectStatement);
+                    AddSelect(selectStatement, routeTransfer);
+                    break;
+                case BoundTryStatement tryStatement:
+                    AddTry(tryStatement, routeTransfer);
+                    break;
+                case BoundLabelStatement labelStatement when ReferenceEquals(labelStatement.Label, methodExitLabel):
+                case BoundReturnStatement returnStatement when ReferenceEquals(returnStatement, methodExitReturn):
+                    break;
+                case BoundGotoStatement gotoStatement when ReferenceEquals(gotoStatement.Label, methodExitLabel):
+                    Add(new BoundReturnStatement(null, methodExitReturn.Expression), routeTransfer);
+                    break;
+                case BoundGotoStatement:
+                case BoundReturnStatement:
+                case BoundThrowStatement:
+                    if (routeTransfer == null)
+                    {
+                        builder.Add(current);
+                    }
+                    else
+                    {
+                        routeTransfer(current);
+                    }
+
                     break;
                 default:
                     builder.Add(current);
@@ -244,7 +283,7 @@ public sealed class ControlFlowGraph
             }
         }
 
-        void AddPatternSwitch(BoundPatternSwitchStatement switchStatement)
+        void AddPatternSwitch(BoundPatternSwitchStatement switchStatement, Action<BoundStatement> routeTransfer)
         {
             var endLabel = NewLabel("switchEnd");
             var arms = new List<(BoundPatternSwitchArm Arm, BoundLabel Label)>();
@@ -273,7 +312,7 @@ public sealed class ControlFlowGraph
                 builder.Add(new BoundConditionalGotoStatement(null, armLabel, NewChoice()));
             }
 
-            if (!dispatchComplete)
+            if (!dispatchComplete && !switchStatement.IsExhaustive)
             {
                 builder.Add(new BoundGotoStatement(null, defaultArm == null ? endLabel : defaultLabel));
             }
@@ -281,20 +320,20 @@ public sealed class ControlFlowGraph
             foreach (var (arm, armLabel) in arms)
             {
                 builder.Add(new BoundLabelStatement(null, armLabel));
-                Add(arm.Body);
+                Add(arm.Body, routeTransfer);
                 builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
             if (defaultArm != null)
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
-                Add(defaultArm.Body);
+                Add(defaultArm.Body, routeTransfer);
             }
 
             builder.Add(new BoundLabelStatement(null, endLabel));
         }
 
-        void AddSelect(BoundSelectStatement selectStatement)
+        void AddSelect(BoundSelectStatement selectStatement, Action<BoundStatement> routeTransfer)
         {
             var dispatchLabel = NewLabel("selectDispatch");
             var endLabel = NewLabel("selectEnd");
@@ -322,18 +361,145 @@ public sealed class ControlFlowGraph
             foreach (var (@case, caseLabel) in cases)
             {
                 builder.Add(new BoundLabelStatement(null, caseLabel));
-                Add(@case.Body);
+                Add(@case.Body, routeTransfer);
                 builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
             if (defaultCase != null)
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
-                Add(defaultCase.Body);
+                Add(defaultCase.Body, routeTransfer);
             }
 
             builder.Add(new BoundLabelStatement(null, endLabel));
         }
+
+        void AddTry(BoundTryStatement tryStatement, Action<BoundStatement> outerRoute)
+        {
+            var endLabel = NewLabel("tryEnd");
+            var exceptionLabel = tryStatement.FinallyBlock == null ? null : NewLabel("exceptionFinally");
+            var alternatives = new List<(BoundStatement Body, BoundLabel Label)>
+            {
+                (tryStatement.TryBlock, NewLabel("tryBody")),
+            };
+
+            foreach (var clause in tryStatement.CatchClauses)
+            {
+                alternatives.Add((clause.Body, NewLabel("catch")));
+            }
+
+            if (exceptionLabel != null)
+            {
+                builder.Add(new BoundConditionalGotoStatement(null, exceptionLabel, NewChoice()));
+            }
+
+            for (var i = 1; i < alternatives.Count; i++)
+            {
+                builder.Add(new BoundConditionalGotoStatement(null, alternatives[i].Label, NewChoice()));
+            }
+
+            builder.Add(new BoundGotoStatement(null, alternatives[0].Label));
+
+            foreach (var (body, label) in alternatives)
+            {
+                var localLabels = CollectLabels(body);
+                builder.Add(new BoundLabelStatement(null, label));
+
+                if (tryStatement.FinallyBlock == null)
+                {
+                    Add(body, outerRoute);
+                    builder.Add(new BoundGotoStatement(null, endLabel));
+                    continue;
+                }
+
+                void RouteThroughFinally(BoundStatement transfer)
+                {
+                    if (transfer is BoundGotoStatement go && localLabels.Contains(go.Label))
+                    {
+                        builder.Add(transfer);
+                        return;
+                    }
+
+                    Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                    Add(transfer, outerRoute);
+                }
+
+                Add(body, RouteThroughFinally);
+                Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                Add(new BoundGotoStatement(null, endLabel), outerRoute);
+            }
+
+            if (exceptionLabel != null)
+            {
+                builder.Add(new BoundLabelStatement(null, exceptionLabel));
+                Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                Add(new BoundThrowStatement(null, NewChoice()), outerRoute);
+            }
+
+            builder.Add(new BoundLabelStatement(null, endLabel));
+        }
+
+        HashSet<BoundLabel> CollectLabels(BoundStatement root)
+        {
+            var labels = new HashSet<BoundLabel>();
+            Collect(root);
+            return labels;
+
+            void Collect(BoundStatement current)
+            {
+                switch (current)
+                {
+                    case BoundLabelStatement label:
+                        labels.Add(label.Label);
+                        break;
+                    case BoundBlockStatement block:
+                        foreach (var nested in block.Statements)
+                        {
+                            Collect(nested);
+                        }
+
+                        break;
+                    case BoundTryStatement nestedTry:
+                        Collect(nestedTry.TryBlock);
+                        foreach (var clause in nestedTry.CatchClauses)
+                        {
+                            Collect(clause.Body);
+                        }
+
+                        if (nestedTry.FinallyBlock != null)
+                        {
+                            Collect(nestedTry.FinallyBlock);
+                        }
+
+                        break;
+                    case BoundFixedStatement fixedStatement:
+                        Collect(fixedStatement.Body);
+                        break;
+                    case BoundScopeStatement scopeStatement:
+                        Collect(scopeStatement.Body);
+                        break;
+                    case BoundPatternSwitchStatement switchStatement:
+                        foreach (var arm in switchStatement.Arms)
+                        {
+                            Collect(arm.Body);
+                        }
+
+                        break;
+                    case BoundSelectStatement selectStatement:
+                        foreach (var @case in selectStatement.Cases)
+                        {
+                            Collect(@case.Body);
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        BoundStatement CloneWithFreshLabels(BoundStatement root)
+            => new DefiniteReturnLabelRewriter(
+                CollectLabels(root),
+                () => NewLabel("finallyBody")).RewriteStatement(root);
 
         BoundLabel NewLabel(string name)
             => new($"<>definiteReturn_{name}_{labelOrdinal++}");
@@ -807,5 +973,35 @@ public sealed class ControlFlowGraph
             var op = BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool);
             return new BoundUnaryExpression(null, op, condition);
         }
+    }
+
+    private sealed class DefiniteReturnLabelRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<BoundLabel, BoundLabel> labels = [];
+
+        public DefiniteReturnLabelRewriter(IEnumerable<BoundLabel> labels, Func<BoundLabel> createLabel)
+        {
+            foreach (var label in labels)
+            {
+                this.labels[label] = createLabel();
+            }
+        }
+
+        protected override BoundStatement RewriteLabelStatement(BoundLabelStatement node)
+            => labels.TryGetValue(node.Label, out var label)
+                ? new BoundLabelStatement(null, label)
+                : node;
+
+        protected override BoundStatement RewriteGotoStatement(BoundGotoStatement node)
+            => labels.TryGetValue(node.Label, out var label)
+                ? new BoundGotoStatement(null, label)
+                : node;
+
+        protected override BoundStatement RewriteConditionalGotoStatement(BoundConditionalGotoStatement node)
+            => new BoundConditionalGotoStatement(
+                null,
+                labels.TryGetValue(node.Label, out var label) ? label : node.Label,
+                RewriteExpression(node.Condition),
+                node.JumpIfTrue);
     }
 }

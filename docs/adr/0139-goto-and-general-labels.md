@@ -68,10 +68,12 @@ introduces no new binder scope — `label: var x = 1` still declares `x` into
 the enclosing block, exactly like C#.
 
 No new `BoundNodeKind` is introduced (`BoundGotoStatement`/
-`BoundLabelStatement` already existed), so `ControlFlowGraph`,
-`RefKindDefiniteAssignmentAnalyzer`, `SlotPlanner`, `MethodBodyEmitter`, and
-the evaluator needed no changes — they already handle these bound nodes
-generically.
+`BoundLabelStatement` already existed). The emitter and evaluator handle the
+nodes generically. Definite-return analysis projects protected exception
+regions separately, however: a branch that leaves `try` or `catch` must run
+`finally` before reaching its target, and a branch that leaves `finally`
+cannot be emitted as CLR `leave` from the handler. The lowering pass therefore
+funnels those exits through a lifted finally body before dispatching them.
 
 ### Diagnostics
 
@@ -112,8 +114,8 @@ directly:
 
 **Positive.** `cs2gs` can now migrate C#'s full `goto`/label surface,
 including the `goto case`/`goto default` fall-through forms, with faithful
-semantics. No gsc runtime or emit changes were needed — only surface syntax
-and a label-name binder.
+semantics. Ordinary labels remain generic bound nodes; protected-region exits
+receive the exception-flow lowering required by CLR handler rules.
 
 **Negative.** Unstructured control flow is easy to write incorrectly by hand;
 G# still has no `goto`-into-scope diagnostic beyond "does not parse as a

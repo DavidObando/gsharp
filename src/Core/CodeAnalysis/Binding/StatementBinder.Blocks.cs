@@ -154,14 +154,14 @@ internal sealed partial class StatementBinder
         }
 
         var boundArms = arms.ToImmutable();
-        ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
+        var isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
             syntax.SwitchKeyword.Location,
             switchType,
             boundArms,
             scope.GetDeclaredStructs(),
             Diagnostics);
 
-        var result = new BoundPatternSwitchStatement(null, discriminant, boundArms);
+        var result = new BoundPatternSwitchStatement(null, discriminant, boundArms, isExhaustive);
 
         // ADR-0069 addendum / issue #712: park the merged narrowing on the
         // bound switch so the enclosing block walker can lift it. Only do

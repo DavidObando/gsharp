@@ -1386,7 +1386,13 @@ public sealed class Lowerer : BoundTreeRewriter
     private static BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
     {
         var flattened = Flatten(statement);
-        return Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
+        var definiteReturnBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
+        flattened = FinallyExitRewriter.Rewrite(flattened);
+        var emittedBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
+        return new BoundBlockStatement(
+            emittedBody.Syntax,
+            emittedBody.Statements,
+            definiteReturnBody);
     }
 
     /// <summary>
@@ -1486,7 +1492,7 @@ public sealed class Lowerer : BoundTreeRewriter
                     flatArms.Add(new BoundPatternSwitchArm(null, arm.Pattern, arm.Guard, Flatten(arm.Body)));
                 }
 
-                builder.Add(new BoundPatternSwitchStatement(null, ps.Discriminant, flatArms.ToImmutable()));
+                builder.Add(new BoundPatternSwitchStatement(null, ps.Discriminant, flatArms.ToImmutable(), ps.IsExhaustive));
             }
             else if (current is BoundSelectStatement sel)
             {

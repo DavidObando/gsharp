@@ -791,7 +791,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundPatternSwitchStatement(null, discriminant, builder?.MoveToImmutable() ?? node.Arms);
+        return new BoundPatternSwitchStatement(null, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.IsExhaustive);
     }
 
     /// <summary>Rewrites a bound pattern.</summary>

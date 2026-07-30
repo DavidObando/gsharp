@@ -247,11 +247,16 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Preserve the legacy trailing ret on void bodies. For value bodies,
-        // cap only an emitted dead-code tail that follows the real terminator.
-        if (alwaysAppendRet || !this.currentPositionEndsInTerminator)
+        if (alwaysAppendRet)
         {
             this.il.OpCode(ILOpCode.Ret);
+        }
+        else if (!this.currentPositionEndsInTerminator)
+        {
+            var constructor = typeof(InvalidOperationException).GetConstructor(Type.EmptyTypes);
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
+            this.il.OpCode(ILOpCode.Throw);
         }
     }
 
