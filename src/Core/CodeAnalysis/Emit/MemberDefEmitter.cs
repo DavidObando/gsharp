@@ -1696,7 +1696,19 @@ internal sealed class MemberDefEmitter
             new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: !prop.IsStatic)
                 .Parameters(
                     prop.Parameters.Length + 1,
-                    r => r.Void(),
+                    r =>
+                    {
+                        if (prop.IsInitOnly)
+                        {
+                            var isExternalInit = this.wellKnown.GetIsExternalInitTypeRef();
+                            if (!isExternalInit.IsNil)
+                            {
+                                r.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+                            }
+                        }
+
+                        r.Void();
+                    },
                     ps =>
                     {
                         // ADR-0149 (issue #944 follow-up): an abstract

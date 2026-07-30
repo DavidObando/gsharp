@@ -2,7 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -124,6 +126,39 @@ struct AppleData : IData {
     }
 
     [Fact]
+    public void Interface_StaticInitProperty_ReportsGS0374()
+    {
+        var source = @"
+sealed interface IData {
+  shared {
+    prop Tag int32 { get; init; }
+  }
+}
+";
+        var diagnostic = Assert.Single(Evaluate(source).Diagnostics);
+        Assert.Equal("GS0374", diagnostic.Id);
+    }
+
+    [Fact]
+    public void ConstructedGenericInterface_MatchingStaticProperty_EmitsAndLoads()
+    {
+        var source = @"
+sealed interface IData[T] {
+  shared {
+    prop Tag T { get; }
+  }
+}
+
+struct AppleData : IData[int32] {
+  shared {
+    prop Tag int32 -> 1
+  }
+}
+";
+        AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
     public void DefaultBodiedStaticInterfaceProperty_Binds()
     {
         // Issue #1030: default-bodied (with accessor bodies) static-virtual
@@ -201,5 +236,19 @@ sealed interface IData {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+    }
+
+    private static void AssertEmitsAndLoads(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        using var peStream = new MemoryStream();
+
+        var result = compilation.Emit(peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        _ = System.Reflection.Assembly.Load(peStream.ToArray()).GetTypes();
     }
 }

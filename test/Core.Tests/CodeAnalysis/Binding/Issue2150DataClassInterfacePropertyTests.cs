@@ -17,15 +17,14 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2150: a data-class positional (primary-constructor) parameter is
-/// materialized as a public instance field, yet — like a C# record's
-/// positional property (<c>record R(int X) : IHasX</c>) — it must satisfy a
-/// matching get-only (or get/set) interface property. Before the fix the
-/// interface-satisfaction walk only scanned <c>StructSymbol.Properties</c>, so
-/// the positional field never satisfied the contract and GS0187 fired. The fix
-/// recognises the positional parameter as an implementation AND synthesises a
-/// backing auto-property accessor so the emitted type carries the CLR
-/// <c>get_/set_</c> interface slot (otherwise the assembly would fail to load
-/// with a <see cref="TypeLoadException"/>).
+/// materialized as an init-only property and may satisfy a matching get-only
+/// interface property. Before the fix the interface-satisfaction walk only
+/// scanned <c>StructSymbol.Properties</c>, so the positional field never
+/// satisfied the contract and GS0187 fired. The fix recognises the positional
+/// parameter as an implementation and synthesises a backing auto-property
+/// getter so the emitted type carries the CLR <c>get_</c> interface slot.
+/// Issue #2875 separately rejects using that init-only member for an ordinary
+/// settable interface property.
 /// </summary>
 public class Issue2150DataClassInterfacePropertyTests
 {
@@ -179,10 +178,8 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GetSetNullableInterfaceProperty_SatisfiedByNullablePositionalParam_NoDiagnostics()
+    public void GetSetNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0502()
     {
-        // Invariant (get/set) position requires an EXACT nullability match:
-        // iface `int32?` <- impl `int32?`.
         const string source = """
             package Test
             interface IHasX {
@@ -192,7 +189,9 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        Assert.Empty(Bind(source));
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0502");
+        Assert.Contains("positional member 'X'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("IHasX.X", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -235,10 +234,8 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void PositionalParam_SatisfiesSetterRequiringInterfaceProperty_NoDiagnostics()
+    public void PositionalParam_DoesNotSatisfySetterRequiringInterfaceProperty_ReportsGS0502()
     {
-        // A data-class positional parameter is a mutable public field, so it can
-        // satisfy an interface property that also requires a setter.
         const string source = """
             package Test
             interface IHas {
@@ -248,7 +245,163 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        Assert.Empty(Bind(source));
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0502");
+        Assert.Equal(
+            "Type 'D' cannot use positional member 'X' to implement interface property 'IHas.X' because the member uses accessor 'init' but the interface requires 'set'; declare property 'X' explicitly with a 'set' accessor.",
+            diagnostic.Message);
+    }
+
+    [Fact]
+    public void ExplicitInitOnlyProperty_DoesNotSatisfySettableInterfaceProperty_ReportsGS0502()
+    {
+        const string source = """
+            package Test
+            interface IHas {
+                prop X int32 { get; set; }
+            }
+            class D : IHas {
+                prop X int32 { get; init; }
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0502");
+        Assert.Contains("property 'X'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("uses accessor 'init'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitInitOnlyProperty_DoesNotSatisfySettableInterfaceProperty_ReportsOnlyGS0502()
+    {
+        const string source = """
+            package Test
+            interface IHas {
+                prop X int32 { get; set; }
+            }
+            class D : IHas {
+                prop (IHas) X int32 { get; init; }
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0502", diagnostic.Id);
+        Assert.Contains("change property 'X' to use accessor 'set'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettableProperty_DoesNotSatisfyInitOnlyInterfaceProperty_ReportsGS0502()
+    {
+        const string source = """
+            package Test
+            interface IHas {
+                prop X int32 { get; init; }
+            }
+            class D : IHas {
+                prop X int32 { get; set; }
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0502", diagnostic.Id);
+        Assert.Contains("uses accessor 'set'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("requires 'init'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitSettableProperty_DoesNotSatisfyInitOnlyInterfaceProperty_ReportsOnlyGS0502()
+    {
+        const string source = """
+            package Test
+            interface IHas {
+                prop X int32 { get; init; }
+            }
+            class D : IHas {
+                prop (IHas) X int32 { get; set; }
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0502", diagnostic.Id);
+        Assert.Contains("change property 'X' to use accessor 'init'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericSettableInterfaceProperty_NotSatisfiedByPositionalMember_ReportsGS0502()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; set; }
+            }
+            data class Box(Value int32) : IBox[int32]
+            """;
+
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0502", diagnostic.Id);
+        Assert.Contains("IBox[int32].Value", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericMissingInterfaceProperty_ReportsGS0187()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; set; }
+            }
+            class Box : IBox[int32] {
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0187", diagnostic.Id);
+        Assert.Contains("Value", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericGetOnlyInterfaceProperty_SatisfiedByPositionalMember_EmitsAndLoads()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; }
+            }
+            data class Box(Value int32) : IBox[int32]
+            """;
+
+        AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
+    public void ExplicitInitProperty_ConstructedGenericInterface_EmitsAndLoads()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; init; }
+            }
+            class Box : IBox[int32] {
+                private prop (IBox[int32]) Value int32 { get; init; }
+            }
+            """;
+
+        AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
+    public void ExplicitProperties_ForTwoConstructionsOfSameGenericInterface_EmitAndLoad()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; }
+            }
+            class Boxes : IBox[int32], IBox[string] {
+                private prop (IBox[int32]) Value int32 -> 1
+                private prop (IBox[string]) Value string -> "two"
+            }
+            """;
+
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
@@ -326,5 +479,19 @@ public class Issue2150DataClassInterfacePropertyTests
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         return compilation.GlobalScope.Diagnostics.ToList();
+    }
+
+    private static void AssertEmitsAndLoads(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        using var peStream = new MemoryStream();
+
+        var result = compilation.Emit(peStream);
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        _ = System.Reflection.Assembly.Load(peStream.ToArray()).GetTypes();
     }
 }

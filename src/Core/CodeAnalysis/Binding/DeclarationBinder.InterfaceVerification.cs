@@ -456,35 +456,14 @@ internal sealed partial class DeclarationBinder
         // tracks whether any satisfied interface property also requires a
         // setter.
 
-        // Issue #2362: a mangled-name explicit PROPERTY implementation
-        // (`__explicit_<Interface>__<Member>`) is resolved against the
-        // interface's OPEN DEFINITION property table, not the
-        // (possibly constructed-generic) `iface.Properties` iterated
-        // below. Unlike Methods, InterfaceSymbol.Construct does not
-        // substitute Properties onto a constructed instance (see
-        // InterfaceSymbol.TryResolveMembers) — `iface.Properties` is
-        // empty for a constructed generic interface, so the main loop
-        // below never even runs for one. Resolving against
-        // `iface.Definition ?? iface` here (a no-op for a non-generic
-        // interface, where Definition is the interface itself) lets a
-        // generic interface's explicit property implementation still
-        // get linked, mirroring the #2181 fix for methods and
-        // `EmitStaticVirtualPropertyMethodImpls`, which reads
-        // `defIface.Properties` for the identical reason.
-        var explicitPropDefIface = iface.Definition ?? iface;
-        if (!explicitPropDefIface.Properties.IsDefaultOrEmpty)
-        {
-            foreach (var openIprop in explicitPropDefIface.Properties)
-            {
-                if (!openIprop.IsStatic)
-                {
-                    TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, openIprop);
-                }
-            }
-        }
+        // Issue #2875 follow-up: constructed G# generic interfaces do not
+        // populate iface.Properties. Verify their open definition's property
+        // table with BuildInterfaceTypeParameterMap substitution, matching the
+        // existing explicit-property and static-property paths.
+        var propertyDefIface = iface.Definition ?? iface;
 
         // ADR-0051: verify property requirements.
-        foreach (var iprop in iface.Properties)
+        foreach (var iprop in propertyDefIface.Properties)
         {
             // ADR-0089 / issue #1019: static-virtual interface
             // properties are verified separately (against the
@@ -498,23 +477,38 @@ internal sealed partial class DeclarationBinder
             // Issue #2362: a mangled-name explicit implementation
             // (`__explicit_<Interface>__<Member>`) satisfies this slot
             // even though its own name never matches `iprop.Name` —
-            // already resolved and linked by the pre-pass above. Skip
-            // entirely; no diagnostic, and the emitter binds the
-            // accessor MethodImpl rows via
-            // `PropertySymbol.ExplicitInterfaceMember`.
-            if (TryResolveExplicitInterfacePropertyImplementation(structSymbol, iface, iprop) != null)
+            // regardless of its own metadata name. Resolve and link it here;
+            // the emitter binds accessor MethodImpl rows via
+            // `PropertySymbol.ExplicitInterfaceMember`. A set/init mismatch
+            // still links the member so GS0502 is reported without cascading
+            // GS0494.
+            var explicitImplementation = TryResolveExplicitInterfacePropertyImplementation(
+                structSymbol,
+                iface,
+                iprop,
+                out var explicitSetterKindMismatch);
+            if (explicitImplementation != null)
             {
+                if (explicitSetterKindMismatch)
+                {
+                    ReportInterfacePropertySetterKindMismatch(
+                        syntax,
+                        structSymbol,
+                        iface.Name,
+                        iprop.Name,
+                        iprop.IsInitOnly,
+                        explicitImplementation);
+                }
+
                 continue;
             }
 
             // Issue #1066: an interface property may be satisfied by a
-            // property implemented (or inherited) ANYWHERE in the base
-            // chain, not only one declared directly on this class.
-            // TypeMemberModel.TryGetProperty walks BaseClass this-first,
-            // mirroring C# semantics where a base class's accessible
-            // instance member satisfies an interface listed on a
-            // derived class.
-            var found = TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out var implProp);
+            // property implemented (or inherited) ANYWHERE in the base chain.
+            PropertySymbol implProp;
+            var found = ReferenceEquals(propertyDefIface, iface)
+                ? TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out implProp)
+                : TryGetConstructedInterfacePropertyImplementation(structSymbol, iface, iprop, out implProp);
             if (found)
             {
                 if (iprop.HasGetter && !implProp.HasGetter)
@@ -539,18 +533,28 @@ internal sealed partial class DeclarationBinder
                 // them through the existing positional compatibility check
                 // below; ordinary declared properties keep their established
                 // interface-verification behavior.
-                if (implProp.Declaration is null
-                    && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _))
+                var isPositionalMember = implProp.Declaration is null
+                    && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _);
+                if (isPositionalMember)
                 {
                     found = false;
+                }
+                else if (InterfacePropertySetterKindsMismatch(iprop, implProp))
+                {
+                    ReportInterfacePropertySetterKindMismatch(
+                        syntax,
+                        structSymbol,
+                        iface.Name,
+                        iprop.Name,
+                        iprop.IsInitOnly,
+                        implProp);
+                    continue;
                 }
             }
 
             // Issue #2150: a data-class positional (primary-constructor)
-            // parameter is materialized as a public instance field and,
-            // like a C# record's positional property, may satisfy a
-            // matching get/set interface property. It never appears in
-            // `.Properties`, so `TryGetProperty` misses it. Walk the
+            // parameter may satisfy a matching get-only interface property.
+            // Walk the
             // this-first BaseClass chain (mirroring `TryGetProperty` and
             // issue #1066) and treat a same-name, type-compatible
             // positional parameter as satisfying the property contract.
@@ -575,7 +579,11 @@ internal sealed partial class DeclarationBinder
                 // (read/write) position — like a C# `in`/`out`
                 // parameter mismatch, both directions must hold, so the
                 // nullability must match EXACTLY.
-                if (!IsInterfacePropertyTypeCompatible(positionalParam.Type, iprop.Type, iprop.HasSetter))
+                if (!IsInterfacePropertyTypeCompatible(
+                    positionalParam.Type,
+                    iprop.Type,
+                    iprop.HasSetter,
+                    BuildInterfaceTypeParameterMap(iface)))
                 {
                     // Name matches but the type is incompatible: the
                     // positional parameter does not satisfy the contract.
@@ -584,11 +592,27 @@ internal sealed partial class DeclarationBinder
                 }
                 else
                 {
+                    // Issue #2875: positional data members are init-only.
+                    // Their set_ accessor carries IsExternalInit and therefore
+                    // cannot fill an ordinary settable interface slot.
+                    if (iprop.HasSetter && !iprop.IsInitOnly)
+                    {
+                        ReportInterfacePropertySetterKindMismatch(
+                            syntax,
+                            structSymbol,
+                            iface.Name,
+                            iprop.Name,
+                            "positional member",
+                            positionalParam.Name,
+                            interfaceIsInitOnly: false,
+                            implementationIsInitOnly: true);
+                        continue;
+                    }
+
                     // Record the positional parameter so a backing
                     // auto-property is synthesized below, filling the
-                    // interface's get_/set_ accessor slots. A data-class
-                    // positional parameter is a mutable public field, so
-                    // it can satisfy a setter requirement too.
+                    // interface's getter (and, for an init-only interface,
+                    // init accessor) slot.
                     var needsSetter = iprop.HasSetter;
                     if (positionalInterfaceProps.TryGetValue(iprop.Name, out var existing))
                     {
@@ -624,7 +648,8 @@ internal sealed partial class DeclarationBinder
     private static bool IsInterfacePropertyTypeCompatible(
         TypeSymbol implementationType,
         TypeSymbol interfaceType,
-        bool hasSetter)
+        bool hasSetter,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
         var implementationUnderlyingType = implementationType is NullableTypeSymbol implementationNullable
             ? implementationNullable.UnderlyingType
@@ -632,18 +657,125 @@ internal sealed partial class DeclarationBinder
         var interfaceUnderlyingType = interfaceType is NullableTypeSymbol interfaceNullable
             ? interfaceNullable.UnderlyingType
             : interfaceType;
-        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(
+        if (!TypeSignaturesEquivalent(
+            interfaceUnderlyingType,
             implementationUnderlyingType,
-            interfaceUnderlyingType))
+            typeParameterMap))
         {
             return false;
         }
 
-        var interfaceIsNullable = interfaceType is NullableTypeSymbol;
+        var substitutedInterfaceType = interfaceType is TypeParameterSymbol typeParameter
+            && typeParameterMap?.TryGetValue(typeParameter, out var substituted) == true
+                ? substituted
+                : interfaceType;
+        var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
         var implementationIsNullable = implementationType is NullableTypeSymbol;
         return hasSetter
             ? interfaceIsNullable == implementationIsNullable
             : interfaceIsNullable || !implementationIsNullable;
+    }
+
+    private static bool TryGetConstructedInterfacePropertyImplementation(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        PropertySymbol interfaceProperty,
+        out PropertySymbol implementation)
+    {
+        var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
+        for (var current = structSymbol; current != null; current = current.BaseClass)
+        {
+            foreach (var candidate in current.Properties)
+            {
+                if (candidate.HasExplicitInterfaceClause
+                    || candidate.Name != interfaceProperty.Name
+                    || (!ReferenceEquals(current, structSymbol) && candidate.Accessibility != Accessibility.Public)
+                    || candidate.IsIndexer != interfaceProperty.IsIndexer
+                    || candidate.Parameters.Length != interfaceProperty.Parameters.Length)
+                {
+                    continue;
+                }
+
+                var parametersMatch = true;
+                for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
+                {
+                    if (!TypeSignaturesEquivalent(
+                        interfaceProperty.Parameters[i].Type,
+                        candidate.Parameters[i].Type,
+                        typeParameterMap))
+                    {
+                        parametersMatch = false;
+                        break;
+                    }
+                }
+
+                if (parametersMatch
+                    && TypeSignaturesEquivalent(interfaceProperty.Type, candidate.Type, typeParameterMap))
+                {
+                    implementation = candidate;
+                    return true;
+                }
+            }
+        }
+
+        implementation = null;
+        return false;
+    }
+
+    private static bool InterfacePropertySetterKindsMismatch(
+        PropertySymbol interfaceProperty,
+        PropertySymbol implementation)
+        => interfaceProperty.HasSetter
+            && implementation.HasSetter
+            && interfaceProperty.IsInitOnly != implementation.IsInitOnly;
+
+    private void ReportInterfacePropertySetterKindMismatch(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        string interfaceName,
+        string propertyName,
+        bool interfaceIsInitOnly,
+        PropertySymbol implementation)
+    {
+        var isPositionalMember = implementation.Declaration is null
+            && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, implementation.Name, out _);
+        ReportInterfacePropertySetterKindMismatch(
+            syntax,
+            structSymbol,
+            interfaceName,
+            propertyName,
+            isPositionalMember ? "positional member" : "property",
+            implementation.Name,
+            interfaceIsInitOnly,
+            implementation.IsInitOnly);
+    }
+
+    private void ReportInterfacePropertySetterKindMismatch(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        string interfaceName,
+        string propertyName,
+        string memberKind,
+        string memberName,
+        bool interfaceIsInitOnly,
+        bool implementationIsInitOnly)
+    {
+        var implementationAccessor = implementationIsInitOnly ? "init" : "set";
+        var requiredAccessor = interfaceIsInitOnly ? "init" : "set";
+        var requiredArticle = interfaceIsInitOnly ? "an" : "a";
+        var fix = memberKind == "positional member"
+            ? $"declare property '{memberName}' explicitly with {requiredArticle} '{requiredAccessor}' accessor."
+            : $"change property '{memberName}' to use accessor '{requiredAccessor}'.";
+        Diagnostics.ReportInterfacePropertySetterKindMismatch(
+            syntax.Identifier.Location,
+            structSymbol.Name,
+            memberKind,
+            memberName,
+            interfaceName,
+            propertyName,
+            implementationAccessor,
+            requiredAccessor,
+            fix);
     }
 
     private void VerifyInterfaceEventImplementations(
@@ -1171,10 +1303,11 @@ internal sealed partial class DeclarationBinder
                 }
 
                 PropertySymbol match = null;
+                var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
                     if (candidate.Name == iprop.Name
-                        && System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(candidate.Type, iprop.Type))
+                        && TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParameterMap))
                     {
                         match = candidate;
                         break;
@@ -1418,6 +1551,8 @@ internal sealed partial class DeclarationBinder
                         // Synthesize a PropertySymbol backed by the field so the emit
                         // path handles it via the existing auto-property machinery.
                         bool contractHasSetter = requiresSetter;
+                        bool contractIsInitOnly = contractHasSetter
+                            && ImportedTypeSymbol.IsInitOnlySetter(clrProp.SetMethod);
                         var synthesized = new PropertySymbol(
                             name: clrProp.Name,
                             type: matchingField.Type,
@@ -1426,7 +1561,8 @@ internal sealed partial class DeclarationBinder
                             hasSetter: contractHasSetter,
                             isAutoProperty: true,
                             isVirtual: true,
-                            isOverride: false);
+                            isOverride: false,
+                            isInitOnly: contractIsInitOnly);
                         synthesized.BackingField = matchingField;
                         structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
                         continue;
@@ -1456,6 +1592,16 @@ internal sealed partial class DeclarationBinder
                         structSymbol.Name,
                         clrIface.FullName ?? clrIface.Name,
                         clrProp.Name + " (setter)");
+                }
+                else if (requiresSetter)
+                {
+                    ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                        syntax,
+                        structSymbol,
+                        clrIface.FullName ?? clrIface.Name,
+                        clrProp.Name,
+                        clrProp.SetMethod,
+                        implProp);
                 }
             }
         }
@@ -1618,7 +1764,40 @@ internal sealed partial class DeclarationBinder
                     clrIface.FullName ?? clrIface.Name,
                     openProp.Name + " (setter)");
             }
+            else if (openProp.SetMethod != null)
+            {
+                ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                    syntax,
+                    structSymbol,
+                    clrIface.FullName ?? clrIface.Name,
+                    openProp.Name,
+                    openProp.SetMethod,
+                    implProp);
+            }
         }
+    }
+
+    private void ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        string interfaceName,
+        string propertyName,
+        System.Reflection.MethodInfo interfaceSetter,
+        PropertySymbol implementation)
+    {
+        var interfaceIsInitOnly = ImportedTypeSymbol.IsInitOnlySetter(interfaceSetter);
+        if (interfaceIsInitOnly == implementation.IsInitOnly)
+        {
+            return;
+        }
+
+        ReportInterfacePropertySetterKindMismatch(
+            syntax,
+            structSymbol,
+            interfaceName,
+            propertyName,
+            interfaceIsInitOnly,
+            implementation);
     }
 
     private static string FormatClrMethodSignature(System.Reflection.MethodInfo method)

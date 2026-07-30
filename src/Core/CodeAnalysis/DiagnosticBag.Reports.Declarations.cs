@@ -1057,4 +1057,39 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The shared target member name.</param>
     public void ReportDuplicateExplicitInterfaceImplementation(TextLocation location, string interfaceName, string memberName)
     => Report(location, DiagnosticDescriptors.DuplicateExplicitInterfaceImplementation, interfaceName, memberName);
+
+    /// <summary>
+    /// Issue #2875: reports a setter-kind mismatch between an interface
+    /// property and its implementation.
+    /// </summary>
+    /// <param name="location">The implementing type's source location.</param>
+    /// <param name="typeName">The implementing type.</param>
+    /// <param name="memberKind">The implementation kind, such as positional member or init-only property.</param>
+    /// <param name="memberName">The implementing member.</param>
+    /// <param name="interfaceName">The required interface.</param>
+    /// <param name="propertyName">The required interface property.</param>
+    /// <param name="implementationAccessor">The implementation accessor kind.</param>
+    /// <param name="requiredAccessor">The interface accessor kind.</param>
+    /// <param name="fix">The corrective action.</param>
+    public void ReportInterfacePropertySetterKindMismatch(
+        TextLocation location,
+        string typeName,
+        string memberKind,
+        string memberName,
+        string interfaceName,
+        string propertyName,
+        string implementationAccessor,
+        string requiredAccessor,
+        string fix)
+    => Report(
+        location,
+        DiagnosticDescriptors.InterfacePropertySetterKindMismatch,
+        typeName,
+        memberKind,
+        memberName,
+        interfaceName,
+        propertyName,
+        implementationAccessor,
+        requiredAccessor,
+        fix);
 }

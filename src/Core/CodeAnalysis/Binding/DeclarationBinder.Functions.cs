@@ -1628,8 +1628,13 @@ internal sealed partial class DeclarationBinder
     /// <paramref name="iprop"/>'s declared type against the candidate's own
     /// (concrete) type.
     /// </summary>
-    private static PropertySymbol TryResolveExplicitInterfacePropertyImplementation(StructSymbol structSymbol, InterfaceSymbol iface, PropertySymbol iprop)
+    private static PropertySymbol TryResolveExplicitInterfacePropertyImplementation(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        PropertySymbol iprop,
+        out bool setterKindMismatch)
     {
+        setterKindMismatch = false;
         if (structSymbol.Properties.IsDefaultOrEmpty)
         {
             return null;
@@ -1637,8 +1642,10 @@ internal sealed partial class DeclarationBinder
 
         foreach (var candidate in structSymbol.Properties)
         {
-            if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop))
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop)
+                && TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
             {
+                setterKindMismatch = InterfacePropertySetterKindsMismatch(iprop, candidate);
                 return candidate;
             }
 
@@ -1660,11 +1667,11 @@ internal sealed partial class DeclarationBinder
             // slot-sharing concern here, so the concrete implementation's
             // type must equal the interface's declared type exactly (after
             // substituting the interface's own type parameters, for a
-            // generic interface). The accessor SHAPE (get/set/init) must also
-            // match exactly — valid C# never lets an explicit property
-            // implementation declare an accessor the interface doesn't
-            // require.
-            if (iprop.HasGetter != candidate.HasGetter || iprop.HasSetter != candidate.HasSetter)
+            // generic interface). Getter/setter presence must also match.
+            // A set/init disagreement is returned separately so the verifier
+            // reports GS0502 without cascading GS0494.
+            if (iprop.HasGetter != candidate.HasGetter
+                || iprop.HasSetter != candidate.HasSetter)
             {
                 continue;
             }
@@ -1705,6 +1712,7 @@ internal sealed partial class DeclarationBinder
             }
 
             candidate.ExplicitInterfaceMember = iprop;
+            setterKindMismatch = InterfacePropertySetterKindsMismatch(iprop, candidate);
             return candidate;
         }
 
@@ -1834,7 +1842,10 @@ internal sealed partial class DeclarationBinder
     /// is resolved) or <see langword="null"/> if no such static property
     /// exists.
     /// </summary>
-    private static PropertySymbol TryResolveExplicitInterfaceStaticPropertyImplementation(StructSymbol structSymbol, InterfaceSymbol iface, PropertySymbol iprop)
+    private static PropertySymbol TryResolveExplicitInterfaceStaticPropertyImplementation(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        PropertySymbol iprop)
     {
         if (structSymbol.StaticProperties.IsDefaultOrEmpty)
         {
@@ -1843,7 +1854,8 @@ internal sealed partial class DeclarationBinder
 
         foreach (var candidate in structSymbol.StaticProperties)
         {
-            if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop))
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop)
+                && TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
             {
                 return candidate;
             }
@@ -1888,7 +1900,7 @@ internal sealed partial class DeclarationBinder
     /// open definition itself), matching that method's "no substitution"
     /// convention.
     /// </summary>
-    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
+    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
     {
         var def = iface.Definition;
         if (def == null || ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty)
@@ -2255,7 +2267,7 @@ internal sealed partial class DeclarationBinder
                 implementation.Type,
                 BuildInterfaceTypeParameterMap(iface));
 
-    private static bool TypeSignaturesEquivalent(
+    internal static bool TypeSignaturesEquivalent(
         TypeSymbol a,
         TypeSymbol b,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)

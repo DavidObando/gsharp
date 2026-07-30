@@ -529,6 +529,11 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var isStaticInterfaceProperty = propSyntax.HasStaticModifier;
+                if (isStaticInterfaceProperty && isInitOnly)
+                {
+                    var initAccessor = propSyntax.Accessors.First(a => a.IsInit);
+                    Diagnostics.ReportInitAccessorOnStaticProperty(initAccessor.AccessorKeyword.Location, propName);
+                }
 
                 var propSymbol = new PropertySymbol(
                     propName,

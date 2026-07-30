@@ -1671,3 +1671,16 @@ files produce one `GS0366` per legacy occurrence with **no cascade
 errors** — the parser binds the recovered shape to the same
 `MapTypeSymbol` so downstream binding proceeds unchanged.
 
+## Interface property setter-kind mismatch (GS0502)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0502 | Error | A property implementation uses `init` where its interface requires `set`, or vice versa. |
+
+An `init` accessor has a different CLR signature from `set` because its return
+type carries `modreq(IsExternalInit)`. The accessor kinds must match in either
+direction. A positional `data class` or `data struct` member is init-only, so
+it can satisfy a get-only interface property but not a settable one. Declare
+the property explicitly with a `set` accessor. An init-only interface property
+must instead be implemented with a matching `init` accessor. Static interface
+properties cannot declare `init` accessors.

@@ -1353,6 +1353,15 @@ internal sealed class UserTokenResolver
             }
         }
 
+        if (fn.IsInitOnlySetter)
+        {
+            var isExternalInit = this.outer.wellKnown.GetIsExternalInitTypeRef();
+            if (!isExternalInit.IsNil)
+            {
+                encoder.CustomModifiers().AddModifier(isExternalInit, isOptional: false);
+            }
+        }
+
         this.signatures.EncodeReturnSymbol(encoder, fn.Type, fn.ReturnRefKind);
     }
 

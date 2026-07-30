@@ -936,6 +936,20 @@ a non-sibling identifier, a floating-point literal, …) is rejected with GS0467
 
 ADR-0149 adds a dedicated qualifier clause for explicit interface implementations: `func (IFoo) M(...) T { ... }`, `prop (IFoo) P T { ... }`, `prop (IFoo) this[i int32] T { ... }`, and the analogous `event (IFoo) E T` form. Unlike an ordinary member, the qualifier's interface type must be one of the containing type's implemented interfaces (GS0493) and must be an interface at all (GS0492), and the declared member must exactly match one of that interface's members by name, parameter/accessor shape (GS0494). Two clauses on the same containing type that resolve to the *same* interface member are rejected as a duplicate implementation (GS0495) — this is distinct from two *different* explicit implementations (of different interface members, or the same simple name under different interfaces) sharing a plain source name, which is the entire point of the feature and is explicitly permitted.
 
+## Interface property setter-kind mismatch (GS0502)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0502 | Error | A property implementation uses `init` where its interface requires `set`, or vice versa. |
+
+An `init` accessor has a different CLR signature from `set` because its return
+type carries `modreq(IsExternalInit)`. The accessor kinds must match in either
+direction. A positional `data class` or `data struct` member is init-only, so
+it can satisfy a get-only interface property but not a settable one. Declare
+the property explicitly with a `set` accessor. An init-only interface property
+must instead be implemented with a matching `init` accessor. Static interface
+properties cannot declare `init` accessors.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
