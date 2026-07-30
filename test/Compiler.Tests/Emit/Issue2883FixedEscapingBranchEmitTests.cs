@@ -15,7 +15,9 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2883: escaping branches inside <c>fixed</c> bodies must remain
-/// visible to definite-return analysis without changing fixed emission.
+/// visible to definite-return analysis without changing fixed emission. The
+/// negative test is the load-bearing regression; runtime tests guard against
+/// projection over-fire and emission changes.
 /// </summary>
 public class Issue2883FixedEscapingBranchEmitTests
 {
@@ -29,6 +31,32 @@ public class Issue2883FixedEscapingBranchEmitTests
         "StackUnexpectedArrayType",
         "ExpectedNumericType",
     };
+
+    [Fact]
+    public void BreakOutOfFixed_WithoutReturn_ReportsGs0100AndEmitsNothing()
+    {
+        const string Source = """
+            package Issue2883.Break
+
+            func F(xs []int32) int32 {
+                unsafe {
+                    for {
+                        fixed p *int32 = xs {
+                            break
+                        }
+                    }
+                }
+            }
+            """;
+
+        using var peStream = new MemoryStream();
+        var result = Compile(Source, peStream);
+        var diagnostic = Assert.Single(result.Diagnostics);
+
+        Assert.False(result.Success);
+        Assert.Equal("GS0100", diagnostic.Id);
+        Assert.Equal(0, peStream.Length);
+    }
 
     [Fact]
     public void BreakOutOfFixed_WithReturnAfterLoop_VerifiesAndRuns()
@@ -159,9 +187,7 @@ public class Issue2883FixedEscapingBranchEmitTests
     private static Assembly CompileAndRun(string source, bool fixedBody = true)
     {
         using var peStream = new MemoryStream();
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var result = compilation.Emit(peStream);
+        var result = Compile(source, peStream);
 
         Assert.True(
             result.Success,
@@ -188,6 +214,13 @@ public class Issue2883FixedEscapingBranchEmitTests
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
         return assembly;
+    }
+
+    private static EmitResult Compile(string source, Stream peStream)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Emit(peStream);
     }
 
     private static int GetField(Assembly assembly, string name)

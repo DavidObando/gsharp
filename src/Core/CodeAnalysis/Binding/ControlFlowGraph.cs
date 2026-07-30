@@ -66,10 +66,10 @@ public sealed class ControlFlowGraph
     /// <returns>Whether all its paths return or not.</returns>
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
-        // Keep fixed/scope structured for emit and data-flow consumers, but
-        // expose their sequential bodies to this graph so escaping gotos can
-        // resolve labels in the enclosing function.
-        var graph = Create(ExpandSequentialRegions(body));
+        // This projection is intentionally limited to definite-return. Other
+        // data-flow analyzers call Create(body) and still treat fixed/scope as
+        // opaque, so their escaping-goto behavior is unchanged.
+        var graph = Create(ProjectSequentialRegionsForDefiniteReturn(body));
 
         foreach (var branch in graph.End.Incoming)
         {
@@ -199,7 +199,7 @@ public sealed class ControlFlowGraph
         }
     }
 
-    private static BoundBlockStatement ExpandSequentialRegions(BoundStatement statement)
+    private static BoundBlockStatement ProjectSequentialRegionsForDefiniteReturn(BoundStatement statement)
     {
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
         Add(statement);
@@ -217,9 +217,14 @@ public sealed class ControlFlowGraph
 
                     break;
                 case BoundFixedStatement fixedStatement:
+                    // Fixed executes its body once; pin setup and normal-exit
+                    // release remain emit concerns. Escaping exits currently
+                    // skip that release epilogue (#2900).
                     Add(fixedStatement.Body);
                     break;
                 case BoundScopeStatement scopeStatement:
+                    // Scope also executes its body once in normal control flow.
+                    // Its task join and failure rethrow remain emit-time behavior.
                     Add(scopeStatement.Body);
                     break;
                 default:
@@ -376,7 +381,6 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.GotoStatement:
                     case BoundNodeKind.ConditionalGotoStatement:
                     case BoundNodeKind.ReturnStatement:
-                    case BoundNodeKind.ThrowStatement:
                         statements.Add(statement);
                         StartBlock();
                         break;
@@ -396,6 +400,7 @@ public sealed class ControlFlowGraph
 
                         break;
                     case BoundNodeKind.TryStatement:
+                    case BoundNodeKind.ThrowStatement:
                     case BoundNodeKind.GoStatement:
                     case BoundNodeKind.ChannelSendStatement:
                     case BoundNodeKind.SelectStatement:

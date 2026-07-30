@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.IO;
+using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -186,13 +187,15 @@ public class Issue2883FixedEscapingBranchFlowTests
     private static void AssertGs0100(string source)
     {
         var diagnostics = Compile(source);
-        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0100");
+        var diagnostic = Assert.Single(diagnostics.Where(candidate => candidate.IsError));
+        Assert.Equal("GS0100", diagnostic.Id);
+        Assert.Equal("F", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
     }
 
     private static void AssertNoGs0100(string source)
     {
         var diagnostics = Compile(source);
-        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "GS0100");
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
     }
 
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> Compile(string source)
