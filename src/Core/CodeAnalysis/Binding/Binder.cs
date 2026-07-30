@@ -3472,9 +3472,9 @@ public sealed class Binder
         // construction's arguments and the nested type's own arguments so member
         // lookup substitutes both levels and the emitter encodes
         // `Outer`1+Middle`2<int32, string>`.
+        var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
         if (deepest is StructSymbol deepestStruct)
         {
-            var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
             if (!enclosingArgs.IsDefaultOrEmpty)
             {
                 var ownArgs = deepestStruct.TypeArguments;
@@ -3482,6 +3482,10 @@ public sealed class Binder
                     ? StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs, scope.References.MapClrTypeToReferences)
                     : StructSymbol.ConstructNestedGeneric(deepestStruct.Definition ?? deepestStruct, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
             }
+        }
+        else if (deepest is EnumSymbol deepestEnum && !enclosingArgs.IsDefaultOrEmpty)
+        {
+            deepest = EnumSymbol.ConstructNested(deepestEnum.Definition ?? deepestEnum, enclosingArgs);
         }
 
         return deepest;
@@ -5010,6 +5014,15 @@ public sealed class Binder
             if (!newEnclosing.IsDefault)
             {
                 return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing, mapClrType);
+            }
+        }
+
+        if (type is EnumSymbol nestedEnum)
+        {
+            var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(nestedEnum, t => SubstituteType(t, substitution, mapClrType));
+            if (!newEnclosing.IsDefault)
+            {
+                return EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, newEnclosing);
             }
         }
 

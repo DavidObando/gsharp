@@ -307,9 +307,18 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
-        if (element is EnumSymbol enumSym && this.cache.EnumTypeDefs.TryGetValue(enumSym, out var etd))
+        if (element is EnumSymbol enumSym)
         {
-            return etd;
+            var def = enumSym.Definition ?? enumSym;
+            if (ReflectionMetadataEmitter.IsUserGenericEnumReference(enumSym))
+            {
+                return this.outer.userTokens.GetUserEnumTypeSpec(enumSym);
+            }
+
+            if (this.cache.EnumTypeDefs.TryGetValue(def, out var etd))
+            {
+                return etd;
+            }
         }
 
         // Issue #1052: a user-declared interface used as a generic-parameter

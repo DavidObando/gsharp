@@ -813,11 +813,12 @@ internal sealed class TypeDefEmitter
         var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: enumNamespace,
-            name: this.emitCtx.Metadata.GetOrAddString(enumSym.Name),
+            name: this.emitCtx.Metadata.GetOrAddString(MangleGenericName(enumSym.Name, enumSym.TypeParameters)),
             baseType: enumTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.cache.EnumTypeDefs[enumSym] = enumTypeDef;
+        this.cache.EnumTypeDefs[enumSym.Definition ?? enumSym] = enumTypeDef;
+        EmitGenericParamRows(this.emitCtx, enumTypeDef, enumSym.TypeParameters);
 
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
         var valueFieldSigBlob = new BlobBuilder();
@@ -840,7 +841,7 @@ internal sealed class TypeDefEmitter
         foreach (var member in enumSym.Members)
         {
             var memberSigBlob = new BlobBuilder();
-            new BlobEncoder(memberSigBlob).FieldSignature().Type(enumTypeDef, isValueType: true);
+            this.encodeTypeSymbol(new BlobEncoder(memberSigBlob).FieldSignature(), enumSym);
             var memberFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
                 name: this.emitCtx.Metadata.GetOrAddString(member.Name),

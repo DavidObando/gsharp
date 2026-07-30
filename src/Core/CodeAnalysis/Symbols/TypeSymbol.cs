@@ -538,6 +538,13 @@ public class TypeSymbol : Symbol
             case ByRefTypeSymbol br:
                 CollectReferencedTypeParameters(br.PointeeType, sink);
                 return;
+            case EnumSymbol es when !es.EnclosingTypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in es.EnclosingTypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                return;
             case StructSymbol ss when !ss.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in ss.TypeArguments)
                 {

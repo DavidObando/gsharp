@@ -221,7 +221,8 @@ internal sealed class SignatureEncoder
                 // `System.Nullable<E>` — a generic instantiation whose single
                 // argument is the enum's own emitted TypeDef. Mirrors the
                 // struct-constrained type-parameter branch above.
-                if (!this.cache.EnumTypeDefs.ContainsKey(nestedEnum))
+                var nestedEnumDef = nestedEnum.Definition ?? nestedEnum;
+                if (!this.cache.EnumTypeDefs.ContainsKey(nestedEnumDef))
                 {
                     throw new InvalidOperationException(
                         $"Enum '{nestedEnum.Name}' has no emitted TypeDef.");
@@ -396,12 +397,25 @@ internal sealed class SignatureEncoder
         {
             // Issue #193: a user-defined enum's signature surface is its
             // own TypeDef (a sealed value type derived from System.Enum).
-            if (!this.cache.EnumTypeDefs.TryGetValue(enumSym, out var enumTypeDef))
+            var enumDefSym = enumSym.Definition ?? enumSym;
+            if (!this.cache.EnumTypeDefs.TryGetValue(enumDefSym, out var enumTypeDef))
             {
                 throw new InvalidOperationException($"Enum '{enumSym.Name}' has no emitted TypeDef.");
             }
 
-            encoder.Type(enumTypeDef, isValueType: true);
+            if (ReflectionMetadataEmitter.IsUserGenericEnumReference(enumSym))
+            {
+                var typeArgs = this.outer.userTokens.ResolveUserEnumTypeSpecArguments(enumSym, enumDefSym);
+                var gi = encoder.GenericInstantiation(enumTypeDef, typeArgs.Length, isValueType: true);
+                foreach (var arg in typeArgs)
+                {
+                    this.EncodeTypeSymbol(gi.AddArgument(), arg);
+                }
+            }
+            else
+            {
+                encoder.Type(enumTypeDef, isValueType: true);
+            }
         }
         else if (type is InterfaceSymbol ifaceSym)
         {

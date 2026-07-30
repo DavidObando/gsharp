@@ -1913,7 +1913,12 @@ internal sealed partial class ExpressionBinder
                 // when the left portion is not a nested type.
                 if (TryResolveNestedTypeChainUnderReceiver(structSym, nested.LeftPart, out var innerReceiver))
                 {
-                    return BindUserTypeStaticAccessorStep(innerReceiver, nested.RightPart);
+                    return innerReceiver switch
+                    {
+                        StructSymbol innerStruct => BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart),
+                        EnumSymbol innerEnum => BindEnumAccessorStep(innerEnum, nested.RightPart),
+                        _ => new BoundErrorExpression(null),
+                    };
                 }
 
                 if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)
@@ -2048,7 +2053,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeExpr">The nested-type-naming expression.</param>
     /// <param name="constructed">The resolved constructed nested type on success.</param>
     /// <returns>Whether the expression named a nested type of the receiver.</returns>
-    private bool TryResolveNestedTypeChainUnderReceiver(StructSymbol receiver, ExpressionSyntax typeExpr, out StructSymbol constructed)
+    private bool TryResolveNestedTypeChainUnderReceiver(StructSymbol receiver, ExpressionSyntax typeExpr, out TypeSymbol constructed)
     {
         constructed = null;
         var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
@@ -2091,6 +2096,14 @@ internal sealed partial class ExpressionBinder
 
                 containerDef = nested;
                 continue;
+            }
+
+            if (nested is EnumSymbol nestedEnum)
+            {
+                constructed = !enclosingArgs.IsDefaultOrEmpty
+                    ? EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, enclosingArgs)
+                    : nestedEnum.Definition ?? nestedEnum;
+                return true;
             }
 
             if (nested is not StructSymbol nestedStruct)

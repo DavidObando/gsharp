@@ -571,6 +571,20 @@ internal sealed class ReflectionMetadataEmitter
 
             this.remaps.RegisterClassRemap(s, remap);
         }
+
+        foreach (var e in this.emitCtx.Program.Enums)
+        {
+            if (e.ContainingType is not StructSymbol)
+            {
+                continue;
+            }
+
+            var enclosing = CollectOriginalEnclosingTypeParameters(e, originalOwnParams);
+            if (!enclosing.IsDefaultOrEmpty)
+            {
+                e.SetTypeParameters(SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosing));
+            }
+        }
     }
 
     // Issue #1537: gathers the flattened ORIGINAL generic parameters of every
@@ -579,11 +593,17 @@ internal sealed class ReflectionMetadataEmitter
     // <paramref name="originalOwnParams"/> so a deeply-nested type sees the
     // originals even after an intermediate enclosing type has been reified.
     private static ImmutableArray<TypeParameterSymbol> CollectOriginalEnclosingTypeParameters(
-        StructSymbol nested,
+        TypeSymbol nested,
         Dictionary<StructSymbol, ImmutableArray<TypeParameterSymbol>> originalOwnParams)
     {
         List<ImmutableArray<TypeParameterSymbol>> levels = null;
-        for (var c = nested.ContainingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
+        var containingType = nested switch
+        {
+            StructSymbol s => s.ContainingType,
+            EnumSymbol e => e.ContainingType,
+            _ => null,
+        };
+        for (var c = containingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
         {
             var def = c.Definition ?? c;
             var tps = originalOwnParams.TryGetValue(def, out var snapshot) ? snapshot : def.TypeParameters;
@@ -4598,6 +4618,28 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         var def = structSym.Definition ?? structSym;
+        return !def.TypeParameters.IsDefaultOrEmpty;
+    }
+
+    /// <summary>
+    /// Returns whether a nested enum reference must be encoded as a TypeSpec
+    /// reified over its generic enclosing type arguments.
+    /// </summary>
+    /// <param name="enumSym">The enum definition or constructed reference.</param>
+    /// <returns>Whether the enum reference is generic in metadata.</returns>
+    internal static bool IsUserGenericEnumReference(EnumSymbol enumSym)
+    {
+        if (enumSym == null)
+        {
+            return false;
+        }
+
+        if (!enumSym.EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return true;
+        }
+
+        var def = enumSym.Definition ?? enumSym;
         return !def.TypeParameters.IsDefaultOrEmpty;
     }
 

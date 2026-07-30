@@ -233,6 +233,7 @@ public sealed class ReferenceResolver : IDisposable
         TupleTypeSymbol.ClearCache();
         FunctionPointerTypeSymbol.ClearCache();
         StructSymbol.ClearCache();
+        EnumSymbol.ClearCache();
         InterfaceSymbol.ClearCache();
         DelegateTypeSymbol.ClearCache();
 

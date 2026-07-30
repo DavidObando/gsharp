@@ -610,6 +610,7 @@ public static class SemanticLookup
             {
                 declarations[function.Declaration.Identifier] = function;
                 MapParameters(function.Declaration, function.Parameters, declarations, localDeclarations);
+                MapTypeClauseReference(function.Declaration.Type, function.Type, declarations);
                 if (function.ExplicitReceiverParameter != null && function.Declaration.Receiver != null)
                 {
                     declarations[function.Declaration.Receiver.Identifier] = function.ExplicitReceiverParameter;
@@ -638,6 +639,7 @@ public static class SemanticLookup
                 for (var i = 0; i < aggregate.Declaration.Fields.Length && i < aggregate.Fields.Length; i++)
                 {
                     declarations[aggregate.Declaration.Fields[i].Identifier] = aggregate.Fields[i];
+                    MapTypeClauseReference(aggregate.Declaration.Fields[i].Type, aggregate.Fields[i].Type, declarations);
                 }
 
                 var allPropertyIdentifiers = aggregate.Declaration.Properties.Select(p => p.Identifier);
@@ -685,6 +687,7 @@ public static class SemanticLookup
                     if (method.Declaration != null)
                     {
                         MapParameters(method.Declaration, method.Parameters, declarations, localDeclarations);
+                        MapTypeClauseReference(method.Declaration.Type, method.Type, declarations);
                         if (method.ThisParameter != null)
                         {
                             GetLocals(localDeclarations, method.Declaration)[method.ThisParameter.Name] = method.ThisParameter;
@@ -839,7 +842,64 @@ public static class SemanticLookup
         {
             var symbol = parameters[symbolIndex + i];
             declarations[syntaxParameters[i].Identifier] = symbol;
+            MapTypeClauseReference(syntaxParameters[i].Type, symbol.Type, declarations);
             GetLocals(localDeclarations, scope)[symbol.Name] = symbol;
+        }
+    }
+
+    private static void MapTypeClauseReference(
+        TypeClauseSyntax typeClause,
+        TypeSymbol type,
+        Dictionary<SyntaxToken, Symbol> declarations)
+    {
+        if (typeClause == null || type == null)
+        {
+            return;
+        }
+
+        var identifier = !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty
+            ? typeClause.QualifierIdentifierTokens[^1]
+            : typeClause.Identifier;
+        if (identifier == null)
+        {
+            return;
+        }
+
+        while (true)
+        {
+            switch (type)
+            {
+                case NullableTypeSymbol nullable:
+                    type = nullable.UnderlyingType;
+                    continue;
+                case NullabilityAnnotatedTypeSymbol annotated:
+                    type = annotated.BaseType;
+                    continue;
+                case ArrayTypeSymbol array:
+                    type = array.ElementType;
+                    continue;
+                case SliceTypeSymbol slice:
+                    type = slice.ElementType;
+                    continue;
+                case PointerTypeSymbol pointer:
+                    type = pointer.PointeeType;
+                    continue;
+                case ChannelTypeSymbol channel:
+                    type = channel.ElementType;
+                    continue;
+                case SequenceTypeSymbol sequence:
+                    type = sequence.ElementType;
+                    continue;
+                case AsyncSequenceTypeSymbol asyncSequence:
+                    type = asyncSequence.ElementType;
+                    continue;
+                case PinnedTypeSymbol pinned:
+                    type = pinned.UnderlyingType;
+                    continue;
+                default:
+                    declarations[identifier] = type;
+                    return;
+            }
         }
     }
 

@@ -337,8 +337,7 @@ public static class SymbolDisplay
 
         builder.Keyword(aggregate.IsClass ? "class" : "struct");
         builder.Space();
-        builder.Type(QualifiedName(format, aggregate.PackageName, aggregate.Name));
-        AppendTypeParameters(builder, aggregate.TypeParameters);
+        builder.Type(QualifiedName(format, aggregate.PackageName, FormatType(aggregate)));
 
         if (!aggregate.Fields.IsEmpty)
         {
@@ -369,7 +368,7 @@ public static class SymbolDisplay
     {
         builder.Keyword("enum");
         builder.Space();
-        builder.Type(QualifiedName(format, enumSymbol.PackageName, enumSymbol.Name));
+        builder.Type(QualifiedName(format, enumSymbol.PackageName, FormatType(enumSymbol)));
         builder.Space();
         builder.Punctuation("{");
         builder.Space();
@@ -483,7 +482,7 @@ public static class SymbolDisplay
             return;
         }
 
-        builder.Punctuation("<");
+        builder.Punctuation("[");
         for (var i = 0; i < typeParameters.Length; i++)
         {
             if (i > 0)
@@ -495,7 +494,7 @@ public static class SymbolDisplay
             builder.Type(typeParameters[i].Name);
         }
 
-        builder.Punctuation(">");
+        builder.Punctuation("]");
     }
 
     private static void AppendClrProperty(PartBuilder builder, SymbolDisplayFormat format, PropertyInfo property)
@@ -735,6 +734,12 @@ public static class SymbolDisplay
                     aggregate.ContainingType,
                     aggregate.EnclosingTypeArguments,
                     GetDisplayTypeArguments(aggregate.TypeArguments, aggregate.TypeParameters));
+            case EnumSymbol enumSymbol:
+                return FormatSourceType(
+                    enumSymbol.Definition?.Name ?? enumSymbol.Name,
+                    enumSymbol.ContainingType,
+                    enumSymbol.EnclosingTypeArguments,
+                    ImmutableArray<TypeSymbol>.Empty);
             case InterfaceSymbol @interface:
                 return FormatSourceType(
                     @interface.Definition?.Name ?? @interface.Name,
