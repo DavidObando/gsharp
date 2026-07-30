@@ -1553,10 +1553,19 @@ internal sealed partial class OverloadResolver
             // method call-argument path, the one that reproduces the issue's
             // exact repro (`Apply((n int32) -> ...)` against a `func
             // Apply(h TickHandler)` parameter).
-            if (expectedType is DelegateTypeSymbol namedDelegateCallTarget
-                && argument.Type is FunctionTypeSymbol
-                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
-                && !ReferenceEquals(argument.Type, namedDelegateCallTarget))
+            // Issue #2850: strip reference nullability on both sides and use
+            // the substituted target, whether it is closed at this call site
+            // or remains open during generic forwarding. A direct generic
+            // free-function call must materialize the structural value as the
+            // nominal delegate just like the instance/static method paths do.
+            var nominalDelegateCallTarget = expectedType is NullableTypeSymbol nullableDelegateTarget
+                ? nullableDelegateTarget.UnderlyingType
+                : expectedType;
+            var structuralArgumentType = argument.Type is NullableTypeSymbol nullableFunctionArgument
+                ? nullableFunctionArgument.UnderlyingType
+                : argument.Type;
+            if (nominalDelegateCallTarget is DelegateTypeSymbol
+                && structuralArgumentType is FunctionTypeSymbol)
             {
                 var namedDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(namedDelegateLoc, argument, expectedType);
