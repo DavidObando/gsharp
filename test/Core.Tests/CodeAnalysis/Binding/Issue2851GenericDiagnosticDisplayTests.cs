@@ -8,6 +8,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -57,7 +58,6 @@ public class Issue2851GenericDiagnosticDisplayTests
 
         var diagnostics = GetDiagnostics(source);
 
-        Assert.Equal(8, diagnostics.Length);
         AssertDiagnostic(diagnostics, "GS0155", "Cannot convert type 'Box[int32]' to 'string'.");
         AssertDiagnostic(diagnostics, "GS0155", "Cannot convert type 'Box[int32]?' to 'string'.");
         AssertDiagnostic(diagnostics, "GS0155", "Cannot convert type 'Box[Box[int32]]' to 'string'.");
@@ -69,15 +69,111 @@ public class Issue2851GenericDiagnosticDisplayTests
     }
 
     [Fact]
+    public void DiagnosticDisplay_RecursesThroughConstructedTypeWrappers()
+    {
+        var compilation = CreateCompilation("""
+            package P
+            class Box[T] {}
+            """);
+        var definition = compilation.GlobalScope.Structs.Single(s => s.Name == "Box");
+        var box = StructSymbol.Construct(definition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
+        var cases = new (TypeSymbol Type, string Display)[]
+        {
+            (SliceTypeSymbol.Get(box), "[]Box[int32]"),
+            (SequenceTypeSymbol.Get(box), "sequence[Box[int32]]"),
+            (MapTypeSymbol.Get(TypeSymbol.String, box), "map[string,Box[int32]]"),
+            (TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box, TypeSymbol.Int32)), "(Box[int32], int32)"),
+            (FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box), TypeSymbol.Void), "(Box[int32]) -> void"),
+            (PointerTypeSymbol.Get(box), "*Box[int32]"),
+        };
+
+        foreach (var (type, display) in cases)
+        {
+            var bag = new DiagnosticBag();
+            bag.ReportCannotConvert(MakeLocation(), type, TypeSymbol.String);
+
+            var diagnostic = Assert.Single(bag);
+            Assert.Equal($"Cannot convert type '{display}' to 'string'.", diagnostic.Message);
+        }
+    }
+
+    [Fact]
+    public void SymbolDisplay_CoversInterfacesMultipleArgumentsDefinitionsAndNestedTypes()
+    {
+        var compilation = CreateCompilation("""
+            package P
+
+            interface Contract[T] {}
+            class Pair[T, U] {}
+            struct Outer[T] {
+                struct Tag {}
+                struct Inner[U] {}
+            }
+
+            func Use(tag Outer[int32].Tag, inner Outer[int32].Inner[string]) {}
+            """);
+
+        var contractDefinition = compilation.GlobalScope.Interfaces.Single(i => i.Name == "Contract");
+        var pairDefinition = compilation.GlobalScope.Structs.Single(s => s.Name == "Pair");
+        var contract = InterfaceSymbol.Construct(
+            contractDefinition,
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
+        var pair = StructSymbol.Construct(
+            pairDefinition,
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32, TypeSymbol.String));
+        var use = compilation.GlobalScope.Functions.Single(f => f.Name == "Use");
+
+        Assert.Equal("Contract[T]", SymbolDisplay.ToTypeDisplayString(contractDefinition));
+        Assert.Equal("Contract[int32]", SymbolDisplay.ToTypeDisplayString(contract));
+        Assert.Equal("Pair[T, U]", SymbolDisplay.ToTypeDisplayString(pairDefinition));
+        Assert.Equal("Pair[int32, string]", SymbolDisplay.ToTypeDisplayString(pair));
+        Assert.Equal("Outer[int32].Tag", SymbolDisplay.ToTypeDisplayString(use.Parameters[0].Type));
+        Assert.Equal("Outer[int32].Inner[string]", SymbolDisplay.ToTypeDisplayString(use.Parameters[1].Type));
+    }
+
+    [Fact]
+    public void ImportedTypes_DisplayAnnotatedNestedAndOpenGenericForms()
+    {
+        var annotated = new NullabilityAnnotatedTypeSymbol(
+            ImportedTypeSymbol.Get(typeof(System.Collections.Generic.List<int>)),
+            ImmutableArray.Create<byte>(1, 1));
+
+        Assert.Equal(
+            "System.Collections.Generic.List[int32]",
+            SymbolDisplay.ToTypeDisplayString(annotated));
+        Assert.Equal(
+            "System.Collections.Generic.Dictionary[int32, string].Enumerator",
+            SymbolDisplay.ToTypeDisplayString(
+                ImportedTypeSymbol.Get(typeof(System.Collections.Generic.Dictionary<int, string>.Enumerator))));
+        Assert.Equal(
+            "GSharp.Core.Tests.CodeAnalysis.Binding.Issue2851ImportedOuter[int32].Inner[string]",
+            SymbolDisplay.ToTypeDisplayString(
+                ImportedTypeSymbol.Get(typeof(Issue2851ImportedOuter<int>.Inner<string>))));
+        Assert.Equal(
+            "GSharp.Core.Tests.CodeAnalysis.Binding.Issue2851ImportedOuter[int32].Inner[string]",
+            SymbolDisplay.ToTypeDisplayString(
+                ImportedTypeSymbol.GetConstructed(
+                    typeof(Issue2851ImportedOuter<int>.Inner<string>),
+                    typeof(Issue2851ImportedOuter<>.Inner<>),
+                    ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32, TypeSymbol.String))));
+        Assert.Equal(
+            "System.Collections.Generic.List[T]",
+            SymbolDisplay.ToTypeDisplayString(
+                ImportedTypeSymbol.Get(typeof(System.Collections.Generic.List<>))));
+    }
+
+    [Fact]
     public void Gs0156_UsesSameConstructedTypeDisplayWithoutChangingName()
     {
         var compilation = CreateCompilation("""
             package P
             class Box[T] {}
             type Conv[T] = delegate func(v T) void
+            func Make() Box[int32] { return Box[int32]() }
             """);
         var boxDefinition = compilation.GlobalScope.Structs.Single(s => s.Name == "Box");
         var delegateDefinition = compilation.GlobalScope.Delegates.Single(d => d.Name == "Conv");
+        var make = compilation.GlobalScope.Functions.Single(f => f.Name == "Make");
         var box = StructSymbol.Construct(boxDefinition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
         var conv = DelegateTypeSymbol.Construct(delegateDefinition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
         var nullableBox = NullableTypeSymbol.Get(box);
@@ -90,6 +186,9 @@ public class Issue2851GenericDiagnosticDisplayTests
 
         Assert.Equal("Box", box.Name);
         Assert.Equal("Conv", conv.Name);
+        Assert.Equal("Box[T]", SymbolDisplay.ToTypeDisplayString(boxDefinition));
+        Assert.Equal("Conv[T]", SymbolDisplay.ToTypeDisplayString(delegateDefinition));
+        Assert.Contains("Box[int32]", make.ToString(), StringComparison.Ordinal);
         Assert.Collection(
             bag,
             diagnostic => Assert.Equal(
@@ -137,4 +236,11 @@ public class Issue2851GenericDiagnosticDisplayTests
 
     private static TextLocation MakeLocation()
         => new(SourceText.From("x"), new TextSpan(0, 1));
+}
+
+internal class Issue2851ImportedOuter<T>
+{
+    internal class Inner<TValue>
+    {
+    }
 }

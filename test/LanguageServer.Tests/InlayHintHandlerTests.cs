@@ -11,6 +11,21 @@ namespace GSharp.LanguageServer.Tests;
 public class InlayHintHandlerTests
 {
     [Fact]
+    public void ComputeHints_DisplaysConstructedSourceGenericType()
+    {
+        const string source = "class Box[T] {}\nlet box = Box[int32]()\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var hint = Assert.Single(
+            InlayHintComputer.ComputeHints(
+                content,
+                includeParameterNames: false,
+                includeTypes: true));
+
+        Assert.Equal(": Box[int32]", hint.Label.String);
+    }
+
+    [Fact]
     public void ComputeHints_ShowsParameterNames()
     {
         const string source = "func add(a int32, b int32) int32 { return a + b }\nvar x = add(1, 2)\n";

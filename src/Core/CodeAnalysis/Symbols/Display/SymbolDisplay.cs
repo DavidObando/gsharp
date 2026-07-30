@@ -670,10 +670,17 @@ public static class SymbolDisplay
                 // parenthesizing here also fixes nested occurrences (slice
                 // element, generic arg, tuple element). Non-function nullable
                 // types are rendered unchanged.
+                if (nullable.UnderlyingType is SliceTypeSymbol nullableSlice)
+                {
+                    return $"[]?{FormatType(nullableSlice.ElementType)}";
+                }
+
                 var underlying = FormatType(nullable.UnderlyingType);
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"
                     : $"{underlying}?";
+            case NullabilityAnnotatedTypeSymbol annotated:
+                return FormatType(annotated.BaseType);
             case FunctionTypeSymbol function:
                 return FormatFunctionType(function);
             case SliceTypeSymbol slice:
@@ -684,6 +691,10 @@ public static class SymbolDisplay
                 return $"sequence[{FormatType(sequence.ElementType)}]";
             case MapTypeSymbol map:
                 return $"map[{FormatType(map.KeyType)},{FormatType(map.ValueType)}]";
+            case PointerTypeSymbol pointer:
+                return $"*{FormatType(pointer.PointeeType)}";
+            case ByRefTypeSymbol byRef:
+                return $"*{FormatType(byRef.PointeeType)}";
             case TupleTypeSymbol tuple:
                 return $"({string.Join(", ", tuple.ElementTypes.Select(FormatType))})";
             case StructSymbol aggregate when IsAnonymousClassType(aggregate):
@@ -695,6 +706,24 @@ public static class SymbolDisplay
                 // follow-up: members are get-only auto-properties, not plain
                 // fields (see AnonymousTypeCache), so render Properties here.
                 return $"{{ {string.Join(", ", aggregate.Properties.Select(p => $"{p.Name}: {FormatType(p.Type)}"))} }}";
+            case StructSymbol aggregate:
+                return FormatSourceType(
+                    aggregate.Definition?.Name ?? aggregate.Name,
+                    aggregate.ContainingType,
+                    aggregate.EnclosingTypeArguments,
+                    GetDisplayTypeArguments(aggregate.TypeArguments, aggregate.TypeParameters));
+            case InterfaceSymbol @interface:
+                return FormatSourceType(
+                    @interface.Definition?.Name ?? @interface.Name,
+                    @interface.ContainingType,
+                    ImmutableArray<TypeSymbol>.Empty,
+                    GetDisplayTypeArguments(@interface.TypeArguments, @interface.TypeParameters));
+            case DelegateTypeSymbol delegateType:
+                return FormatSourceType(
+                    delegateType.Definition?.Name ?? delegateType.Name,
+                    containingType: null,
+                    ImmutableArray<TypeSymbol>.Empty,
+                    GetDisplayTypeArguments(delegateType.TypeArguments, delegateType.TypeParameters));
             case ImportedTypeSymbol imported:
                 return FormatImportedType(imported);
             default:
@@ -716,6 +745,57 @@ public static class SymbolDisplay
     /// <returns><see langword="true"/> if <paramref name="type"/> is a synthesized anonymous-class type.</returns>
     private static bool IsAnonymousClassType(StructSymbol type)
         => type.Declaration == null && type.Name.StartsWith("<>AnonymousType", StringComparison.Ordinal);
+
+    private static string FormatSourceType(
+        string name,
+        TypeSymbol containingType,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var prefix = string.Empty;
+        if (containingType != null)
+        {
+            prefix = enclosingTypeArguments.IsDefaultOrEmpty
+                ? $"{FormatType(containingType)}."
+                : $"{FormatContainingSourceType(containingType, enclosingTypeArguments)}.";
+        }
+
+        return prefix + name + FormatTypeArguments(typeArguments);
+    }
+
+    private static string FormatContainingSourceType(
+        TypeSymbol containingType,
+        ImmutableArray<TypeSymbol> enclosingTypeArguments)
+    {
+        if (containingType is StructSymbol aggregate)
+        {
+            var ownArgumentCount = Math.Min(aggregate.TypeParameters.Length, enclosingTypeArguments.Length);
+            var outerArgumentCount = enclosingTypeArguments.Length - ownArgumentCount;
+            return FormatSourceType(
+                aggregate.Name,
+                aggregate.ContainingType,
+                enclosingTypeArguments.Take(outerArgumentCount).ToImmutableArray(),
+                enclosingTypeArguments.Skip(outerArgumentCount).ToImmutableArray());
+        }
+
+        return FormatType(containingType);
+    }
+
+    private static string FormatTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+    {
+        return typeArguments.IsDefaultOrEmpty
+            ? string.Empty
+            : $"[{string.Join(", ", typeArguments.Select(FormatType))}]";
+    }
+
+    private static ImmutableArray<TypeSymbol> GetDisplayTypeArguments(
+        ImmutableArray<TypeSymbol> typeArguments,
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        return !typeArguments.IsDefaultOrEmpty
+            ? typeArguments
+            : typeParameters.Cast<TypeSymbol>().ToImmutableArray();
+    }
 
     /// <summary>
     /// Renders a <see cref="FunctionTypeSymbol"/> in its canonical arrow shape
@@ -768,9 +848,9 @@ public static class SymbolDisplay
         if (!imported.TypeArguments.IsDefaultOrEmpty)
         {
             var definition = imported.OpenDefinition;
-            var baseName = StripGenericArity(definition?.FullName ?? definition?.Name) ?? imported.Name;
-            var args = string.Join(", ", imported.TypeArguments.Select(a => a == null ? "?" : FormatType(a)));
-            return $"{baseName}[{args}]";
+            return definition == null
+                ? $"{StripGenericArity(imported.Name)}[{string.Join(", ", imported.TypeArguments.Select(FormatGenericTypeArgument))}]"
+                : FormatImportedGenericTypeName(definition, imported.TypeArguments);
         }
 
         return FormatClrTypeName(imported.ClrType, qualifyNames: true);
@@ -787,10 +867,15 @@ public static class SymbolDisplay
             return name;
         }
 
-        var tickIndex = name.IndexOf('`');
-        if (tickIndex >= 0)
+        for (var tickIndex = name.IndexOf('`'); tickIndex >= 0; tickIndex = name.IndexOf('`', tickIndex))
         {
-            name = name.Substring(0, tickIndex);
+            var endIndex = tickIndex + 1;
+            while (endIndex < name.Length && char.IsDigit(name[endIndex]))
+            {
+                endIndex++;
+            }
+
+            name = name.Remove(tickIndex, endIndex - tickIndex);
         }
 
         return name.Replace('+', '.');
@@ -846,17 +931,59 @@ public static class SymbolDisplay
             return qualifyNames ? (clrType.FullName ?? clrType.Name).Replace('+', '.') : clrType.Name;
         }
 
-        var typeName = clrType.IsNested ? clrType.Name : (qualifyNames ? clrType.FullName ?? clrType.Name : clrType.Name);
-        var tickIndex = typeName.IndexOf('`');
-        if (tickIndex >= 0)
+        return FormatClrGenericTypeName(
+            clrType.GetGenericTypeDefinition(),
+            clrType.GetGenericArguments(),
+            qualifyNames);
+    }
+
+    private static string FormatClrGenericTypeName(Type definition, Type[] typeArguments, bool qualifyNames)
+    {
+        var declaringArgumentCount = definition.DeclaringType?.GetGenericArguments().Length ?? 0;
+        var ownArguments = typeArguments.Skip(declaringArgumentCount).ToArray();
+        var name = StripGenericArity(definition.Name);
+
+        if (definition.IsNested)
         {
-            typeName = typeName.Substring(0, tickIndex);
+            var declaringArguments = typeArguments.Take(declaringArgumentCount).ToArray();
+            name = $"{FormatClrGenericTypeName(definition.DeclaringType, declaringArguments, qualifyNames)}.{name}";
+        }
+        else if (qualifyNames && !string.IsNullOrEmpty(definition.Namespace))
+        {
+            name = $"{definition.Namespace}.{name}";
         }
 
-        typeName = typeName.Replace('+', '.');
-        var args = clrType.GetGenericArguments();
-        return $"{typeName}[{string.Join(", ", args.Select(a => FormatClrTypeName(a, qualifyNames)))}]";
+        return ownArguments.Length == 0
+            ? name
+            : $"{name}[{string.Join(", ", ownArguments.Select(a => FormatClrTypeName(a, qualifyNames)))}]";
     }
+
+    private static string FormatImportedGenericTypeName(
+        Type definition,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var declaringArgumentCount = definition.DeclaringType?.GetGenericArguments().Length ?? 0;
+        var ownArguments = typeArguments.Skip(declaringArgumentCount).ToImmutableArray();
+        var name = StripGenericArity(definition.Name);
+
+        if (definition.IsNested)
+        {
+            name = $"{FormatImportedGenericTypeName(
+                definition.DeclaringType,
+                typeArguments.Take(declaringArgumentCount).ToImmutableArray())}.{name}";
+        }
+        else if (!string.IsNullOrEmpty(definition.Namespace))
+        {
+            name = $"{definition.Namespace}.{name}";
+        }
+
+        return ownArguments.IsDefaultOrEmpty
+            ? name
+            : $"{name}[{string.Join(", ", ownArguments.Select(FormatGenericTypeArgument))}]";
+    }
+
+    private static string FormatGenericTypeArgument(TypeSymbol type)
+        => type == null ? "?" : FormatType(type);
 
     private static bool TryGetGSharpPrimitiveName(Type clrType, out string name)
     {

@@ -2,9 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System;
-using System.Collections.Immutable;
 using System.IO;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.IO;
 
@@ -75,7 +74,7 @@ public static class SymbolPrinter
         if (symbol.Type != null)
         {
             writer.WriteSpace();
-            writer.WriteIdentifier(symbol.Type.Name);
+            symbol.Type.WriteTo(writer);
         }
     }
 
@@ -116,105 +115,7 @@ public static class SymbolPrinter
 
     private static void WriteTypeTo(TypeSymbol symbol, TextWriter writer)
     {
-        if (symbol is NullableTypeSymbol nullable
-            && TryWriteConstructedTypeTo(nullable.UnderlyingType, writer))
-        {
-            writer.Write('?');
-            return;
-        }
-
-        if (!TryWriteConstructedTypeTo(symbol, writer))
-        {
-            writer.WriteIdentifier(symbol.Name);
-        }
-    }
-
-    private static bool TryWriteConstructedTypeTo(TypeSymbol symbol, TextWriter writer)
-    {
-        switch (symbol)
-        {
-            case StructSymbol { TypeArguments.IsDefaultOrEmpty: false } aggregate:
-                WriteConstructedTypeTo(aggregate.Definition.Name, aggregate.TypeArguments, writer);
-                return true;
-            case InterfaceSymbol { TypeArguments.IsDefaultOrEmpty: false } @interface:
-                WriteConstructedTypeTo(@interface.Definition.Name, @interface.TypeArguments, writer);
-                return true;
-            case DelegateTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } @delegate:
-                WriteConstructedTypeTo(@delegate.Definition.Name, @delegate.TypeArguments, writer);
-                return true;
-            case ImportedTypeSymbol imported:
-                return TryWriteImportedConstructedTypeTo(imported, writer);
-            default:
-                return false;
-        }
-    }
-
-    private static void WriteConstructedTypeTo(
-        string name,
-        ImmutableArray<TypeSymbol> typeArguments,
-        TextWriter writer)
-    {
-        writer.WriteIdentifier(RemoveGenericArity(name));
-        writer.Write('[');
-        for (var i = 0; i < typeArguments.Length; i++)
-        {
-            if (i > 0)
-            {
-                writer.Write(", ");
-            }
-
-            WriteTypeTo(typeArguments[i], writer);
-        }
-
-        writer.Write(']');
-    }
-
-    private static bool TryWriteImportedConstructedTypeTo(ImportedTypeSymbol imported, TextWriter writer)
-    {
-        if (imported.OpenDefinition != null && !imported.TypeArguments.IsDefaultOrEmpty)
-        {
-            WriteConstructedTypeTo(
-                imported.OpenDefinition.FullName ?? imported.OpenDefinition.Name,
-                imported.TypeArguments,
-                writer);
-            return true;
-        }
-
-        var clrType = imported.ClrType;
-        if (clrType == null || !clrType.IsGenericType || clrType.IsGenericTypeDefinition)
-        {
-            return false;
-        }
-
-        var definition = clrType.GetGenericTypeDefinition();
-        var clrArguments = clrType.GetGenericArguments();
-        var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(clrArguments.Length);
-        foreach (var argument in clrArguments)
-        {
-            typeArguments.Add(TypeSymbol.FromClrType(argument));
-        }
-
-        WriteConstructedTypeTo(
-            definition.FullName ?? definition.Name,
-            typeArguments.MoveToImmutable(),
-            writer);
-        return true;
-    }
-
-    private static string RemoveGenericArity(string name)
-    {
-        for (var tick = name.IndexOf('`'); tick >= 0; tick = name.IndexOf('`', tick))
-        {
-            var end = tick + 1;
-            while (end < name.Length && char.IsDigit(name[end]))
-            {
-                end++;
-            }
-
-            name = name.Remove(tick, end - tick);
-        }
-
-        return name;
+        writer.WriteIdentifier(SymbolDisplay.ToTypeDisplayString(symbol));
     }
 
     private static void WriteEnumMemberTo(EnumMemberSymbol symbol, TextWriter writer)
