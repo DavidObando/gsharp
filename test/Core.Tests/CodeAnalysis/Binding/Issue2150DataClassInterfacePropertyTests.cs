@@ -358,7 +358,7 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GenericGetOnlyInterfaceProperty_SatisfiedByPositionalMember_NoDiagnostics()
+    public void GenericGetOnlyInterfaceProperty_SatisfiedByPositionalMember_EmitsAndLoads()
     {
         const string source = """
             package Test
@@ -368,7 +368,23 @@ public class Issue2150DataClassInterfacePropertyTests
             data class Box(Value int32) : IBox[int32]
             """;
 
-        Assert.Empty(Bind(source));
+        AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
+    public void ExplicitInitProperty_ConstructedGenericInterface_EmitsAndLoads()
+    {
+        const string source = """
+            package Test
+            interface IBox[T] {
+                prop Value T { get; init; }
+            }
+            class Box : IBox[int32] {
+                private prop (IBox[int32]) Value int32 { get; init; }
+            }
+            """;
+
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
