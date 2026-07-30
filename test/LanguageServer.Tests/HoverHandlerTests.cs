@@ -84,6 +84,29 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_PreservesConstructedTypesInsideCompositeTypeClauses()
+    {
+        const string source = """
+            package P
+            class Box[T] {}
+            func Composite(
+                m map[string, Box[int32]],
+                f (Box[bool]) -> Box[string],
+                t (Box[float64], Box[uint8])) {}
+            """;
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var expected = new[] { "int32", "bool", "string", "float64", "uint8" };
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var hover = HoverComputer.ComputeHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Box", i + 1));
+            Assert.Contains($"class P.Box[{expected[i]}]", hover.Contents.ToString(), System.StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ComputeHover_HonorsCancellation()
     {
         // Issue #1662: ComputeHover accepted a CancellationToken but never observed it. On a

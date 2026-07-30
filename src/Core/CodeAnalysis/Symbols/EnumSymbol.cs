@@ -76,13 +76,6 @@ public sealed class EnumSymbol : TypeSymbol
     /// </summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
-    /// <summary>
-    /// Gets a value indicating whether this symbol is a constructed nested enum.
-    /// </summary>
-    public bool IsConstructedNestedType => Definition != null
-        && !ReferenceEquals(Definition, this)
-        && !EnclosingTypeArguments.IsDefaultOrEmpty;
-
     /// <summary>Gets the CLR underlying enum for values.</summary>
     public TypeSymbol UnderlyingType => TypeSymbol.Int32;
 

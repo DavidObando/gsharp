@@ -857,49 +857,33 @@ public static class SemanticLookup
             return;
         }
 
-        var identifier = !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty
-            ? typeClause.QualifierIdentifierTokens[^1]
-            : typeClause.Identifier;
-        if (identifier == null)
+        var wrappedTypes = type is ImportedTypeSymbol
+            ? Array.Empty<TypeSymbol>()
+            : TypeSymbol.GetWrappedTypes(type).ToArray();
+        if (wrappedTypes.Length > 0)
         {
+            var wrappedClauses = typeClause.GetChildren().OfType<TypeClauseSyntax>().ToArray();
+            if (typeClause.Identifier != null
+                || (wrappedTypes.Length == 1 && wrappedClauses.Length != 1))
+            {
+                MapTypeClauseReference(typeClause, wrappedTypes[0], declarations);
+                return;
+            }
+
+            for (var i = 0; i < Math.Min(wrappedTypes.Length, wrappedClauses.Length); i++)
+            {
+                MapTypeClauseReference(wrappedClauses[i], wrappedTypes[i], declarations);
+            }
+
             return;
         }
 
-        while (true)
+        var identifier = !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty
+            ? typeClause.QualifierIdentifierTokens[^1]
+            : typeClause.Identifier;
+        if (identifier != null)
         {
-            switch (type)
-            {
-                case NullableTypeSymbol nullable:
-                    type = nullable.UnderlyingType;
-                    continue;
-                case NullabilityAnnotatedTypeSymbol annotated:
-                    type = annotated.BaseType;
-                    continue;
-                case ArrayTypeSymbol array:
-                    type = array.ElementType;
-                    continue;
-                case SliceTypeSymbol slice:
-                    type = slice.ElementType;
-                    continue;
-                case PointerTypeSymbol pointer:
-                    type = pointer.PointeeType;
-                    continue;
-                case ChannelTypeSymbol channel:
-                    type = channel.ElementType;
-                    continue;
-                case SequenceTypeSymbol sequence:
-                    type = sequence.ElementType;
-                    continue;
-                case AsyncSequenceTypeSymbol asyncSequence:
-                    type = asyncSequence.ElementType;
-                    continue;
-                case PinnedTypeSymbol pinned:
-                    type = pinned.UnderlyingType;
-                    continue;
-                default:
-                    declarations[identifier] = type;
-                    return;
-            }
+            declarations[identifier] = type;
         }
     }
 
@@ -1626,7 +1610,9 @@ public static class SemanticLookup
                 }
             }
 
-            return index.TryGetValue(target, out var tokens) ? tokens : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
+            return index.TryGetValue(NormalizeForReferences(target), out var tokens)
+                ? tokens
+                : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
         }
 
         private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex(CancellationToken ct = default)
@@ -1653,7 +1639,7 @@ public static class SemanticLookup
                         continue;
                     }
 
-                    var symbol = this.Resolve(token);
+                    var symbol = NormalizeForReferences(this.Resolve(token));
                     if (symbol == null)
                     {
                         continue;
@@ -1688,6 +1674,14 @@ public static class SemanticLookup
 
             return index;
         }
+
+        private static Symbol NormalizeForReferences(Symbol symbol) => symbol switch
+        {
+            StructSymbol s => s.Definition ?? s,
+            EnumSymbol e => e.Definition ?? e,
+            InterfaceSymbol i => i.Definition ?? i,
+            _ => symbol,
+        };
 
         private static (string FileName, int SpanStart, int SpanEnd)? SpanKey(SyntaxToken token)
         {

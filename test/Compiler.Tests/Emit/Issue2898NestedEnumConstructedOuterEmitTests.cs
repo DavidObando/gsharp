@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -62,7 +63,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.Equal(intEnum, Nullable.GetUnderlyingType(nullableIntEnum));
         Assert.Equal(stringEnum, Nullable.GetUnderlyingType(nullableStringEnum));
 
-        var enumDefinition = Assert.Single(allTypes, t => t.Name == "Color`1");
+        var enumDefinition = Assert.Single(allTypes, t => t.Name == "Color");
         Assert.True(enumDefinition.IsEnum);
         Assert.Equal(enumDefinition, intEnum.GetGenericTypeDefinition());
 
@@ -97,6 +98,70 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.Equal(intEnum, Assert.Single(captureInt.GetParameters()).ParameterType);
         var captured = Assert.IsAssignableFrom<Delegate>(captureInt.Invoke(null, new[] { intValue }));
         Assert.Equal(intEnum, captured.DynamicInvoke().GetType());
+    }
+
+    [Fact]
+    public void DeepNestedEnum_LoadsAcrossGenericInterfaceAndDictionarySignatures()
+    {
+        const string source = """
+            package P
+            import System.Collections.Generic
+
+            struct Deep[A] {
+                struct Mid[B] {
+                    enum Tone { Red = 5, Green, Blue = 9 }
+                }
+            }
+
+            interface IToneSource[A, B] {
+                func Get() Deep[A].Mid[B].Tone;
+            }
+
+            class ToneSource[A, B] : IToneSource[A, B] {
+                func Get() Deep[A].Mid[B].Tone { return Deep[A].Mid[B].Tone.Green }
+            }
+
+            func Echo[A, B](tone Deep[A].Mid[B].Tone) Deep[A].Mid[B].Tone { return tone }
+            func Blue() Deep[int32].Mid[string].Tone { return Deep[int32].Mid[string].Tone.Blue }
+            func Source() Deep[int32].Mid[string].Tone { return ToneSource[int32, string]().Get() }
+            func MakeMap() Dictionary[Deep[int32].Mid[string].Tone, string] {
+                let values = Dictionary[Deep[int32].Mid[string].Tone, string]()
+                values.Add(Deep[int32].Mid[string].Tone.Red, "red")
+                return values
+            }
+            """;
+
+        var assembly = CompileAndLoad(source);
+        var allTypes = assembly.GetTypes();
+        var program = allTypes.Single(t => t.Name == "<Program>");
+        var deepEnum = GetMethod(program, "Blue").ReturnType;
+        var enumDefinition = deepEnum.GetGenericTypeDefinition();
+
+        Assert.Equal("Tone", enumDefinition.Name);
+        Assert.Equal(new[] { typeof(int), typeof(string) }, deepEnum.GenericTypeArguments);
+        Assert.Equal(5, deepEnum.GetField("Red", BindingFlags.Public | BindingFlags.Static).GetRawConstantValue());
+        Assert.Equal(6, deepEnum.GetField("Green", BindingFlags.Public | BindingFlags.Static).GetRawConstantValue());
+        Assert.Equal(9, deepEnum.GetField("Blue", BindingFlags.Public | BindingFlags.Static).GetRawConstantValue());
+
+        var echo = GetMethod(program, "Echo").MakeGenericMethod(typeof(int), typeof(string));
+        Assert.Equal(deepEnum, Assert.Single(echo.GetParameters()).ParameterType);
+        Assert.Equal(deepEnum, echo.ReturnType);
+
+        var blue = GetMethod(program, "Blue").Invoke(null, null);
+        Assert.Equal(9, Convert.ToInt32(echo.Invoke(null, new[] { blue })));
+        Assert.Equal(6, Convert.ToInt32(GetMethod(program, "Source").Invoke(null, null)));
+
+        var sourceInterface = allTypes.Single(t => t.Name == "IToneSource`2")
+            .MakeGenericType(typeof(int), typeof(string));
+        var sourceClass = allTypes.Single(t => t.Name == "ToneSource`2")
+            .MakeGenericType(typeof(int), typeof(string));
+        Assert.Equal(deepEnum, GetMethod(sourceInterface, "Get").ReturnType);
+        Assert.Equal(deepEnum, GetMethod(sourceClass, "Get").ReturnType);
+
+        var mapMethod = GetMethod(program, "MakeMap");
+        Assert.Equal(deepEnum, mapMethod.ReturnType.GenericTypeArguments[0]);
+        var map = Assert.IsAssignableFrom<IDictionary>(mapMethod.Invoke(null, null));
+        Assert.Equal("red", map[deepEnum.GetField("Red", BindingFlags.Public | BindingFlags.Static).GetValue(null)]);
     }
 
     private static MethodInfo GetMethod(Type type, string name)

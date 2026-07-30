@@ -894,7 +894,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="type">The wrapper/constructed type to unwrap.</param>
     /// <returns>The type's immediate inner type(s); empty for a leaf kind.</returns>
-    private static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
+    internal static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
     {
         switch (type)
         {

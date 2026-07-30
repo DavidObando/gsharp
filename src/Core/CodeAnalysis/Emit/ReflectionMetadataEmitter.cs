@@ -4634,11 +4634,6 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
-        if (!enumSym.EnclosingTypeArguments.IsDefaultOrEmpty)
-        {
-            return true;
-        }
-
         var def = enumSym.Definition ?? enumSym;
         return !def.TypeParameters.IsDefaultOrEmpty;
     }

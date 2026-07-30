@@ -48,4 +48,52 @@ public class RenameHandlerTests
 
         Assert.Null(edit);
     }
+
+    [Fact]
+    public void ComputeRename_ConstructedUserTypeRenamesEveryConstruction()
+    {
+        const string source = """
+            package P
+            class Box[T] { var Value T }
+            func Use(value Box[int32]) {}
+            func Ret() Box[bool] { return Box[bool]() }
+            """;
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///rename.gs");
+
+        var edit = RenameComputer.ComputeRename(
+            uri,
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Box", 1),
+            "Crate");
+
+        Assert.NotNull(edit);
+        var edits = edit.Changes[uri].ToList();
+        Assert.Equal(4, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Crate", e.NewText));
+    }
+
+    [Fact]
+    public void ComputeRename_ConstructedNestedEnumRenamesEveryConstruction()
+    {
+        const string source = """
+            package P
+            struct Outer[T] { enum Color { Red } }
+            func I(c Outer[int32].Color) {}
+            func S(c Outer[string].Color) {}
+            """;
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///rename.gs");
+
+        var edit = RenameComputer.ComputeRename(
+            uri,
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Color", 1),
+            "Shade");
+
+        Assert.NotNull(edit);
+        var edits = edit.Changes[uri].ToList();
+        Assert.Equal(3, edits.Count);
+        Assert.All(edits, e => Assert.Equal("Shade", e.NewText));
+    }
 }

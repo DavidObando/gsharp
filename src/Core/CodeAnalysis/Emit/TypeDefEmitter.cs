@@ -813,11 +813,11 @@ internal sealed class TypeDefEmitter
         var enumTypeDef = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: enumNamespace,
-            name: this.emitCtx.Metadata.GetOrAddString(MangleGenericName(enumSym.Name, enumSym.TypeParameters)),
+            name: this.emitCtx.Metadata.GetOrAddString(enumSym.Name),
             baseType: enumTypeRef,
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
-        this.cache.EnumTypeDefs[enumSym.Definition ?? enumSym] = enumTypeDef;
+        this.cache.EnumTypeDefs[enumSym] = enumTypeDef;
         EmitGenericParamRows(this.emitCtx, enumTypeDef, enumSym.TypeParameters);
 
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
