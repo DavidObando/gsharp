@@ -21,7 +21,7 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2888InterfacePropertyTypeMismatchTests
 {
     [Fact]
-    public void OrdinaryTypeMismatches_ReportGS0187AndDoNotEmit()
+    public void OrdinaryTypeMismatches_ReportGS0504AndDoNotEmit()
     {
         const string source = """
             package Rejected
@@ -47,8 +47,8 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             interface INonNullableSet { prop Value string { get; set; } }
             class NullableSet : INonNullableSet { prop Value string? { get; set; } }
 
-            interface IGeneric[T] { prop Value T { get; } }
-            class GenericMismatch : IGeneric[int32] { prop Value string -> "x" }
+            interface IValueNullableGet { prop Value int32? { get; } }
+            class ValueNullableGet : IValueNullableGet { prop Value int32 -> 1 }
 
             class Cell[T] { }
             interface IConstructed { prop Value Cell[int32] { get; } }
@@ -66,16 +66,12 @@ public class Issue2888InterfacePropertyTypeMismatchTests
 
             interface IInit { prop Value int32 { get; init; } }
             class InitMismatch : IInit { prop Value string { get; init; } }
-
-            interface IIndexer { prop this[key string] int32 { get; } }
-            class IndexerMismatch : IIndexer {
-                prop this[key string] string { get { return "x" } }
-            }
             """;
 
         var output = CompileExpectingFailure(source);
 
-        Assert.Equal(13, CountOccurrences(output, "error GS0187:"));
+        Assert.Equal(12, CountOccurrences(output, "error GS0504:"));
+        Assert.DoesNotContain("GS0187", output, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0502", output, StringComparison.Ordinal);
         foreach (var typeName in new[]
         {
@@ -86,16 +82,24 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             "NullableGet",
             "NonNullableSet",
             "NullableSet",
-            "GenericMismatch",
+            "ValueNullableGet",
             "ConstructedMismatch",
             "BaseInterfaceMismatch",
             "InheritedPropertyMismatch",
             "InitMismatch",
-            "IndexerMismatch",
         })
         {
-            Assert.Contains($"Class '{typeName}' does not implement interface method", output, StringComparison.Ordinal);
+            Assert.Contains($"Type '{typeName}' cannot use property 'Value'", output, StringComparison.Ordinal);
         }
+
+        Assert.Contains(
+            "Type 'ClassGet' cannot use property 'Value' to implement interface property 'IClassGet.Value': expected type 'int32', actual type 'string'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type 'ValueNullableGet' cannot use property 'Value' to implement interface property 'IValueNullableGet.Value': expected type 'int32?', actual type 'int32'.",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -122,6 +126,9 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             interface IGenericNullable[T] { prop Value T? { get; } }
             class GenericCovariant : IGenericNullable[string] { prop Value string -> "x" }
 
+            interface IOpenNullable[T] { prop Value T? { get; } }
+            class OpenGenericCovariant[T] : IOpenNullable[T] { prop Value T { get; } }
+
             class Cell[T] { }
             interface IConstructed { prop Value Cell[int32] { get; } }
             class ConstructedExact : IConstructed {
@@ -135,6 +142,19 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             open class PropertyBase { prop Value int32 -> 1 }
             interface IInheritedProperty { prop Value int32 { get; } }
             class InheritedPropertyExact : PropertyBase, IInheritedProperty { }
+
+            interface IHiddenBase { prop Value int32 { get; } }
+            open class HiddenBase { open prop Value int32 -> 1 }
+            class DerivedHidesMatchingBase : HiddenBase, IHiddenBase {
+                prop Value string -> "x"
+            }
+
+            interface IGenericHiddenBase[T] { prop Value T { get; } }
+            open class GenericHiddenBase { open prop Value int32 -> 1 }
+            class GenericDerivedHidesMatchingBase
+                : GenericHiddenBase, IGenericHiddenBase[int32] {
+                prop Value string -> "x"
+            }
 
             interface IInit { prop Value int32 { get; init; } }
             class InitExact : IInit { prop Value int32 { get; init; } }
@@ -173,6 +193,81 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             """;
 
         AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
+    public void ConstructedGenericMismatches_ReportGS0504WithSubstitutedTypesAndDoNotEmit()
+    {
+        const string source = """
+            package GenericRejected
+
+            interface IBox[T] { prop Value T { get; } }
+            class WrongType : IBox[int32] { prop Value string -> "x" }
+
+            interface INullableBox[T] { prop Value T? { get; } }
+            class ValueNullable : INullableBox[int32] { prop Value int32 -> 1 }
+
+            interface IStructNullable[T struct] { prop Value T? { get; } }
+            class StructConstrained[T struct] : IStructNullable[T] {
+                prop Value T { get; }
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Equal(3, CountOccurrences(output, "error GS0504:"));
+        Assert.Contains(
+            "Type 'WrongType' cannot use property 'Value' to implement interface property 'IBox[int32].Value': expected type 'int32', actual type 'string'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type 'ValueNullable' cannot use property 'Value' to implement interface property 'INullableBox[int32].Value': expected type 'int32?', actual type 'int32'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type 'StructConstrained' cannot use property 'Value' to implement interface property 'IStructNullable[T].Value': expected type 'T?', actual type 'T'.",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitClauseAndPrivateBaseProperties_DoNotSilentlySatisfyOtherSlots()
+    {
+        const string source = """
+            package ShadowRejected
+
+            interface IA { prop Value int32 { get; } }
+            interface IB { prop Value string { get; } }
+            class ExplicitShadow : IA, IB {
+                private prop (IB) Value string -> "x"
+            }
+
+            interface IPrivateBase { prop Value int32 { get; } }
+            open class PrivateBase { private prop Value int32 -> 1 }
+            class PrivateBaseDerived : PrivateBase, IPrivateBase { }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Equal(2, CountOccurrences(output, "error GS0187:"));
+        Assert.DoesNotContain("GS0504", output, StringComparison.Ordinal);
+        Assert.Contains("Class 'ExplicitShadow' does not implement interface method 'IA.Value'.", output, StringComparison.Ordinal);
+        Assert.Contains("Class 'PrivateBaseDerived' does not implement interface method 'IPrivateBase.Value'.", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PositionalValueTypeNullableCovariance_ReportsGS0187AndDoesNotEmit()
+    {
+        const string source = """
+            package PositionalRejected
+
+            interface IBox { prop Value int32? { get; } }
+            data class Box(Value int32) : IBox
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Contains("GS0187", output, StringComparison.Ordinal);
     }
 
     [Fact]

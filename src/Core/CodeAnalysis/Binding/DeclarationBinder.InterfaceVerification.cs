@@ -505,20 +505,12 @@ internal sealed partial class DeclarationBinder
 
             // Issue #1066: an interface property may be satisfied by a
             // property implemented (or inherited) ANYWHERE in the base chain.
-            PropertySymbol implProp;
-            var found = ReferenceEquals(propertyDefIface, iface)
-                ? TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out implProp)
-                : TryGetConstructedInterfacePropertyImplementation(structSymbol, iface, iprop, out implProp);
-            if (found
-                && !implProp.HasExplicitInterfaceClause
-                && !IsInterfacePropertyTypeCompatible(
-                    implProp.Type,
-                    iprop.Type,
-                    iprop.HasSetter,
-                    BuildInterfaceTypeParameterMap(iface)))
-            {
-                found = false;
-            }
+            var found = TryGetConstructedInterfacePropertyImplementation(
+                structSymbol,
+                iface,
+                iprop,
+                out var implProp,
+                out var typeMismatch);
 
             if (found)
             {
@@ -573,23 +565,11 @@ internal sealed partial class DeclarationBinder
             {
                 found = true;
 
-                // Issue #2150 follow-up (Oahu migration): compare the
-                // underlying (nullability-erased) types, then apply
-                // Kotlin-style SOUND nullability variance on top —
-                // G# targets Kotlin-faithful null safety (smart-casts,
-                // `if let`/`guard let`), which enforces nullability via
-                // subtyping: `T <: T?`, never the reverse. A get-only
-                // interface property is a covariant (return) position,
-                // so the implementing member's type merely needs to be
-                // a SUBTYPE of the interface property's type — `T` or
-                // `T?` both satisfy `T?`, but only `T` satisfies `T`
-                // (accepting `T?` there would let a consumer of the
-                // non-null contract observe `null` and NPE, which is
-                // exactly the unsoundness this tightens). A property
-                // that ALSO declares a setter is an invariant
-                // (read/write) position — like a C# `in`/`out`
-                // parameter mismatch, both directions must hold, so the
-                // nullability must match EXACTLY.
+                // Issue #2150: get-only covariance permits T to satisfy T?
+                // only when the nullable annotation is erased in metadata
+                // (reference types and unconstrained type parameters).
+                // Nullable<T> over a value type has a distinct CLR signature.
+                // Settable properties remain invariant.
                 if (!IsInterfacePropertyTypeCompatible(
                     positionalParam.Type,
                     iprop.Type,
@@ -647,11 +627,27 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                Diagnostics.ReportInterfaceMethodNotImplemented(
-                    syntax.Identifier.Location,
-                    structSymbol.Name,
-                    iface.Name,
-                    iprop.Name);
+                if (typeMismatch != null)
+                {
+                    Diagnostics.ReportInterfacePropertyTypeMismatch(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        typeMismatch.Name,
+                        iface.Name,
+                        iprop.Name,
+                        SubstituteInterfacePropertyType(
+                            iprop.Type,
+                            BuildInterfaceTypeParameterMap(iface)),
+                        typeMismatch.Type);
+                }
+                else
+                {
+                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol.Name,
+                        iface.Name,
+                        iprop.Name);
+                }
             }
         }
     }
@@ -662,44 +658,54 @@ internal sealed partial class DeclarationBinder
         bool hasSetter,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
+        var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
         var implementationUnderlyingType = implementationType is NullableTypeSymbol implementationNullable
             ? implementationNullable.UnderlyingType
             : implementationType;
-        var interfaceUnderlyingType = interfaceType is NullableTypeSymbol interfaceNullable
+        var interfaceUnderlyingType = substitutedInterfaceType is NullableTypeSymbol interfaceNullable
             ? interfaceNullable.UnderlyingType
-            : interfaceType;
-        if (!TypeSignaturesEquivalent(
-            interfaceUnderlyingType,
-            implementationUnderlyingType,
-            typeParameterMap))
+            : substitutedInterfaceType;
+        if (!TypeSignaturesEquivalent(interfaceUnderlyingType, implementationUnderlyingType))
         {
             return false;
         }
 
-        var substitutedInterfaceType = interfaceType is TypeParameterSymbol typeParameter
-            && typeParameterMap?.TryGetValue(typeParameter, out var substituted) == true
-                ? substituted
-                : interfaceType;
-        var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
+        var interfaceNullableType = substitutedInterfaceType as NullableTypeSymbol;
+        var interfaceIsNullable = interfaceNullableType != null;
         var implementationIsNullable = implementationType is NullableTypeSymbol;
-        return hasSetter
-            ? interfaceIsNullable == implementationIsNullable
-            : interfaceIsNullable || !implementationIsNullable;
+        if (hasSetter || !interfaceIsNullable || implementationIsNullable)
+        {
+            return interfaceIsNullable == implementationIsNullable;
+        }
+
+        return !NullableLifting.IsAnyValueTypeNullable(interfaceNullableType);
     }
+
+    private static TypeSymbol SubstituteInterfacePropertyType(
+        TypeSymbol interfaceType,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        => typeParameterMap == null
+            ? interfaceType
+            : StructSymbol.SubstituteTypeParameters(
+                interfaceType,
+                typeParameterMap.ToDictionary(entry => entry.Key, entry => entry.Value));
 
     private static bool TryGetConstructedInterfacePropertyImplementation(
         StructSymbol structSymbol,
         InterfaceSymbol iface,
         PropertySymbol interfaceProperty,
-        out PropertySymbol implementation)
+        out PropertySymbol implementation,
+        out PropertySymbol typeMismatch)
     {
         var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
+        typeMismatch = null;
         for (var current = structSymbol; current != null; current = current.BaseClass)
         {
             foreach (var candidate in current.Properties)
             {
                 if (candidate.HasExplicitInterfaceClause
                     || candidate.Name != interfaceProperty.Name
+                    || (candidate.IsIndexer && ReferenceEquals(iface.Definition ?? iface, iface))
                     || (!ReferenceEquals(current, structSymbol) && candidate.Accessibility != Accessibility.Public)
                     || candidate.IsIndexer != interfaceProperty.IsIndexer
                     || candidate.Parameters.Length != interfaceProperty.Parameters.Length)
@@ -720,11 +726,29 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                if (parametersMatch)
+                if (!parametersMatch)
                 {
-                    implementation = candidate;
-                    return true;
+                    continue;
                 }
+
+                if (!IsInterfacePropertyTypeCompatible(
+                    candidate.Type,
+                    interfaceProperty.Type,
+                    interfaceProperty.HasSetter,
+                    typeParameterMap))
+                {
+                    var isPositionalMember = candidate.Declaration is null
+                        && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, candidate.Name, out _);
+                    if (!isPositionalMember)
+                    {
+                        typeMismatch ??= candidate;
+                    }
+
+                    continue;
+                }
+
+                implementation = candidate;
+                return true;
             }
         }
 

@@ -1695,6 +1695,20 @@ Use `?(...)` for null-safe invocation of a name or member receiver. For an
 indexed or call-result receiver, use `?.Invoke(...)`. Alternatively, bind the
 delegate with `if let`, or assert non-null with `!!` before calling.
 
+## Interface property type mismatch (GS0504)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0504 | Error | An ordinary property has a different type from the interface property it would implement. |
+
+The diagnostic names the implementing type and property, the interface
+property, and both the required and actual types. Get-only properties may
+erase reference nullability covariantly: a `string` implementation can satisfy
+a `string?` contract, and `T` can satisfy an unconstrained `T?` contract.
+Settable properties remain invariant. Value-type nullability is never erased:
+`int32` cannot implement a get-only `int32?` property because the CLR types are
+`System.Int32` and `System.Nullable<System.Int32>`.
+
 ## Suspension inside fixed statement (GS0506)
 
 | ID | Severity | Description |

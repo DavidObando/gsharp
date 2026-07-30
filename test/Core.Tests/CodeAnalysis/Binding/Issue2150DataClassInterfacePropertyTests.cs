@@ -120,11 +120,10 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GetOnlyNullableInterfaceProperty_SatisfiedByNonNullablePositionalParam_NoDiagnostics()
+    public void GetOnlyNullableValueInterfaceProperty_NotSatisfiedByNonNullablePositionalParam_ReportsGS0187()
     {
-        // Kotlin-style sound widening: `T <: T?`, so a non-nullable
-        // implementation always satisfies a nullable get-only contract:
-        // iface `int32?` <- impl `int32`.
+        // `int32?` is CLR Nullable<int32>, not an erased annotation. Its getter
+        // signature therefore differs from `int32`, so covariance is invalid.
         const string source = """
             package Test
             interface IHasNullableX {
@@ -134,7 +133,22 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        Assert.Empty(Bind(source));
+        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
+        Assert.Single(gs0187);
+    }
+
+    [Fact]
+    public void GetOnlyNullableReferenceInterfaceProperty_SatisfiedByNonNullablePositionalParam_EmitsAndLoads()
+    {
+        const string source = """
+            package Test
+            interface IHasNullableX {
+                prop X string? { get; }
+            }
+            data class NonNullableX(X string) : IHasNullableX
+            """;
+
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
