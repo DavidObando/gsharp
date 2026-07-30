@@ -313,6 +313,148 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         }
     }
 
+    [Fact]
+    public void CopyConstructor_DerivedDeclaredBeforeBase_UsesPlannedBaseRowAndPreservesFields()
+    {
+        const string source = """
+            package i2871reversed
+
+            data class Leaf(Extra int32) : Base {
+                override prop Kind string -> "leaf"
+            }
+
+            open data class Base {
+                prop Id int32 { get; init; }
+
+                open prop Kind string {
+                    get;
+                }
+            }
+            """;
+        const string csharp = """
+            using i2871reversed;
+
+            public static class Probe
+            {
+                public static string Run()
+                {
+                    Base original = new Leaf(7) { Id = 3 };
+                    var clone = original with { };
+                    return $"{clone.GetType().Name}:{((Leaf)clone).Extra}:{clone.Id}";
+                }
+            }
+            """;
+
+        var directory = CreateArtifactsDirectory();
+        try
+        {
+            var libraryPath = CompileGSharpLibrary(directory, "Records", source);
+            IlVerifier.Verify(libraryPath);
+
+            using (var stream = File.OpenRead(libraryPath))
+            using (var peReader = new PEReader(stream))
+            {
+                var reader = peReader.GetMetadataReader();
+                var baseCopyConstructor = FindCopyConstructor(reader, FindType(reader, "Base"));
+                var leafCopyConstructor = FindCopyConstructor(reader, FindType(reader, "Leaf"));
+                Assert.True(MethodContainsCallTo(
+                    peReader,
+                    reader,
+                    leafCopyConstructor,
+                    baseCopyConstructor));
+            }
+
+            Assert.Equal(
+                "Leaf:7:3",
+                CompileCSharpConsumerAndRun(directory, libraryPath, csharp));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CopyConstructor_ThroughNonDataIntermediary_UsesDirectCtorChainAndPreservesFields()
+    {
+        const string source = """
+            package i2871copyintermediary
+
+            data class Leaf(LeafValue int32) : Middle {
+            }
+
+            open class Middle : Base {
+                prop MiddleValue int32 { get; init; }
+
+                override prop Kind string -> "middle"
+            }
+
+            open data class Base {
+                prop BaseValue int32 { get; init; }
+
+                open prop Kind string {
+                    get;
+                }
+            }
+            """;
+        const string csharp = """
+            using i2871copyintermediary;
+
+            public static class Probe
+            {
+                public static string Run()
+                {
+                    Base original = new Leaf(7) { BaseValue = 3, MiddleValue = 5 };
+                    var clone = (Leaf)(original with { });
+                    return $"{clone.GetType().Name}:{clone.LeafValue}:{clone.MiddleValue}:{clone.BaseValue}";
+                }
+            }
+            """;
+
+        var directory = CreateArtifactsDirectory();
+        try
+        {
+            var libraryPath = CompileGSharpLibrary(directory, "Records", source);
+            IlVerifier.Verify(libraryPath);
+
+            using (var stream = File.OpenRead(libraryPath))
+            using (var peReader = new PEReader(stream))
+            {
+                var reader = peReader.GetMetadataReader();
+                var baseType = FindType(reader, "Base");
+                var middleType = FindType(reader, "Middle");
+                var leafType = FindType(reader, "Leaf");
+                var baseCopyConstructor = FindCopyConstructor(reader, baseType);
+                var middleCopyConstructor = FindCopyConstructor(reader, middleType);
+                var leafCopyConstructor = FindCopyConstructor(reader, leafType);
+
+                Assert.True(MethodContainsCallTo(
+                    peReader,
+                    reader,
+                    middleCopyConstructor,
+                    baseCopyConstructor));
+                Assert.True(MethodContainsCallTo(
+                    peReader,
+                    reader,
+                    leafCopyConstructor,
+                    middleCopyConstructor));
+                AssertCloneMethodImpl(
+                    reader,
+                    leafType,
+                    FindMethod(reader, leafType, "<Clone>$"),
+                    FindMethod(reader, baseType, "<Clone>$"));
+            }
+
+            Assert.Equal(
+                "Leaf:7:5:3",
+                CompileCSharpConsumerAndRun(directory, libraryPath, csharp));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static void AssertAbstractClone(MethodDefinition clone)
     {
         Assert.True((clone.Attributes & MethodAttributes.Abstract) != 0);
@@ -389,7 +531,13 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
             .Where(handle => reader.GetString(reader.GetMethodDefinition(handle).Name) == ".ctor")
             .Single(handle =>
             {
-                var signature = reader.GetBlobReader(reader.GetMethodDefinition(handle).Signature);
+                var definition = reader.GetMethodDefinition(handle);
+                if ((definition.Attributes & MethodAttributes.MemberAccessMask) == MethodAttributes.Public)
+                {
+                    return false;
+                }
+
+                var signature = reader.GetBlobReader(definition.Signature);
                 var header = signature.ReadSignatureHeader();
                 if (header.IsGeneric)
                 {
@@ -406,23 +554,37 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         TypeDefinitionHandle typeHandle,
         MemberReferenceHandle target)
     {
-        var targetToken = MetadataTokens.GetToken(target);
         foreach (var methodHandle in reader.GetTypeDefinition(typeHandle).GetMethods())
         {
-            var method = reader.GetMethodDefinition(methodHandle);
-            if (method.RelativeVirtualAddress == 0)
+            if (MethodContainsCallTo(peReader, reader, methodHandle, target))
             {
-                continue;
+                return true;
             }
+        }
 
-            var il = peReader.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
-            for (var i = 0; il != null && i + 4 < il.Length; i++)
+        return false;
+    }
+
+    private static bool MethodContainsCallTo(
+        PEReader peReader,
+        MetadataReader reader,
+        MethodDefinitionHandle methodHandle,
+        EntityHandle target)
+    {
+        var method = reader.GetMethodDefinition(methodHandle);
+        if (method.RelativeVirtualAddress == 0)
+        {
+            return false;
+        }
+
+        var targetToken = MetadataTokens.GetToken(target);
+        var il = peReader.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
+        for (var i = 0; il != null && i + 4 < il.Length; i++)
+        {
+            if (il[i] == 0x28
+                && BinaryPrimitives.ReadInt32LittleEndian(il.AsSpan(i + 1, 4)) == targetToken)
             {
-                if (il[i] == 0x28
-                    && BinaryPrimitives.ReadInt32LittleEndian(il.AsSpan(i + 1, 4)) == targetToken)
-                {
-                    return true;
-                }
+                return true;
             }
         }
 

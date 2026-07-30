@@ -102,7 +102,6 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
 
-    private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassCopyConstructors = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
 
@@ -500,7 +499,6 @@ internal sealed class DataStructSynthesizer
             var equalityContractGetter = this.EmitDataClassEqualityContractGetter(structSym);
             this.equalityContractGetters[structSym] = equalityContractGetter;
             var copyConstructor = this.EmitDataClassCopyConstructor(structSym);
-            this.dataClassCopyConstructors[structSym] = copyConstructor;
             this.EmitDataClassClone(structSym, copyConstructor);
         }
 
@@ -623,7 +621,13 @@ internal sealed class DataStructSynthesizer
             this.nextParameterHandle());
     }
 
-    private MethodDefinitionHandle EmitDataClassCopyConstructor(StructSymbol structSym)
+    /// <summary>
+    /// Emits the copy constructor shared by data classes and non-data
+    /// intermediary classes in a data-class inheritance chain.
+    /// </summary>
+    /// <param name="structSym">The class whose fields are copied.</param>
+    /// <returns>The emitted copy-constructor MethodDef.</returns>
+    public MethodDefinitionHandle EmitDataClassCopyConstructor(StructSymbol structSym)
     {
         int bodyOffset = -1;
         if (!this.emitCtx.MetadataOnly)
@@ -661,13 +665,22 @@ internal sealed class DataStructSynthesizer
         new BlobEncoder(signature).MethodSignature(isInstanceMethod: true)
             .Parameters(1, r => r.Void(), ps => this.encodeTypeSymbol(ps.AddParameter().Type(), structSym));
         var visibility = IsDataObjectOverrideFinal(structSym) ? MethodAttributes.Private : MethodAttributes.Family;
-        return this.emitCtx.Metadata.AddMethodDefinition(
+        var copyConstructor = this.emitCtx.Metadata.AddMethodDefinition(
             visibility | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
             MethodImplAttributes.IL | MethodImplAttributes.Managed,
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(signature),
             bodyOffset,
             this.nextParameterHandle());
+
+        if (this.cache.DataClassCopyConstructorHandles.TryGetValue(structSym, out var plannedCopyConstructor)
+            && copyConstructor != plannedCopyConstructor)
+        {
+            throw new InvalidOperationException(
+                $"Class '{structSym.Name}' copy-constructor MethodDef row {MetadataTokens.GetRowNumber(copyConstructor)} did not match the planned row {MetadataTokens.GetRowNumber(plannedCopyConstructor)}.");
+        }
+
+        return copyConstructor;
     }
 
     private void EmitDataClassClone(StructSymbol structSym, MethodDefinitionHandle copyConstructor)
@@ -786,15 +799,16 @@ internal sealed class DataStructSynthesizer
     {
         copyConstructorToken = default;
         var baseClass = structSym.BaseClass;
-        if (baseClass?.IsData != true)
+        if (baseClass == null)
         {
             return false;
         }
 
         var baseDefinition = baseClass.Definition ?? baseClass;
-        if (!this.dataClassCopyConstructors.TryGetValue(baseDefinition, out var baseCopyConstructor))
+        if (!this.cache.DataClassCopyConstructorHandles.TryGetValue(baseDefinition, out var baseCopyConstructor))
         {
-            return false;
+            throw new InvalidOperationException(
+                $"Class '{structSym.Name}' has no planned copy constructor for direct base '{baseClass.Name}'.");
         }
 
         if (!ReflectionMetadataEmitter.IsUserGenericTypeReference(baseClass))

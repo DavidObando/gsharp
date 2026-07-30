@@ -383,6 +383,15 @@ internal sealed class MetadataTokenCache
         = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
     /// <summary>
+    /// Gets the planned copy-constructor MethodDef for each data class and
+    /// non-data class in a data-class inheritance chain. Planned handles let
+    /// derived copy constructors call their direct base copy constructor
+    /// regardless of declaration or body-emission order.
+    /// </summary>
+    public Dictionary<StructSymbol, MethodDefinitionHandle> DataClassCopyConstructorHandles { get; }
+        = new Dictionary<StructSymbol, MethodDefinitionHandle>();
+
+    /// <summary>
     /// Gets the planned <c>&lt;Clone&gt;$</c> MethodDef for each data class.
     /// Planned handles let covariant clone MethodImpl rows target a base clone
     /// even when the base method body has not been emitted yet.
