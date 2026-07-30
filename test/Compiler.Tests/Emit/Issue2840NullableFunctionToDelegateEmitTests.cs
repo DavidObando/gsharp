@@ -274,6 +274,42 @@ public class Issue2840NullableFunctionToDelegateEmitTests
     }
 
     [Fact]
+    public void EndToEnd_StaticGenericFunction_NullableDelegateParameter_Runs()
+    {
+        const string source = """
+            package i2840staticgeneric
+            import System
+
+            interface ICanc {
+                prop IsCancelled bool { get }
+            }
+
+            type Conv[T ICanc] = delegate func(book int32, ctx T, cb (string) -> void) void
+
+            class Cancel : ICanc {
+                prop IsCancelled bool -> false
+            }
+
+            func Do[T ICanc](ctx T, convertAction Conv[T]?) {
+                if convertAction != nil {
+                    convertAction(4, ctx, (s string) -> System.Console.WriteLine(s))
+                }
+            }
+
+            func Main() {
+                var ca ((int32, Cancel, (string) -> void) -> void)? = nil
+                ca = (book int32, ctx Cancel, onState (string) -> void) -> {
+                    onState("sg")
+                }
+                Do(Cancel(), ca)
+                System.Console.WriteLine("done")
+            }
+            """;
+
+        Assert.Equal("sg\ndone\n", CompileAndRun(source));
+    }
+
+    [Fact]
     public void EndToEnd_NonNullableStructuralFunctionToDelegate_StillRuns()
     {
         // Control: the non-nullable direction that always worked.
