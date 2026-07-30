@@ -248,7 +248,6 @@ public sealed class ControlFlowGraph
         {
             var endLabel = NewLabel("switchEnd");
             var arms = new List<(BoundPatternSwitchArm Arm, BoundLabel Label)>();
-            var literalDiscriminant = switchStatement.Discriminant as BoundLiteralExpression;
             BoundPatternSwitchArm defaultArm = null;
             BoundLabel defaultLabel = null;
             var dispatchComplete = false;
@@ -260,29 +259,6 @@ public sealed class ControlFlowGraph
                     defaultArm = arm;
                     defaultLabel = NewLabel("switchDefault");
                     continue;
-                }
-
-                if (arm.Guard is BoundLiteralExpression { Value: false })
-                {
-                    continue;
-                }
-
-                if (literalDiscriminant != null
-                    && TryMatchLiteralPattern(arm.Pattern, literalDiscriminant.Value, out var matches))
-                {
-                    if (!matches)
-                    {
-                        continue;
-                    }
-
-                    if (arm.Guard == null || arm.Guard is BoundLiteralExpression { Value: true })
-                    {
-                        var matchingArmLabel = NewLabel("switchArm");
-                        arms.Add((arm, matchingArmLabel));
-                        builder.Add(new BoundGotoStatement(null, matchingArmLabel));
-                        dispatchComplete = true;
-                        break;
-                    }
                 }
 
                 var armLabel = NewLabel("switchArm");
@@ -313,7 +289,6 @@ public sealed class ControlFlowGraph
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
                 Add(defaultArm.Body);
-                builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
             builder.Add(new BoundLabelStatement(null, endLabel));
@@ -355,7 +330,6 @@ public sealed class ControlFlowGraph
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
                 Add(defaultCase.Body);
-                builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
             builder.Add(new BoundLabelStatement(null, endLabel));
@@ -368,109 +342,6 @@ public sealed class ControlFlowGraph
             => new BoundVariableExpression(
                 null,
                 new LocalVariableSymbol($"<>definiteReturnChoice{choiceOrdinal++}", isReadOnly: true, TypeSymbol.Bool));
-
-        static bool TryMatchLiteralPattern(BoundPattern pattern, object value, out bool matches)
-        {
-            switch (pattern)
-            {
-                case BoundConstantPattern { Value: BoundLiteralExpression constant }:
-                    matches = LiteralEquals(value, constant.Value);
-                    return true;
-                case BoundDiscardPattern:
-                    matches = true;
-                    return true;
-                case BoundTypePattern when value == null:
-                    matches = false;
-                    return true;
-                case BoundRelationalPattern { Value: BoundLiteralExpression right } nanRelational
-                    when IsNaN(value) || IsNaN(right.Value):
-                    matches = nanRelational.Op.Kind == BoundBinaryOperatorKind.NotEquals;
-                    return nanRelational.Op.Kind is BoundBinaryOperatorKind.Equals
-                        or BoundBinaryOperatorKind.NotEquals
-                        or BoundBinaryOperatorKind.Less
-                        or BoundBinaryOperatorKind.LessOrEquals
-                        or BoundBinaryOperatorKind.Greater
-                        or BoundBinaryOperatorKind.GreaterOrEquals;
-                case BoundRelationalPattern { Value: BoundLiteralExpression right } relational
-                    when TryCompareLiterals(value, right.Value, out var comparison):
-                    switch (relational.Op.Kind)
-                    {
-                        case BoundBinaryOperatorKind.Equals:
-                            matches = comparison == 0;
-                            return true;
-                        case BoundBinaryOperatorKind.NotEquals:
-                            matches = comparison != 0;
-                            return true;
-                        case BoundBinaryOperatorKind.Less:
-                            matches = comparison < 0;
-                            return true;
-                        case BoundBinaryOperatorKind.LessOrEquals:
-                            matches = comparison <= 0;
-                            return true;
-                        case BoundBinaryOperatorKind.Greater:
-                            matches = comparison > 0;
-                            return true;
-                        case BoundBinaryOperatorKind.GreaterOrEquals:
-                            matches = comparison >= 0;
-                            return true;
-                        default:
-                            matches = false;
-                            return false;
-                    }
-
-                case BoundBinaryPattern binary
-                    when TryMatchLiteralPattern(binary.Left, value, out var left)
-                        && TryMatchLiteralPattern(binary.Right, value, out var right):
-                    matches = binary.IsConjunction ? left && right : left || right;
-                    return true;
-                case BoundNotPattern notPattern
-                    when TryMatchLiteralPattern(notPattern.Pattern, value, out var inner):
-                    matches = !inner;
-                    return true;
-                default:
-                    matches = false;
-                    return false;
-            }
-        }
-
-        static bool TryCompareLiterals(object left, object right, out int comparison)
-        {
-            left = UnwrapEnum(left);
-            right = UnwrapEnum(right);
-            if (left == null || right == null || IsNaN(left) || IsNaN(right))
-            {
-                comparison = 0;
-                return false;
-            }
-
-            if (left.GetType() == right.GetType() && left is IComparable comparable)
-            {
-                comparison = comparable.CompareTo(right);
-                return true;
-            }
-
-            comparison = 0;
-            return false;
-        }
-
-        static bool LiteralEquals(object left, object right)
-        {
-            left = UnwrapEnum(left);
-            right = UnwrapEnum(right);
-            return !IsNaN(left) && !IsNaN(right) && Equals(left, right);
-        }
-
-        static object UnwrapEnum(object value)
-            => value is Enum enumValue
-                ? Convert.ChangeType(
-                    enumValue,
-                    Enum.GetUnderlyingType(enumValue.GetType()),
-                    System.Globalization.CultureInfo.InvariantCulture)
-                : value;
-
-        static bool IsNaN(object value)
-            => (value is float floatValue && float.IsNaN(floatValue))
-                || (value is double doubleValue && double.IsNaN(doubleValue));
     }
 
     /// <summary>

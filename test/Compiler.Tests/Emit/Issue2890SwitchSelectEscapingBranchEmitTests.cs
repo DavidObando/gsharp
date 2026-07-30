@@ -98,6 +98,142 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
         Assert.Equal(8, GetField(assembly, "result"));
     }
 
+    [Fact]
+    public void SelectWithoutDefaultWhoseEveryArmReturns_VerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2890.EmitSelectNoDefaultReturns
+            import Gsharp.Extensions.Go
+
+            func F() int32 {
+                let ch = make(chan int32, 1)
+                ch <- 12
+                select {
+                    case ch <- 1 { return 11 }
+                    case let value = <-ch { return value }
+                }
+            }
+
+            public var result = F()
+            """;
+
+        var assembly = CompileAndRun(Source);
+        Assert.Equal(12, GetField(assembly, "result"));
+    }
+
+    [Fact]
+    public void SelectWhoseEveryArmThrows_VerifiesLoadsAndThrows()
+    {
+        const string Source = """
+            package Issue2890.EmitSelectThrows
+            import System
+            import Gsharp.Extensions.Go
+
+            func F() int32 {
+                let ch = make(chan int32, 1)
+                select {
+                    case ch <- 1 { throw Exception("send") }
+                    case <-ch { throw Exception("receive") }
+                    default { throw Exception("default") }
+                }
+            }
+
+            public var result = F()
+            """;
+
+        var exception = Assert.Throws<TargetInvocationException>(() => CompileAndRun(Source));
+        Assert.IsType<Exception>(exception.InnerException);
+    }
+
+    [Fact]
+    public void SwitchArmContainingReturningSelect_VerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2890.EmitSwitchSelectReturns
+            import Gsharp.Extensions.Go
+
+            func F(x int32) int32 {
+                let ch = make(chan int32, 1)
+                switch x {
+                    case 1 {
+                        select {
+                            case ch <- 1 { return 1 }
+                            default { return 2 }
+                        }
+                    }
+                    default { return 3 }
+                }
+            }
+
+            public var result = F(1)
+            """;
+
+        var assembly = CompileAndRun(Source);
+        Assert.Equal(1, GetField(assembly, "result"));
+    }
+
+    [Fact]
+    public void PatternSwitchWhoseEveryArmReturns_VerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2890.EmitSwitchReturnsGuard
+
+            func F(x int32) int32 {
+                switch x {
+                    case 1 { return 1 }
+                    default { return 2 }
+                }
+            }
+
+            public var result = F(2)
+            """;
+
+        var assembly = CompileAndRun(Source);
+        Assert.Equal(2, GetField(assembly, "result"));
+    }
+
+    [Fact]
+    public void CompletingSwitchArmFollowedByReturn_VerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2890.EmitSwitchThenReturnGuard
+
+            func F(x int32) int32 {
+                switch x {
+                    case 1 { }
+                    default { return 1 }
+                }
+
+                return 2
+            }
+
+            public var result = F(1) + F(0)
+            """;
+
+        var assembly = CompileAndRun(Source);
+        Assert.Equal(3, GetField(assembly, "result"));
+    }
+
+    [Fact]
+    public void TypePatternSwitchWhoseEveryArmReturns_VerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2890.EmitTypePatternGuard
+
+            func F(value object) int32 {
+                switch value {
+                    case _ is string { return 1 }
+                    default { return 2 }
+                }
+            }
+
+            public var result = F("text") + F(7)
+            """;
+
+        var assembly = CompileAndRun(Source);
+        Assert.Equal(3, GetField(assembly, "result"));
+    }
+
     private static void AssertOnlyGs0100AndNoEmission(string source)
     {
         using var peStream = new MemoryStream();

@@ -205,6 +205,96 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
+    public void LiteralSwitchWithoutDefault_ReportsGs0100()
+    {
+        const string Source = """
+            package Issue2890.LiteralNoDefault
+
+            func F() int32 {
+                switch 1 {
+                    case 1 { return 10 }
+                    case 2 { return 20 }
+                }
+            }
+            """;
+
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
+    public void ImpossibleLiteralArmBreak_ReportsGs0100()
+    {
+        const string Source = """
+            package Issue2890.ImpossibleLiteralBreak
+
+            func F() int32 {
+                for {
+                    switch 1 {
+                        case 2 { break }
+                    }
+                }
+            }
+            """;
+
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
+    public void FalseGuardArmBreak_ReportsGs0100()
+    {
+        const string Source = """
+            package Issue2890.FalseGuardBreak
+
+            func F(x int32) int32 {
+                for {
+                    switch x {
+                        case _ when false { break }
+                        default { return 1 }
+                    }
+                }
+            }
+            """;
+
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
+    public void CompletingSwitchArmDoesNotFallThroughToDefault_ReportsGs0100()
+    {
+        const string Source = """
+            package Issue2890.SwitchArmCompletion
+
+            func F(x int32) int32 {
+                switch x {
+                    case 1 { }
+                    default { return 1 }
+                }
+            }
+            """;
+
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
+    public void CompletingSelectArmDoesNotFallThroughToDefault_ReportsGs0100()
+    {
+        const string Source = """
+            package Issue2890.SelectArmCompletion
+            import Gsharp.Extensions.Go
+
+            func F() int32 {
+                let ch = make(chan int32, 1)
+                select {
+                    case ch <- 1 { }
+                    default { return 1 }
+                }
+            }
+            """;
+
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
     public void SelectWhoseEveryArmReturns_DoesNotReportGs0100()
     {
         const string Source = """
@@ -305,11 +395,10 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
-    public void LiteralSwitchSkipsImpossibleEscapingArms()
+    public void LiteralSwitchImpossibleEscapingArms_ReportsGs0100()
     {
         const string Source = """
             package Issue2890.LiteralSwitch
-            import Gsharp.Extensions.Go
 
             func F() int32 {
                 for {
@@ -320,9 +409,56 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
                     }
                 }
             }
+            """;
 
-            func SelectControl() int32 {
-                select {
+        AssertOnlyGs0100(Source);
+    }
+
+    [Fact]
+    public void PatternSwitchWhoseEveryArmReturns_RemainsValid()
+    {
+        const string Source = """
+            package Issue2890.SwitchReturnsGuard
+
+            func F(x int32) int32 {
+                switch x {
+                    case 1 { return 1 }
+                    default { return 2 }
+                }
+            }
+            """;
+
+        AssertNoErrors(Source);
+    }
+
+    [Fact]
+    public void CompletingSwitchArmFollowedByReturn_RemainsValid()
+    {
+        const string Source = """
+            package Issue2890.SwitchThenReturnGuard
+
+            func F(x int32) int32 {
+                switch x {
+                    case 1 { }
+                    default { return 1 }
+                }
+
+                return 2
+            }
+            """;
+
+        AssertNoErrors(Source);
+    }
+
+    [Fact]
+    public void TypePatternSwitchWhoseEveryArmReturns_RemainsValid()
+    {
+        const string Source = """
+            package Issue2890.TypePatternGuard
+
+            func F(value object) int32 {
+                switch value {
+                    case _ is string { return 1 }
                     default { return 2 }
                 }
             }
