@@ -298,6 +298,12 @@ public sealed partial class DiagnosticBag
     public void ReportUnableToFindMember(TextLocation location, string text)
     => Report(location, DiagnosticDescriptors.UnableToFindMember, text);
 
+    /// <summary>Reports a direct call through a nullable delegate receiver without a valid narrowing.</summary>
+    /// <param name="location">The nullable receiver location.</param>
+    /// <param name="receiverName">The receiver spelling.</param>
+    public void ReportNullableDelegateReceiverInvocation(TextLocation location, string receiverName)
+    => Report(location, DiagnosticDescriptors.NullableDelegateReceiverInvocation, receiverName);
+
     /// <summary>
     /// Reports that we couldn't find the specified function.
     /// </summary>

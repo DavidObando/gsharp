@@ -279,6 +279,12 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
 | GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field (ADR-0060 / ADR-0029). Previously misfiled under GS0241. |
 
+### Nullable delegate invocation diagnostics (GS0502)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0502 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `handler(value)` when `handler` is still nullable; use `handler?(value)` or capture a proven non-null value in a stable local first. |
+
 ### Pointer / by-ref diagnostics (GS9001–GS9006)
 
 | ID | Severity | Description | Example trigger |

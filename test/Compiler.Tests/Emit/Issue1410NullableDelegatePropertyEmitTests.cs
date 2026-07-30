@@ -164,7 +164,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
     }
 
     [Fact]
-    public void NullableVoidAndReferenceReturningDelegateProperties_ShortCircuitAndPlainCallStillThrows()
+    public void NullableVoidAndReferenceReturningDelegateProperties_ShortCircuit()
     {
         var source = """
             package P
@@ -184,15 +184,9 @@ public class Issue1410NullableDelegatePropertyEmitTests
             full.Text = () -> "value"
             full.Notify?("called")
             Console.WriteLine(full.Text?() ?? "fallback")
-
-            try {
-                empty.Text()
-            } catch (e NullReferenceException) {
-                Console.WriteLine("plain-call-threw")
-            }
             """;
 
-        Assert.Equal("fallback\ncalled\nvalue\nplain-call-threw\n", CompileAndRun(source));
+        Assert.Equal("fallback\ncalled\nvalue\n", CompileAndRun(source));
     }
 
     [Fact]

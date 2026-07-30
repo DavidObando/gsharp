@@ -517,6 +517,13 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (ce.NullableQuestionToken == null && effectiveMemberType is NullableTypeSymbol)
+        {
+            Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
         if (callableType is DelegateTypeSymbol namedDelegate)
         {
             if (!overloads.TryBindNamedDelegateArguments(
@@ -734,6 +741,13 @@ internal sealed partial class ExpressionBinder
             System.Reflection.FieldInfo f2 => ClrNullability.GetFieldTypeSymbol(f2),
             _ => TypeSymbol.FromClrType(memberClrType),
         };
+
+        if (ce.NullableQuestionToken == null && memberTypeSymbol is NullableTypeSymbol)
+        {
+            Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
 
         // The delegate value load — `ldfld` for a field, `call get_X` for a
         // property. The shared BoundClrPropertyAccessExpression node carries

@@ -970,6 +970,12 @@ internal sealed partial class OverloadResolver
             && delegateTargetType.ClrType is System.Type delegateClrType
             && ClrTypeUtilities.IsDelegateType(delegateClrType))
         {
+            if (delegateTargetType is NullableTypeSymbol)
+            {
+                Diagnostics.ReportNullableDelegateReceiverInvocation(syntax.Identifier.Location, delegateVar.Name);
+                return new BoundErrorExpression(null);
+            }
+
             // Issue #2799 follow-up: the receiver load must honor every
             // implicit-member variable kind, not only a plain local/parameter
             // (a bare `BoundVariableExpression`) and the field-like event's
