@@ -170,6 +170,8 @@ internal sealed class FunctionEmitter
 
             try
             {
+                // MoveNextBodyRewriter owns this synthesized epilogue and
+                // guarantees that the body already ends in ret.
                 emitter.EmitBlock(body);
             }
             catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)

@@ -56,6 +56,9 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Discriminant);
         this.il.StoreLocal(discriminantSlot);
 
+        // Issue #2283: all-terminal switches still emit their uniform dead
+        // branches/end label. EmitMethodBody must append a real ret at that
+        // label so no branch targets the exact end of the method body.
         var endLabel = this.il.DefineLabel();
         BoundPatternSwitchArm defaultArm = null;
 

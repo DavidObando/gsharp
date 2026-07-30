@@ -382,9 +382,7 @@ internal sealed partial class MethodBodyEmitter
         else if (statement is not BoundBlockStatement && this.il.Offset != startOffset)
         {
             this.currentPositionEndsInTerminator =
-                statement is BoundReturnStatement or BoundThrowStatement or BoundGotoStatement
-                || statement is BoundExpressionStatement { Expression: BoundThrowExpression }
-                || statement is BoundVariableDeclaration { Initializer: BoundThrowExpression };
+                statement is BoundReturnStatement or BoundThrowStatement or BoundGotoStatement;
         }
     }
 
