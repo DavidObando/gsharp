@@ -1012,7 +1012,7 @@ public sealed partial class DiagnosticBag
     /// <param name="sourceType">The conversion source type.</param>
     /// <param name="targetType">The conversion target type.</param>
     public void ReportDuplicateConversionOperator(TextLocation location, TypeSymbol sourceType, TypeSymbol targetType)
-    => Report(location, DiagnosticDescriptors.DuplicateConversionOperator, sourceType?.Name, targetType?.Name);
+    => Report(location, DiagnosticDescriptors.DuplicateConversionOperator, sourceType, targetType);
 
     /// <summary>
     /// ADR-0149: GS0492 — an explicit-interface qualifier clause
