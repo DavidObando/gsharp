@@ -86,49 +86,43 @@ public sealed partial class Evaluator
                 }
             }
 
+            var statement = program.Functions[node.Function];
+            var isIterator = IsIteratorFunction(node.Function, statement);
+            object result;
             using (PushFrame(locals))
             {
-                var statement = program.Functions[node.Function];
-
-                if (IsIteratorFunction(node.Function, statement))
+                if (isIterator)
                 {
-                    return EvaluateIteratorFunction(node.Function, statement);
+                    result = EvaluateIteratorFunction(node.Function, statement);
                 }
-
-                var result = EvaluateFunctionBody(statement);
-
-                // ADR-0060 item #7: write the final parameter slot value back to
-                // the caller's lvalue for every 'ref'/'out' parameter.
-                if (userRefSlots != null)
+                else
                 {
-                    foreach (var (parameter, operand) in userRefSlots)
-                    {
-                        var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
-                        switch (operand)
-                        {
-                            case BoundVariableExpression bve:
-                                Assign(bve.Variable, finalValue);
-                                break;
-                            case BoundFieldAccessExpression fa:
-                                WriteBackField(fa, finalValue);
-                                break;
-                            case BoundPropertyAccessExpression pa:
-                                WriteBackProperty(pa, finalValue);
-                                break;
-                            case BoundIndexExpression idx:
-                                WriteBackIndex(idx, finalValue);
-                                break;
-                        }
-                    }
+                    result = EvaluateFunctionBody(statement);
                 }
+            }
 
-                if (node.Function.IsAsync)
+            // ADR-0060 item #7: write the final parameter slot value back to
+            // the caller's lvalue after restoring the caller's frame.
+            if (userRefSlots != null)
+            {
+                foreach (var (parameter, operand) in userRefSlots)
                 {
-                    return WrapAsyncResult(node.Function.Type, result);
+                    var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
+                    WriteBackToOperand(operand, finalValue);
                 }
+            }
 
+            if (isIterator)
+            {
                 return result;
             }
+
+            if (node.Function.IsAsync)
+            {
+                return WrapAsyncResult(node.Function.Type, result);
+            }
+
+            return result;
         }
     }
 

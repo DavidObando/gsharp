@@ -135,6 +135,9 @@ internal static class CaptureBoxingRewriter
         }
 
         var statement = program.Statement;
+
+        // Binder registers synthesized top-level statements as the same block
+        // instance in Statement and Functions[EntryPoint].
         if (program.EntryPoint != null
             && program.Functions.TryGetValue(program.EntryPoint, out var entryPointBody)
             && ReferenceEquals(statement, entryPointBody))

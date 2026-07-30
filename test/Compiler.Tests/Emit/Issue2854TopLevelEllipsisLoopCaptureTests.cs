@@ -120,9 +120,18 @@ public class Issue2854TopLevelEllipsisLoopCaptureTests
             RedirectStandardError = true,
             UseShellExecute = false,
         });
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        var exited = process.WaitForExit(30_000);
+        if (!exited)
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+
+        Assert.True(exited, "dotnet exec timed out");
+        var output = outputTask.GetAwaiter().GetResult();
+        var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, error);
         return output.Replace("\r\n", "\n");
     }
