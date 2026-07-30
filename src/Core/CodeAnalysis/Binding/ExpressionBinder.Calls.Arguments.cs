@@ -513,10 +513,12 @@ internal sealed partial class ExpressionBinder
         }
 
         if (ce.NullableQuestionToken == null
-            && effectiveMemberType is NullableTypeSymbol nullableEffectiveMember
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableEffectiveMember.UnderlyingType, out _))
+            && overloads.TryReportNullableDelegateReceiver(
+                effectiveMemberType,
+                ce.Identifier.Location,
+                methodName,
+                supportsNullSafeInvocation: true))
         {
-            Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
             result = new BoundErrorExpression(null);
             return true;
         }
@@ -748,9 +750,13 @@ internal sealed partial class ExpressionBinder
             new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
         var effectiveMemberType = delegateLoad.Type;
 
-        if (ce.NullableQuestionToken == null && effectiveMemberType is NullableTypeSymbol)
+        if (ce.NullableQuestionToken == null
+            && overloads.TryReportNullableDelegateReceiver(
+                effectiveMemberType,
+                ce.Identifier.Location,
+                methodName,
+                supportsNullSafeInvocation: true))
         {
-            Diagnostics.ReportNullableDelegateReceiverInvocation(ce.Identifier.Location, methodName);
             result = new BoundErrorExpression(null);
             return true;
         }
@@ -767,9 +773,9 @@ internal sealed partial class ExpressionBinder
         BoundExpression invokeReceiver = delegateLoad;
         if (ce.NullableQuestionToken != null)
         {
-            var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
+            var captureType = memberTypeSymbol is NullableTypeSymbol nullableMember
                 ? nullableMember.UnderlyingType
-                : effectiveMemberType;
+                : memberTypeSymbol;
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);

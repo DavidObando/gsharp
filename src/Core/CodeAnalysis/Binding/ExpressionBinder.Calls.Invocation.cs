@@ -1863,25 +1863,25 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    internal BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
+    internal BoundExpression BindAccessorCall(
+        BoundExpression receiver,
+        ImportedClassSymbol classSymbol,
+        CallExpressionSyntax ce,
+        ExpressionSyntax receiverSyntax = null)
     {
         var methodName = ce.Identifier.Text;
-        if (receiver?.Type is NullableTypeSymbol nullableReceiver
-            && string.Equals(methodName, "Invoke", System.StringComparison.Ordinal)
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableReceiver.UnderlyingType, out _))
+        SyntaxNode effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
+        var receiverLocation = effectiveReceiverSyntax?.Location ?? ce.Identifier.Location;
+        var receiverName = effectiveReceiverSyntax == null
+            ? methodName
+            : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+        if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal)
+            && overloads.TryReportNullableDelegateReceiver(
+                receiver?.Type,
+                receiverLocation,
+                receiverName,
+                supportsNullSafeInvocation: true))
         {
-            var receiverName = receiver switch
-            {
-                BoundVariableExpression variable => variable.Variable.Name,
-                BoundFieldAccessExpression field => field.Field.Name,
-                BoundPropertyAccessExpression property => property.Property.Name,
-                BoundClrPropertyAccessExpression clrMember => clrMember.Member.Name,
-                _ when receiver.Syntax != null => receiver.Syntax.SyntaxTree.Text.ToString(receiver.Syntax.Span),
-                _ => methodName,
-            };
-            Diagnostics.ReportNullableDelegateReceiverInvocation(
-                receiver.Syntax?.Location ?? ce.Identifier.Location,
-                receiverName);
             return new BoundErrorExpression(null);
         }
 

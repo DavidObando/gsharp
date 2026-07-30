@@ -859,10 +859,12 @@ internal sealed partial class OverloadResolver
         }
 
         if (symbol is VariableSymbol directDelegateVar
-            && (narrowedCallTargetType ?? directDelegateVar.Type) is NullableTypeSymbol nullableCallTarget
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableCallTarget.UnderlyingType, out _))
+            && TryReportNullableDelegateReceiver(
+                narrowedCallTargetType ?? directDelegateVar.Type,
+                syntax.Identifier.Location,
+                directDelegateVar.Name,
+                supportsNullSafeInvocation: true))
         {
-            Diagnostics.ReportNullableDelegateReceiverInvocation(syntax.Identifier.Location, directDelegateVar.Name);
             return new BoundErrorExpression(null);
         }
 

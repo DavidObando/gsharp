@@ -529,7 +529,12 @@ internal sealed partial class StatementBinder
         scope = new BoundScope(scope);
 
         var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
-        var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
+        var body = BindConditionedLoopBody(
+            condition,
+            bodySyntax,
+            labelName,
+            out var breakLabel,
+            out var continueLabel);
 
         scope = scope.Parent;
 
@@ -580,7 +585,12 @@ internal sealed partial class StatementBinder
         var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
         var condition = syntax.Condition == null ? null : bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
         var post = syntax.Post == null ? null : BindStatement(syntax.Post);
-        var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
+        var body = BindConditionedLoopBody(
+            condition,
+            syntax.Body,
+            labelName,
+            out var breakLabel,
+            out var continueLabel);
 
         scope = scope.Parent;
 
@@ -615,6 +625,32 @@ internal sealed partial class StatementBinder
         statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
 
         return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
+    }
+
+    private BoundStatement BindConditionedLoopBody(
+        BoundExpression condition,
+        StatementSyntax bodySyntax,
+        string labelName,
+        out BoundLabel breakLabel,
+        out BoundLabel continueLabel)
+    {
+        var loopNarrow = condition == null
+            ? null
+            : TryClassifyNilGuard(condition).NonNil;
+        if (loopNarrow == null)
+        {
+            return BindLoopBody(bodySyntax, labelName, out breakLabel, out continueLabel);
+        }
+
+        binderCtx.NarrowedVariables.Add(loopNarrow);
+        try
+        {
+            return BindLoopBody(bodySyntax, labelName, out breakLabel, out continueLabel);
+        }
+        finally
+        {
+            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+        }
     }
 
     private BoundStatement BindWhileStatement(WhileStatementSyntax syntax)

@@ -25,6 +25,27 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2885NullableDelegateReceiverTests
 {
+    private const string ImportedFixture = """
+        #nullable enable
+        using System;
+
+        namespace Issue2885Fixture;
+
+        public sealed class Box
+        {
+            public Action<int>? Mutable;
+            public readonly Action<int>? Readonly;
+            public Action<int>? GetOnly { get; }
+
+            public Box(Action<int>? value)
+            {
+                Mutable = value;
+                Readonly = value;
+                GetOnly = value;
+            }
+        }
+        """;
+
     [Theory]
     [InlineData("mutable-field", "Src", "Mutable")]
     [InlineData("custom-property", "Src", "Custom")]
@@ -49,6 +70,7 @@ public class Issue2885NullableDelegateReceiverTests
         Assert.Equal("GS0503", diagnostic.Id);
         Assert.Equal(receiverName, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.Contains($"'{receiverName}'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("'?(...)'", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains("'if let'", diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains("'!!'", diagnostic.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("stable non-null local", diagnostic.Message, StringComparison.Ordinal);
@@ -95,6 +117,7 @@ public class Issue2885NullableDelegateReceiverTests
     [InlineData("array-index", "arr[0]")]
     [InlineData("call-result", "Get()")]
     [InlineData("explicit-invoke", "d")]
+    [InlineData("qualified-explicit-invoke", "Handler")]
     [InlineData("named-delegate", "h")]
     public void OtherNullableDelegateCallPaths_ReportNullableReceiver(string shape, string receiverName)
     {
@@ -122,6 +145,16 @@ public class Issue2885NullableDelegateReceiverTests
 
                 func RunInvoke(d System.Action[int32]?) { d.Invoke(1) }
                 """,
+            "qualified-explicit-invoke" => """
+                package Issue2885QualifiedInvoke
+                import System
+
+                class Holder {
+                    var Handler System.Action[int32]?
+                }
+
+                func RunInvoke(holder Holder) { holder.Handler.Invoke(1) }
+                """,
             "named-delegate" => """
                 package Issue2885Named
 
@@ -135,28 +168,8 @@ public class Issue2885NullableDelegateReceiverTests
     }
 
     [Fact]
-    public void ImportedClrDelegateMembers_RespectStability()
+    public void ImportedClrMutableDelegateMember_ReportsNullableReceiver()
     {
-        const string fixture = """
-            #nullable enable
-            using System;
-
-            namespace Issue2885Fixture;
-
-            public sealed class Box
-            {
-                public Action<int>? Mutable;
-                public readonly Action<int>? Readonly;
-                public Action<int>? GetOnly { get; }
-
-                public Box(Action<int>? value)
-                {
-                    Mutable = value;
-                    Readonly = value;
-                    GetOnly = value;
-                }
-            }
-            """;
         const string rejected = """
             package Issue2885ImportedRejected
             import Issue2885Fixture
@@ -167,8 +180,12 @@ public class Issue2885NullableDelegateReceiverTests
                 }
             }
             """;
-        AssertSingleGs0503(rejected, "Mutable", fixture);
+        AssertSingleGs0503(rejected, "Mutable", ImportedFixture);
+    }
 
+    [Fact]
+    public void ImportedClrStableDelegateMembers_NarrowAndRun()
+    {
         const string accepted = """
             package Issue2885ImportedAccepted
             import System
@@ -190,7 +207,86 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("41\n42\n43\n44\n", CompileAndRun(accepted, "imported-stable", fixture));
+        Assert.Equal("41\n42\n43\n44\n", CompileAndRun(accepted, "imported-stable", ImportedFixture));
+    }
+
+    [Theory]
+    [InlineData("while-local", "1\n")]
+    [InlineData("for-condition-local", "2\n")]
+    [InlineData("for-clause-local", "3\n")]
+    [InlineData("nested-while", "4\n5\n")]
+    [InlineData("stable-member", "6\n")]
+    [InlineData("nullable-class", "class\n")]
+    [InlineData("and-condition", "7\n")]
+    [InlineData("source-type-while", "8\n")]
+    [InlineData("source-type-for", "9\n")]
+    public void LoopConditionNarrowing_CompilesAndRuns(string shape, string expectedOutput)
+    {
+        Assert.Equal(expectedOutput, CompileAndRun(BuildLoopGuardSource(shape), "loop-" + shape));
+    }
+
+    [Fact]
+    public void DoWhileCondition_DoesNotNarrowFirstIteration()
+    {
+        const string source = """
+            package Issue2885DoWhile
+            import System
+
+            func Run(d System.Action[int32]?) {
+                do {
+                    d(1)
+                } while d != nil
+            }
+            """;
+
+        AssertSingleGs0503(source, "d");
+    }
+
+    [Fact]
+    public void LoopGuardedUnstableMember_RemainsRejected()
+    {
+        const string source = """
+            package Issue2885LoopMember
+            import System
+
+            class Holder {
+                var Handler System.Action[int32]?
+            }
+
+            func Run(holder Holder) {
+                while holder.Handler != nil {
+                    holder.Handler(1)
+                    break
+                }
+            }
+            """;
+
+        AssertSingleGs0503(source, "Handler");
+    }
+
+    [Fact]
+    public void DiagnosticAdvice_MatchesReceiverSyntax()
+    {
+        const string named = """
+            package Issue2885AdviceNamed
+            import System
+            func Run(d System.Action[int32]?) { d(1) }
+            """;
+        const string member = """
+            package Issue2885AdviceMember
+            import System
+            class Holder { var Handler System.Action[int32]? }
+            func Run(holder Holder) { holder.Handler(1) }
+            """;
+        const string indexed = """
+            package Issue2885AdviceIndexed
+            import System
+            func Run(values []System.Action[int32]?) { values[0](1) }
+            """;
+
+        Assert.Contains("'?(...)'", GetGs0503(named).Message, StringComparison.Ordinal);
+        Assert.Contains("'?(...)'", GetGs0503(member).Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("'?(...)'", GetGs0503(indexed).Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -416,6 +512,124 @@ public class Issue2885NullableDelegateReceiverTests
             """;
     }
 
+    private static string BuildLoopGuardSource(string shape)
+    {
+        var body = shape switch
+        {
+            "while-local" => """
+                func Main() {
+                    var d System.Action[int32]? = Write
+                    while d != nil {
+                        d(1)
+                        break
+                    }
+                }
+                """,
+            "for-condition-local" => """
+                func Main() {
+                    var d System.Action[int32]? = Write
+                    for d != nil {
+                        d(2)
+                        break
+                    }
+                }
+                """,
+            "for-clause-local" => """
+                func Main() {
+                    var d System.Action[int32]? = Write
+                    for var i = 0; d != nil; i++ {
+                        d(3)
+                        break
+                    }
+                }
+                """,
+            "nested-while" => """
+                func Main() {
+                    var first System.Action[int32]? = Write
+                    var second System.Action[int32]? = Write
+                    while first != nil {
+                        while second != nil {
+                            first(4)
+                            second(5)
+                            break
+                        }
+                        break
+                    }
+                }
+                """,
+            "stable-member" => """
+                class Holder {
+                    let Handler System.Action[int32]?
+                    init(handler System.Action[int32]?) { Handler = handler }
+                }
+
+                func Main() {
+                    let holder = Holder(Write)
+                    while holder.Handler != nil {
+                        holder.Handler(6)
+                        break
+                    }
+                }
+                """,
+            "nullable-class" => """
+                class C {
+                    func M() { Console.WriteLine("class") }
+                }
+
+                func Main() {
+                    var c C? = C()
+                    while c != nil {
+                        c.M()
+                        break
+                    }
+                }
+                """,
+            "and-condition" => """
+                func Main() {
+                    var d System.Action[int32]? = Write
+                    var i = 0
+                    while d != nil && i < 1 {
+                        d(7)
+                        i++
+                    }
+                }
+                """,
+            "source-type-while" => """
+                class Src { prop N int32 -> 8 }
+
+                func Main() {
+                    let write System.Action[Src] = (value Src) -> Console.WriteLine(value.N)
+                    var d System.Action[Src]? = write
+                    while d != nil {
+                        d(Src())
+                        break
+                    }
+                }
+                """,
+            "source-type-for" => """
+                class Src { prop N int32 -> 9 }
+
+                func Main() {
+                    let write System.Action[Src] = (value Src) -> Console.WriteLine(value.N)
+                    var d System.Action[Src]? = write
+                    for var i = 0; d != nil && i < 1; i++ {
+                        d(Src())
+                    }
+                }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+
+        return $$"""
+            package Issue2885Loop
+            import System
+
+            func Write(value int32) { Console.WriteLine(value) }
+
+            {{body}}
+            """;
+    }
+
     private static string BuildRemedySource(string receiverShape)
     {
         var body = receiverShape switch
@@ -548,6 +762,14 @@ public class Issue2885NullableDelegateReceiverTests
         var diagnostic = Assert.Single(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
         Assert.Equal("GS0503", diagnostic.Id);
         Assert.Contains($"'{receiverName}'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    private static GSharp.Core.CodeAnalysis.Diagnostic GetGs0503(string source)
+    {
+        var compilation = new GsCompilation(GsSyntaxTree.Parse(SourceText.From(source)));
+        var diagnostic = Assert.Single(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("GS0503", diagnostic.Id);
+        return diagnostic;
     }
 
     private static string CompileAndRun(string source, string caseName, string fixtureSource = null)

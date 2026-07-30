@@ -301,8 +301,17 @@ public sealed partial class DiagnosticBag
     /// <summary>GS0503: Reports a direct call through a nullable delegate receiver without a valid narrowing.</summary>
     /// <param name="location">The nullable receiver location.</param>
     /// <param name="receiverName">The receiver spelling.</param>
-    public void ReportNullableDelegateReceiverInvocation(TextLocation location, string receiverName)
-    => Report(location, DiagnosticDescriptors.NullableDelegateReceiverInvocation, receiverName);
+    /// <param name="supportsNullSafeInvocation">Whether <c>?(...)</c> is valid for this receiver shape.</param>
+    public void ReportNullableDelegateReceiverInvocation(
+        TextLocation location,
+        string receiverName,
+        bool supportsNullSafeInvocation)
+    {
+        var advice = supportsNullSafeInvocation
+            ? "Use '?(...)' for null-safe invocation, bind it with 'if let', or assert non-null with '!!' before calling."
+            : "Bind it with 'if let', or assert non-null with '!!' before calling.";
+        Report(location, DiagnosticDescriptors.NullableDelegateReceiverInvocation, receiverName, advice);
+    }
 
     /// <summary>
     /// Reports that we couldn't find the specified function.

@@ -1689,7 +1689,7 @@ properties cannot declare `init` accessors.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `handler(value)` when `handler` is still nullable; bind it with `if let`, or assert non-null with `!!` before calling. |
+| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | For name/member receivers, use `?(...)` for null-safe invocation. Otherwise bind with `if let`, or assert non-null with `!!` before calling. |
 
 ## Suspension inside fixed statement (GS0506)
 

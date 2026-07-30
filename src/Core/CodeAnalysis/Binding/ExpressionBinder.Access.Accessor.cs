@@ -642,7 +642,7 @@ internal sealed partial class ExpressionBinder
             return BindInterfaceStaticAccessorStep(userInterfaceSymbol, rightPart);
         }
 
-        return BindAccessorStep(receiver, classSymbol, rightPart);
+        return BindAccessorStep(receiver, classSymbol, rightPart, leftPart);
     }
 
     private bool TryResolveInheritedImportedNestedType(

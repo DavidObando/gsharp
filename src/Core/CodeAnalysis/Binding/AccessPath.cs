@@ -76,9 +76,18 @@ public sealed class AccessPath : IEquatable<AccessPath>
         => variable == null ? null : new AccessPath(variable, ImmutableArray<object>.Empty);
 
     /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
-    /// <param name="member">The immutable member read after this path.</param>
+    /// <param name="member">The immutable source member read after this path.</param>
     /// <returns>The extended path.</returns>
-    public AccessPath Append(object member)
+    public AccessPath Append(Symbol member)
+    {
+        var members = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
+        return new AccessPath(Root, members.Add(member));
+    }
+
+    /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
+    /// <param name="member">The immutable imported CLR member read after this path.</param>
+    /// <returns>The extended path.</returns>
+    public AccessPath Append(MemberInfo member)
     {
         var members = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
         return new AccessPath(Root, members.Add(member));
