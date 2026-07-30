@@ -338,6 +338,7 @@ public sealed class ControlFlowGraph
         BoundLabel NewLabel(string name)
             => new($"<>definiteReturn_{name}_{labelOrdinal++}");
 
+        // Keep this non-literal so GraphBuilder preserves both synthetic alternatives.
         BoundExpression NewChoice()
             => new BoundVariableExpression(
                 null,
