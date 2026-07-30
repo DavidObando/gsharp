@@ -1376,12 +1376,18 @@ public partial class Parser
             // expression ends, then split the simple alignment/format tail.
             // This keeps hole disambiguation in sync with every expression
             // form, including ternaries and nullable-element array literals.
-            var probeParser = new Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length);
-            _ = probeParser.ParseExpression();
-            var expressionLength = probeParser.Current.Kind == SyntaxKind.CommaToken
-                || probeParser.Current.Kind == SyntaxKind.ColonToken
-                    ? probeParser.Current.Position - fragment.Position
-                    : fragment.Text.Length;
+            var expressionLength = fragment.Text.Length;
+            // No separator character means the expression necessarily fills the hole.
+            if (fragment.Text.IndexOf(',') >= 0 || fragment.Text.IndexOf(':') >= 0)
+            {
+                var probeParser = new Parser(syntaxTree, fragment.Position, fragment.Position + fragment.Text.Length);
+                _ = probeParser.ParseExpression();
+                expressionLength = probeParser.Current.Kind == SyntaxKind.CommaToken
+                    || probeParser.Current.Kind == SyntaxKind.ColonToken
+                        ? probeParser.Current.Position - fragment.Position
+                        : fragment.Text.Length;
+            }
+
             SplitTail(fragment.Text, expressionLength, out var exprText, out var alignmentText, out var formatText);
 
             // ADR-0055 §C: anchor diagnostics on the hole itself (using the

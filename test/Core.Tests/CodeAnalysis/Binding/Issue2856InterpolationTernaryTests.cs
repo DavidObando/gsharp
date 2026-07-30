@@ -81,6 +81,24 @@ public class Issue2856InterpolationTernaryTests
     }
 
     [Fact]
+    public void DeepNestedInterpolation_WithOuterFormat_Evaluates()
+    {
+        // A timing assertion would be flaky in CI. Depth 18 keeps correctness
+        // coverage while making an accidental return to two parses per level
+        // obvious in local interpolation-suite timings.
+        var expression = "1";
+        for (var i = 0; i < 18; i++)
+        {
+            expression = "\"${" + expression + "}\"";
+        }
+
+        var result = Evaluate("let text = \"[${" + expression + ",6:D4}]\"");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("[     1]", Value(result, "text"));
+    }
+
+    [Fact]
     public void TopLevelTernary_IgnoresConditionalPunctuationInComments()
     {
         var result = Evaluate("""
