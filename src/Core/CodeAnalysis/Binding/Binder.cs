@@ -3850,22 +3850,17 @@ public sealed class Binder
                 return null;
             }
 
-            // #313: in-scope type parameters project onto System.Object under
-            // the type-erased generic model so the closed CLR shape is well
-            // formed while the symbolic argument is preserved alongside.
-            if (TypeSymbol.ContainsTypeParameter(ta))
+            // #313 / #671: keep any symbolic projection alongside the erased
+            // closed CLR shape, including nested generic/array/nullable forms.
+            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta.ClrType == null)
             {
                 hasSymbolicArg = true;
-                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
-                continue;
-            }
-
-            // Issue #671: user-defined types without a ClrType project onto
-            // System.Object (same as type parameters above).
-            if (ta.ClrType == null)
-            {
-                hasSymbolicArg = true;
-                clrArgs[i] = scope.References.MapClrTypeToReferences(typeof(object));
+                clrArgs[i] = TypeSymbol.ContainsTypeParameter(ta)
+                    || TypeSymbol.ContainsSameCompilationUserType(ta)
+                    || ta.ClrType == null
+                        ? scope.References.MapClrTypeToReferences(typeof(object))
+                        : ResolveClrTypeForGenericArg(ta)
+                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
                 continue;
             }
 
