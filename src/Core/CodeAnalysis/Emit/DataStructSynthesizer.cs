@@ -101,7 +101,6 @@ internal sealed class DataStructSynthesizer
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken;
     private readonly Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef;
     private readonly Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef;
-    private readonly Func<ConstructorInfo, TypeSymbol, EntityHandle> resolveImportedCtorRef;
 
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> dataClassEqualsTypedMethods = new();
     private readonly Dictionary<StructSymbol, MethodDefinitionHandle> equalityContractGetters = new();
@@ -124,8 +123,7 @@ internal sealed class DataStructSynthesizer
         Func<StructSymbol, EntityHandle> resolveUserTypeToken,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveUserFieldToken,
         Func<StructSymbol, EntityHandle, string, BlobBuilder, EntityHandle> resolveUserMethodRef,
-        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef,
-        Func<ConstructorInfo, TypeSymbol, EntityHandle> resolveImportedCtorRef)
+        Func<MethodInfo, TypeSymbol, EntityHandle> resolveImportedMethodRef)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -139,7 +137,6 @@ internal sealed class DataStructSynthesizer
         this.resolveUserFieldToken = resolveUserFieldToken ?? throw new ArgumentNullException(nameof(resolveUserFieldToken));
         this.resolveUserMethodRef = resolveUserMethodRef ?? throw new ArgumentNullException(nameof(resolveUserMethodRef));
         this.resolveImportedMethodRef = resolveImportedMethodRef ?? throw new ArgumentNullException(nameof(resolveImportedMethodRef));
-        this.resolveImportedCtorRef = resolveImportedCtorRef ?? throw new ArgumentNullException(nameof(resolveImportedCtorRef));
     }
 
     /// <summary>
@@ -805,26 +802,6 @@ internal sealed class DataStructSynthesizer
         if (baseClass == null)
         {
             return false;
-        }
-
-        if (baseClass.ClrType is { } importedBase)
-        {
-            var candidates = ClrTypeUtilities.SafeGetConstructors(
-                    importedBase,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(constructor =>
-                    (constructor.IsPublic || constructor.IsFamily || constructor.IsFamilyOrAssembly)
-                    && constructor.GetParameters() is [{ } parameter]
-                    && ClrTypeUtilities.AreSame(parameter.ParameterType, importedBase))
-                .ToArray();
-            if (candidates.Length != 1)
-            {
-                throw new InvalidOperationException(
-                    $"Imported base class '{baseClass.Name}' has no unique accessible copy constructor.");
-            }
-
-            copyConstructorToken = this.resolveImportedCtorRef(candidates[0], baseClass);
-            return true;
         }
 
         var baseDefinition = baseClass.Definition ?? baseClass;

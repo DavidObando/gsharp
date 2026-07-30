@@ -1056,8 +1056,7 @@ internal sealed class ReflectionMetadataEmitter
             this.userTokens.ResolveUserTypeToken,
             this.userTokens.ResolveFieldToken,
             this.userTokens.GetUserStructMethodRef,
-            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType),
-            (constructor, containingType) => this.memberRefs.GetCtorReference(constructor, containingType));
+            (method, containingType) => this.memberRefs.GetMethodEntityHandle(method, containingType));
 
         // PR-E-7: MemberDefEmitter wires up after DataStructSynthesizer.
         // It depends on the same EmitContext/MetadataTokenCache/WellKnownReferences
