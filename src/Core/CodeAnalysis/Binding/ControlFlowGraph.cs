@@ -66,7 +66,10 @@ public sealed class ControlFlowGraph
     /// <returns>Whether all its paths return or not.</returns>
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
-        var graph = Create(body);
+        // Keep fixed/scope structured for emit and data-flow consumers, but
+        // expose their sequential bodies to this graph so escaping gotos can
+        // resolve labels in the enclosing function.
+        var graph = Create(ExpandSequentialRegions(body));
 
         foreach (var branch in graph.End.Incoming)
         {
@@ -193,6 +196,36 @@ public sealed class ControlFlowGraph
             default:
                 return statement.Kind == BoundNodeKind.ReturnStatement
                     || statement.Kind == BoundNodeKind.ThrowStatement;
+        }
+    }
+
+    private static BoundBlockStatement ExpandSequentialRegions(BoundStatement statement)
+    {
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
+        Add(statement);
+        return new BoundBlockStatement(null, builder.ToImmutable());
+
+        void Add(BoundStatement current)
+        {
+            switch (current)
+            {
+                case BoundBlockStatement block:
+                    foreach (var nested in block.Statements)
+                    {
+                        Add(nested);
+                    }
+
+                    break;
+                case BoundFixedStatement fixedStatement:
+                    Add(fixedStatement.Body);
+                    break;
+                case BoundScopeStatement scopeStatement:
+                    Add(scopeStatement.Body);
+                    break;
+                default:
+                    builder.Add(current);
+                    break;
+            }
         }
     }
 
@@ -343,6 +376,7 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.GotoStatement:
                     case BoundNodeKind.ConditionalGotoStatement:
                     case BoundNodeKind.ReturnStatement:
+                    case BoundNodeKind.ThrowStatement:
                         statements.Add(statement);
                         StartBlock();
                         break;
@@ -362,7 +396,6 @@ public sealed class ControlFlowGraph
 
                         break;
                     case BoundNodeKind.TryStatement:
-                    case BoundNodeKind.ThrowStatement:
                     case BoundNodeKind.GoStatement:
                     case BoundNodeKind.ChannelSendStatement:
                     case BoundNodeKind.SelectStatement:
