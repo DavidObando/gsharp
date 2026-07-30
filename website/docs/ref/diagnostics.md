@@ -1671,3 +1671,13 @@ files produce one `GS0366` per legacy occurrence with **no cascade
 errors** — the parser binds the recovered shape to the same
 `MapTypeSymbol` so downstream binding proceeds unchanged.
 
+## Init-only interface implementation mismatch (GS0502)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0502 | Error | An init-only property or positional data member is used to implement an interface property that requires an ordinary setter. |
+
+An `init` accessor has a different CLR signature from `set` because its return
+type carries `modreq(IsExternalInit)`. A positional `data class` or `data
+struct` member is init-only, so it can satisfy a get-only interface property
+but not a settable one. Declare the property explicitly with a `set` accessor.

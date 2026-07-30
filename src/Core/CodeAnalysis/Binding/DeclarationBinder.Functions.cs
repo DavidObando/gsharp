@@ -1664,7 +1664,9 @@ internal sealed partial class DeclarationBinder
             // match exactly — valid C# never lets an explicit property
             // implementation declare an accessor the interface doesn't
             // require.
-            if (iprop.HasGetter != candidate.HasGetter || iprop.HasSetter != candidate.HasSetter)
+            if (iprop.HasGetter != candidate.HasGetter
+                || iprop.HasSetter != candidate.HasSetter
+                || (iprop.HasSetter && iprop.IsInitOnly != candidate.IsInitOnly))
             {
                 continue;
             }

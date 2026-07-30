@@ -1057,4 +1057,30 @@ public sealed partial class DiagnosticBag
     /// <param name="memberName">The shared target member name.</param>
     public void ReportDuplicateExplicitInterfaceImplementation(TextLocation location, string interfaceName, string memberName)
     => Report(location, DiagnosticDescriptors.DuplicateExplicitInterfaceImplementation, interfaceName, memberName);
+
+    /// <summary>
+    /// Issue #2875: reports an init-only implementation for an interface
+    /// property that requires an ordinary setter.
+    /// </summary>
+    /// <param name="location">The implementing type's source location.</param>
+    /// <param name="typeName">The implementing type.</param>
+    /// <param name="memberKind">The implementation kind, such as positional member or init-only property.</param>
+    /// <param name="memberName">The implementing member.</param>
+    /// <param name="interfaceName">The required interface.</param>
+    /// <param name="propertyName">The required interface property.</param>
+    public void ReportInterfaceSetterNotImplementedByInitOnlyProperty(
+        TextLocation location,
+        string typeName,
+        string memberKind,
+        string memberName,
+        string interfaceName,
+        string propertyName)
+    => Report(
+        location,
+        DiagnosticDescriptors.InterfaceSetterNotImplementedByInitOnlyProperty,
+        typeName,
+        memberKind,
+        memberName,
+        interfaceName,
+        propertyName);
 }

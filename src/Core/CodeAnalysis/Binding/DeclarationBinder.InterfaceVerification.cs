@@ -539,18 +539,27 @@ internal sealed partial class DeclarationBinder
                 // them through the existing positional compatibility check
                 // below; ordinary declared properties keep their established
                 // interface-verification behavior.
-                if (implProp.Declaration is null
-                    && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _))
+                var isPositionalMember = implProp.Declaration is null
+                    && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, iprop.Name, out _);
+                if (isPositionalMember)
                 {
                     found = false;
+                }
+                else if (iprop.HasSetter && !iprop.IsInitOnly && implProp.IsInitOnly)
+                {
+                    ReportInitOnlyInterfaceImplementationMismatch(
+                        syntax,
+                        structSymbol,
+                        iface.Name,
+                        iprop.Name,
+                        implProp);
+                    continue;
                 }
             }
 
             // Issue #2150: a data-class positional (primary-constructor)
-            // parameter is materialized as a public instance field and,
-            // like a C# record's positional property, may satisfy a
-            // matching get/set interface property. It never appears in
-            // `.Properties`, so `TryGetProperty` misses it. Walk the
+            // parameter may satisfy a matching get-only interface property.
+            // Walk the
             // this-first BaseClass chain (mirroring `TryGetProperty` and
             // issue #1066) and treat a same-name, type-compatible
             // positional parameter as satisfying the property contract.
@@ -584,11 +593,25 @@ internal sealed partial class DeclarationBinder
                 }
                 else
                 {
+                    // Issue #2875: positional data members are init-only.
+                    // Their set_ accessor carries IsExternalInit and therefore
+                    // cannot fill an ordinary settable interface slot.
+                    if (iprop.HasSetter && !iprop.IsInitOnly)
+                    {
+                        Diagnostics.ReportInterfaceSetterNotImplementedByInitOnlyProperty(
+                            syntax.Identifier.Location,
+                            structSymbol.Name,
+                            "positional member",
+                            positionalParam.Name,
+                            iface.Name,
+                            iprop.Name);
+                        continue;
+                    }
+
                     // Record the positional parameter so a backing
                     // auto-property is synthesized below, filling the
-                    // interface's get_/set_ accessor slots. A data-class
-                    // positional parameter is a mutable public field, so
-                    // it can satisfy a setter requirement too.
+                    // interface's getter (and, for an init-only interface,
+                    // init accessor) slot.
                     var needsSetter = iprop.HasSetter;
                     if (positionalInterfaceProps.TryGetValue(iprop.Name, out var existing))
                     {
@@ -644,6 +667,26 @@ internal sealed partial class DeclarationBinder
         return hasSetter
             ? interfaceIsNullable == implementationIsNullable
             : interfaceIsNullable || !implementationIsNullable;
+    }
+
+    private void ReportInitOnlyInterfaceImplementationMismatch(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        string interfaceName,
+        string propertyName,
+        PropertySymbol implementation)
+    {
+        var memberKind = implementation.Declaration is null
+            && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, implementation.Name, out _)
+                ? "positional member"
+                : "init-only property";
+        Diagnostics.ReportInterfaceSetterNotImplementedByInitOnlyProperty(
+            syntax.Identifier.Location,
+            structSymbol.Name,
+            memberKind,
+            implementation.Name,
+            interfaceName,
+            propertyName);
     }
 
     private void VerifyInterfaceEventImplementations(
@@ -1457,6 +1500,17 @@ internal sealed partial class DeclarationBinder
                         clrIface.FullName ?? clrIface.Name,
                         clrProp.Name + " (setter)");
                 }
+                else if (requiresSetter
+                    && implProp.IsInitOnly
+                    && !IsClrInitOnlySetter(clrProp.SetMethod))
+                {
+                    ReportInitOnlyInterfaceImplementationMismatch(
+                        syntax,
+                        structSymbol,
+                        clrIface.FullName ?? clrIface.Name,
+                        clrProp.Name,
+                        implProp);
+                }
             }
         }
     }
@@ -1618,6 +1672,35 @@ internal sealed partial class DeclarationBinder
                     clrIface.FullName ?? clrIface.Name,
                     openProp.Name + " (setter)");
             }
+            else if (openProp.SetMethod != null
+                && implProp.IsInitOnly
+                && !IsClrInitOnlySetter(openProp.SetMethod))
+            {
+                ReportInitOnlyInterfaceImplementationMismatch(
+                    syntax,
+                    structSymbol,
+                    clrIface.FullName ?? clrIface.Name,
+                    openProp.Name,
+                    implProp);
+            }
+        }
+    }
+
+    private static bool IsClrInitOnlySetter(System.Reflection.MethodInfo setter)
+    {
+        if (setter == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return setter.ReturnParameter.GetRequiredCustomModifiers()
+                .Any(modifier => modifier.FullName == "System.Runtime.CompilerServices.IsExternalInit");
+        }
+        catch
+        {
+            return false;
         }
     }
 
