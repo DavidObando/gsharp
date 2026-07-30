@@ -455,6 +455,90 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         }
     }
 
+    [Fact]
+    public void CopyConstructor_FromImportedDataBase_UsesMemberRefAndPreservesFields()
+    {
+        const string baseSource = """
+            package i2871importedbase
+
+            open data class Base {
+                prop BaseValue int32 { get; init; }
+
+                open prop Kind string {
+                    get;
+                }
+            }
+            """;
+        const string derivedSource = """
+            package i2871importedderived
+
+            import i2871importedbase
+
+            data class Leaf(LeafValue int32) : Base {
+                override prop Kind string -> "leaf"
+            }
+            """;
+        const string csharp = """
+            using i2871importedbase;
+            using i2871importedderived;
+
+            public static class Probe
+            {
+                public static string Run()
+                {
+                    Base original = new Leaf(7) { BaseValue = 3 };
+                    var clone = original with { };
+                    return $"{clone.GetType().Name}:{((Leaf)clone).LeafValue}:{clone.BaseValue}";
+                }
+            }
+            """;
+
+        var directory = CreateArtifactsDirectory();
+        try
+        {
+            var basePath = CompileGSharpLibrary(directory, "BaseRecords", baseSource);
+            var derivedPath = CompileGSharpLibrary(directory, "DerivedRecords", derivedSource, basePath);
+            IlVerifier.Verify(basePath);
+            IlVerifier.Verify(derivedPath, new[] { basePath });
+
+            using (var stream = File.OpenRead(derivedPath))
+            using (var peReader = new PEReader(stream))
+            {
+                var reader = peReader.GetMetadataReader();
+                var leafType = FindType(reader, "Leaf");
+                var leafCopyConstructor = FindCopyConstructor(reader, leafType);
+                var importedBaseCopyConstructor = reader.MemberReferences.Single(handle =>
+                {
+                    var reference = reader.GetMemberReference(handle);
+                    if (reader.GetString(reference.Name) != ".ctor"
+                        || reference.Parent.Kind != HandleKind.TypeReference
+                        || GetParameterCount(reader, reference.Signature) != 1)
+                    {
+                        return false;
+                    }
+
+                    var parent = reader.GetTypeReference((TypeReferenceHandle)reference.Parent);
+                    return reader.GetString(parent.Namespace) == "i2871importedbase"
+                        && reader.GetString(parent.Name) == "Base";
+                });
+
+                Assert.True(MethodContainsCallTo(
+                    peReader,
+                    reader,
+                    leafCopyConstructor,
+                    importedBaseCopyConstructor));
+            }
+
+            Assert.Equal(
+                "Leaf:7:3",
+                CompileCSharpConsumerAndRun(directory, new[] { basePath, derivedPath }, csharp));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static void AssertAbstractClone(MethodDefinition clone)
     {
         Assert.True((clone.Attributes & MethodAttributes.Abstract) != 0);
@@ -548,6 +632,18 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
             });
     }
 
+    private static int GetParameterCount(MetadataReader reader, BlobHandle signatureHandle)
+    {
+        var signature = reader.GetBlobReader(signatureHandle);
+        var header = signature.ReadSignatureHeader();
+        if (header.IsGeneric)
+        {
+            _ = signature.ReadCompressedInteger();
+        }
+
+        return signature.ReadCompressedInteger();
+    }
+
     private static bool TypeContainsCallTo(
         PEReader peReader,
         MetadataReader reader,
@@ -607,6 +703,9 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
     }
 
     private static string CompileCSharpConsumerAndRun(string directory, string libraryPath, string csharp)
+        => CompileCSharpConsumerAndRun(directory, new[] { libraryPath }, csharp);
+
+    private static string CompileCSharpConsumerAndRun(string directory, string[] libraryPaths, string csharp)
     {
         var consumerPath = Path.Combine(directory, "Consumer.dll");
         var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
@@ -614,7 +713,7 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
                 ?? Array.Empty<string>())
             .Where(File.Exists)
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
-            .Append(MetadataReference.CreateFromFile(libraryPath));
+            .Concat(libraryPaths.Select(path => MetadataReference.CreateFromFile(path)));
         var consumer = CSharpCompilation.Create(
             "Consumer",
             new[] { CSharpSyntaxTree.ParseText(csharp, new CSharpParseOptions(LanguageVersion.Latest)) },
@@ -629,8 +728,11 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         var loadContext = new AssemblyLoadContext("Issue2871-" + Guid.NewGuid(), isCollectible: true);
         try
         {
-            var libraryAssembly = loadContext.LoadFromAssemblyPath(libraryPath);
-            _ = libraryAssembly.GetTypes();
+            foreach (var libraryPath in libraryPaths)
+            {
+                _ = loadContext.LoadFromAssemblyPath(libraryPath).GetTypes();
+            }
+
             var consumerAssembly = loadContext.LoadFromAssemblyPath(consumerPath);
             return (string)consumerAssembly.GetType("Probe", throwOnError: true)!
                 .GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!
@@ -642,7 +744,11 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         }
     }
 
-    private static string CompileGSharpLibrary(string directory, string assemblyName, string source)
+    private static string CompileGSharpLibrary(
+        string directory,
+        string assemblyName,
+        string source,
+        params string[] references)
     {
         var sourcePath = Path.Combine(directory, assemblyName + ".gs");
         var libraryPath = Path.Combine(directory, assemblyName + ".dll");
@@ -657,13 +763,16 @@ public sealed class Issue2871CovariantRecordCloneEmitTests
         int exitCode;
         try
         {
-            exitCode = Program.Main(new[]
-            {
-                "/out:" + libraryPath,
-                "/target:library",
-                "/targetframework:net10.0",
-                sourcePath,
-            });
+            var arguments = new[]
+                {
+                    "/out:" + libraryPath,
+                    "/target:library",
+                    "/targetframework:net10.0",
+                }
+                .Concat(references.Select(reference => "/r:" + reference))
+                .Append(sourcePath)
+                .ToArray();
+            exitCode = Program.Main(arguments);
         }
         finally
         {
