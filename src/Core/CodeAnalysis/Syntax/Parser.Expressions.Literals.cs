@@ -1377,6 +1377,7 @@ public partial class Parser
             // This keeps hole disambiguation in sync with every expression
             // form, including ternaries and nullable-element array literals.
             var expressionLength = fragment.Text.Length;
+
             // No separator character means the expression necessarily fills the hole.
             if (fragment.Text.IndexOf(',') >= 0 || fragment.Text.IndexOf(':') >= 0)
             {
