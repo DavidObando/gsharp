@@ -312,6 +312,8 @@ public class Compilation
         }
 
         // Keep interpreted closure cells aligned with emitted closure cells.
+        // Evaluation consumes expression receivers directly and exactly once,
+        // so it does not need the emit-only side-effect spiller first.
         program = Lowering.CaptureBoxingRewriter.Lower(
             program,
             (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
@@ -404,9 +406,9 @@ public class Compilation
 
         // Issue #523: hoist captured locals/parameters into per-variable
         // box classes so function literals see writes to the variable cell
-        // (Go/C# closure semantics). Must run after side-effect spilling
-        // and before the async / iterator state-machine lowerers so they
-        // see the boxed captures rather than the snapshot-by-value pattern.
+        // (Go/C# closure semantics). On the emit path, this must run after
+        // side-effect spilling and before the async / iterator state-machine
+        // lowerers so they see boxed captures rather than snapshots.
         // Issue #2037: thread the MLC cross-reflection-context projector so
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.

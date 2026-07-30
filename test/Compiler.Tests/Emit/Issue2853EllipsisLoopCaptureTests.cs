@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -195,8 +196,10 @@ public class Issue2853EllipsisLoopCaptureTests
 
     private static void AssertEnginesAgree(string source, int expected, string testName)
     {
-        var evaluation = new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
+            .Evaluate(new Dictionary<VariableSymbol, object>()));
+        Assert.True(evaluationTask.Wait(TimeSpan.FromSeconds(30)), "interpreter evaluation timed out");
+        var evaluation = evaluationTask.GetAwaiter().GetResult();
 
         Assert.Empty(evaluation.Diagnostics);
         Assert.Equal(expected, evaluation.Value);

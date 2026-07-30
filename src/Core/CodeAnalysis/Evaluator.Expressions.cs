@@ -505,11 +505,7 @@ public sealed partial class Evaluator
 
     private object EvaluateIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
-        var targetValue = node.TargetExpression != null
-            ? EvaluateExpression(node.TargetExpression)
-            : node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-                ? GetGlobal(node.Target)
-                : Locals.Peek()[node.Target];
+        var targetValue = ResolveReceiverValue(node.TargetExpression, node.Target);
         var targetType = node.TargetExpression?.Type ?? node.Target.Type;
 
         // Phase 3.A.4: map indexed assignment `m[k] = v`.
@@ -1508,11 +1504,7 @@ public sealed partial class Evaluator
 
     private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
-        var target = node.TargetExpression != null
-            ? EvaluateExpression(node.TargetExpression)
-            : node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-                ? GetGlobal(node.Target)
-                : Locals.Peek()[node.Target];
+        var target = ResolveReceiverValue(node.TargetExpression, node.Target);
 
         var args = new object[node.Arguments.Length];
         for (var i = 0; i < node.Arguments.Length; i++)
@@ -1588,11 +1580,7 @@ public sealed partial class Evaluator
             return value;
         }
 
-        var current = node.ReceiverExpression != null
-            ? EvaluateExpression(node.ReceiverExpression)
-            : node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
-                ? GetGlobal(node.Receiver)
-                : Locals.Peek()[node.Receiver];
+        var current = ResolveReceiverValue(node.ReceiverExpression, node.Receiver);
 
         var sv = current as StructValue ?? new StructValue(node.StructType);
 
@@ -1601,13 +1589,13 @@ public sealed partial class Evaluator
         // Go-style value semantics by writing to a copy.
         if (node.StructType.IsClass)
         {
-            var value = EvaluateExpression(node.Value);
-            sv.Fields[node.Field.Name] = value;
-            if (!ReferenceEquals(sv, current))
+            if (current == null)
             {
-                Assign(node.Receiver, sv);
+                throw new NullReferenceException();
             }
 
+            var value = EvaluateExpression(node.Value);
+            sv.Fields[node.Field.Name] = value;
             return value;
         }
         else
@@ -1626,6 +1614,18 @@ public sealed partial class Evaluator
 
             return value;
         }
+    }
+
+    private object ResolveReceiverValue(BoundExpression expression, VariableSymbol receiver)
+    {
+        if (expression != null)
+        {
+            return EvaluateExpression(expression);
+        }
+
+        return receiver.Kind == Symbols.SymbolKind.GlobalVariable
+            ? GetGlobal(receiver)
+            : Locals.Peek()[receiver];
     }
 
     private object EvaluatePropertyAccessExpression(BoundPropertyAccessExpression node)
