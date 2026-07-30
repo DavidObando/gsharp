@@ -1265,11 +1265,12 @@ public partial class Parser
         var keyword = MatchToken(SyntaxKind.ReturnKeyword);
         var keywordLine = syntaxTree.Text.GetLineIndex(keyword.Span.Start);
         var currentLine = syntaxTree.Text.GetLineIndex(Current.Span.Start);
-        var isEof = Current.Kind == SyntaxKind.EndOfFileToken;
-        var sameLine = !isEof && keywordLine == currentLine;
+        var hasExpression = Current.Kind != SyntaxKind.EndOfFileToken
+            && Current.Kind != SyntaxKind.CloseBraceToken
+            && keywordLine == currentLine;
         SyntaxToken refKeyword = null;
         ExpressionSyntax expression = null;
-        if (sameLine)
+        if (hasExpression)
         {
             // Issue #490 (ADR-0060 follow-up): optional `ref` contextual modifier directly
             // following `return` marks this as a ref-return: `return ref <lvalue>`. The
