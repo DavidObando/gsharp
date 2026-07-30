@@ -10,6 +10,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Compiler;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -28,6 +30,7 @@ public class Issue2889LambdaThunkNestedGenericTests
             package i2889imported
             import System
             import System.Collections.Generic
+            import System.Threading.Tasks
 
             class Src {
                 let N int32
@@ -35,6 +38,18 @@ public class Issue2889LambdaThunkNestedGenericTests
             }
 
             struct Pt { var X int32 }
+
+            enum Mode { First, Second }
+
+            interface IValue {
+                func Value() int32;
+            }
+
+            class SourceValue : IValue {
+                let N int32
+                init(n int32) { N = n }
+                func Value() int32 -> N
+            }
 
             class MyBox[T any] {
                 let Value T
@@ -58,6 +73,16 @@ public class Issue2889LambdaThunkNestedGenericTests
 
             func PrintMethod(items List[Src]) {
                 Console.WriteLine(items[0].N)
+            }
+
+            func MakePrinter() System.Action[List[Src]] {
+                return (items List[Src]) -> Console.WriteLine(items[0].N)
+            }
+
+            func InvokePrinter(
+                printer System.Action[List[Src]],
+                items List[Src]) {
+                printer(items)
             }
 
             func Main() {
@@ -111,12 +136,58 @@ public class Issue2889LambdaThunkNestedGenericTests
                 inferred(List[Src]{ Src(20) })
 
                 Holder().Run(List[Src]{ Src(21) })
+
+                let identity System.Func[List[Src], List[Src]] =
+                    (items List[Src]) -> items
+                Console.WriteLine(identity(List[Src]{ Src(23) })[0].N)
+
+                let offset = 1
+                let captured System.Action[List[Src]] =
+                    (items List[Src]) -> Console.WriteLine(items[0].N + offset)
+                captured(List[Src]{ Src(23) })
+
+                MakePrinter()(List[Src]{ Src(25) })
+
+                InvokePrinter(
+                    (items List[Src]) -> Console.WriteLine(items[0].N),
+                    List[Src]{ Src(26) })
+
+                let enumAction System.Action[List[Mode]] =
+                    (items List[Mode]) -> Console.WriteLine(items.Count + 26)
+                enumAction(List[Mode]{ Mode.Second })
+
+                let interfaceAction System.Action[List[IValue]] =
+                    (items List[IValue]) -> Console.WriteLine(items[0].Value())
+                interfaceAction(List[IValue]{ SourceValue(28) })
+
+                let dictionaryAction System.Action[Dictionary[Src, List[Src]]] =
+                    (items Dictionary[Src, List[Src]]) ->
+                        Console.WriteLine(items.Count + 28)
+                let bySource = Dictionary[Src, List[Src]]()
+                bySource.Add(Src(1), List[Src]{ Src(1) })
+                dictionaryAction(bySource)
+
+                let listArrayAction System.Action[[]List[Src]] =
+                    (items []List[Src]) -> Console.WriteLine(items[0][0].N)
+                listArrayAction([]List[Src]{ List[Src]{ Src(30) } })
+
+                let taskFactory System.Func[Task[List[Src]]] =
+                    () -> Task.FromResult[List[Src]](List[Src]{ Src(31) })
+                Console.WriteLine(taskFactory().Result[0].N)
+
+                let taskAction System.Action[Task[List[Src]]] =
+                    (items Task[List[Src]]) -> Console.WriteLine(items.Result[0].N)
+                taskAction(Task.FromResult[List[Src]](List[Src]{ Src(32) }))
             }
             """;
 
         Assert.Equal(
-            "10\n10\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n",
-            CompileAndRun(source, expectedSourceTypeName: "i2889imported.Src"));
+            "10\n10\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n"
+            + "23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n",
+            CompileAndRun(
+                source,
+                expectedSourceTypeName: "i2889imported.Src",
+                expectClosure: true));
     }
 
     [Fact]
@@ -362,11 +433,142 @@ public class Issue2889LambdaThunkNestedGenericTests
             CompileAndRun(source, expectedSourceTypeName: "i2889controls.Src"));
     }
 
+    [Fact]
+    public void InlineLambdaThroughNestedErasedReceiver_ReportsCurrentDiagnostics()
+    {
+        var diagnostics = CompileExpectingFailure("""
+            package i2889inline
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[List[Src]]]()
+                callbacks.Add((items List[Src]) -> Console.WriteLine(items[0].N))
+            }
+            """);
+
+        Assert.Contains("error GS0159: Cannot find function Add.", diagnostics, StringComparison.Ordinal);
+        Assert.Contains(
+            "error GS0155: Cannot convert type 'object' to 'System.Collections.Generic.List[Src]'.",
+            diagnostics,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PublicLibraryDelegateSignature_RoundTripsThroughCSharp()
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "Issue2889_PublicApi_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var librarySourcePath = Path.Combine(directory, "library.gs");
+            var libraryPath = Path.Combine(directory, "i2889publicapi.dll");
+            File.WriteAllText(librarySourcePath, """
+                package i2889publicapi
+                import System
+                import System.Collections.Generic
+
+                class Src {}
+
+                class Api {
+                    shared {
+                        func Register(callback System.Action[List[Src]]) {
+                            callback(List[Src]{ Src() })
+                        }
+                    }
+                }
+                """);
+            Compile(
+            [
+                "/out:" + libraryPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                librarySourcePath,
+            ]);
+            IlVerifier.Verify(libraryPath);
+
+            var syntaxTree = CSharpSyntaxTree.ParseText("""
+                using System.Collections.Generic;
+                using i2889publicapi;
+
+                namespace Consumer;
+
+                public static class Runner
+                {
+                    public static int Run()
+                    {
+                        var count = 0;
+                        Api.Register((List<Src> items) => count = items.Count);
+                        return count;
+                    }
+                }
+                """);
+            var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
+                    ?.Split(Path.PathSeparator)
+                    ?? Array.Empty<string>())
+                .Where(File.Exists)
+                .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+                .Append(MetadataReference.CreateFromFile(libraryPath));
+            var consumerPath = Path.Combine(directory, "consumer.dll");
+            var consumer = CSharpCompilation.Create(
+                "Issue2889CSharpConsumer",
+                new[] { syntaxTree },
+                references,
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using (var peStream = File.Create(consumerPath))
+            {
+                var result = consumer.Emit(peStream);
+                Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+            }
+
+            IlVerifier.Verify(consumerPath, additionalReferences: new[] { libraryPath });
+
+            var loadContext = new AssemblyLoadContext(
+                "Issue2889_PublicApi_" + Guid.NewGuid().ToString("N"),
+                isCollectible: true);
+            try
+            {
+                var libraryAssembly = loadContext.LoadFromAssemblyPath(libraryPath);
+                loadContext.Resolving += (_, name) =>
+                    name.Name == libraryAssembly.GetName().Name ? libraryAssembly : null;
+
+                var api = libraryAssembly.GetTypes().Single(type => type.Name == "Api");
+                var parameterType = api.GetMethod("Register")!.GetParameters().Single().ParameterType;
+                Assert.Equal(typeof(Action<>), parameterType.GetGenericTypeDefinition());
+                var listType = parameterType.GetGenericArguments().Single();
+                Assert.Equal(typeof(List<>), listType.GetGenericTypeDefinition());
+                var sourceType = listType.GetGenericArguments().Single();
+                Assert.Equal("i2889publicapi.Src", sourceType.FullName);
+                Assert.NotEqual(typeof(object), sourceType);
+
+                var consumerAssembly = loadContext.LoadFromAssemblyPath(consumerPath);
+                var run = consumerAssembly.GetType("Consumer.Runner")!.GetMethod("Run")!;
+                Assert.Equal(1, run.Invoke(null, null));
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
     private static string CompileAndRun(
         string source,
         string expectedSourceTypeName,
         string library = null,
-        string libraryAssemblyName = null)
+        string libraryAssemblyName = null,
+        bool expectClosure = false)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -410,7 +612,11 @@ public class Issue2889LambdaThunkNestedGenericTests
             IlVerifier.Verify(
                 assemblyPath,
                 libraryPath != null ? new[] { libraryPath } : null);
-            AssertLambdaSignatures(assemblyPath, expectedSourceTypeName, libraryPath);
+            AssertLambdaSignatures(
+                assemblyPath,
+                expectedSourceTypeName,
+                libraryPath,
+                expectClosure);
 
             var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
             if (!File.Exists(runtimeConfigPath))
@@ -449,20 +655,15 @@ public class Issue2889LambdaThunkNestedGenericTests
         }
         finally
         {
-            try
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-            catch
-            {
-            }
+            TryDeleteDirectory(directory);
         }
     }
 
     private static void AssertLambdaSignatures(
         string assemblyPath,
         string expectedSourceTypeName,
-        string libraryPath)
+        string libraryPath,
+        bool expectClosure)
     {
         var loadContext = new AssemblyLoadContext(
             "Issue2889_" + Guid.NewGuid().ToString("N"),
@@ -478,30 +679,43 @@ public class Issue2889LambdaThunkNestedGenericTests
         try
         {
             var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
-            var signatures = assembly
+            var lambdaMethods = assembly
                 .GetTypes()
                 .SelectMany(type => type.GetMethods(
                     BindingFlags.Public
                     | BindingFlags.NonPublic
                     | BindingFlags.Static
-                    | BindingFlags.Instance))
-                .Where(method => method.Name.Contains("<lambda", StringComparison.Ordinal))
-                .Select(method =>
-                    method.ReturnType + "("
-                    + string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType))
-                    + ")")
+                    | BindingFlags.Instance)
+                    .Where(method =>
+                        method.Name.Contains("<lambda", StringComparison.Ordinal)
+                        || (type.FullName?.Contains("<closure", StringComparison.Ordinal) == true
+                            && method.Name == "Invoke"))
+                    .Select(method => (Type: type, Method: method)))
                 .ToArray();
 
-            Assert.NotEmpty(signatures);
-            var rendered = string.Join("\n", signatures);
+            Assert.NotEmpty(lambdaMethods);
+            if (expectClosure)
+            {
+                Assert.Contains(
+                    lambdaMethods,
+                    candidate =>
+                        candidate.Type.FullName?.Contains("<closure", StringComparison.Ordinal) == true
+                        && candidate.Method.Name == "Invoke");
+            }
+
+            var rendered = string.Join(
+                "\n",
+                lambdaMethods.Select(candidate =>
+                    candidate.Method.ReturnType + "("
+                    + string.Join(
+                        ",",
+                        candidate.Method.GetParameters().Select(parameter => parameter.ParameterType))
+                    + ")"));
             Assert.Contains(
                 "System.Collections.Generic.List`1[" + expectedSourceTypeName + "]",
                 rendered,
                 StringComparison.Ordinal);
-            Assert.DoesNotContain(
-                "System.Collections.Generic.List`1[System.Object]",
-                rendered,
-                StringComparison.Ordinal);
+            Assert.DoesNotMatch(@"(?:\[|,)System\.Object(?=[\],\[])", rendered);
         }
         finally
         {
@@ -509,7 +723,40 @@ public class Issue2889LambdaThunkNestedGenericTests
         }
     }
 
+    private static string CompileExpectingFailure(string source)
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "Issue2889_Failure_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+            var result = RunCompiler(
+            [
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                sourcePath,
+            ]);
+            Assert.NotEqual(0, result.ExitCode);
+            return result.Diagnostics;
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
     private static void Compile(string[] args)
+    {
+        var result = RunCompiler(args);
+        Assert.True(result.ExitCode == 0, $"gsc failed:\n{result.Diagnostics}");
+    }
+
+    private static (int ExitCode, string Diagnostics) RunCompiler(string[] args)
     {
         using var stdoutWriter = new StringWriter();
         using var stderrWriter = new StringWriter();
@@ -528,8 +775,19 @@ public class Issue2889LambdaThunkNestedGenericTests
             Console.SetError(previousError);
         }
 
-        Assert.True(
-            exitCode == 0,
-            $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
+        return (
+            exitCode,
+            $"stdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
+    }
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch
+        {
+        }
     }
 }
