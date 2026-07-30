@@ -158,6 +158,13 @@ internal static class CaptureBoxingRewriter
         return result;
     }
 
+    internal static bool IsCaptured(BoundStatement body, VariableSymbol variable)
+    {
+        var captured = new HashSet<VariableSymbol>();
+        CaptureWalker.Collect(body, captured);
+        return captured.Contains(variable);
+    }
+
     private static (BoundBlockStatement Body, Dictionary<FunctionSymbol, BoundBlockStatement> LambdaUpdates)
         RewriteFunctionBody(
         FunctionSymbol function,

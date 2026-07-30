@@ -43,16 +43,12 @@ namespace GSharp.Compiler.Tests.Emit;
 /// ordinary slot via specialized emit dispatch, exactly like a catch clause.
 /// </para>
 /// <para>
-/// A <c>for i in a...b</c> loop variable was also audited: it is boxed
-/// correctly already, because the general <c>Lowerer</c> desugars it into an
-/// ordinary <c>var i = a</c> declaration (feeding the C-style counting loop)
-/// during binding, *before* <c>CaptureBoxingRewriter</c> runs — so the
-/// existing <c>RewriteVariableDeclaration</c> box path already covers it (and,
-/// matching C#'s <c>for</c> loop semantics, all closures over it correctly
-/// share one variable cell for the whole loop, not a fresh cell per
-/// iteration — a `for x in collection` foreach loop remains intentionally
-/// un-boxed, since its per-iteration-fresh variable already matches C#
-/// foreach semantics). An unsafe <c>fixed</c> pointer/pinned local capture was
+/// A <c>for i in a...b</c> loop variable is also declaration-backed before
+/// capture boxing. When captured, ellipsis lowering now separates the hidden
+/// counting variable from a fresh per-iteration <c>i</c> declaration, so the
+/// existing <c>RewriteVariableDeclaration</c> box path allocates one cell per
+/// iteration, matching G# collection <c>for-in</c> semantics. An unsafe
+/// <c>fixed</c> pointer/pinned local capture was
 /// also audited: rather than box a raw unmanaged pointer past the lifetime of
 /// its pin (unsafe — the pin is released when the enclosing <c>fixed</c>
 /// block exits), the fix rejects the escape at binding time with a dedicated

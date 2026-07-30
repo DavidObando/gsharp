@@ -299,7 +299,11 @@ public sealed class Lowerer : BoundTreeRewriter
         //     gotoTrue ((step > 0 && lower < upper) || (step < 0 && lower > upper)) body
         //     break:
         // }
-        var variableDeclaration = new BoundVariableDeclaration(null, node.Variable, node.LowerBound);
+        var isCaptured = CaptureBoxingRewriter.IsCaptured(node.Body, node.Variable);
+        var controlVariable = isCaptured
+            ? new LocalVariableSymbol("$ellipsis", isReadOnly: false, type: TypeSymbol.Int32)
+            : node.Variable;
+        var variableDeclaration = new BoundVariableDeclaration(null, controlVariable, node.LowerBound);
         var upperBoundSymbol = new LocalVariableSymbol("upperBound", isReadOnly: true, type: TypeSymbol.Int32);
         var upperBoundDeclaration = new BoundVariableDeclaration(null, upperBoundSymbol, node.UpperBound);
         var stepBoundSymbol = new LocalVariableSymbol("step", isReadOnly: false, type: TypeSymbol.Int32);
@@ -307,7 +311,7 @@ public sealed class Lowerer : BoundTreeRewriter
             null,
             variable: stepBoundSymbol,
             initializer: new BoundLiteralExpression(null, 1));
-        var variableExpression = new BoundVariableExpression(null, node.Variable);
+        var variableExpression = new BoundVariableExpression(null, controlVariable);
         var upperBoundExpression = new BoundVariableExpression(null, upperBoundSymbol);
         var stepBoundExpression = new BoundVariableExpression(null, stepBoundSymbol);
         var ifLowerIsGreaterThanUpperExpression = new BoundBinaryExpression(
@@ -331,11 +335,22 @@ public sealed class Lowerer : BoundTreeRewriter
         var bodyLabel = GenerateLabel();
         var bodyLabelStatement = new BoundLabelStatement(null, bodyLabel);
         var continueLabelStatement = new BoundLabelStatement(null, node.ContinueLabel);
+        var iterationVariableDeclaration = isCaptured
+            ? new BoundVariableDeclaration(null, node.Variable, variableExpression)
+            : null;
+        var copyIterationVariableBack = isCaptured
+            ? new BoundExpressionStatement(
+                null,
+                new BoundAssignmentExpression(
+                    null,
+                    controlVariable,
+                    new BoundVariableExpression(null, node.Variable)))
+            : null;
         var increment = new BoundExpressionStatement(
             null,
             expression: new BoundAssignmentExpression(
                 null,
-                variable: node.Variable,
+                variable: controlVariable,
                 expression: new BoundBinaryExpression(
                     null,
                     left: variableExpression,
@@ -381,21 +396,31 @@ public sealed class Lowerer : BoundTreeRewriter
         var gotoTrue = new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true);
         var breakLabelStatement = new BoundLabelStatement(null, node.BreakLabel);
 
-        var result = new BoundBlockStatement(
-            null,
-            ImmutableArray.Create<BoundStatement>(
-            variableDeclaration,
-            upperBoundDeclaration,
-            stepBoundDeclaration,
-            ifLowerIsGreaterThanUpperIfStatement,
-            gotoStart,
-            bodyLabelStatement,
-            node.Body,
-            continueLabelStatement,
-            increment,
-            startLabelStatement,
-            gotoTrue,
-            breakLabelStatement));
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(variableDeclaration);
+        statements.Add(upperBoundDeclaration);
+        statements.Add(stepBoundDeclaration);
+        statements.Add(ifLowerIsGreaterThanUpperIfStatement);
+        statements.Add(gotoStart);
+        statements.Add(bodyLabelStatement);
+        if (iterationVariableDeclaration != null)
+        {
+            statements.Add(iterationVariableDeclaration);
+        }
+
+        statements.Add(node.Body);
+        statements.Add(continueLabelStatement);
+        if (copyIterationVariableBack != null)
+        {
+            statements.Add(copyIterationVariableBack);
+        }
+
+        statements.Add(increment);
+        statements.Add(startLabelStatement);
+        statements.Add(gotoTrue);
+        statements.Add(breakLabelStatement);
+
+        var result = new BoundBlockStatement(null, statements.ToImmutable());
         return RewriteStatement(result);
     }
 
