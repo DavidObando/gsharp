@@ -675,6 +675,11 @@ public static class SymbolDisplay
                     return $"[]?{FormatType(nullableSlice.ElementType)}";
                 }
 
+                if (nullable.UnderlyingType is ArrayTypeSymbol nullableArray)
+                {
+                    return $"[{nullableArray.Length}]?{FormatType(nullableArray.ElementType)}";
+                }
+
                 var underlying = FormatType(nullable.UnderlyingType);
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"
@@ -683,6 +688,10 @@ public static class SymbolDisplay
                 return FormatType(annotated.BaseType);
             case FunctionTypeSymbol function:
                 return FormatFunctionType(function);
+            case FunctionPointerTypeSymbol functionPointer:
+                return FormatFunctionPointerType(functionPointer);
+            case ArrayTypeSymbol array:
+                return $"[{array.Length}]{FormatType(array.ElementType)}";
             case SliceTypeSymbol slice:
                 return $"[]{FormatType(slice.ElementType)}";
             case AsyncSequenceTypeSymbol asyncSequence:
@@ -691,10 +700,14 @@ public static class SymbolDisplay
                 return $"sequence[{FormatType(sequence.ElementType)}]";
             case MapTypeSymbol map:
                 return $"map[{FormatType(map.KeyType)},{FormatType(map.ValueType)}]";
+            case ChannelTypeSymbol channel:
+                return $"chan {FormatType(channel.ElementType)}";
             case PointerTypeSymbol pointer:
                 return $"*{FormatType(pointer.PointeeType)}";
             case ByRefTypeSymbol byRef:
                 return $"*{FormatType(byRef.PointeeType)}";
+            case PinnedTypeSymbol pinned:
+                return $"pinned {FormatType(pinned.UnderlyingType)}";
             case TupleTypeSymbol tuple:
                 return $"({string.Join(", ", tuple.ElementTypes.Select(FormatType))})";
             case StructSymbol aggregate when IsAnonymousClassType(aggregate):
@@ -833,6 +846,20 @@ public static class SymbolDisplay
         sb.Append(") -> ");
         sb.Append(FormatType(function.ReturnType));
         return sb.ToString();
+    }
+
+    private static string FormatFunctionPointerType(FunctionPointerTypeSymbol functionPointer)
+    {
+        var parameters = string.Join(", ", functionPointer.ParameterTypes.Select(FormatGenericTypeArgument));
+        var returnType = FormatGenericTypeArgument(functionPointer.ReturnType);
+        if (!functionPointer.IsManaged)
+        {
+            return $"unmanaged[{functionPointer.CallingConvention}] ({parameters}) -> {returnType}";
+        }
+
+        return functionPointer.ReturnType == TypeSymbol.Void
+            ? $"*func({parameters})"
+            : $"*func({parameters}) {returnType}";
     }
 
     /// <summary>

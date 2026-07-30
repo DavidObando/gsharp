@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.InteropServices;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -79,12 +80,17 @@ public class Issue2851GenericDiagnosticDisplayTests
         var box = StructSymbol.Construct(definition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
         var cases = new (TypeSymbol Type, string Display)[]
         {
+            (ArrayTypeSymbol.Get(box, 3), "[3]Box[int32]"),
             (SliceTypeSymbol.Get(box), "[]Box[int32]"),
             (SequenceTypeSymbol.Get(box), "sequence[Box[int32]]"),
             (MapTypeSymbol.Get(TypeSymbol.String, box), "map[string,Box[int32]]"),
+            (ChannelTypeSymbol.Get(box), "chan Box[int32]"),
             (TupleTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box, TypeSymbol.Int32)), "(Box[int32], int32)"),
             (FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(box), TypeSymbol.Void), "(Box[int32]) -> void"),
+            (FunctionPointerTypeSymbol.GetManaged(ImmutableArray.Create<TypeSymbol>(box), box), "*func(Box[int32]) Box[int32]"),
+            (FunctionPointerTypeSymbol.Get(CallingConvention.Cdecl, ImmutableArray.Create<TypeSymbol>(box), box), "unmanaged[Cdecl] (Box[int32]) -> Box[int32]"),
             (PointerTypeSymbol.Get(box), "*Box[int32]"),
+            (new PinnedTypeSymbol(box), "pinned Box[int32]"),
         };
 
         foreach (var (type, display) in cases)
@@ -95,6 +101,21 @@ public class Issue2851GenericDiagnosticDisplayTests
             var diagnostic = Assert.Single(bag);
             Assert.Equal($"Cannot convert type '{display}' to 'string'.", diagnostic.Message);
         }
+    }
+
+    [Fact]
+    public void FixedArrayDisplay_DistinguishesNullableArrayFromNullableElements()
+    {
+        var nullableArray = NullableTypeSymbol.Get(ArrayTypeSymbol.Get(TypeSymbol.Int32, 3));
+        var nullableElements = ArrayTypeSymbol.Get(NullableTypeSymbol.Get(TypeSymbol.Int32), 3);
+        var nullableArrayAndElements = NullableTypeSymbol.Get(nullableElements);
+
+        Assert.Equal("[3]?int32", SymbolDisplay.ToTypeDisplayString(nullableArray));
+        Assert.Equal("[3]int32?", SymbolDisplay.ToTypeDisplayString(nullableElements));
+        Assert.Equal("[3]?int32?", SymbolDisplay.ToTypeDisplayString(nullableArrayAndElements));
+        Assert.NotEqual(
+            SymbolDisplay.ToTypeDisplayString(nullableArray),
+            SymbolDisplay.ToTypeDisplayString(nullableElements));
     }
 
     [Fact]
