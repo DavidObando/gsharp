@@ -63,6 +63,10 @@ public sealed partial class Evaluator
 
             switch (s.Kind)
             {
+                case BoundNodeKind.BlockStatement:
+                    EvaluateStatement((BoundBlockStatement)s);
+                    index++;
+                    break;
                 case BoundNodeKind.VariableDeclaration:
                     EvaluateVariableDeclaration((BoundVariableDeclaration)s);
                     index++;

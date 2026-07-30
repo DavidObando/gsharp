@@ -127,13 +127,20 @@ internal sealed class BinderContext
     /// the binder's root scope is created.</param>
     public BinderContext(BoundScope parent)
     {
-        RootScope = new BoundScope(parent);
+        InitialScope = new BoundScope(parent);
+        RootScope = InitialScope;
     }
 
     /// <summary>
     /// Gets the diagnostics bag for the binder this context backs.
     /// </summary>
     public DiagnosticBag Diagnostics { get; } = new DiagnosticBag();
+
+    /// <summary>
+    /// Gets the binder's initial scope. Unlike <see cref="RootScope"/>, this
+    /// remains stable while nested statement binding pushes child scopes.
+    /// </summary>
+    public BoundScope InitialScope { get; }
 
     /// <summary>
     /// Gets the reference resolver associated with the binder's scope chain.

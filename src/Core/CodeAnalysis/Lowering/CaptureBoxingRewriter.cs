@@ -134,6 +134,17 @@ internal static class CaptureBoxingRewriter
             return program;
         }
 
+        var statement = program.Statement;
+
+        // Binder registers synthesized top-level statements as the same block
+        // instance in Statement and Functions[EntryPoint].
+        if (program.EntryPoint != null
+            && program.Functions.TryGetValue(program.EntryPoint, out var entryPointBody)
+            && ReferenceEquals(statement, entryPointBody))
+        {
+            statement = newFunctions[program.EntryPoint];
+        }
+
         var combinedStructs = program.Structs.AddRange(newStructs);
 
         var result = new BoundProgram(
@@ -142,7 +153,7 @@ internal static class CaptureBoxingRewriter
             program.Diagnostics,
             newFunctions.ToImmutable(),
             program.EntryPoint,
-            program.Statement,
+            statement,
             combinedStructs,
             program.Interfaces,
             program.Enums,
@@ -156,6 +167,13 @@ internal static class CaptureBoxingRewriter
         };
 
         return result;
+    }
+
+    internal static bool IsCaptured(BoundStatement body, VariableSymbol variable)
+    {
+        var captured = new HashSet<VariableSymbol>();
+        CaptureWalker.Collect(body, captured);
+        return captured.Contains(variable);
     }
 
     private static (BoundBlockStatement Body, Dictionary<FunctionSymbol, BoundBlockStatement> LambdaUpdates)

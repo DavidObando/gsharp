@@ -505,12 +505,11 @@ public sealed partial class Evaluator
 
     private object EvaluateIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
-        var targetValue = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-            ? GetGlobal(node.Target)
-            : Locals.Peek()[node.Target];
+        var targetValue = ResolveReceiverValue(node.TargetExpression, node.Target);
+        var targetType = node.TargetExpression?.Type ?? node.Target.Type;
 
         // Phase 3.A.4: map indexed assignment `m[k] = v`.
-        if (node.Target.Type is MapTypeSymbol && targetValue is System.Collections.IDictionary dict)
+        if (targetType is MapTypeSymbol && targetValue is System.Collections.IDictionary dict)
         {
             var key = EvaluateExpression(node.Index);
             var value = EvaluateExpression(node.Value);
@@ -1505,9 +1504,7 @@ public sealed partial class Evaluator
 
     private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
-        var target = node.Target.Kind == Symbols.SymbolKind.GlobalVariable
-            ? GetGlobal(node.Target)
-            : Locals.Peek()[node.Target];
+        var target = ResolveReceiverValue(node.TargetExpression, node.Target);
 
         var args = new object[node.Arguments.Length];
         for (var i = 0; i < node.Arguments.Length; i++)
@@ -1567,7 +1564,7 @@ public sealed partial class Evaluator
     {
         // ADR-0053: static field assignment — receiver is null; store in the
         // static-field storage keyed by (StructType, Field).
-        if (node.Receiver == null)
+        if (node.Receiver == null && node.ReceiverExpression == null)
         {
             var value = EvaluateExpression(node.Value);
 
@@ -1583,9 +1580,7 @@ public sealed partial class Evaluator
             return value;
         }
 
-        var current = node.Receiver.Kind == Symbols.SymbolKind.GlobalVariable
-            ? GetGlobal(node.Receiver)
-            : Locals.Peek()[node.Receiver];
+        var current = ResolveReceiverValue(node.ReceiverExpression, node.Receiver);
 
         var sv = current as StructValue ?? new StructValue(node.StructType);
 
@@ -1594,13 +1589,13 @@ public sealed partial class Evaluator
         // Go-style value semantics by writing to a copy.
         if (node.StructType.IsClass)
         {
-            var value = EvaluateExpression(node.Value);
-            sv.Fields[node.Field.Name] = value;
-            if (!ReferenceEquals(sv, current))
+            if (current == null)
             {
-                Assign(node.Receiver, sv);
+                throw new NullReferenceException();
             }
 
+            var value = EvaluateExpression(node.Value);
+            sv.Fields[node.Field.Name] = value;
             return value;
         }
         else
@@ -1608,9 +1603,29 @@ public sealed partial class Evaluator
             var copy = sv.Copy();
             var value = EvaluateExpression(node.Value);
             copy.Fields[node.Field.Name] = value;
-            Assign(node.Receiver, copy);
+            if (node.ReceiverExpression != null)
+            {
+                WriteBackToOperand(node.ReceiverExpression, copy);
+            }
+            else
+            {
+                Assign(node.Receiver, copy);
+            }
+
             return value;
         }
+    }
+
+    private object ResolveReceiverValue(BoundExpression expression, VariableSymbol receiver)
+    {
+        if (expression != null)
+        {
+            return EvaluateExpression(expression);
+        }
+
+        return receiver.Kind == Symbols.SymbolKind.GlobalVariable
+            ? GetGlobal(receiver)
+            : Locals.Peek()[receiver];
     }
 
     private object EvaluatePropertyAccessExpression(BoundPropertyAccessExpression node)

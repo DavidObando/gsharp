@@ -34,6 +34,10 @@ let trimmed = numbers[1..^1]
 
 Lambda literals use the arrow form. The canonical form infers parameter and return types from the target delegate: `(x) -> expr`, `(a, b) -> expr`, or the paren-dropped single-parameter `x -> expr`; block bodies use `(params) -> { ... }`. A block body is a statement block with an optional trailing value expression: an `if`-without-`else` and other void control-flow run as statements, `return` works anywhere, and a trailing expression (or `return`) supplies the value — full parity with `func` literals (void when neither yields a value). Types may also be written explicitly (`(x int32) -> expr`), and async lambdas use `async (params) -> ...`. A trailing lambda may follow a call as the final argument.
 
+Closures capture local and parameter variable cells, not value snapshots.
+Writes through the enclosing scope or another closure are visible to every
+closure that captures the same variable.
+
 Members can also use `->` for a single-expression body: `func Square(x int32) int32 -> x * x`, `prop Count int32 -> items.Length`, `get -> field`, and `set -> field = value`. The C# fat arrow `=>` is not G# syntax.
 
 ## Interpolation
@@ -105,6 +109,12 @@ for i in 0...10 {
     Console.WriteLine(i)
 }
 ```
+
+Captured variables introduced by collection `for-in` and numeric ellipsis
+loops are fresh for each iteration. A variable declared in a three-part loop
+(`for var i = 0; i < n; i++`) is shared by every closure created by that loop.
+A captured local declared inside any loop body is fresh each time its
+declaration executes, regardless of loop form.
 
 ## Goto and labels
 
