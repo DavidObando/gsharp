@@ -30,14 +30,13 @@ namespace GSharp.Compiler.Tests.Emit;
 /// bookkeeping can't index.
 /// </para>
 /// <para>
-/// The fix reuses <c>ControlFlowGraph.SwitchAlwaysReturns</c> — the exact
-/// reachability check the binder already uses for definite-return analysis
-/// (issue #1596) — to detect this case and skip emitting the trailing
-/// <c>Br endLabel</c> / <c>MarkLabel(endLabel)</c> entirely when the switch
-/// is exhaustive (has a <c>default</c>) and every arm definitely
-/// returns/throws. All other shapes (non-exhaustive switches, switches with a
-/// non-terminal arm, switches followed by more code, and switches using
-/// <c>break</c>) keep emitting the end label exactly as before.
+/// The emitter now keeps one uniform switch shape, including the trailing
+/// <c>Br endLabel</c> / <c>MarkLabel(endLabel)</c>. The method-body epilogue
+/// guard in <c>MethodBodyEmitter.EmitMethodBody</c> recognizes that this label
+/// leaves the current IL position open and appends a real <c>ret</c>. Dead
+/// branches therefore target a valid instruction instead of the exact end of
+/// the method body, preserving the fix for every exhaustive and
+/// non-exhaustive switch shape.
 /// </para>
 /// </summary>
 public class Issue2283SwitchAllTerminalArmsEmitTests

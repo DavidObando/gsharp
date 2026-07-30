@@ -56,16 +56,10 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(node.Discriminant);
         this.il.StoreLocal(discriminantSlot);
 
-        // If the switch is exhaustive (has a `default` arm) and every arm
-        // definitely returns/throws, no path ever falls through to an "end"
-        // of the switch — emitting a trailing `Br endLabel`/`MarkLabel(endLabel)`
-        // in that case produces a label reachable only via dead branches,
-        // which crashes ilverify's predecessor bookkeeping (issue #2283).
-        // Reuse the same reachability analysis the binder already uses for
-        // definite-return checking (ControlFlowGraph.SwitchAlwaysReturns) so
-        // this stays in sync with that logic.
-        var alwaysReturns = ControlFlowGraph.SwitchAlwaysReturns(node);
-        var endLabel = alwaysReturns ? default : this.il.DefineLabel();
+        // Issue #2283: all-terminal switches still emit their uniform dead
+        // branches/end label. EmitMethodBody must append a real ret at that
+        // label so no branch targets the exact end of the method body.
+        var endLabel = this.il.DefineLabel();
         BoundPatternSwitchArm defaultArm = null;
 
         foreach (var arm in node.Arms)
@@ -89,10 +83,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             this.EmitStatement(arm.Body);
-            if (!alwaysReturns)
-            {
-                this.il.Branch(ILOpCode.Br, endLabel);
-            }
+            this.il.Branch(ILOpCode.Br, endLabel);
 
             this.il.MarkLabel(nextArm);
         }
@@ -102,10 +93,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitStatement(defaultArm.Body);
         }
 
-        if (!alwaysReturns)
-        {
-            this.il.MarkLabel(endLabel);
-        }
+        this.il.MarkLabel(endLabel);
     }
 
     // Phase C: switch-expression emit. Mirrors the pattern-switch

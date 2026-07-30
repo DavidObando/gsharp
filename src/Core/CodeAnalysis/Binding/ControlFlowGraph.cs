@@ -86,9 +86,7 @@ public sealed class ControlFlowGraph
             // falls off its end either, so it is likewise a valid terminator
             // (issue #1596). Non-exhaustive switches (no `default`) still fall
             // through and are rejected below.
-            if (lastStatement.Kind != BoundNodeKind.ReturnStatement
-                && lastStatement.Kind != BoundNodeKind.ThrowStatement
-                && !(lastStatement is BoundPatternSwitchStatement sw && SwitchAlwaysReturns(sw)))
+            if (!StatementDefinitelyReturns(lastStatement))
             {
                 return false;
             }
@@ -179,7 +177,7 @@ public sealed class ControlFlowGraph
     /// </summary>
     /// <param name="statement">The bound statement.</param>
     /// <returns>Whether the statement definitely returns or throws.</returns>
-    private static bool StatementDefinitelyReturns(BoundStatement statement)
+    internal static bool StatementDefinitelyReturns(BoundStatement statement)
     {
         switch (statement)
         {
@@ -190,6 +188,8 @@ public sealed class ControlFlowGraph
                 return last != null && StatementDefinitelyReturns(last);
             case BoundPatternSwitchStatement nestedSwitch:
                 return SwitchAlwaysReturns(nestedSwitch);
+            case BoundFixedStatement fixedStatement:
+                return StatementDefinitelyReturns(fixedStatement.Body);
             default:
                 return statement.Kind == BoundNodeKind.ReturnStatement
                     || statement.Kind == BoundNodeKind.ThrowStatement;
@@ -352,12 +352,10 @@ public sealed class ControlFlowGraph
                         statements.Add(statement);
                         break;
                     case BoundNodeKind.PatternSwitchStatement:
+                    case BoundNodeKind.FixedStatement:
                         statements.Add(statement);
 
-                        // An exhaustive switch (default present and every arm
-                        // returns/throws) terminates the block like a return;
-                        // otherwise it falls through to the next statement.
-                        if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
+                        if (StatementDefinitelyReturns(statement))
                         {
                             StartBlock();
                         }
@@ -369,14 +367,12 @@ public sealed class ControlFlowGraph
                     case BoundNodeKind.ChannelSendStatement:
                     case BoundNodeKind.SelectStatement:
                     case BoundNodeKind.ScopeStatement:
-                    case BoundNodeKind.FixedStatement:
                     case BoundNodeKind.AwaitForRangeStatement:
                     case BoundNodeKind.YieldStatement:
                         // Treat exception-flow constructs as opaque statements; precise
                         // CFG modeling of catch/finally edges is deferred to a later phase.
                         // GoStatement and ChannelSendStatement fall through to the next
-                        // statement at the CFG level. A FixedStatement carries a pinned
-                        // body that likewise falls through to the following statement.
+                        // statement at the CFG level.
                         statements.Add(statement);
                         break;
                     default:
@@ -471,11 +467,8 @@ public sealed class ControlFlowGraph
                             Connect(current, end);
                             break;
                         case BoundNodeKind.PatternSwitchStatement:
-                            // An exhaustive switch (default present and every arm
-                            // returns/throws) terminates control like a return and
-                            // connects to the end block. A non-exhaustive switch may
-                            // fall through to the next statement (issue #1596).
-                            if (SwitchAlwaysReturns((BoundPatternSwitchStatement)statement))
+                        case BoundNodeKind.FixedStatement:
+                            if (StatementDefinitelyReturns(statement))
                             {
                                 Connect(current, end);
                             }
@@ -494,7 +487,6 @@ public sealed class ControlFlowGraph
                         case BoundNodeKind.ChannelSendStatement:
                         case BoundNodeKind.SelectStatement:
                         case BoundNodeKind.ScopeStatement:
-                        case BoundNodeKind.FixedStatement:
                         case BoundNodeKind.AwaitForRangeStatement:
                         case BoundNodeKind.YieldStatement:
                             // Issue #798: `yield` (ADR-0040) participates in the

@@ -134,6 +134,10 @@ internal sealed partial class MethodBodyEmitter
     private readonly List<SequencePoint> sequencePoints = new List<SequencePoint>();
     private int lastSequencePointIlOffset = -1;
 
+    // Tracks whether the current linear IL position is closed by ret, throw,
+    // or an unconditional branch. A label or ordinary instruction reopens it.
+    private bool currentPositionEndsInTerminator;
+
     public MethodBodyEmitter(
         ReflectionMetadataEmitter outer,
         InstructionEncoder il,
@@ -226,6 +230,18 @@ internal sealed partial class MethodBodyEmitter
         }
     }
 
+    public void EmitMethodBody(BoundBlockStatement body, bool alwaysAppendRet)
+    {
+        this.EmitBlock(body);
+
+        // Preserve the legacy trailing ret on void bodies. For value bodies,
+        // cap only an emitted dead-code tail that follows the real terminator.
+        if (alwaysAppendRet || !this.currentPositionEndsInTerminator)
+        {
+            this.il.OpCode(ILOpCode.Ret);
+        }
+    }
+
     private void EmitBlockExpression(BoundBlockExpression blockExpression)
     {
         // Labels introduced inside an expression-position block (e.g. the
@@ -256,6 +272,8 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStatement(BoundStatement statement)
     {
+        var startOffset = this.il.Offset;
+
         if (statement.Syntax != null)
         {
             this.currentNode = statement;
@@ -355,6 +373,16 @@ internal sealed partial class MethodBodyEmitter
                     statement.Syntax,
                     $"Bound statement kind '{statement.Kind}' is not yet supported by the emitter.");
                 break;
+        }
+
+        if (statement is BoundLabelStatement)
+        {
+            this.currentPositionEndsInTerminator = false;
+        }
+        else if (statement is not BoundBlockStatement && this.il.Offset != startOffset)
+        {
+            this.currentPositionEndsInTerminator =
+                statement is BoundReturnStatement or BoundThrowStatement or BoundGotoStatement;
         }
     }
 
