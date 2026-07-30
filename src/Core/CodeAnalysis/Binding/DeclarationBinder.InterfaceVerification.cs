@@ -509,6 +509,17 @@ internal sealed partial class DeclarationBinder
             var found = ReferenceEquals(propertyDefIface, iface)
                 ? TypeMemberModel.TryGetProperty(structSymbol, iprop.Name, out implProp)
                 : TryGetConstructedInterfacePropertyImplementation(structSymbol, iface, iprop, out implProp);
+            if (found
+                && !implProp.HasExplicitInterfaceClause
+                && !IsInterfacePropertyTypeCompatible(
+                    implProp.Type,
+                    iprop.Type,
+                    iprop.HasSetter,
+                    BuildInterfaceTypeParameterMap(iface)))
+            {
+                found = false;
+            }
+
             if (found)
             {
                 if (iprop.HasGetter && !implProp.HasGetter)
@@ -709,8 +720,7 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                if (parametersMatch
-                    && TypeSignaturesEquivalent(interfaceProperty.Type, candidate.Type, typeParameterMap))
+                if (parametersMatch)
                 {
                     implementation = candidate;
                     return true;
