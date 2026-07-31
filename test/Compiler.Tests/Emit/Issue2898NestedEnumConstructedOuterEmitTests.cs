@@ -22,6 +22,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
     {
         const string source = """
             package P
+            import System.Collections.Generic
 
             struct Outer[T] {
                 enum Color { Red }
@@ -37,6 +38,16 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
             func BI() object { return Outer[int32].Color.Red }
             func BS() object { return Outer[string].Color.Red }
             func Capture[T](c Outer[T].Color) () -> Outer[T].Color -> () -> c
+            func Remap[A, B](c Outer[B].Color) int32 {
+                var outer = List[Outer[B].Color]()
+                outer.Add(c)
+                let f (Outer[B].Color) -> int32 = (value Outer[B].Color) -> {
+                    var inner = List[Outer[B].Color]()
+                    inner.Add(value)
+                    return int32(inner[0])
+                }
+                return f(outer[0])
+            }
             struct Holder {
                 var IntRed Outer[int32].Color
                 var StringRed Outer[string].Color
@@ -100,6 +111,10 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.Equal(intEnum, Assert.Single(captureInt.GetParameters()).ParameterType);
         var captured = Assert.IsAssignableFrom<Delegate>(captureInt.Invoke(null, new[] { intValue }));
         Assert.Equal(intEnum, captured.DynamicInvoke().GetType());
+
+        var remap = GetMethod(program, "Remap").MakeGenericMethod(typeof(int), typeof(string));
+        Assert.Equal(stringEnum, Assert.Single(remap.GetParameters()).ParameterType);
+        Assert.Equal(0, remap.Invoke(null, new[] { stringValue }));
     }
 
     [Fact]

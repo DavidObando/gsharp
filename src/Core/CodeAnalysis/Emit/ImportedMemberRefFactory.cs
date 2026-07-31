@@ -1347,7 +1347,11 @@ internal sealed class ImportedMemberRefFactory
             return false;
         }
 
-        var cacheKey = new MetadataTokenCache.CtorRefSymbolKey(ctor, imported.TypeArguments);
+        var cacheKey = new MetadataTokenCache.CtorRefSymbolKey(
+            ctor,
+            imported.TypeArguments,
+            this.remaps.ActiveIteratorStateMachineRemap,
+            this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.cache.CtorRefsWithSymbolArgs.TryGetValue(cacheKey, out var cached))
         {
             handle = cached;
