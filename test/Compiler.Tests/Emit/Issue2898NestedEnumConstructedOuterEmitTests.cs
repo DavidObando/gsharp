@@ -301,6 +301,37 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.Equal(typeof(int), Assert.Single(values.GetType().GetElementType()!.GenericTypeArguments));
     }
 
+    [Fact]
+    public void StaticInterfacePropertyNestedEnum_PropagatesReferenceNullabilityErasure()
+    {
+        const string source = """
+            package P
+
+            struct Outer[T] {
+                public enum Color { Red = 1 }
+            }
+
+            sealed interface IGet[T] {
+                shared { prop Value Outer[T?].Color { get; } }
+            }
+
+            class TextImplicit : IGet[string] {
+                shared { prop Value Outer[string].Color -> Outer[string].Color.Red }
+            }
+
+            func Read[T IGet[string]](witness T) Outer[string].Color {
+                return T.Value
+            }
+
+            func Run() int32 { return int32(Read(TextImplicit{})) }
+            """;
+
+        var assembly = CompileAndLoad(source, IlVerifier.KnownIssues.StaticVirtualInterface);
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+
+        Assert.Equal(1, GetMethod(program, "Run").Invoke(null, null));
+    }
+
     private static MethodInfo GetMethod(Type type, string name)
         => type.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Missing method {type.FullName}.{name}");
@@ -312,7 +343,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         return Assert.IsAssignableFrom<Array>(GetMethod(outer, methodName).Invoke(Activator.CreateInstance(outer), null));
     }
 
-    private static Assembly CompileAndLoad(string source)
+    private static Assembly CompileAndLoad(string source, string[] ignoredErrorCodes = null)
     {
         var tempDir = Path.Combine(
             AppContext.BaseDirectory,
@@ -322,7 +353,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         try
         {
             var outputPath = Compile(tempDir, "test", source);
-            IlVerifier.Verify(outputPath);
+            IlVerifier.Verify(outputPath, ignoredErrorCodes: ignoredErrorCodes);
 
             var bytes = File.ReadAllBytes(outputPath);
             var assembly = Assembly.Load(bytes);
