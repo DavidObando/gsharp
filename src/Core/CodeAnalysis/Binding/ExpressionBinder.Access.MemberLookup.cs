@@ -436,13 +436,27 @@ internal sealed partial class ExpressionBinder
                 }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
                 {
-                    // Phase 4.5: tuple element access via Item1..ItemN.
+                    // Phase 4.5 / issue #2924: tuple element access via
+                    // one-based Item1..ItemN or zero-based .0...N selectors.
                     var memberName = ne.IdentifierToken.Text;
-                    if (memberName.StartsWith("Item", System.StringComparison.Ordinal)
-                        && int.TryParse(memberName.Substring(4), out var oneBased)
-                        && oneBased >= 1 && oneBased <= tupleSym.Arity)
+                    var zeroBased = -1;
+                    if (int.TryParse(memberName, out var numericIndex)
+                        && numericIndex >= 0
+                        && numericIndex < tupleSym.Arity)
                     {
-                        return new BoundTupleElementAccessExpression(null, receiver, tupleSym, oneBased - 1);
+                        zeroBased = numericIndex;
+                    }
+                    else if (memberName.StartsWith("Item", System.StringComparison.Ordinal)
+                        && int.TryParse(memberName.Substring(4), out var oneBased)
+                        && oneBased >= 1
+                        && oneBased <= tupleSym.Arity)
+                    {
+                        zeroBased = oneBased - 1;
+                    }
+
+                    if (zeroBased >= 0)
+                    {
+                        return new BoundTupleElementAccessExpression(null, receiver, tupleSym, zeroBased);
                     }
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
