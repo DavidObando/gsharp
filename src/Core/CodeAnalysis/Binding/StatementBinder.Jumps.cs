@@ -137,21 +137,118 @@ internal sealed partial class StatementBinder
     /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
     /// <param name="breakLabel">The synthesized break label.</param>
     /// <param name="continueLabel">The synthesized continue label.</param>
+    /// <param name="inheritedNarrowingFrameCount">Number of active frames whose
+    /// narrowings predate this loop iteration.</param>
+    /// <param name="backEdgeTail">Optional post/condition evaluation executed
+    /// between body completion and the next iteration.</param>
+    /// <param name="backEdgeCondition">Optional condition that must be true
+    /// before control reaches the next iteration.</param>
     private BoundStatement BindLoopBody(
         StatementSyntax body,
         string labelName,
         out BoundLabel breakLabel,
-        out BoundLabel continueLabel)
+        out BoundLabel continueLabel,
+        int inheritedNarrowingFrameCount = -1,
+        BoundStatement backEdgeTail = null,
+        BoundExpression backEdgeCondition = null)
     {
-        binderCtx.LabelCounter++;
-        breakLabel = new BoundLabel($"break{binderCtx.LabelCounter}");
-        continueLabel = new BoundLabel($"continue{binderCtx.LabelCounter}");
+        inheritedNarrowingFrameCount = inheritedNarrowingFrameCount < 0
+            ? binderCtx.NarrowedVariables.Count
+            : inheritedNarrowingFrameCount;
+        if (!HasActiveNarrowings(inheritedNarrowingFrameCount))
+        {
+            return BindCore(out breakLabel, out continueLabel);
+        }
 
-        binderCtx.LoopStack.Push((labelName, breakLabel, continueLabel));
-        var boundBody = BindStatement(body);
-        binderCtx.LoopStack.Pop();
+        var diagnosticCount = Diagnostics.Count;
+        var narrowingSnapshots = binderCtx.NarrowedVariables
+            .Select(frame => new Dictionary<AccessPath, TypeSymbol>(frame))
+            .ToArray();
+        var pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray();
+        var pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray();
+        var definedUserLabels = binderCtx.DefinedUserLabels.ToArray();
+        var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
 
-        return boundBody;
+        // Issue #2943: first bind supplies exact assignment symbols and lowered
+        // control flow. If a write can reach the back-edge, restore speculative
+        // state, remove only inherited narrowings, and bind the body again.
+        var firstBody = BindCore(out var firstBreakLabel, out var firstContinueLabel);
+        var mutations = CollectLoopBackEdgeMutations(
+            firstBody,
+            firstBreakLabel,
+            firstContinueLabel,
+            backEdgeTail,
+            backEdgeCondition);
+        if (!InvalidatesInheritedNarrowing(
+                mutations,
+                mutations.MayMutateMemberPaths,
+                inheritedNarrowingFrameCount,
+                narrowingSnapshots))
+        {
+            breakLabel = firstBreakLabel;
+            continueLabel = firstContinueLabel;
+            return firstBody;
+        }
+
+        Diagnostics.TruncateTo(diagnosticCount);
+        for (var i = 0; i < narrowingSnapshots.Length; i++)
+        {
+            var frame = binderCtx.NarrowedVariables[i];
+            frame.Clear();
+            foreach (var entry in narrowingSnapshots[i])
+            {
+                frame.Add(entry.Key, entry.Value);
+            }
+        }
+
+        RestoreDictionary(binderCtx.PendingEarlyExitFrames, pendingEarlyExitFrames);
+        RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames);
+        RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels);
+        userGotoHandlerRegions.Clear();
+        userGotoHandlerRegions.AddRange(userGotoHandlerSnapshot);
+
+        InvalidateInheritedNarrowings(
+            mutations,
+            mutations.MayMutateMemberPaths,
+            inheritedNarrowingFrameCount);
+        return BindCore(out breakLabel, out continueLabel);
+
+        BoundStatement BindCore(out BoundLabel localBreakLabel, out BoundLabel localContinueLabel)
+        {
+            binderCtx.LabelCounter++;
+            localBreakLabel = new BoundLabel($"break{binderCtx.LabelCounter}");
+            localContinueLabel = new BoundLabel($"continue{binderCtx.LabelCounter}");
+
+            binderCtx.LoopStack.Push((labelName, localBreakLabel, localContinueLabel));
+            try
+            {
+                return BindStatement(body);
+            }
+            finally
+            {
+                binderCtx.LoopStack.Pop();
+            }
+        }
+
+        static void RestoreDictionary<TKey, TValue>(
+            Dictionary<TKey, TValue> destination,
+            KeyValuePair<TKey, TValue>[] snapshot)
+        {
+            destination.Clear();
+            foreach (var entry in snapshot)
+            {
+                destination.Add(entry.Key, entry.Value);
+            }
+        }
+
+        static void RestoreSet<T>(HashSet<T> destination, T[] snapshot)
+        {
+            destination.Clear();
+            foreach (var item in snapshot)
+            {
+                destination.Add(item);
+            }
+        }
     }
 
     private BoundStatement BindBreakStatement(BreakStatementSyntax syntax)

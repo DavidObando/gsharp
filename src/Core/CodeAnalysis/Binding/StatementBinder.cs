@@ -415,7 +415,7 @@ internal sealed partial class StatementBinder
                 // a statement that writes to a narrowed variable, drop its
                 // narrowing from the current frame so subsequent reads in this
                 // block see the variable at its declared (nullable) type again.
-                InvalidateNarrowingsForAssignedVariables(statementSyntax);
+                InvalidateNarrowingsForAssignedVariables(statementSyntax, statement);
 
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),

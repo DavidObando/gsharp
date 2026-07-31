@@ -313,6 +313,24 @@ A member-path narrowing is conservatively dropped when anything in scope could c
 
 This is intentionally stricter than Kotlin (which keeps `val`-member casts across benign calls), but it satisfies the issue's explicit "intervening call invalidates" requirement and is trivially sound. Local-root narrowings retain their previous, more precise invalidation behavior.
 
+### Loop back-edges (issue #2943)
+
+A narrowing inherited from outside a loop is invalidated before the body when
+an assignment or member-path mutation can reach that loop's back-edge. This
+applies to condition, C-style, infinite, ellipsis, range, async-range, and
+`do…while` loops, including writes inside nested control flow and paths ending
+in `continue`. A write on a path that exits the loop with `break`, `return`,
+`throw`, or `goto` does not invalidate the body because that path cannot begin
+another iteration.
+
+Narrowing proved anew for each iteration remains valid. In particular,
+`while x != nil`, `while x is T`, and equivalent C-style loop conditions keep
+their condition-derived narrowing, while a guard or non-null assignment inside
+the body may re-establish narrowing after an inherited narrowing is removed.
+A C-style initializer is processed as an ordinary preceding statement: its
+writes invalidate incoming narrowing, and a statically non-null assignment may
+establish a fresh narrowing for the first body entry.
+
 ### Where it applies
 
 Member-path narrowing is produced by the same classifiers as local narrowing — `is` / `!is` tests (statement and expression level, including `&&` / `||` threading and `if`-as-expression), nil-guards, and `switch` arm discriminators — and consumed at every field/property *read* site (`ApplyMemberNarrowing`). Emit inserts the same `castclass` / `unbox.any` after the `ldfld` / `ldsfld` / getter call for a narrowed member read; the lowerer and rewriter carry the narrowed type through (including auto-property reads that lower to backing-field access).

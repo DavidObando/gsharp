@@ -101,7 +101,9 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private void InvalidateNarrowingsForAssignedVariables(SyntaxNode statementSyntax)
+    private void InvalidateNarrowingsForAssignedVariables(
+        SyntaxNode statementSyntax,
+        BoundStatement boundStatement = null)
     {
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
         // `BindBlockStatements` pushes a (usually empty) memberNotNullFrame for
@@ -131,14 +133,37 @@ internal sealed partial class StatementBinder
         var assignedNames = new HashSet<string>();
         var dropAllMemberPaths = CollectAssignedNamesAndMemberMutation(statementSyntax, assignedNames);
 
-        // Resolve the set of reassigned root variables so we can also drop any
-        // member path rooted at one of them.
-        var assignedRoots = new HashSet<VariableSymbol>();
-        foreach (var name in assignedNames)
+        // Issue #2943: use bound assignment targets when available so symbol
+        // identity, not a same-named variable in an enclosing scope, decides
+        // which root and member paths are invalidated. Special lowering paths
+        // that invalidate before producing one bound statement retain the
+        // syntax-name fallback.
+        HashSet<VariableSymbol> assignedRoots;
+        if (boundStatement != null)
         {
-            if (scope.TryLookupSymbol(name) is VariableSymbol v)
+            var collector = new AssignedRootsCollector();
+            collector.Visit(boundStatement);
+            assignedRoots = collector.Roots;
+            foreach (var frame in binderCtx.NarrowedVariables)
             {
-                assignedRoots.Add(v);
+                foreach (var path in frame.Keys)
+                {
+                    if (collector.AssignsRoot(path.Root))
+                    {
+                        assignedRoots.Add(path.Root);
+                    }
+                }
+            }
+        }
+        else
+        {
+            assignedRoots = new HashSet<VariableSymbol>();
+            foreach (var name in assignedNames)
+            {
+                if (scope.TryLookupSymbol(name) is VariableSymbol v)
+                {
+                    assignedRoots.Add(v);
+                }
             }
         }
 
@@ -147,11 +172,6 @@ internal sealed partial class StatementBinder
             return;
         }
 
-        // Resolve each name through the current scope and drop any matching
-        // narrowing from ALL active frames. We don't need to be conservative
-        // about scope shadowing: the narrowed variable lives in an outer scope,
-        // so an inner shadowing declaration with the same name will resolve to a
-        // different symbol, and the narrowing will simply not be triggered.
         // Issue #208: iterate ALL frames (not just the top) because the
         // memberNotNullFrame sits above the if-condition frames; dropping from
         // only the top would miss narrowings added by if-condition analysis.
@@ -196,7 +216,12 @@ internal sealed partial class StatementBinder
     /// </summary>
     private bool HasAnyActiveNarrowings()
     {
-        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+        return HasActiveNarrowings(binderCtx.NarrowedVariables.Count);
+    }
+
+    private bool HasActiveNarrowings(int frameCount)
+    {
+        for (var i = Math.Min(frameCount, binderCtx.NarrowedVariables.Count) - 1; i >= 0; i--)
         {
             if (binderCtx.NarrowedVariables[i].Count > 0)
             {
@@ -205,6 +230,113 @@ internal sealed partial class StatementBinder
         }
 
         return false;
+    }
+
+    private bool InvalidatesInheritedNarrowing(
+        AssignedRootsCollector mutations,
+        bool mayMutateMemberPaths,
+        int frameCount,
+        IReadOnlyList<Dictionary<AccessPath, TypeSymbol>> frames)
+    {
+        for (var i = Math.Min(frameCount, frames.Count) - 1; i >= 0; i--)
+        {
+            foreach (var path in frames[i].Keys)
+            {
+                if (mutations.AssignsRoot(path.Root) || (path.HasMembers && mayMutateMemberPaths))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void InvalidateInheritedNarrowings(
+        AssignedRootsCollector mutations,
+        bool mayMutateMemberPaths,
+        int frameCount)
+    {
+        for (var i = Math.Min(frameCount, binderCtx.NarrowedVariables.Count) - 1; i >= 0; i--)
+        {
+            var frame = binderCtx.NarrowedVariables[i];
+            var removed = frame.Keys
+                .Where(path => mutations.AssignsRoot(path.Root) || (path.HasMembers && mayMutateMemberPaths))
+                .ToArray();
+            foreach (var path in removed)
+            {
+                frame.Remove(path);
+            }
+        }
+    }
+
+    private static LoopBackEdgeMutationCollector CollectLoopBackEdgeMutations(
+            BoundStatement body,
+            BoundLabel breakLabel,
+            BoundLabel continueLabel,
+            BoundStatement backEdgeTail,
+            BoundExpression backEdgeCondition)
+    {
+        var markerLabel = new BoundLabel("loopBackEdge");
+        var marker = new BoundExpressionStatement(null, new BoundLiteralExpression(null, true));
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(body);
+        statements.Add(new BoundLabelStatement(null, continueLabel));
+        if (backEdgeTail != null)
+        {
+            statements.Add(backEdgeTail);
+        }
+
+        if (backEdgeCondition != null)
+        {
+            statements.Add(new BoundConditionalGotoStatement(
+                null,
+                markerLabel,
+                backEdgeCondition,
+                jumpIfTrue: true));
+            statements.Add(new BoundGotoStatement(null, breakLabel));
+            statements.Add(new BoundLabelStatement(null, markerLabel));
+        }
+
+        statements.Add(marker);
+        statements.Add(new BoundLabelStatement(null, breakLabel));
+
+        var graph = ControlFlowGraph.Create(
+            Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable())));
+        var markerBlock = graph.Blocks.FirstOrDefault(
+            block => block.Statements.Any(statement => ReferenceEquals(statement, marker)));
+        var collector = new LoopBackEdgeMutationCollector();
+        if (markerBlock == null)
+        {
+            return collector;
+        }
+
+        var reachesBackEdge = new HashSet<ControlFlowGraph.BasicBlock>();
+        var pending = new Stack<ControlFlowGraph.BasicBlock>();
+        pending.Push(markerBlock);
+        while (pending.Count > 0)
+        {
+            var block = pending.Pop();
+            if (!reachesBackEdge.Add(block))
+            {
+                continue;
+            }
+
+            foreach (var incoming in block.Incoming)
+            {
+                pending.Push(incoming.From);
+            }
+        }
+
+        foreach (var block in reachesBackEdge)
+        {
+            foreach (var statement in block.Statements)
+            {
+                collector.Visit(statement);
+            }
+        }
+
+        return collector;
     }
 
     /// <summary>
@@ -369,7 +501,7 @@ internal sealed partial class StatementBinder
         // A possibly-null right-hand side does not narrow (invalidation already
         // cleared any prior narrowing). Only a statically non-nullable value
         // proves the local is non-null after the assignment.
-        if (assignedType is NullableTypeSymbol)
+        if (assignedType == TypeSymbol.Null || assignedType is NullableTypeSymbol)
         {
             return false;
         }
@@ -741,9 +873,25 @@ internal sealed partial class StatementBinder
     /// plain assignment target in a subtree, used to conservatively invalidate
     /// join narrowings across constructs the flow analysis does not model.
     /// </summary>
-    private sealed class AssignedRootsCollector : BoundTreeWalker
+    private class AssignedRootsCollector : BoundTreeWalker
     {
+        private readonly HashSet<(VariableSymbol Receiver, FieldSymbol Field)> assignedFields = new();
+        private readonly HashSet<(VariableSymbol Receiver, PropertySymbol Property)> assignedProperties = new();
+
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
+
+        public bool AssignsRoot(VariableSymbol root)
+        {
+            return Roots.Contains(root)
+                || (root is ImplicitFieldVariableSymbol field
+                    && assignedFields.Contains((field.Receiver, field.Field)))
+                || (root is ImplicitStaticFieldVariableSymbol staticField
+                    && assignedFields.Contains((null, staticField.Field)))
+                || (root is ImplicitPropertyVariableSymbol property
+                    && assignedProperties.Contains((property.Receiver, property.Property)))
+                || (root is ImplicitStaticPropertyVariableSymbol staticProperty
+                    && assignedProperties.Contains((null, staticProperty.Property)));
+        }
 
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
         {
@@ -753,6 +901,62 @@ internal sealed partial class StatementBinder
             }
 
             base.VisitAssignmentExpression(node);
+        }
+
+        protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            if (node.ReceiverExpression == null)
+            {
+                assignedFields.Add((node.Receiver, node.Field));
+            }
+
+            base.VisitFieldAssignmentExpression(node);
+        }
+
+        protected override void VisitPropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        {
+            var receiver = (node.Receiver as BoundVariableExpression)?.Variable;
+            if (node.Receiver == null || receiver != null)
+            {
+                assignedProperties.Add((receiver, node.Property));
+            }
+
+            base.VisitPropertyAssignmentExpression(node);
+        }
+    }
+
+    private sealed class LoopBackEdgeMutationCollector : AssignedRootsCollector
+    {
+        public bool MayMutateMemberPaths { get; private set; }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            switch (node?.Kind)
+            {
+                case BoundNodeKind.CallExpression:
+                case BoundNodeKind.FunctionPointerInvocationExpression:
+                case BoundNodeKind.ImportedCallExpression:
+                case BoundNodeKind.ImportedInstanceCallExpression:
+                case BoundNodeKind.ConstrainedStaticCallExpression:
+                case BoundNodeKind.ConstructorCallExpression:
+                case BoundNodeKind.UserInstanceCallExpression:
+                case BoundNodeKind.BaseInterfaceCallExpression:
+                case BoundNodeKind.BaseClassCallExpression:
+                case BoundNodeKind.IndirectCallExpression:
+                case BoundNodeKind.ClrConstructorCallExpression:
+                case BoundNodeKind.ClrStaticCallExpression:
+                case BoundNodeKind.ClrConversionCallExpression:
+                case BoundNodeKind.FieldAssignmentExpression:
+                case BoundNodeKind.PropertyAssignmentExpression:
+                case BoundNodeKind.IndexAssignmentExpression:
+                case BoundNodeKind.ClrPropertyAssignmentExpression:
+                case BoundNodeKind.ClrIndexAssignmentExpression:
+                case BoundNodeKind.IndirectAssignmentExpression:
+                    MayMutateMemberPaths = true;
+                    break;
+            }
+
+            base.VisitExpression(node);
         }
     }
 
