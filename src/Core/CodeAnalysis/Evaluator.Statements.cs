@@ -27,6 +27,36 @@ namespace GSharp.Core.CodeAnalysis;
 public sealed partial class Evaluator
 #pragma warning restore CA1001
 {
+    /// <summary>
+    /// Issue #1649: EvaluateExpression wraps every non-EvaluatorException in an
+    /// EvaluatorException to attach node context (for GS9999 reporting when
+    /// nothing catches it). That wrapping must not leak into typed catch
+    /// matching or handler-variable binding, so unwrap repeatedly down to the
+    /// innermost real exception. TargetInvocationException (thrown by
+    /// reflection-based CLR calls) gets the same treatment.
+    /// </summary>
+    /// <param name="ex">Exception to unwrap.</param>
+    /// <returns>Innermost runtime exception.</returns>
+    internal static Exception UnwrapRuntimeException(Exception ex)
+    {
+        while (true)
+        {
+            if (ex is EvaluatorException { InnerException: { } inner })
+            {
+                ex = inner;
+                continue;
+            }
+
+            if (ex is TargetInvocationException { InnerException: { } tieInner })
+            {
+                ex = tieInner;
+                continue;
+            }
+
+            return ex;
+        }
+    }
+
     private object EvaluateStatement(BoundBlockStatement body)
     {
         var labelToIndex = GetLabelToIndex(body);
@@ -699,40 +729,6 @@ public sealed partial class Evaluator
 
         throw new Exception(value?.ToString());
     }
-
-    /// <summary>
-    /// Issue #1649: EvaluateExpression wraps every non-EvaluatorException in an
-    /// EvaluatorException to attach node context (for GS9999 reporting when
-    /// nothing catches it). That wrapping must not leak into typed catch
-    /// matching or handler-variable binding, so unwrap repeatedly down to the
-    /// real exception. Reflection-generated TargetInvocationException wrappers
-    /// get the same treatment, while a user-thrown TargetInvocationException
-    /// remains visible to catch matching and handler-variable binding.
-    /// </summary>
-    private static Exception UnwrapRuntimeException(Exception ex)
-    {
-        while (true)
-        {
-            if (ex is EvaluatorException { InnerException: { } inner })
-            {
-                ex = inner;
-                continue;
-            }
-
-            if (ex is TargetInvocationException { InnerException: { } tieInner } tie
-                && IsReflectionInvocationWrapper(tie))
-            {
-                ex = tieInner;
-                continue;
-            }
-
-            return ex;
-        }
-    }
-
-    private static bool IsReflectionInvocationWrapper(TargetInvocationException ex)
-        => ex.TargetSite?.DeclaringType?.Assembly is not { } assembly
-            || assembly == typeof(TargetInvocationException).Assembly;
 
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
