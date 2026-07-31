@@ -68,6 +68,24 @@ public class Issue2891SiblingAnalyzerNoDriftTests
                 var reached = true
             }
             """);
+        yield return Case("OutNestedEscapingFinallyClean", "", """
+            func F(out value int32) {
+                outer: for {
+                    try {
+                        for {
+                            try {
+                            } finally {
+                                goto innerDone
+                            }
+                        }
+                    innerDone:
+                        value = 1
+                    } finally {
+                        break outer
+                    }
+                }
+            }
+            """);
         yield return Case("RefTryOnlyCatchCompletes", "GS0239", """
             import System
             func Bump(ref value int32) {

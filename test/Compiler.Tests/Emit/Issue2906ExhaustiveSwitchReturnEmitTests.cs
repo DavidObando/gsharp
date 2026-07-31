@@ -286,10 +286,44 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
         Assert.Equal(7, GetField(assembly, "result"));
     }
 
+    [Fact]
+    public void ExhaustiveEnum_UnnamedValueWithFixedReturn_UsesFixedEpilogueDefault()
+    {
+        const string Source = """
+            package Issue2906.EmitUnnamedFixed
+            import System
+            func F(x DateTimeKind, values []int32) int32 {
+                switch x {
+                    case DateTimeKind.Unspecified {
+                        unsafe {
+                            fixed p *int32 = values {
+                                return *p
+                            }
+                        }
+                    }
+                    case DateTimeKind.Utc { return 2 }
+                    case DateTimeKind.Local { return 3 }
+                }
+            }
+            public var result = F(DateTimeKind(99), []int32{7})
+            """;
+
+        var assembly = CompileVerifyLoadAndRun(
+            "UnnamedFixed",
+            Source,
+            ignoredVerificationErrors: new[] { "ExpectedNumericType" });
+        // The fixed-return epilogue is intentionally emitted before the
+        // missing-return guard, so an unmatched value returns its default slot.
+        Assert.Equal(0, GetField(assembly, "result"));
+    }
+
     private static object[] Case(string name, int expected, string body)
         => new object[] { name, expected, $"package Issue2906.Emit{name}{Environment.NewLine}{body}" };
 
-    private static Assembly CompileVerifyLoadAndRun(string name, string source)
+    private static Assembly CompileVerifyLoadAndRun(
+        string name,
+        string source,
+        IEnumerable<string> ignoredVerificationErrors = null)
     {
         using var peStream = new MemoryStream();
         var result = new Compilation(SyntaxTree.Parse(SourceText.From(source))).Emit(peStream);
@@ -302,7 +336,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
         try
         {
             File.WriteAllBytes(assemblyPath, bytes);
-            IlVerifier.Verify(assemblyPath);
+            IlVerifier.Verify(assemblyPath, ignoredErrorCodes: ignoredVerificationErrors);
         }
         finally
         {

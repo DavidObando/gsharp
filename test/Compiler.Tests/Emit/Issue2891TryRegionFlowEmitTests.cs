@@ -471,6 +471,75 @@ public class Issue2891TryRegionFlowEmitTests
             """);
     }
 
+    /// <summary>Gets nested branch-analysis shapes that require runtime execution guards.</summary>
+    public static IEnumerable<object[]> BranchAnalysisExecutionCases()
+    {
+        yield return OutputCase("LocalGotoInTry", "fin#1\nr=1301\n", """
+            import System
+            func F() int32 {
+                var result = 100
+                for {
+                    try {
+                    again:
+                        result += 1
+                        if result < 103 {
+                            goto again
+                        }
+                        result += 1198
+                    } finally {
+                        Console.WriteLine("fin#1")
+                        break
+                    }
+                }
+                return result
+            }
+            Console.WriteLine("r=" + F().ToString())
+            """);
+        yield return OutputCase("LocalGotoInNestedFinally", "outerfin\nr=5\n", """
+            import System
+            func F() int32 {
+                var result = 0
+                for {
+                    try {
+                        try {
+                        } finally {
+                            goto local
+                        local:
+                            result = 5
+                        }
+                    } finally {
+                        Console.WriteLine("outerfin")
+                        break
+                    }
+                }
+                return result
+            }
+            Console.WriteLine("r=" + F().ToString())
+            """);
+        yield return OutputCase("LocalGotoInNestedCatch", "outerfin\nr=3\n", """
+            import System
+            func F() int32 {
+                var result = 0
+                for {
+                    try {
+                        try {
+                            throw Exception("enter catch")
+                        } catch (ex Exception) {
+                            goto local
+                        local:
+                            result = 3
+                        }
+                    } finally {
+                        Console.WriteLine("outerfin")
+                        break
+                    }
+                }
+                return result
+            }
+            Console.WriteLine("r=" + F().ToString())
+            """);
+    }
+
     [Theory]
     [MemberData(nameof(FiniteCases))]
     public void AcceptedFiniteShape_VerifiesLoadsAndRuns(string name, int expected, string source)
@@ -478,6 +547,11 @@ public class Issue2891TryRegionFlowEmitTests
         var assembly = CompileVerifyLoadAndRun(name, source);
         Assert.Equal(expected, GetField(assembly, "result"));
     }
+
+    [Theory]
+    [MemberData(nameof(BranchAnalysisExecutionCases))]
+    public void NestedBranchAnalysis_LoadsAndRunsInChild(string name, string expectedOutput, string source)
+        => CompileLoadAndRunChild(name, source, expectedOutput);
 
     [Theory]
     [InlineData("FinallyInfiniteLoop", false)]
@@ -514,11 +588,14 @@ public class Issue2891TryRegionFlowEmitTests
             F()
             """;
 
-        CompileVerifyLoadAndRunChild(name, source);
+        CompileLoadAndRunChild(name, source);
     }
 
     private static object[] Case(string name, int expected, string body)
         => new object[] { name, expected, $"package Issue2891.Emit{name}{Environment.NewLine}{body}" };
+
+    private static object[] OutputCase(string name, string expectedOutput, string body)
+        => new object[] { name, expectedOutput, $"package Issue2891.Emit{name}{Environment.NewLine}{body}" };
 
     private static Assembly CompileVerifyLoadAndRun(string name, string source)
     {
@@ -562,7 +639,10 @@ public class Issue2891TryRegionFlowEmitTests
         return assembly;
     }
 
-    private static void CompileVerifyLoadAndRunChild(string name, string source)
+    private static void CompileLoadAndRunChild(
+        string name,
+        string source,
+        string expectedOutput = null)
     {
         var prefix = $"Issue2891_{name}_{Guid.NewGuid():N}";
         var directory = Directory.GetCurrentDirectory();
@@ -597,17 +677,27 @@ public class Issue2891TryRegionFlowEmitTests
             using var process = Process.Start(start)!;
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
-            var exited = process.WaitForExit(3_000);
+            var exited = process.WaitForExit(expectedOutput == null ? 3_000 : 10_000);
             if (!exited)
             {
                 process.Kill(entireProcessTree: true);
                 Assert.True(process.WaitForExit(5_000), $"{name} child did not stop after kill");
             }
 
-            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
             var stderr = stderrTask.GetAwaiter().GetResult();
-            Assert.False(exited, $"{name} unexpectedly completed\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.Contains("entered", stdout, StringComparison.Ordinal);
+            if (expectedOutput == null)
+            {
+                Assert.False(exited, $"{name} unexpectedly completed\nstdout:\n{stdout}\nstderr:\n{stderr}");
+                Assert.Contains("entered", stdout, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.True(exited, $"{name} execution timed out");
+                Assert.Equal(0, process.ExitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(expectedOutput, stdout);
+            }
         }
         finally
         {
