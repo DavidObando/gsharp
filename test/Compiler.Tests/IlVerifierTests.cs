@@ -111,9 +111,7 @@ public class IlVerifierTests
                     method.RelativeVirtualAddress >= s.VirtualAddress
                     && method.RelativeVirtualAddress < s.VirtualAddress + s.SizeOfRawData);
                 var bodyOffset = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData;
-                var headerSize = (bytes[bodyOffset] & 0x3) == 0x2
-                    ? 1
-                    : (BitConverter.ToUInt16(bytes, bodyOffset) >> 12) * 4;
+                var headerSize = 1;
                 bytes[bodyOffset + headerSize] = 0x26;
             }
 

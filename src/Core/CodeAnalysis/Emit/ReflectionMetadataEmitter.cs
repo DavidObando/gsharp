@@ -253,8 +253,8 @@ internal sealed class ReflectionMetadataEmitter
     //   asyncIteratorInfos            -> stateMachines.AsyncIteratorInfos
     //   asyncIteratorEmitContexts     -> stateMachines.IteratorEmitContexts
     //   asyncSmEnclosingClosures      -> stateMachines.AsyncSmEnclosingClosures
-    // BodyEmitter reads stateMachines.IteratorEmitContexts for the async
-    // iterator MoveNext path; the remaining 2 BodyEmitter-internal SM helpers
+    // BodyEmitter reads stateMachines.IteratorEmitContexts for iterator
+    // MoveNext paths; the remaining 2 async-only BodyEmitter-internal SM helpers
     // (EmitStateMachineAwaitOnCompleted, EmitAsyncIteratorBuilderMoveNext)
     // still live inside BodyEmitter and call back into
     // stateMachines.EmitAwaitOnCompletedCall — they move with BodyEmitter in
@@ -396,7 +396,7 @@ internal sealed class ReflectionMetadataEmitter
     // SynthesizeAsyncIteratorStateMachines / SynthesizeAsyncLambdaStateMachines)
     // and the top-level MoveNext / SetStateMachine / AwaitOnCompleted /
     // async-kickoff IL emission, plus the nested StateMachineEmitter.IteratorStateMachineInfo /
-    // StateMachineEmitter.AsyncIteratorEmitContext helpers and every SM cache/plan
+    // StateMachineEmitter.IteratorEmitContext helpers and every SM cache/plan
     // (IteratorKickoffBodies, IteratorStateMachineInfos, AsyncStateMachinePlans,
     // IteratorPlans, AsyncIteratorPlans, AsyncIteratorInfos,
     // IteratorEmitContexts, AsyncSmEnclosingClosures). The 2 BodyEmitter-
@@ -4156,7 +4156,7 @@ internal sealed class ReflectionMetadataEmitter
         /// <param name="structThisParameter">The struct <c>this</c> parameter, when arg0 is a managed pointer.</param>
         /// <param name="asyncFieldMap">The async state-machine field map (MoveNext only).</param>
         /// <param name="asyncPlan">The async state-machine plan (MoveNext only).</param>
-        /// <param name="asyncIteratorEmitCtx">The async-iterator emit context (async-iterator MoveNext only).</param>
+        /// <param name="iteratorEmitCtx">The iterator emit context (iterator MoveNext only).</param>
         /// <param name="enclosingClosure">The enclosing closure info (closure invoke methods only).</param>
         /// <returns>A configured <see cref="MethodBodyEmitter"/>.</returns>
         public MethodBodyEmitter CreateEmitter(
@@ -4164,7 +4164,7 @@ internal sealed class ReflectionMetadataEmitter
             ParameterSymbol structThisParameter = null,
             AsyncStateMachineFieldMap asyncFieldMap = null,
             AsyncStateMachinePlan asyncPlan = null,
-            StateMachineEmitter.AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
+            StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null,
             ClosureEmitter.ClosureInfo enclosingClosure = null)
         {
             return new MethodBodyEmitter(
@@ -4191,7 +4191,7 @@ internal sealed class ReflectionMetadataEmitter
                 structThisParameter: structThisParameter,
                 asyncFieldMap: asyncFieldMap,
                 asyncPlan: asyncPlan,
-                asyncIteratorEmitCtx: asyncIteratorEmitCtx,
+                iteratorEmitCtx: iteratorEmitCtx,
                 constValues: this.constValues,
                 enclosingClosure: enclosingClosure,
                 stackAllocResultSlots: this.stackAllocResultSlots);

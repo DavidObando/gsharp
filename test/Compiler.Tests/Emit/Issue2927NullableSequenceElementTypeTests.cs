@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using GSharp.Compiler;
@@ -160,43 +161,156 @@ public class Issue2927NullableSequenceElementTypeTests
     }
 
     [Fact]
-    public void GenericNullableSequenceDoesNotRegressToRuntimeCrash()
+    public void ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns()
     {
         const string Source = """
-            package Issue2927Generic
+            package Issue2927ReferenceConstrained
             import System
 
-            func text(value int32?) string {
-                if value == nil {
-                    return "nil"
-                }
+            func values[T class](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
 
+            for value in values[string]("x") {
+                Console.WriteLine(value == nil ? "nil" : value)
+            }
+            """;
+
+        var assemblyPath = Compile(Source, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal("x\nnil\n", RunBounded(assemblyPath, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+    }
+
+    [Fact]
+    public void StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2927StructConstrained
+            import System
+
+            func values[T struct](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            for value in values[int32](5) {
+                Console.WriteLine(value == nil ? "nil" : value.ToString())
+            }
+            """;
+
+        var assemblyPath = Compile(Source, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal("5\nnil\n", RunBounded(assemblyPath, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+    }
+
+    [Fact]
+    public void NullableReferenceSequenceGuardLoadsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2927ReferenceGuard
+            import System
+
+            func text(value string?) string {
+                if value == nil { return "nil" }
+                return value
+            }
+
+            func values() sequence[string?] {
+                yield "x"
+                yield nil
+            }
+
+            for value in values() { Console.WriteLine(text(value)) }
+            """;
+
+        var assemblyPath = Compile(Source, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal("x\nnil\n", RunBounded(assemblyPath, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns)));
+    }
+
+    [Fact]
+    public void NullableUserEnumSequenceGuardLoadsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2927EnumGuard
+            import System
+
+            enum E { A }
+
+            func text(value E?) string {
+                if value == nil { return "nil" }
                 return value.ToString()
             }
+
+            func values() sequence[E?] {
+                yield E.A
+                yield nil
+            }
+
+            for value in values() { Console.WriteLine(text(value)) }
+            """;
+
+        var assemblyPath = Compile(Source, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal("A\nnil\n", RunBounded(assemblyPath, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns)));
+    }
+
+    [Theory]
+    [InlineData("Direct", """
+        for value in values[int32](5) {
+            Console.WriteLine(value)
+        }
+        """)]
+    [InlineData("ConcreteParameter", """
+        func consume(values sequence[int32?]) {
+            for value in values {
+                Console.WriteLine(value)
+            }
+        }
+
+        consume(values[int32](5))
+        """)]
+    [InlineData("AnnotatedVariable", """
+        var concrete sequence[int32?] = values[int32](5)
+        for value in concrete {
+            Console.WriteLine(value)
+        }
+        """)]
+    [InlineData("PassthroughFunction", """
+        func pass(values sequence[int32?]) sequence[int32?] -> values
+        for value in pass(values[int32](5)) {
+            Console.WriteLine(value)
+        }
+        """)]
+    public void GenericNullableSequenceReportsSingleGS0508(string shape, string usage)
+    {
+        var source = $$"""
+            package Issue2927Generic{{shape}}
+            import System
 
             func values[T](value T) sequence[T?] {
                 yield value
                 yield nil
             }
 
-            for value in values[int32](5) {
-                Console.WriteLine(text(value))
-            }
+            {{usage}}
             """;
 
-        var assemblyPath = Compile(Source, nameof(GenericNullableSequenceDoesNotRegressToRuntimeCrash));
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-        Assert.NotEmpty(assembly.GetTypes());
-
-        // The generic value semantics remain tracked by #2927. This guard
-        // prevents a partial concrete-type fix from turning existing output
-        // into EntryPointNotFoundException.
-        var output = RunBounded(assemblyPath, nameof(GenericNullableSequenceDoesNotRegressToRuntimeCrash));
-        Assert.True(output is "0\nnil\n" or "5\nnil\n", $"Unexpected output: {output}");
+        // GS0508 prevents emission, so no assembly exists to load or pass to IlVerifier.
+        AssertSingleGS0508(source, $"{nameof(GenericNullableSequenceReportsSingleGS0508)}_{shape}");
     }
 
     [Fact]
-    public void GenericAsyncNullableSequenceDoesNotRegressToRuntimeCrash()
+    public void GenericAsyncNullableSequenceReportsSingleGS0508()
     {
         const string Source = """
             package Issue2927GenericAsync
@@ -229,12 +343,8 @@ public class Issue2927NullableSequenceElementTypeTests
             Console.WriteLine(result)
             """;
 
-        var assemblyPath = Compile(Source, nameof(GenericAsyncNullableSequenceDoesNotRegressToRuntimeCrash));
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-        Assert.NotEmpty(assembly.GetTypes());
-
-        var output = RunBounded(assemblyPath, nameof(GenericAsyncNullableSequenceDoesNotRegressToRuntimeCrash));
-        Assert.True(output is "5,0,\n" or "5,nil,\n", $"Unexpected output: {output}");
+        // GS0508 prevents emission, so no assembly exists to load or pass to IlVerifier.
+        AssertSingleGS0508(Source, nameof(GenericAsyncNullableSequenceReportsSingleGS0508));
     }
 
     private static async Task AssertParity(string source, string expected, string name, bool evaluateWithInterpreter)
@@ -258,11 +368,32 @@ public class Issue2927NullableSequenceElementTypeTests
 
     private static string Compile(string source, string name)
     {
+        var result = InvokeCompiler(source, name);
+        Assert.True(result.ExitCode == 0, $"{name}: gsc failed:\n{result.Output}");
+        return result.AssemblyPath;
+    }
+
+    private static void AssertSingleGS0508(string source, string name)
+    {
+        var result = InvokeCompiler(source, name);
+        Assert.NotEqual(0, result.ExitCode);
+        var diagnostics = result.Output.Split('\n')
+            .Where(line => line.Contains("error GS", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(diagnostics);
+        Assert.Contains("error GS0508:", diagnostics[0], StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath), "gsc must not emit an assembly after GS0508");
+    }
+
+    private static (int ExitCode, string Output, string AssemblyPath) InvokeCompiler(string source, string name)
+    {
         var directory = Path.Combine(AppContext.BaseDirectory, nameof(Issue2927NullableSequenceElementTypeTests), name);
         Directory.CreateDirectory(directory);
         var sourcePath = Path.Combine(directory, "test.gs");
         var assemblyPath = Path.Combine(directory, "test.dll");
         File.WriteAllText(sourcePath, source);
+        File.Delete(assemblyPath);
+        File.Delete(Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"));
 
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
@@ -287,8 +418,7 @@ public class Issue2927NullableSequenceElementTypeTests
             Console.SetError(previousErr);
         }
 
-        Assert.True(exitCode == 0, $"{name}: gsc failed:\n{stdout}\n{stderr}");
-        return assemblyPath;
+        return (exitCode, stdout.ToString() + stderr.ToString(), assemblyPath);
     }
 
     private static string RunBounded(string assemblyPath, string name)

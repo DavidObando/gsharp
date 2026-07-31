@@ -1045,7 +1045,7 @@ internal sealed partial class MethodBodyEmitter
     {
         FieldSymbol hoistedField = null;
         if ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out hoistedField))
-            || (this.asyncIteratorEmitCtx != null && this.asyncIteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))
+            || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))
         {
             // Load from the state machine: ldarg.0; ldfld <smStruct>::<hoistedField>
             this.il.OpCode(ILOpCode.Ldarg_0);

@@ -1059,6 +1059,15 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DuplicateExplicitInterfaceImplementation, interfaceName, memberName);
 
     /// <summary>
+    /// Issue #2927: reports a nullable sequence element whose type parameter
+    /// has no value/reference representation constraint.
+    /// </summary>
+    /// <param name="location">The nullable sequence element type.</param>
+    /// <param name="typeParameterName">The unconstrained type parameter.</param>
+    public void ReportUnconstrainedNullableSequenceElement(TextLocation location, string typeParameterName)
+    => Report(location, DiagnosticDescriptors.UnconstrainedNullableSequenceElement, typeParameterName);
+
+    /// <summary>
     /// Issue #2875: reports a setter-kind mismatch between an interface
     /// property and its implementation.
     /// </summary>

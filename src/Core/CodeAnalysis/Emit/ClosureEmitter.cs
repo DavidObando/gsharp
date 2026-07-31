@@ -90,7 +90,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <item>The state-machine synthesizers (<c>SynthesizeIteratorStateMachines</c>,
 /// <c>SynthesizeAsyncIteratorStateMachines</c>,
 /// <c>SynthesizeAsyncLambdaStateMachines</c>) and their nested classes
-/// (<c>IteratorStateMachineInfo</c>, <c>AsyncIteratorEmitContext</c>).
+/// (<c>IteratorStateMachineInfo</c>, <c>IteratorEmitContext</c>).
 /// These move with PR-E-10 <c>StateMachineEmitter</c>. They share the
 /// <see cref="Counter"/> field and append to <see cref="SynthesizedClosureClasses"/>
 /// from the root; both are exposed publicly here so the still-on-root SM

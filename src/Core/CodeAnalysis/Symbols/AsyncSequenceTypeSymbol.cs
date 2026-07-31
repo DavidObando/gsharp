@@ -18,10 +18,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class AsyncSequenceTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<(TypeSymbol ElementType, bool LiftNullable), AsyncSequenceTypeSymbol> Cache = new();
+    private static readonly ConcurrentDictionary<TypeSymbol, AsyncSequenceTypeSymbol> Cache = new();
 
-    private AsyncSequenceTypeSymbol(TypeSymbol elementType, bool liftNullable)
-        : base($"sequence[{elementType.Name}]", MakeClrType(elementType, liftNullable))
+    private AsyncSequenceTypeSymbol(TypeSymbol elementType)
+        : base($"sequence[{elementType.Name}]", MakeClrType(elementType))
     {
         ElementType = elementType;
     }
@@ -41,11 +41,8 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
             throw new ArgumentNullException(nameof(elementType));
         }
 
-        return Cache.GetOrAdd((elementType, true), key => new AsyncSequenceTypeSymbol(key.ElementType, key.LiftNullable));
+        return Cache.GetOrAdd(elementType, et => new AsyncSequenceTypeSymbol(et));
     }
-
-    internal static AsyncSequenceTypeSymbol GetWithErasedNullableRuntime(TypeSymbol elementType)
-        => Cache.GetOrAdd((elementType, false), key => new AsyncSequenceTypeSymbol(key.ElementType, key.LiftNullable));
 
     /// <summary>
     /// Removes all entries from the static type cache. Called by
@@ -55,11 +52,9 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol elementType, bool liftNullable)
+    private static Type MakeClrType(TypeSymbol elementType)
     {
-        var elementClrType = liftNullable
-            ? NullableTypeSymbol.GetEffectiveClrType(elementType)
-            : elementType.ClrType;
+        var elementClrType = NullableTypeSymbol.GetEffectiveClrType(elementType);
         if (elementClrType == null)
         {
             return null;
