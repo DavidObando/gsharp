@@ -2358,6 +2358,7 @@ public sealed class StructSymbol : TypeSymbol
         Func<Type, Type> mapClrType = null,
         bool eraseReferenceNullability = false)
     {
+        // Keep recursive arms on this closure so optional substitution modes propagate.
         TypeSymbol SubstituteNested(TypeSymbol nested)
             => SubstituteTypeForConstruction(nested, subst, mapClrType, eraseReferenceNullability);
 
