@@ -255,6 +255,7 @@ public sealed class Binder
             bindBlockStatement: syntax => statements.BindBlockStatement(syntax),
             bindTypeClause: BindTypeClause,
             bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
+            isIteratorReturnType: IsIteratorReturnType,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             getCurrentFunction: () => this.function,
