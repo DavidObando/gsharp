@@ -68,6 +68,16 @@ public class Issue2918InlineLambdaErasedReceiverTests
 
             public string Kind { get; }
         }
+
+        public sealed class DelegateBox<T>
+        {
+            public DelegateBox(T value) => Value = value;
+
+            public T Value { get; }
+
+            public string RuntimeTypeName =>
+                Value!.GetType().GetGenericTypeDefinition().FullName!;
+        }
         """;
 
     [Fact]
@@ -218,6 +228,109 @@ public class Issue2918InlineLambdaErasedReceiverTests
         Assert.Equal(
             "symbolic\nclosed\n",
             CompileVerifyLoadAndRun(source, "Issue2918ConstructorOverloads.Src"));
+    }
+
+    [Fact]
+    public void ImportedPredicateThroughErasedListSlot_IsRejected()
+    {
+        const string source = """
+            package Issue2918PredicateSlot
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let predicates = List[Predicate[Src]]()
+                predicates.Add((item Src) -> item.N > 2)
+            }
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedComparisonThroughErasedListSlot_IsRejected()
+    {
+        const string source = """
+            package Issue2918ComparisonSlot
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let comparisons = List[Comparison[Src]]()
+                comparisons.Add((left Src, right Src) -> left.N - right.N)
+            }
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedPredicateThroughErasedConstructorSlot_IsRejected()
+    {
+        const string source = """
+            package Issue2918PredicateConstructor
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let box = DelegateBox[Predicate[Src]](
+                    (item Src) -> item.N > 2)
+                Console.WriteLine(box.RuntimeTypeName)
+                Console.WriteLine(box.Value(Src(3)))
+            }
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
+        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HoistedImportedPredicateThroughGenericConstructor_RetainsDelegateIdentity()
+    {
+        const string source = """
+            package Issue2918PredicateHoisted
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let predicate Predicate[Src] = (item Src) -> item.N > 2
+                let box = DelegateBox[Predicate[Src]](predicate)
+                Console.WriteLine(box.RuntimeTypeName)
+                Console.WriteLine(box.Value(Src(3)))
+            }
+            """;
+
+        Assert.Equal(
+            "System.Predicate`1\nTrue\n",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue2918PredicateHoisted.Src",
+                verifyIl: false));
     }
 
     [Fact]
@@ -453,7 +566,10 @@ public class Issue2918InlineLambdaErasedReceiverTests
         }
     }
 
-    private static string CompileVerifyLoadAndRun(string source, string expectedSourceTypeName)
+    private static string CompileVerifyLoadAndRun(
+        string source,
+        string expectedSourceTypeName,
+        bool verifyIl = true)
     {
         var directory = CreateDirectory("Issue2918_");
         try
@@ -475,7 +591,11 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 sourcePath,
             ]);
 
-            IlVerifier.Verify(assemblyPath, additionalReferences: new[] { contractsPath });
+            if (verifyIl)
+            {
+                IlVerifier.Verify(assemblyPath, additionalReferences: new[] { contractsPath });
+            }
+
             AssertLoadsWithReifiedLambdaSignatures(
                 assemblyPath,
                 contractsPath,
@@ -599,6 +719,42 @@ public class Issue2918InlineLambdaErasedReceiverTests
 
     private static void Compile(string[] args)
     {
+        var (exitCode, output) = RunCompiler(args);
+        Assert.True(exitCode == 0, $"gsc failed:\n{output}");
+    }
+
+    private static string CompileExpectingFailure(string source)
+    {
+        var directory = CreateDirectory("Issue2918_Rejected_");
+        try
+        {
+            var contractsPath = Path.Combine(directory, "Issue2918Contracts.dll");
+            CompileCSharp(Contracts, contractsPath, "Issue2918Contracts");
+
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+            var (exitCode, output) = RunCompiler(
+            [
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                "/r:" + contractsPath,
+                sourcePath,
+            ]);
+
+            Assert.NotEqual(0, exitCode);
+            return output;
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    private static (int ExitCode, string Output) RunCompiler(string[] args)
+    {
         using var stdoutWriter = new StringWriter();
         using var stderrWriter = new StringWriter();
         var previousOut = Console.Out;
@@ -616,9 +772,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             Console.SetError(previousError);
         }
 
-        Assert.True(
-            exitCode == 0,
-            $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
+        return (exitCode, stdoutWriter.ToString() + stderrWriter.ToString());
     }
 
     private static void CompileCSharp(

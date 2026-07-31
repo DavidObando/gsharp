@@ -670,7 +670,12 @@ internal sealed partial class ExpressionBinder
                 && symbolicParamType is ImportedTypeSymbol symbolicDelegateParam
                 && symbolicDelegateParam.OpenDefinition != null
                 && symbolicDelegateParam.HasTypeParameterArgument
-                && TryBuildSymbolicDelegateTarget(openParamType, openDef, symbolicArgs, out var symbolicDelegateTarget))
+                && TryBuildSymbolicDelegateTarget(
+                    openParamType,
+                    openDef,
+                    symbolicArgs,
+                    out _,
+                    out var symbolicDelegateTarget))
             {
                 // The substituted delegate target matches the literal's declared
                 // (TResult-typed) shape, so the adapter returns the literal
@@ -781,8 +786,10 @@ internal sealed partial class ExpressionBinder
         Type openParameterType,
         Type openDefinition,
         ImmutableArray<TypeSymbol> symbolicArgs,
+        out TypeSymbol mapped,
         out FunctionTypeSymbol target)
     {
+        mapped = null;
         target = null;
         if (openParameterType == null)
         {
@@ -792,7 +799,7 @@ internal sealed partial class ExpressionBinder
         // Issue #2918: substitute the complete parameter before asking whether
         // it is a lambda target. The open parameter may itself be `T`, while
         // the receiver or method closes `T` to `Action[Src]`.
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+        mapped = MemberLookup.MapOpenClrTypeToSymbolic(
             openParameterType,
             openDefinition,
             symbolicArgs);
@@ -803,6 +810,25 @@ internal sealed partial class ExpressionBinder
 
         target = candidate;
         return true;
+    }
+
+    private static bool IsCanonicalFunctionDelegate(TypeSymbol type)
+    {
+        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
+        {
+            type = delegateType;
+        }
+
+        if (type is not ImportedTypeSymbol imported)
+        {
+            return true;
+        }
+
+        var openDefinition = imported.OpenDefinition ?? imported.ClrType;
+        var fullName = openDefinition?.FullName;
+        return fullName == "System.Action"
+            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
+            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
     }
 
     /// <summary>
@@ -1467,7 +1493,14 @@ internal sealed partial class ExpressionBinder
                             openParameterType,
                             receiverOpenDefinition,
                             receiverTypeArguments,
+                            out var mappedDelegate,
                             out functionType))
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
+                    if (!IsCanonicalFunctionDelegate(mappedDelegate))
                     {
                         candidateUsable = false;
                         break;
