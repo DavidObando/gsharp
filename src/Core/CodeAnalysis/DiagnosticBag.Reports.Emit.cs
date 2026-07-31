@@ -127,6 +127,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.FixedSourceNotPinnable, typeName);
 
     /// <summary>
+    /// GS0506: an <c>await</c> or <c>yield</c> suspension point appears in a
+    /// <c>fixed</c> body. A pinned local cannot survive state-machine
+    /// suspension, so the suspension must move outside the fixed statement.
+    /// </summary>
+    /// <param name="location">The location of the <c>await</c> or <c>yield</c> keyword.</param>
+    /// <param name="keyword">The rejected keyword.</param>
+    public void ReportFixedStatementCannotSuspend(TextLocation location, string keyword)
+    => Report(location, DiagnosticDescriptors.FixedStatementCannotSuspend, keyword);
+
+    /// <summary>
     /// GS0403: a <c>void</c>-element pointer (<c>*void</c>, the faithful mapping
     /// of C# <c>void*</c>; ADR-0122 §3 / issue #1033) was directly dereferenced
     /// (<c>*p</c>), indexed (<c>p[i]</c>), or used in pointer arithmetic

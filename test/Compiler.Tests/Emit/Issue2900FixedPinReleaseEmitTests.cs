@@ -265,6 +265,40 @@ public class Issue2900FixedPinReleaseEmitTests
     }
 
     [Fact]
+    public void StaticInitializerReturn_UsesSharedFixedEpilogue_AndRuns()
+    {
+        const string Source = """
+            package Issue2900.StaticInitializer
+            import System
+
+            class Holder {
+                shared {
+                    var Total int32 = 0
+
+                    init {
+                        var xs = []int32{41}
+                        unsafe {
+                            fixed p *int32 = xs {
+                                Total = *p
+                                return
+                            }
+                        }
+                        Total = -1
+                    }
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(Holder.Total)
+            }
+            """;
+
+        using var program = Compile(Source, "static_initializer");
+        Assert.Equal("41\n", program.Run());
+        AssertEscapingLeave(program.ReadMethod(".cctor"), expectedFinallyCount: 1);
+    }
+
+    [Fact]
     public void EarlyBreak_ReleasesPinBeforeCompactingGc()
     {
         const string Source = """
@@ -284,7 +318,7 @@ public class Issue2900FixedPinReleaseEmitTests
                         }
                     }
 
-                    for var i = 0; i < 2000; i++ {
+                    for var i = 0; i < 20000; i++ {
                         var garbage = []uint8{uint8(4), uint8(5), uint8(6)}
                         GC.KeepAlive(garbage)
                     }
@@ -529,6 +563,69 @@ public class Issue2900FixedPinReleaseEmitTests
     }
 
     [Fact]
+    public void SwitchArmReturn_UsesSharedFixedEpilogue_AndRuns()
+    {
+        const string Source = """
+            package Issue2900.SwitchReturn
+            import System
+
+            func FromSwitch(xs []int32) int32 {
+                unsafe {
+                    fixed p *int32 = xs {
+                        switch xs[0] {
+                            case 7 {
+                                return *p + 1
+                            }
+                        }
+                    }
+                }
+                return -1
+            }
+
+            func Main() {
+                Console.WriteLine(FromSwitch([]int32{7}))
+            }
+            """;
+
+        using var program = Compile(Source, "switch_return");
+        Assert.Equal("8\n", program.Run());
+        AssertEscapingLeave(program.ReadMethod("FromSwitch"), expectedFinallyCount: 1);
+    }
+
+    [Fact]
+    public void SelectArmReturn_UsesSharedFixedEpilogue_AndRuns()
+    {
+        const string Source = """
+            package Issue2900.SelectReturn
+            import System
+            import Gsharp.Extensions.Go
+
+            func FromSelect(xs []int32) int32 {
+                let ch = make(chan int32, 1)
+                ch <- 2
+                unsafe {
+                    fixed p *int32 = xs {
+                        select {
+                            case let value = <-ch {
+                                return *p + value
+                            }
+                        }
+                    }
+                }
+                return -1
+            }
+
+            func Main() {
+                Console.WriteLine(FromSelect([]int32{7}))
+            }
+            """;
+
+        using var program = Compile(Source, "select_return");
+        Assert.Equal("9\n", program.Run());
+        AssertEscapingLeave(program.ReadMethod("FromSelect"), expectedFinallyCount: 1);
+    }
+
+    [Fact]
     public void AsyncAndIterator_WithLaterSuspension_VerifyAndRun()
     {
         const string Source = """
@@ -590,6 +687,73 @@ public class Issue2900FixedPinReleaseEmitTests
                 method.Regions.Any(region => region.Kind == ExceptionRegionKind.Finally)
                 && method.Instructions.Any(instruction => instruction.OpCode == OpCodes.Endfinally)),
             "State-machine bodies must retain fixed cleanup regions.");
+    }
+
+    [Fact]
+    public void SuspensionInsideFixed_ReportsGs0506_ButNestedLambdaIsAllowed()
+    {
+        const string InvalidSource = """
+            package Issue2900.SuspensionErrors
+            import System.Threading.Tasks
+
+            async func AwaitDirect() Task[int32] {
+                var xs = []int32{1}
+                unsafe {
+                    fixed p *int32 = xs {
+                        await Task.Yield()
+                    }
+                }
+                return 1
+            }
+
+            async func AwaitNested() Task[int32] {
+                var xs = []int32{1}
+                unsafe {
+                    fixed p *int32 = xs {
+                        fixed q *int32 = xs {
+                            await Task.Yield()
+                        }
+                    }
+                }
+                return 1
+            }
+
+            func YieldDirect() sequence[int32] {
+                var xs = []int32{2}
+                unsafe {
+                    fixed p *int32 = xs {
+                        yield *p
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = CompileErrors(InvalidSource, "suspension_errors");
+        Assert.Equal(3, diagnostics.Split("GS0506").Length - 1);
+        Assert.Contains("'await' cannot appear inside a 'fixed' statement", diagnostics);
+        Assert.Contains("'yield' cannot appear inside a 'fixed' statement", diagnostics);
+
+        const string ValidSource = """
+            package Issue2900.NestedLambda
+            import System
+            import System.Threading.Tasks
+
+            func Main() {
+                var xs = []int32{1}
+                unsafe {
+                    fixed p *int32 = xs {
+                        let work = async () -> {
+                            await Task.Yield()
+                            return 7
+                        }
+                        Console.WriteLine(work().Result)
+                    }
+                }
+            }
+            """;
+
+        using var program = Compile(ValidSource, "nested_lambda");
+        Assert.Equal("7\n", program.Run());
     }
 
     private static void AssertEscapingLeave(MethodIl method, int expectedFinallyCount)
@@ -671,6 +835,47 @@ public class Issue2900FixedPinReleaseEmitTests
             $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
         IlVerifier.Verify(assemblyPath, additionalReferences: null, ignoredErrorCodes: FixedIlVerifyIgnored);
         return new CompiledProgram(directory, assemblyPath);
+    }
+
+    private static string CompileErrors(string source, string tag)
+    {
+        var directory = Directory.CreateTempSubdirectory($"gs_i2900_{tag}_").FullName;
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            var previousOut = Console.Out;
+            var previousError = Console.Error;
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            int exitCode;
+            try
+            {
+                exitCode = Program.Main(new[]
+                {
+                    "/out:" + assemblyPath,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    sourcePath,
+                });
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousError);
+            }
+
+            Assert.NotEqual(0, exitCode);
+            return stdout + stderr.ToString();
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static MethodIl ReadMethod(PEReader pe, MetadataReader metadata, MethodDefinitionHandle handle)
@@ -777,9 +982,17 @@ public class Issue2900FixedPinReleaseEmitTests
                 RedirectStandardError = true,
                 UseShellExecute = false,
             })!;
-            var stdout = process.StandardOutput.ReadToEnd().Replace("\r\n", "\n");
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(30_000))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+                Assert.Fail("dotnet exec timed out");
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n");
+            var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(process.ExitCode == 0, $"dotnet exec exited {process.ExitCode}:\n{stderr}");
             return stdout;
         }

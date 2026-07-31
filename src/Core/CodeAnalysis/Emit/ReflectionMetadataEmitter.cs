@@ -4167,17 +4167,6 @@ internal sealed class ReflectionMetadataEmitter
                         return found;
                     case BoundFixedStatement fixedStatement:
                         return Find(fixedStatement.Body, insideFixed: true);
-                    case BoundTryStatement tryStatement:
-                        var tryFound = Find(tryStatement.TryBlock, insideFixed);
-                        foreach (var clause in tryStatement.CatchClauses)
-                        {
-                            tryFound |= Find(clause.Body, insideFixed);
-                        }
-
-                        return tryFound
-                            | (tryStatement.FinallyBlock != null && Find(tryStatement.FinallyBlock, insideFixed));
-                    case BoundScopeStatement scopeStatement:
-                        return Find(scopeStatement.Body, insideFixed);
                     case BoundSelectStatement selectStatement:
                         var selectFound = false;
                         foreach (var arm in selectStatement.Cases)
