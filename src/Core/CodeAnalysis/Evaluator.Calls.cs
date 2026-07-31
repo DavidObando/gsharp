@@ -600,6 +600,14 @@ public sealed partial class Evaluator
 
             return value;
         }
+        else if (value is Delegate sourceDelegate
+            && node.Type?.ClrType is Type delegateType
+            && typeof(Delegate).IsAssignableFrom(delegateType))
+        {
+            return delegateType.IsInstanceOfType(sourceDelegate)
+                ? sourceDelegate
+                : CreateInterpreterDelegate(delegateType, sourceDelegate.DynamicInvoke);
+        }
         else if (node.Type == TypeSymbol.Object
             || node.Type is InterfaceSymbol
             || (node.Type is StructSymbol upcastTarget && upcastTarget.IsClass)

@@ -756,7 +756,7 @@ public sealed partial class Evaluator
             captured[v] = LookupVariable(v);
         }
 
-        return new ClosureValue(node.Function, node.Body, node.FunctionType, captured);
+        return MaterializeClosure(new ClosureValue(node.Function, node.Body, node.FunctionType, captured));
     }
 
     private object EvaluateMethodGroupExpression(BoundMethodGroupExpression node)
@@ -775,7 +775,7 @@ public sealed partial class Evaluator
             captured[node.Function.ThisParameter] = EvaluateExpression(node.Receiver);
         }
 
-        return new ClosureValue(node.Function, body, node.FunctionType, captured);
+        return MaterializeClosure(new ClosureValue(node.Function, body, node.FunctionType, captured));
     }
 
     private object EvaluateClrMethodGroupExpression(BoundClrMethodGroupExpression node)
@@ -804,16 +804,77 @@ public sealed partial class Evaluator
             throw new EvaluatorException("Attempted to invoke a nil function.", node);
         }
 
-        var closure = (ClosureValue)targetValue;
+        var arguments = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            arguments[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        if (targetValue is Delegate target)
+        {
+            return InvokeDelegate(target, arguments);
+        }
+
+        return InvokeClosure((ClosureValue)targetValue, arguments);
+    }
+
+    private object MaterializeClosure(ClosureValue closure)
+    {
+        return closure.FunctionType.ClrType is Type delegateType
+            ? CreateInterpreterDelegate(delegateType, args => InvokeMaterializedClosure(closure, args))
+            : closure;
+    }
+
+    private static Delegate CreateInterpreterDelegate(Type delegateType, Func<object[], object> invoke)
+    {
+        var invokeMethod = delegateType.GetMethod(nameof(Action.Invoke));
+        var parameters = invokeMethod.GetParameters()
+            .Select(parameter => System.Linq.Expressions.Expression.Parameter(parameter.ParameterType, parameter.Name))
+            .ToArray();
+        var arguments = System.Linq.Expressions.Expression.NewArrayInit(
+            typeof(object),
+            parameters.Select(parameter => System.Linq.Expressions.Expression.Convert(parameter, typeof(object))));
+        var invocation = System.Linq.Expressions.Expression.Invoke(
+            System.Linq.Expressions.Expression.Constant(invoke),
+            arguments);
+        System.Linq.Expressions.Expression body = invokeMethod.ReturnType.IsSameAs(typeof(void))
+            ? System.Linq.Expressions.Expression.Block(invocation, System.Linq.Expressions.Expression.Empty())
+            : System.Linq.Expressions.Expression.Convert(invocation, invokeMethod.ReturnType);
+        return System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters).Compile();
+    }
+
+    private static object InvokeDelegate(Delegate target, object[] arguments)
+    {
+        try
+        {
+            return target.DynamicInvoke(arguments);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
+    }
+
+    private object InvokeMaterializedClosure(ClosureValue closure, object[] arguments)
+    {
+        var result = InvokeClosure(closure, arguments);
+        return closure.Function.IsAsync
+            ? WrapAsyncResult(closure.Function.Type, result)
+            : result;
+    }
+
+    private object InvokeClosure(ClosureValue closure, object[] arguments)
+    {
         var frame = new ConcurrentDictionary<VariableSymbol, object>();
         foreach (var kv in closure.CapturedLocals)
         {
             frame[kv.Key] = kv.Value;
         }
 
-        for (var i = 0; i < node.Arguments.Length; i++)
+        for (var i = 0; i < arguments.Length; i++)
         {
-            frame[closure.Function.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
+            frame[closure.Function.Parameters[i]] = arguments[i];
         }
 
         using (PushFrame(frame))
