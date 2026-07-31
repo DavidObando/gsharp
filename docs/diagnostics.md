@@ -988,6 +988,14 @@ types are specialized into `class` and `struct` variants automatically.
 Other unconstrained sequence type positions still require an explicit
 `struct`, `class`, or base-class constraint.
 
+A call from another unconstrained generic context cannot select either
+specialized iterator variant. Constrain the enclosing type parameter to
+`struct`, `class`, or a base class. Named or explicit arguments do not resolve
+that call: until [#2958](https://github.com/DavidObando/gsharp/issues/2958),
+it reports GS0266, and a nullable value-type argument may instead report
+GS0152. G# rejects source overloads differentiated only by constraints with
+GS0264, even though iterator specialization synthesizes equivalent variants.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

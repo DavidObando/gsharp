@@ -384,6 +384,26 @@ public class Issue2927NullableSequenceElementTypeTests
     }
 
     [Fact]
+    public void SpecializedGenericIteratorResultConvertsToConcreteNullableSequence()
+    {
+        const string Source = """
+            package Issue2927ConcreteSequence
+            import System
+
+            func text(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func values[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            var concrete sequence[int32?] = values[int32](5)
+            for value in concrete { Console.WriteLine(text(value)) }
+            """;
+
+        AssertEmittedProgram(Source, "5\nnil\n", nameof(SpecializedGenericIteratorResultConvertsToConcreteNullableSequence));
+    }
+
+    [Fact]
     public void GenericNullableSequenceSpecializesTopLevelExtensionInstanceAndStaticIterators()
     {
         const string Source = """
@@ -506,6 +526,21 @@ public class Issue2927NullableSequenceElementTypeTests
     }
 
     [Fact]
+    public void UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508()
+    {
+        const string Source = """
+            package Issue2927NonIteratorReturnDiagnosticGuard
+            func consume[T]() sequence[T?] -> nil
+            """;
+
+        var result = InvokeCompiler(Source, nameof(UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508));
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0508:", StringComparison.Ordinal)));
+        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0155:", StringComparison.Ordinal)));
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
     public void UnconstrainedEnclosingTypeParameterIteratorStillReportsSingleGS0508()
     {
         const string Source = """
@@ -534,6 +569,61 @@ public class Issue2927NullableSequenceElementTypeTests
         Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0125:", StringComparison.Ordinal)));
         Assert.DoesNotContain("error GS0508:", result.Output, StringComparison.Ordinal);
         Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics()
+    {
+        const string InferredSource = """
+            package Issue2927InferredDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt(u) }
+            """;
+        const string NamedSource = """
+            package Issue2927NamedDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt(v: u) }
+            """;
+        const string ExplicitSource = """
+            package Issue2927ExplicitDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt[U](u) }
+            """;
+        const string NullableSource = """
+            package Issue2927NullableArgumentDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            let value int32? = 1
+            let values = opt[int32?](2)
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(InferredSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_inferred"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(NamedSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_named"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(ExplicitSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_explicit"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(NullableSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_nullable"),
+            "GS0152",
+            "does not satisfy the 'struct' constraint.");
     }
 
     private static void AssertEmittedProgram(string source, string expected, string name)
@@ -620,6 +710,21 @@ public class Issue2927NullableSequenceElementTypeTests
         Assert.Single(diagnostics);
         Assert.Contains("error GS0508:", diagnostics[0], StringComparison.Ordinal);
         Assert.False(File.Exists(result.AssemblyPath), "gsc must not emit an assembly after GS0508");
+    }
+
+    private static void AssertSingleDiagnostic(
+        (int ExitCode, string Output, string AssemblyPath) result,
+        string id,
+        string message)
+    {
+        Assert.NotEqual(0, result.ExitCode);
+        var diagnostics = result.Output.Split('\n')
+            .Where(line => line.Contains("error GS", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(diagnostics);
+        Assert.Contains($"error {id}:", diagnostics[0], StringComparison.Ordinal);
+        Assert.Contains(message, diagnostics[0], StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
     }
 
     private static (int ExitCode, string Output, string AssemblyPath) InvokeCompiler(string source, string name)
