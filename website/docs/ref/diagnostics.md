@@ -1042,8 +1042,12 @@ Cause/fix:
   (`prop Name T { get { … } }`), declaring a non-abstract default
   static slot; no diagnostic is raised.
 - **GS0397** — add the missing static property inside the
-  implementer's `shared { … }` block with a matching name, type, and
-  accessor set:
+  implementer's `shared { … }` block with a compatible name, type, and
+  accessor set. Static properties use the same nullable-erasure rule as
+  instance interface properties: get-only reference or unconstrained/class-
+  constrained type-parameter nullability may be covariant, concrete and
+  `struct`-constrained nullable value types remain distinct, and setters are
+  invariant:
   `struct AppleData : IData { shared { prop Name string { get { return "apple" } } } }`.
 
 ## Private interface helper diagnostics (GS0334–GS0337)

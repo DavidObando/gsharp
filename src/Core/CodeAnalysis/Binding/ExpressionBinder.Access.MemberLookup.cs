@@ -3463,7 +3463,9 @@ internal sealed partial class ExpressionBinder
                         return new BoundErrorExpression(null);
                     }
 
-                    var propType = SubstituteThroughConstructedInterface(slotProp.Type, slotIface);
+                    var propType = DeclarationBinder.GetInterfacePropertySlotType(
+                        slotProp.Type,
+                        DeclarationBinder.BuildInterfaceTypeParameterMap(slotIface));
 
                     return new BoundConstrainedStaticCallExpression(
                         ne,

@@ -673,7 +673,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static bool IsInterfacePropertyTypeCompatible(
+    internal static bool IsInterfacePropertyTypeCompatible(
         TypeSymbol implementationType,
         TypeSymbol interfaceType,
         bool hasSetter,
@@ -694,28 +694,13 @@ internal sealed partial class DeclarationBinder
             : interfaceIsNullable || !implementationIsNullable;
     }
 
-    private static TypeSymbol GetInterfacePropertySlotType(
+    internal static TypeSymbol GetInterfacePropertySlotType(
         TypeSymbol type,
         Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
         => StructSymbol.SubstituteTypeParameters(
             type,
             typeParameterMap,
             eraseReferenceNullability: true);
-
-    private static bool IsStaticInterfacePropertyTypeCompatible(
-        TypeSymbol implementationType,
-        TypeSymbol interfaceType,
-        bool hasSetter,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
-    {
-        // Issue #2945: static-virtual emission does not erase nullable generic slots like instance emission.
-        return TypeSignaturesEquivalent(interfaceType, implementationType, typeParameterMap)
-            && IsInterfacePropertyTypeCompatible(
-                implementationType,
-                interfaceType,
-                hasSetter,
-                typeParameterMap);
-    }
 
     private static bool IsUnsupportedImplicitInterfaceIndexer(
         InterfaceSymbol iface,
@@ -1453,7 +1438,7 @@ internal sealed partial class DeclarationBinder
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
                     if (candidate.Name == iprop.Name
-                        && IsStaticInterfacePropertyTypeCompatible(
+                        && IsInterfacePropertyTypeCompatible(
                             candidate.Type,
                             iprop.Type,
                             iprop.HasSetter,

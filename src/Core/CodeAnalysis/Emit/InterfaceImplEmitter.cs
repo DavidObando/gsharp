@@ -1117,9 +1117,10 @@ internal sealed class InterfaceImplEmitter
                     foreach (var candidate in structSymbol.StaticProperties)
                     {
                         if (candidate.Name == slotProp.Name
-                            && DeclarationBinder.TypeSignaturesEquivalent(
-                                slotProp.Type,
+                            && DeclarationBinder.IsInterfacePropertyTypeCompatible(
                                 candidate.Type,
+                                slotProp.Type,
+                                slotProp.HasSetter,
                                 typeParameterMap))
                         {
                             implProp = candidate;

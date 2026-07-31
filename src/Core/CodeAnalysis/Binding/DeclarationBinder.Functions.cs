@@ -1882,7 +1882,7 @@ internal sealed partial class DeclarationBinder
             }
 
             var typeParamMap = BuildInterfaceTypeParameterMap(iface);
-            if (!IsStaticInterfacePropertyTypeCompatible(
+            if (!IsInterfacePropertyTypeCompatible(
                 candidate.Type,
                 iprop.Type,
                 iprop.HasSetter,
