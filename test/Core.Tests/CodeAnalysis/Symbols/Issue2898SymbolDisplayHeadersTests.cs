@@ -166,6 +166,30 @@ public class Issue2898SymbolDisplayHeadersTests
         Assert.NotSame(before, after);
     }
 
+    [Fact]
+    public void ConstructNested_NormalizesEmptyArgumentsAndConstructedDefinitions()
+    {
+        var compilation = Compile("""
+            package P
+            struct Outer[T] { enum Color { Red } }
+            """);
+        var definition = compilation.GlobalScope.Enums.Single(e => e.Name == "Color");
+
+        Assert.Same(
+            definition,
+            EnumSymbol.ConstructNested(definition, ImmutableArray<TypeSymbol>.Empty));
+
+        var intConstruction = EnumSymbol.ConstructNested(
+            definition,
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
+        var stringConstruction = EnumSymbol.ConstructNested(
+            intConstruction,
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.String));
+
+        Assert.Same(definition, stringConstruction.Definition);
+        Assert.Equal("Outer[string].Color", SymbolDisplay.ToTypeDisplayString(stringConstruction));
+    }
+
     private static void AssertEnumLiteral(Compilation compilation, string functionName, EnumSymbol expectedType)
     {
         var function = compilation.BoundProgram.Functions.Keys.Single(f => f.Name == functionName);

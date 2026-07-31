@@ -123,10 +123,16 @@ public sealed class EnumSymbol : TypeSymbol
         EnumSymbol nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
     {
+        if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return nestedDefinition;
+        }
+
+        var def = nestedDefinition.Definition ?? nestedDefinition;
         var key = new TypeArgsKey(enclosingTypeArguments);
         return ConstructedNestedCache.GetOrAdd(
-            (nestedDefinition, key),
-            _ => CreateConstructedNested(nestedDefinition, enclosingTypeArguments));
+            (def, key),
+            _ => CreateConstructedNested(def, enclosingTypeArguments));
     }
 
     /// <summary>
