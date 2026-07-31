@@ -358,7 +358,7 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
-    public void ImplicitStaticVirtualNullableErasureGap_RejectsWithoutOutput()
+    public void ImplicitStaticVirtualNullableErasure_EmitsAndLoads()
     {
         const string source = """
             package StaticImplicitCovarianceRejected
@@ -370,11 +370,11 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             }
             """;
 
-        _ = CompileExpectingFailure(source);
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
-    public void ExplicitStaticVirtualNullableErasureGap_RejectsWithoutOutput()
+    public void ExplicitStaticVirtualNullableErasure_EmitsAndLoads()
     {
         const string source = """
             package StaticExplicitCovarianceRejected
@@ -388,7 +388,7 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             }
             """;
 
-        _ = CompileExpectingFailure(source);
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
