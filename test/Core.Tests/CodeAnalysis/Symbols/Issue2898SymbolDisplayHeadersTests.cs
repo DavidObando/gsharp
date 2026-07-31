@@ -57,6 +57,7 @@ public class Issue2898SymbolDisplayHeadersTests
         var stringEnum = Assert.IsType<EnumSymbol>(stringFunction.Parameters.Single().Type);
 
         Assert.NotSame(intEnum, stringEnum);
+        Assert.Same(intEnum.Definition, intEnum.Definition.Definition);
         Assert.Same(intEnum.Definition, stringEnum.Definition);
         Assert.Equal("int32", Assert.Single(intEnum.EnclosingTypeArguments).Name);
         Assert.Equal("string", Assert.Single(stringEnum.EnclosingTypeArguments).Name);

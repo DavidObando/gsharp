@@ -7,6 +7,8 @@ using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using GSharp.Compiler;
 using Xunit;
 
@@ -164,6 +166,90 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.Equal("red", map[deepEnum.GetField("Red", BindingFlags.Public | BindingFlags.Static).GetValue(null)]);
     }
 
+    [Fact]
+    public void ImportedNestedEnum_LoadsWithConcreteDistinctEnclosingArguments()
+    {
+        const string librarySource = """
+            package glib
+
+            public struct Outer[T] {
+                public enum Color { Red = 4, Green = 5, Blue = 6 }
+            }
+            """;
+        const string consumerSource = """
+            package useglib
+            import glib
+
+            var c = Outer[int32].Color.Green
+            var d = Outer[string].Color.Blue
+            func I() int32 { return int32(c) }
+            func S() int32 { return int32(d) }
+            func BI() object { return c }
+            func BS() object { return d }
+            func EI(value Outer[int32].Color) Outer[int32].Color { return value }
+            func ES(value Outer[string].Color) Outer[string].Color { return value }
+            """;
+
+        var tempDir = Path.Combine(
+            AppContext.BaseDirectory,
+            "Issue2898ImportedEmit",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var libraryPath = Compile(tempDir, "glib", librarySource);
+            var consumerPath = Compile(tempDir, "useglib", consumerSource, "/target:exe", "/r:" + libraryPath);
+
+            IlVerifier.Verify(libraryPath);
+            IlVerifier.Verify(consumerPath, new[] { libraryPath });
+
+            var intSignature = GetFieldSignature(consumerPath, "c");
+            var stringSignature = GetFieldSignature(consumerPath, "d");
+            Assert.NotEqual(intSignature, stringSignature);
+            Assert.EndsWith("08", intSignature);
+            Assert.EndsWith("0E", stringSignature);
+            Assert.DoesNotContain("1300", intSignature);
+            Assert.DoesNotContain("1300", stringSignature);
+
+            var library = Assembly.Load(File.ReadAllBytes(libraryPath));
+            var libraryTypes = library.GetTypes();
+            ResolveEventHandler resolveLibrary = (_, args) =>
+                new AssemblyName(args.Name).Name == library.GetName().Name ? library : null;
+            AppDomain.CurrentDomain.AssemblyResolve += resolveLibrary;
+            try
+            {
+                var consumer = Assembly.Load(File.ReadAllBytes(consumerPath));
+                var consumerTypes = consumer.GetTypes();
+                var program = consumerTypes.Single(t => t.Name == "<Program>");
+                var intEnum = program.GetField("c", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).FieldType;
+                var stringEnum = program.GetField("d", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).FieldType;
+
+                Assert.NotEqual(intEnum, stringEnum);
+                Assert.Equal(typeof(int), Assert.Single(intEnum.GenericTypeArguments));
+                Assert.Equal(typeof(string), Assert.Single(stringEnum.GenericTypeArguments));
+                Assert.Equal(intEnum.GetGenericTypeDefinition(), stringEnum.GetGenericTypeDefinition());
+                Assert.Equal(libraryTypes.Single(t => t.Name == "Color"), intEnum.GetGenericTypeDefinition());
+                Assert.Equal(intEnum, Assert.Single(GetMethod(program, "EI").GetParameters()).ParameterType);
+                Assert.Equal(intEnum, GetMethod(program, "EI").ReturnType);
+                Assert.Equal(stringEnum, Assert.Single(GetMethod(program, "ES").GetParameters()).ParameterType);
+                Assert.Equal(stringEnum, GetMethod(program, "ES").ReturnType);
+                GetMethod(program, "<Main>$").Invoke(null, new object[] { Array.Empty<string>() });
+                Assert.Equal(5, GetMethod(program, "I").Invoke(null, null));
+                Assert.Equal(6, GetMethod(program, "S").Invoke(null, null));
+                Assert.Equal(intEnum, GetMethod(program, "BI").Invoke(null, null).GetType());
+                Assert.Equal(stringEnum, GetMethod(program, "BS").Invoke(null, null).GetType());
+            }
+            finally
+            {
+                AppDomain.CurrentDomain.AssemblyResolve -= resolveLibrary;
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
     private static MethodInfo GetMethod(Type type, string name)
         => type.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Missing method {type.FullName}.{name}");
@@ -177,36 +263,7 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            var sourcePath = Path.Combine(tempDir, "test.gs");
-            var outputPath = Path.Combine(tempDir, "test.dll");
-            File.WriteAllText(sourcePath, source);
-
-            using var compileOut = new StringWriter();
-            using var compileErr = new StringWriter();
-            var previousOut = Console.Out;
-            var previousErr = Console.Error;
-            Console.SetOut(compileOut);
-            Console.SetError(compileErr);
-            int exitCode;
-            try
-            {
-                exitCode = Program.Main(new[]
-                {
-                    "/out:" + outputPath,
-                    "/target:library",
-                    "/targetframework:net10.0",
-                    sourcePath,
-                });
-            }
-            finally
-            {
-                Console.SetOut(previousOut);
-                Console.SetError(previousErr);
-            }
-
-            Assert.True(
-                exitCode == 0,
-                $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            var outputPath = Compile(tempDir, "test", source);
             IlVerifier.Verify(outputPath);
 
             var bytes = File.ReadAllBytes(outputPath);
@@ -218,5 +275,53 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static string Compile(string directory, string name, string source, params string[] extraArguments)
+    {
+        var sourcePath = Path.Combine(directory, name + ".gs");
+        var outputPath = Path.Combine(directory, name + ".dll");
+        File.WriteAllText(sourcePath, source);
+
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        int exitCode;
+        try
+        {
+            var targetArgument = extraArguments.Any(a => a.StartsWith("/target:", StringComparison.OrdinalIgnoreCase))
+                ? Array.Empty<string>()
+                : new[] { "/target:library" };
+            exitCode = Program.Main(extraArguments.Concat(targetArgument).Concat(new[]
+            {
+                "/out:" + outputPath,
+                "/targetframework:net10.0",
+                sourcePath,
+            }).ToArray());
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousErr);
+        }
+
+        Assert.True(
+            exitCode == 0,
+            $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+        return outputPath;
+    }
+
+    private static string GetFieldSignature(string assemblyPath, string fieldName)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var field = metadata.FieldDefinitions
+            .Select(metadata.GetFieldDefinition)
+            .Single(f => metadata.GetString(f.Name) == fieldName);
+        return Convert.ToHexString(metadata.GetBlobBytes(field.Signature));
     }
 }
