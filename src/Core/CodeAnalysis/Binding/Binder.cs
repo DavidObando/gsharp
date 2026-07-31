@@ -4869,13 +4869,31 @@ public sealed class Binder
             // `sequence[U]` at the call site (and downstream
             // `BindExtensionFunctionCall` sees a matching parameter type).
             var inner = SubstituteType(seq.ElementType, substitution, mapClrType);
-            return ReferenceEquals(inner, seq.ElementType) ? type : SequenceTypeSymbol.Get(inner);
+            if (ReferenceEquals(inner, seq.ElementType))
+            {
+                return type;
+            }
+
+            var eraseNullableRuntime = seq.ElementType is NullableTypeSymbol nullableElement
+                && nullableElement.UnderlyingType is TypeParameterSymbol { HasValueTypeConstraint: false };
+            return eraseNullableRuntime
+                ? SequenceTypeSymbol.GetWithErasedNullableRuntime(inner)
+                : SequenceTypeSymbol.Get(inner);
         }
 
         if (type is AsyncSequenceTypeSymbol aseq)
         {
             var inner = SubstituteType(aseq.ElementType, substitution, mapClrType);
-            return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
+            if (ReferenceEquals(inner, aseq.ElementType))
+            {
+                return type;
+            }
+
+            var eraseNullableRuntime = aseq.ElementType is NullableTypeSymbol nullableElement
+                && nullableElement.UnderlyingType is TypeParameterSymbol { HasValueTypeConstraint: false };
+            return eraseNullableRuntime
+                ? AsyncSequenceTypeSymbol.GetWithErasedNullableRuntime(inner)
+                : AsyncSequenceTypeSymbol.Get(inner);
         }
 
         if (type is MapTypeSymbol map)

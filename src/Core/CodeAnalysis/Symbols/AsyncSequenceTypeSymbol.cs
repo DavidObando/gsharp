@@ -18,10 +18,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class AsyncSequenceTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<TypeSymbol, AsyncSequenceTypeSymbol> Cache = new();
+    private static readonly ConcurrentDictionary<(TypeSymbol ElementType, bool LiftNullable), AsyncSequenceTypeSymbol> Cache = new();
 
-    private AsyncSequenceTypeSymbol(TypeSymbol elementType)
-        : base($"sequence[{elementType.Name}]", MakeClrType(elementType))
+    private AsyncSequenceTypeSymbol(TypeSymbol elementType, bool liftNullable)
+        : base($"sequence[{elementType.Name}]", MakeClrType(elementType, liftNullable))
     {
         ElementType = elementType;
     }
@@ -41,8 +41,11 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
             throw new ArgumentNullException(nameof(elementType));
         }
 
-        return Cache.GetOrAdd(elementType, et => new AsyncSequenceTypeSymbol(et));
+        return Cache.GetOrAdd((elementType, true), key => new AsyncSequenceTypeSymbol(key.ElementType, key.LiftNullable));
     }
+
+    internal static AsyncSequenceTypeSymbol GetWithErasedNullableRuntime(TypeSymbol elementType)
+        => Cache.GetOrAdd((elementType, false), key => new AsyncSequenceTypeSymbol(key.ElementType, key.LiftNullable));
 
     /// <summary>
     /// Removes all entries from the static type cache. Called by
@@ -52,13 +55,16 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol elementType)
+    private static Type MakeClrType(TypeSymbol elementType, bool liftNullable)
     {
-        if (elementType.ClrType == null)
+        var elementClrType = liftNullable
+            ? NullableTypeSymbol.GetEffectiveClrType(elementType)
+            : elementType.ClrType;
+        if (elementClrType == null)
         {
             return null;
         }
 
-        return typeof(IAsyncEnumerable<>).MakeGenericType(elementType.ClrType);
+        return typeof(IAsyncEnumerable<>).MakeGenericType(elementClrType);
     }
 }

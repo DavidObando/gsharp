@@ -13,10 +13,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class SequenceTypeSymbol : TypeSymbol
 {
-    private static readonly ConcurrentDictionary<TypeSymbol, SequenceTypeSymbol> Cache = new();
+    private static readonly ConcurrentDictionary<(TypeSymbol ElementType, bool LiftNullable), SequenceTypeSymbol> Cache = new();
 
-    private SequenceTypeSymbol(TypeSymbol elementType)
-        : base($"sequence[{elementType.Name}]", MakeClrType(elementType))
+    private SequenceTypeSymbol(TypeSymbol elementType, bool liftNullable)
+        : base($"sequence[{elementType.Name}]", MakeClrType(elementType, liftNullable))
     {
         ElementType = elementType;
     }
@@ -36,8 +36,11 @@ public sealed class SequenceTypeSymbol : TypeSymbol
             throw new ArgumentNullException(nameof(elementType));
         }
 
-        return Cache.GetOrAdd(elementType, et => new SequenceTypeSymbol(et));
+        return Cache.GetOrAdd((elementType, true), key => new SequenceTypeSymbol(key.ElementType, key.LiftNullable));
     }
+
+    internal static SequenceTypeSymbol GetWithErasedNullableRuntime(TypeSymbol elementType)
+        => Cache.GetOrAdd((elementType, false), key => new SequenceTypeSymbol(key.ElementType, key.LiftNullable));
 
     /// <summary>
     /// Removes all entries from the static type cache. Called by
@@ -47,13 +50,16 @@ public sealed class SequenceTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol elementType)
+    private static Type MakeClrType(TypeSymbol elementType, bool liftNullable)
     {
-        if (elementType.ClrType == null)
+        var elementClrType = liftNullable
+            ? NullableTypeSymbol.GetEffectiveClrType(elementType)
+            : elementType.ClrType;
+        if (elementClrType == null)
         {
             return null;
         }
 
-        return typeof(IEnumerable<>).MakeGenericType(elementType.ClrType);
+        return typeof(IEnumerable<>).MakeGenericType(elementClrType);
     }
 }
