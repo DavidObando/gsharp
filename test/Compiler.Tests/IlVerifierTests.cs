@@ -5,6 +5,7 @@
 #nullable enable
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
@@ -148,5 +149,123 @@ public class IlVerifierTests
         {
             Environment.SetEnvironmentVariable("GSHARP_SKIP_ILVERIFY", prev);
         }
+    }
+
+    [Fact]
+    public void RunProcess_HungChild_TimesOutWithPartialOutput()
+    {
+        var assemblyPath = typeof(IlVerifierTests).Assembly.Location;
+        var stopwatch = Stopwatch.StartNew();
+        var exception = Assert.Throws<XunitException>(
+            () => IlVerifier.RunProcess(
+                CreateChildProcess(
+                    "[Console]::Out.Write('timeout-stdout'); [Console]::Error.Write('timeout-stderr'); Start-Sleep -Seconds 6",
+                    "printf timeout-stdout; printf timeout-stderr >&2; sleep 6"),
+                assemblyPath,
+                timeoutMilliseconds: 2_000));
+        stopwatch.Stop();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"timeout took {stopwatch.Elapsed}");
+        Assert.Contains("timed out after 2000 ms", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(assemblyPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("timeout-stdout", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("timeout-stderr", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunProcess_LargeStdoutAndStderr_DrainsBothPipes()
+    {
+        // A regression that starts either drain after WaitForExit hangs this test.
+        // xUnit's Fact timeout is unavailable because this assembly disables test
+        // parallelization, so treat such a hang as the deadlock regression, not a flake.
+        const int OutputLength = 128 * 1024;
+        var result = IlVerifier.RunProcess(
+            CreateChildProcess(
+                $"[Console]::Out.Write('o' * {OutputLength}); [Console]::Error.Write('e' * {OutputLength})",
+                $"awk 'BEGIN {{ for (i = 0; i < {OutputLength}; i++) printf \"o\" }}'; " +
+                $"awk 'BEGIN {{ for (i = 0; i < {OutputLength}; i++) printf \"e\" }}' >&2"),
+            typeof(IlVerifierTests).Assembly.Location,
+            timeoutMilliseconds: 10_000);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(new string('o', OutputLength), result.Stdout);
+        Assert.Equal(new string('e', OutputLength), result.Stderr);
+    }
+
+    [Fact]
+    public void RunProcess_EscapedDescendantHoldingPipe_TimeoutRemainsBounded()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Process has no portable API for creating a reparented Windows
+            // descendant that retains inherited redirected pipe handles.
+            return;
+        }
+
+        var pidPath = Path.Combine(
+            AppContext.BaseDirectory,
+            $"ilverify-escaped-{Guid.NewGuid():N}.pid");
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var exception = Assert.Throws<XunitException>(
+                () => IlVerifier.RunProcess(
+                    CreateChildProcess(
+                        string.Empty,
+                        $"(sleep 30 2>/dev/null & echo $! > '{pidPath}'); printf escaped-stdout; sleep 6"),
+                    typeof(IlVerifierTests).Assembly.Location,
+                    timeoutMilliseconds: 2_000));
+            stopwatch.Stop();
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"timeout took {stopwatch.Elapsed}");
+            Assert.Contains("process '/bin/sh' timed out after 2000 ms", exception.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                "<unavailable: output pipe held by a surviving descendant>",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(pidPath)
+                && int.TryParse(File.ReadAllText(pidPath), out var pid))
+            {
+                try
+                {
+                    using var escaped = Process.GetProcessById(pid);
+                    escaped.Kill(entireProcessTree: true);
+                    escaped.WaitForExit(5_000);
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
+
+            File.Delete(pidPath);
+        }
+    }
+
+    private static ProcessStartInfo CreateChildProcess(string windowsCommand, string unixCommand)
+    {
+        var startInfo = new ProcessStartInfo(OperatingSystem.IsWindows() ? "powershell.exe" : "/bin/sh")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(windowsCommand);
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(unixCommand);
+        }
+
+        return startInfo;
     }
 }

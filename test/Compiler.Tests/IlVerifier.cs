@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using Xunit.Sdk;
 
 namespace GSharp.Compiler.Tests;
@@ -35,11 +36,16 @@ namespace GSharp.Compiler.Tests;
 ///   <item>If the <c>ilverify</c> tool cannot be located, the helper throws
 ///         (instead of silently passing) so CI failures are obvious. To bypass
 ///         in environments without the tool, set <c>GSHARP_SKIP_ILVERIFY=1</c>.</item>
+///   <item>Verification is limited to 30 seconds. On timeout, the helper kills
+///         the tool process tree and reports any partial stdout and stderr.</item>
 /// </list>
 /// </summary>
 internal static class IlVerifier
 {
     private const string SkipEnvVar = "GSHARP_SKIP_ILVERIFY";
+    private const int VerifyTimeoutMilliseconds = 30_000;
+    private const int KillGraceMilliseconds = 10_000;
+    private const string UnavailableOutput = "<unavailable: output pipe held by a surviving descendant>";
 
     private static readonly object ToolLocateSync = new();
     private static readonly Lazy<IReadOnlyList<string>> RuntimeReferences =
@@ -130,21 +136,10 @@ internal static class IlVerifier
             psi.ArgumentList.Add(a);
         }
 
-        using var proc = Process.Start(psi)
-            ?? throw new XunitException($"ilverify: failed to start '{command}'");
+        var (exitCode, stdout, stderr) =
+            RunProcess(psi, assemblyPath, VerifyTimeoutMilliseconds);
 
-        // Drain both pipes concurrently before waiting: reading stdout to EOF
-        // and only then stderr can deadlock when ilverify fills the stderr pipe
-        // buffer (~64 KB of error lines) while we are still blocked on stdout,
-        // leaving the child unable to exit. Awaiting both reads together avoids
-        // the classic redirected-pipe deadlock.
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        var stderrTask = proc.StandardError.ReadToEndAsync();
-        proc.WaitForExit();
-        var stdout = stdoutTask.GetAwaiter().GetResult();
-        var stderr = stderrTask.GetAwaiter().GetResult();
-
-        if (proc.ExitCode != 0)
+        if (exitCode != 0)
         {
             // ilverify writes one line per IL error. Surface its full output so
             // a CI failure points directly at the offending opcode/method.
@@ -152,7 +147,7 @@ internal static class IlVerifier
                 .Append("ilverify detected invalid IL in '")
                 .Append(assemblyPath)
                 .Append("' (exit ")
-                .Append(proc.ExitCode)
+                .Append(exitCode)
                 .AppendLine("):")
                 .AppendLine(stdout.TrimEnd())
                 .Append(stderr.TrimEnd())
@@ -167,6 +162,63 @@ internal static class IlVerifier
                 $"ilverify exited successfully without confirming verification of '{assemblyPath}'.{Environment.NewLine}" +
                 stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd());
         }
+    }
+
+    internal static (int ExitCode, string Stdout, string Stderr) RunProcess(
+        ProcessStartInfo startInfo,
+        string assemblyPath,
+        int timeoutMilliseconds)
+    {
+        using var proc = Process.Start(startInfo)
+            ?? throw new XunitException($"ilverify: failed to start '{startInfo.FileName}'");
+
+        // Drain both pipes concurrently before waiting: reading stdout to EOF
+        // and only then stderr can deadlock when ilverify fills the stderr pipe
+        // buffer (~64 KB of error lines) while we are still blocked on stdout,
+        // leaving the child unable to exit. Awaiting both reads together avoids
+        // the classic redirected-pipe deadlock.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        if (!proc.WaitForExit(timeoutMilliseconds))
+        {
+            proc.Kill(entireProcessTree: true);
+            proc.WaitForExit(KillGraceMilliseconds);
+
+            // Observation prevents a later unobserved-task escalation when a
+            // surviving descendant eventually closes a pipe with an error.
+            // It does not change task state: Wait/Result below still throw any
+            // fault that completes within the grace period.
+            _ = stdoutTask.ContinueWith(
+                task => _ = task.Exception,
+                TaskContinuationOptions.OnlyOnFaulted);
+            _ = stderrTask.ContinueWith(
+                task => _ = task.Exception,
+                TaskContinuationOptions.OnlyOnFaulted);
+
+            string Grab(Task<string> task) => task.Wait(KillGraceMilliseconds)
+                ? task.Result
+                : UnavailableOutput;
+            var timedOutStdout = Grab(stdoutTask);
+            var timedOutStderr = Grab(stderrTask);
+            var message = new StringBuilder()
+                .Append("process '")
+                .Append(startInfo.FileName)
+                .Append("' timed out after ")
+                .Append(timeoutMilliseconds)
+                .Append(" ms while verifying '")
+                .Append(assemblyPath)
+                .AppendLine("':")
+                .AppendLine("stdout:")
+                .AppendLine(timedOutStdout.TrimEnd())
+                .AppendLine("stderr:")
+                .Append(timedOutStderr.TrimEnd())
+                .ToString();
+            throw new XunitException(message);
+        }
+
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+        return (proc.ExitCode, stdout, stderr);
     }
 
     /// <summary>
