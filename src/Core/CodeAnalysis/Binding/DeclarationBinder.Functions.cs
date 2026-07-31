@@ -1665,9 +1665,9 @@ internal sealed partial class DeclarationBinder
             // is its own distinct G# member — unlike #985's covariant-return
             // method bridge, there is no "same name, different return type"
             // slot-sharing concern here, so the concrete implementation's
-            // type must equal the interface's declared type exactly (after
-            // substituting the interface's own type parameters, for a
-            // generic interface). Getter/setter presence must also match.
+            // type must match the interface slot after substituting the
+            // interface's own type parameters. Getter/setter presence must
+            // also match.
             // A set/init disagreement is returned separately so the verifier
             // reports GS0502 without cascading GS0494.
             if (iprop.HasGetter != candidate.HasGetter
@@ -1706,7 +1706,11 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            if (!TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParamMap))
+            if (!IsInterfacePropertyTypeCompatible(
+                candidate.Type,
+                iprop.Type,
+                iprop.HasSetter,
+                typeParamMap))
             {
                 continue;
             }
@@ -1878,7 +1882,12 @@ internal sealed partial class DeclarationBinder
             }
 
             var typeParamMap = BuildInterfaceTypeParameterMap(iface);
-            if (!TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParamMap))
+            if (!TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParamMap)
+                || !IsInterfacePropertyTypeCompatible(
+                candidate.Type,
+                iprop.Type,
+                iprop.HasSetter,
+                typeParamMap))
             {
                 continue;
             }
@@ -1900,7 +1909,7 @@ internal sealed partial class DeclarationBinder
     /// open definition itself), matching that method's "no substitution"
     /// convention.
     /// </summary>
-    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
+    internal static Dictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
     {
         var def = iface.Definition;
         if (def == null || ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty)

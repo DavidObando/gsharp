@@ -461,6 +461,7 @@ internal sealed partial class DeclarationBinder
         // table with BuildInterfaceTypeParameterMap substitution, matching the
         // existing explicit-property and static-property paths.
         var propertyDefIface = iface.Definition ?? iface;
+        var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
 
         // ADR-0051: verify property requirements.
         foreach (var iprop in propertyDefIface.Properties)
@@ -509,10 +510,20 @@ internal sealed partial class DeclarationBinder
                 structSymbol,
                 iface,
                 iprop,
+                typeParameterMap,
                 out var implProp,
                 out var typeMismatch);
+            if (!found
+                && HasMatchingImportedBaseProperty(
+                    structSymbol,
+                    iface,
+                    iprop,
+                    typeParameterMap))
+            {
+                found = true;
+            }
 
-            if (found)
+            if (found && implProp != null)
             {
                 if (iprop.HasGetter && !implProp.HasGetter)
                 {
@@ -574,11 +585,11 @@ internal sealed partial class DeclarationBinder
                     positionalParam.Type,
                     iprop.Type,
                     iprop.HasSetter,
-                    BuildInterfaceTypeParameterMap(iface)))
+                    typeParameterMap))
                 {
                     // Name matches but the type is incompatible: the
                     // positional parameter does not satisfy the contract.
-                    // Fall through to the single GS0187 report below.
+                    // Fall through to the single GS0504 report below.
                     found = false;
                 }
                 else
@@ -635,9 +646,7 @@ internal sealed partial class DeclarationBinder
                         typeMismatch.Name,
                         iface.Name,
                         iprop.Name,
-                        SubstituteInterfacePropertyType(
-                            iprop.Type,
-                            BuildInterfaceTypeParameterMap(iface)),
+                        GetInterfacePropertyExpectedType(iprop.Type, typeParameterMap),
                         typeMismatch.Type);
                 }
                 else
@@ -656,48 +665,163 @@ internal sealed partial class DeclarationBinder
         TypeSymbol implementationType,
         TypeSymbol interfaceType,
         bool hasSetter,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
-        var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
-        var implementationUnderlyingType = implementationType is NullableTypeSymbol implementationNullable
-            ? implementationNullable.UnderlyingType
-            : implementationType;
-        var interfaceUnderlyingType = substitutedInterfaceType is NullableTypeSymbol interfaceNullable
-            ? interfaceNullable.UnderlyingType
-            : substitutedInterfaceType;
-        if (!TypeSignaturesEquivalent(interfaceUnderlyingType, implementationUnderlyingType))
+        if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            interfaceType,
+            implementationType,
+            typeParameterMap))
         {
             return false;
         }
 
-        var interfaceNullableType = substitutedInterfaceType as NullableTypeSymbol;
-        var interfaceIsNullable = interfaceNullableType != null;
+        var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
         var implementationIsNullable = implementationType is NullableTypeSymbol;
-        if (hasSetter || !interfaceIsNullable || implementationIsNullable)
+        var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
+        return hasSetter
+            ? interfaceIsNullable == implementationIsNullable
+            : interfaceIsNullable || !implementationIsNullable;
+    }
+
+    private static TypeSymbol GetInterfacePropertySlotType(
+        TypeSymbol type,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        if (typeParameterMap != null
+            && type is TypeParameterSymbol typeParameter
+            && typeParameterMap.TryGetValue(typeParameter, out var substituted))
         {
-            return interfaceIsNullable == implementationIsNullable;
+            return GetInterfacePropertySlotType(substituted, typeParameterMap: null);
         }
 
-        return !NullableLifting.IsAnyValueTypeNullable(interfaceNullableType);
+        if (type is NullableTypeSymbol nullable)
+        {
+            var underlying = GetInterfacePropertySlotType(nullable.UnderlyingType, typeParameterMap);
+            return NullableLifting.IsAnyValueTypeNullable(nullable)
+                ? NullableTypeSymbol.Get(underlying)
+                : underlying;
+        }
+
+        if (type is SliceTypeSymbol slice)
+        {
+            return SliceTypeSymbol.Get(GetInterfacePropertySlotType(slice.ElementType, typeParameterMap));
+        }
+
+        if (type is ArrayTypeSymbol array)
+        {
+            return ArrayTypeSymbol.Get(
+                GetInterfacePropertySlotType(array.ElementType, typeParameterMap),
+                array.Length);
+        }
+
+        if (type is MapTypeSymbol map)
+        {
+            return MapTypeSymbol.Get(
+                GetInterfacePropertySlotType(map.KeyType, typeParameterMap),
+                GetInterfacePropertySlotType(map.ValueType, typeParameterMap));
+        }
+
+        if (type is ByRefTypeSymbol byRef)
+        {
+            return ByRefTypeSymbol.Get(
+                GetInterfacePropertySlotType(byRef.PointeeType, typeParameterMap));
+        }
+
+        if (type is PointerTypeSymbol pointer)
+        {
+            return PointerTypeSymbol.Get(
+                GetInterfacePropertySlotType(pointer.PointeeType, typeParameterMap));
+        }
+
+        if (type is StructSymbol structType && !structType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var arguments = structType.TypeArguments
+                .Select(argument => GetInterfacePropertySlotType(argument, typeParameterMap))
+                .ToImmutableArray();
+            return StructSymbol.Construct(structType.Definition ?? structType, arguments);
+        }
+
+        if (type is InterfaceSymbol interfaceType && !interfaceType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var arguments = interfaceType.TypeArguments
+                .Select(argument => GetInterfacePropertySlotType(argument, typeParameterMap))
+                .ToImmutableArray();
+            return InterfaceSymbol.Construct(interfaceType.Definition ?? interfaceType, arguments);
+        }
+
+        if (type is ImportedTypeSymbol importedType
+            && importedType.OpenDefinition != null
+            && !importedType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var arguments = importedType.TypeArguments
+                .Select(argument => GetInterfacePropertySlotType(argument, typeParameterMap))
+                .ToImmutableArray();
+            return ImportedTypeSymbol.GetConstructed(
+                importedType.ClrType,
+                importedType.OpenDefinition,
+                arguments);
+        }
+
+        if (type is DelegateTypeSymbol delegateType && !delegateType.TypeArguments.IsDefaultOrEmpty)
+        {
+            var arguments = delegateType.TypeArguments
+                .Select(argument => GetInterfacePropertySlotType(argument, typeParameterMap))
+                .ToImmutableArray();
+            return DelegateTypeSymbol.Construct(delegateType.Definition ?? delegateType, arguments);
+        }
+
+        if (type is FunctionTypeSymbol functionType)
+        {
+            var parameters = functionType.ParameterTypes
+                .Select(parameter => GetInterfacePropertySlotType(parameter, typeParameterMap))
+                .ToImmutableArray();
+            return FunctionTypeSymbol.Get(
+                parameters,
+                functionType.IsVariadic,
+                GetInterfacePropertySlotType(functionType.ReturnType, typeParameterMap));
+        }
+
+        return type;
     }
 
     private static TypeSymbol SubstituteInterfacePropertyType(
         TypeSymbol interfaceType,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
-        => typeParameterMap == null
-            ? interfaceType
-            : StructSymbol.SubstituteTypeParameters(
-                interfaceType,
-                typeParameterMap.ToDictionary(entry => entry.Key, entry => entry.Value));
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        if (typeParameterMap == null)
+        {
+            return interfaceType;
+        }
+
+        return StructSymbol.SubstituteTypeParameters(interfaceType, typeParameterMap);
+    }
+
+    private static TypeSymbol GetInterfacePropertyExpectedType(
+        TypeSymbol interfaceType,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        var substituted = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
+        if (interfaceType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol declaredTypeParameter }
+            && !declaredTypeParameter.HasValueTypeConstraint
+            && substituted is NullableTypeSymbol substitutedNullable
+            && NullableLifting.IsAnyValueTypeNullable(substitutedNullable))
+        {
+            return GetInterfacePropertySlotType(interfaceType, typeParameterMap);
+        }
+
+        return interfaceType is NullableTypeSymbol
+            ? substituted
+            : GetInterfacePropertySlotType(interfaceType, typeParameterMap);
+    }
 
     private static bool TryGetConstructedInterfacePropertyImplementation(
         StructSymbol structSymbol,
         InterfaceSymbol iface,
         PropertySymbol interfaceProperty,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap,
         out PropertySymbol implementation,
         out PropertySymbol typeMismatch)
     {
-        var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
         typeMismatch = null;
         for (var current = structSymbol; current != null; current = current.BaseClass)
         {
@@ -737,13 +861,7 @@ internal sealed partial class DeclarationBinder
                     interfaceProperty.HasSetter,
                     typeParameterMap))
                 {
-                    var isPositionalMember = candidate.Declaration is null
-                        && TypeMemberModel.TryGetPrimaryConstructorParameter(structSymbol, candidate.Name, out _);
-                    if (!isPositionalMember)
-                    {
-                        typeMismatch ??= candidate;
-                    }
-
+                    typeMismatch ??= candidate;
                     continue;
                 }
 
@@ -753,6 +871,61 @@ internal sealed partial class DeclarationBinder
         }
 
         implementation = null;
+        return false;
+    }
+
+    private static bool HasMatchingImportedBaseProperty(
+        StructSymbol structSymbol,
+        InterfaceSymbol iface,
+        PropertySymbol interfaceProperty,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        var importedBase = TypeMemberModel.GetNearestImportedBase(structSymbol);
+        if (importedBase?.ClrType == null
+            || (interfaceProperty.IsIndexer && ReferenceEquals(iface.Definition ?? iface, iface)))
+        {
+            return false;
+        }
+
+        foreach (var candidate in ClrTypeUtilities.SafeGetProperties(
+            importedBase.ClrType,
+            BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (candidate.Name != interfaceProperty.Name
+                || candidate.GetIndexParameters().Length != interfaceProperty.Parameters.Length
+                || (interfaceProperty.HasGetter && candidate.GetGetMethod(nonPublic: false) == null)
+                || (interfaceProperty.HasSetter && candidate.GetSetMethod(nonPublic: false) == null)
+                || (interfaceProperty.HasSetter
+                    && interfaceProperty.IsInitOnly
+                        != ImportedTypeSymbol.IsInitOnlySetter(candidate.GetSetMethod(nonPublic: false))))
+            {
+                continue;
+            }
+
+            var parametersMatch = true;
+            for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
+            {
+                if (!TypeSignaturesEquivalent(
+                    interfaceProperty.Parameters[i].Type,
+                    MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i),
+                    typeParameterMap))
+                {
+                    parametersMatch = false;
+                    break;
+                }
+            }
+
+            if (parametersMatch
+                && IsInterfacePropertyTypeCompatible(
+                    MemberLookup.GetClrPropertyTypeSymbol(importedBase, candidate),
+                    interfaceProperty.Type,
+                    interfaceProperty.HasSetter,
+                    typeParameterMap))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -1341,7 +1514,12 @@ internal sealed partial class DeclarationBinder
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
                     if (candidate.Name == iprop.Name
-                        && TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParameterMap))
+                        && TypeSignaturesEquivalent(iprop.Type, candidate.Type, typeParameterMap)
+                        && IsInterfacePropertyTypeCompatible(
+                            candidate.Type,
+                            iprop.Type,
+                            iprop.HasSetter,
+                            typeParameterMap))
                     {
                         match = candidate;
                         break;

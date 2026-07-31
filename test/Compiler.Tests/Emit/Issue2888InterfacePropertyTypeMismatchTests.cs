@@ -103,7 +103,7 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
-    public void CompatibleSiblingShapes_EmitVerifyAndLoad()
+    public void CompatibleBaselineSiblingShapes_EmitVerifyAndLoad()
     {
         const string source = """
             package Accepted
@@ -122,12 +122,6 @@ public class Issue2888InterfacePropertyTypeMismatchTests
 
             interface IGeneric[T] { prop Value T { get; } }
             class GenericExact : IGeneric[int32] { prop Value int32 -> 1 }
-
-            interface IGenericNullable[T] { prop Value T? { get; } }
-            class GenericCovariant : IGenericNullable[string] { prop Value string -> "x" }
-
-            interface IOpenNullable[T] { prop Value T? { get; } }
-            class OpenGenericCovariant[T] : IOpenNullable[T] { prop Value T { get; } }
 
             class Cell[T] { }
             interface IConstructed { prop Value Cell[int32] { get; } }
@@ -196,6 +190,150 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
+    public void NullableGenericRelaxations_EmitVerifyAndLoad()
+    {
+        const string source = """
+            package GenericAccepted
+
+            interface IGenericNullable[T] { prop Value T? { get; } }
+            class ReferenceCovariant : IGenericNullable[string] {
+                prop Value string -> "x"
+            }
+
+            class ConstructedValueCovariant : IGenericNullable[int32] {
+                prop Value int32 -> 1
+            }
+
+            interface IOpenNullable[T] { prop Value T? { get; } }
+            class OpenGenericCovariant[T] : IOpenNullable[T] {
+                prop Value T { get; }
+            }
+            """;
+
+        AssertEmitsAndLoads(source);
+    }
+
+    [Fact]
+    public void NullableGenericPropertySurface_EmitsLoadsOrRejectsWithoutOutput()
+    {
+        const string accepted = """
+            package NullableSurfaceAccepted
+
+            interface IGet[T] { prop Value T? { get; } }
+            class ImplicitGet : IGet[int32] { prop Value int32 -> 1 }
+            class ExplicitGet : IGet[int32] {
+                private prop (IGet[int32]) Value int32 -> 1
+            }
+            data class PositionalGet(Value int32) : IGet[int32]
+
+            interface ISet[T] { prop Value T? { get; set; } }
+            class OpenSet[T] : ISet[T] { prop Value T? { get; set; } }
+
+            interface IIndexer[T] { prop this[key string] T? { get; } }
+            class IndexerGet : IIndexer[int32] {
+                prop this[key string] int32 { get { return 1 } }
+            }
+
+            interface ISlice[T] { prop Value []T? { get; } }
+            class SliceGet : ISlice[int32] { prop Value []int32 { get; } }
+
+            interface IArray[T] { prop Value [3]T? { get; } }
+            class ArrayGet : IArray[int32] { prop Value [3]int32 { get; } }
+
+            class Cell[T] { }
+            interface INested[T] { prop Value Cell[T?] { get; } }
+            class NestedGet : INested[int32] {
+                prop Value Cell[int32] { get; }
+            }
+
+            interface IExactNullableArgument[T] { prop Value T { get; } }
+            class ExactNullableArgument : IExactNullableArgument[string?] {
+                prop Value string? -> nil
+            }
+
+            sealed interface IStatic[T] {
+                shared { prop Value T? { get; } }
+            }
+            struct OpenStatic[T] : IStatic[T] {
+                shared { prop Value T? -> nil }
+            }
+            """;
+
+        AssertEmitsAndLoads(accepted);
+        foreach (var rejected in new[]
+        {
+            """
+            package NullableImplicitGetRejected
+            interface I[T] { prop Value T? { get; } }
+            class C : I[int32] { prop Value int32? -> nil }
+            """,
+            """
+            package NullableExplicitGetRejected
+            interface I[T] { prop Value T? { get; } }
+            class C : I[int32] {
+                private prop (I[int32]) Value int32? -> nil
+            }
+            """,
+            """
+            package NullablePositionalGetRejected
+            interface I[T] { prop Value T? { get; } }
+            data class C(Value int32?) : I[int32]
+            """,
+            """
+            package NullableImplicitSetRejected
+            interface I[T] { prop Value T? { get; set; } }
+            class C : I[int32] { prop Value int32? { get; set; } }
+            """,
+            """
+            package NullableIndexerRejected
+            interface I[T] { prop this[key string] T? { get; } }
+            class C : I[int32] {
+                prop this[key string] int32? { get { return nil } }
+            }
+            """,
+            """
+            package NullableSliceRejected
+            interface I[T] { prop Value []T? { get; } }
+            class C : I[int32] { prop Value []int32? { get; } }
+            """,
+            """
+            package NullableArrayRejected
+            interface I[T] { prop Value [3]T? { get; } }
+            class C : I[int32] { prop Value [3]int32? { get; } }
+            """,
+            """
+            package NullableNestedRejected
+            class Cell[T] { }
+            interface I[T] { prop Value Cell[T?] { get; } }
+            class C : I[int32] { prop Value Cell[int32?] { get; } }
+            """,
+            """
+            package NullableStaticRejected
+            sealed interface I[T] {
+                shared { prop Value T? { get; } }
+            }
+            struct C : I[int32] {
+                shared { prop Value int32? -> nil }
+            }
+            """,
+            """
+            package NullableExplicitStaticRejected
+            sealed interface I[T] {
+                shared { prop Value T? { get; } }
+            }
+            struct C : I[int32] {
+                shared {
+                    private prop (I[int32]) Value int32? -> nil
+                }
+            }
+            """,
+        })
+        {
+            _ = CompileExpectingFailure(rejected);
+        }
+    }
+
+    [Fact]
     public void ConstructedGenericMismatches_ReportGS0504WithSubstitutedTypesAndDoNotEmit()
     {
         const string source = """
@@ -205,7 +343,14 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             class WrongType : IBox[int32] { prop Value string -> "x" }
 
             interface INullableBox[T] { prop Value T? { get; } }
-            class ValueNullable : INullableBox[int32] { prop Value int32 -> 1 }
+            class NullableGetter : INullableBox[int32] {
+                prop Value int32? -> nil
+            }
+
+            interface INullableSettableBox[T] { prop Value T? { get; set; } }
+            class NullableSettable : INullableSettableBox[int32] {
+                prop Value int32? { get; set; }
+            }
 
             interface IStructNullable[T struct] { prop Value T? { get; } }
             class StructConstrained[T struct] : IStructNullable[T] {
@@ -215,13 +360,17 @@ public class Issue2888InterfacePropertyTypeMismatchTests
 
         var output = CompileExpectingFailure(source);
 
-        Assert.Equal(3, CountOccurrences(output, "error GS0504:"));
+        Assert.Equal(4, CountOccurrences(output, "error GS0504:"));
         Assert.Contains(
             "Type 'WrongType' cannot use property 'Value' to implement interface property 'IBox[int32].Value': expected type 'int32', actual type 'string'.",
             output,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Type 'ValueNullable' cannot use property 'Value' to implement interface property 'INullableBox[int32].Value': expected type 'int32?', actual type 'int32'.",
+            "Type 'NullableGetter' cannot use property 'Value' to implement interface property 'INullableBox[int32].Value': expected type 'int32', actual type 'int32?'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type 'NullableSettable' cannot use property 'Value' to implement interface property 'INullableSettableBox[int32].Value': expected type 'int32', actual type 'int32?'.",
             output,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -256,7 +405,7 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
-    public void PositionalValueTypeNullableCovariance_ReportsGS0187AndDoesNotEmit()
+    public void PositionalValueTypeNullableCovariance_ReportsGS0504AndDoesNotEmit()
     {
         const string source = """
             package PositionalRejected
@@ -267,7 +416,10 @@ public class Issue2888InterfacePropertyTypeMismatchTests
 
         var output = CompileExpectingFailure(source);
 
-        Assert.Contains("GS0187", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "error GS0504: Type 'Box' cannot use property 'Value' to implement interface property 'IBox.Value': expected type 'int32?', actual type 'int32'.",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -337,6 +489,79 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             var referencePath = CompileCSharpFixture(directory);
             var output = CompileExpectingFailure(source, referencePath);
             Assert.Contains("GS0187", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedClrBaseProperty_SatisfiesGSharpInterface_EmitsVerifyAndLoads()
+    {
+        const string source = """
+            package ImportedBaseExact
+            import ClrContracts
+
+            interface IValue { prop Value int32 { get; } }
+            class Box : Base, IValue { }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var referencePath = CompileCSharpFixture(directory);
+            AssertEmitsAndLoads(source, referencePath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedClrBaseProperty_HiddenByWrongTypeProperty_EmitsVerifyAndLoads()
+    {
+        const string source = """
+            package ImportedBaseHidden
+            import ClrContracts
+
+            interface IValue { prop Value int32 { get; } }
+            class Box : Base, IValue {
+                prop Value string -> "x"
+            }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var referencePath = CompileCSharpFixture(directory);
+            AssertEmitsAndLoads(source, referencePath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedClrBaseProperty_WrongTypeOrAccessor_ReportsGS0187AndDoesNotEmit()
+    {
+        const string source = """
+            package ImportedBaseRejected
+            import ClrContracts
+
+            interface IValue { prop Value int32 { get; } }
+            class WrongTypeBox : WrongTypeBase, IValue { }
+            class MissingGetterBox : MissingGetterBase, IValue { }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var referencePath = CompileCSharpFixture(directory);
+            var output = CompileExpectingFailure(source, referencePath);
+            Assert.Equal(2, CountOccurrences(output, "error GS0187:"));
         }
         finally
         {
@@ -435,6 +660,21 @@ public class Issue2888InterfacePropertyTypeMismatchTests
                     public interface IBox
                     {
                         int Value { get; set; }
+                    }
+
+                    public class Base
+                    {
+                        public virtual int Value => 1;
+                    }
+
+                    public class WrongTypeBase
+                    {
+                        public virtual string Value => "x";
+                    }
+
+                    public class MissingGetterBase
+                    {
+                        public virtual int Value { set { } }
                     }
                     """,
                     new CSharpParseOptions(LanguageVersion.Latest)),
