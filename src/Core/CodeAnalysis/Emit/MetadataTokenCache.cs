@@ -46,7 +46,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (<c>asyncStateMachinePlans</c>, <c>iteratorPlans</c>,
 /// <c>asyncIteratorPlans</c>, <c>iteratorKickoffBodies</c>,
 /// <c>iteratorStateMachineInfos</c>, <c>asyncIteratorInfos</c>,
-/// <c>asyncIteratorEmitContexts</c>, <c>asyncSmEnclosingClosures</c> —
+/// <c>iteratorEmitContexts</c>, <c>asyncSmEnclosingClosures</c> —
 /// move in PR-E-10 <c>StateMachineEmitter</c>).
 /// </para>
 /// </remarks>

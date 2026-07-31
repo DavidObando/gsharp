@@ -251,9 +251,9 @@ internal sealed class ReflectionMetadataEmitter
     //   iteratorPlans                 -> stateMachines.IteratorPlans
     //   asyncIteratorPlans            -> stateMachines.AsyncIteratorPlans
     //   asyncIteratorInfos            -> stateMachines.AsyncIteratorInfos
-    //   asyncIteratorEmitContexts     -> stateMachines.AsyncIteratorEmitContexts
+    //   asyncIteratorEmitContexts     -> stateMachines.IteratorEmitContexts
     //   asyncSmEnclosingClosures      -> stateMachines.AsyncSmEnclosingClosures
-    // BodyEmitter reads stateMachines.AsyncIteratorEmitContexts for the async
+    // BodyEmitter reads stateMachines.IteratorEmitContexts for the async
     // iterator MoveNext path; the remaining 2 BodyEmitter-internal SM helpers
     // (EmitStateMachineAwaitOnCompleted, EmitAsyncIteratorBuilderMoveNext)
     // still live inside BodyEmitter and call back into
@@ -399,7 +399,7 @@ internal sealed class ReflectionMetadataEmitter
     // StateMachineEmitter.AsyncIteratorEmitContext helpers and every SM cache/plan
     // (IteratorKickoffBodies, IteratorStateMachineInfos, AsyncStateMachinePlans,
     // IteratorPlans, AsyncIteratorPlans, AsyncIteratorInfos,
-    // AsyncIteratorEmitContexts, AsyncSmEnclosingClosures). The 2 BodyEmitter-
+    // IteratorEmitContexts, AsyncSmEnclosingClosures). The 2 BodyEmitter-
     // internal SM helpers (EmitStateMachineAwaitOnCompleted,
     // EmitAsyncIteratorBuilderMoveNext) still live inside BodyEmitter and
     // call back into stateMachines.EmitAwaitOnCompletedCall — they move with

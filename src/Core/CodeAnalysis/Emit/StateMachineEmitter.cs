@@ -54,7 +54,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (<see cref="IteratorKickoffBodies"/>,
 /// <see cref="IteratorStateMachineInfos"/>, <see cref="AsyncStateMachinePlans"/>,
 /// <see cref="IteratorPlans"/>, <see cref="AsyncIteratorPlans"/>,
-/// <see cref="AsyncIteratorInfos"/>, <see cref="AsyncIteratorEmitContexts"/>,
+/// <see cref="AsyncIteratorInfos"/>, <see cref="IteratorEmitContexts"/>,
 /// <see cref="AsyncSmEnclosingClosures"/>).
 /// <strong>These move here.</strong>
 /// </item>
@@ -223,7 +223,7 @@ internal sealed class StateMachineEmitter
     /// <c>BodyEmitter</c> via the root emitter when threading the async
     /// iterator MoveNext path through the await pipeline.
     /// </summary>
-    public Dictionary<StructSymbol, AsyncIteratorEmitContext> AsyncIteratorEmitContexts { get; } = [];
+    public Dictionary<StructSymbol, AsyncIteratorEmitContext> IteratorEmitContexts { get; } = [];
 
     /// <summary>
     /// Gets the map from a capture-bearing async lambda's SM struct to the
@@ -662,6 +662,13 @@ internal sealed class StateMachineEmitter
                 new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(kickoffSmType, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
                     thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
             this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, outerMethodTPs, classTPs);
+
+            // Issue #2907: closure materialization inside the SYNC MoveNext body is
+            // emitter-owned and bypasses IteratorMoveNextBodyBuilder's variable->field
+            // substitution, so it needs the hoisted-field map. Reuse the already-shipped
+            // async-iterator channel: the only other consumer (EmitAwaitOnCompletedCall)
+            // fires on `await`, which a sync iterator body cannot contain.
+            this.IteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, null, null, fieldMap);
             this.closures.SynthesizedClosureClasses.Add(smClass);
         }
     }
@@ -1005,7 +1012,7 @@ internal sealed class StateMachineEmitter
             var returnClrType = plan.Function.Type?.ClrType
                 ?? typeof(System.Collections.Generic.IAsyncEnumerable<object>);
             var aiBuilderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, this.emitCtx.References);
-            this.AsyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo, fieldMap);
+            this.IteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo, fieldMap);
         }
     }
 

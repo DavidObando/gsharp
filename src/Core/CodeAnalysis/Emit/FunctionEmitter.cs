@@ -337,7 +337,7 @@ internal sealed class FunctionEmitter
                 StateMachineEmitter.AsyncIteratorEmitContext aiEmitCtx = null;
                 if (function.Name == "MoveNext" && function.ReceiverType is StructSymbol owningSmClass)
                 {
-                    this.outer.stateMachines.AsyncIteratorEmitContexts.TryGetValue(owningSmClass, out aiEmitCtx);
+                    this.outer.stateMachines.IteratorEmitContexts.TryGetValue(owningSmClass, out aiEmitCtx);
                 }
 
                 // For struct instance methods, pass structThisParameter so the
