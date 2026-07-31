@@ -103,6 +103,92 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
+    public void NullConditionalLiftedCalls_ShortCircuitAndInvoke()
+    {
+        const string Source = """
+            package Issue2924NullConditional
+            import System
+
+            type Mapper = delegate func(value int32) int32
+
+            class Guard {
+                func Plain(value int32) {
+                    Console.WriteLine("plain:{0}", value)
+                }
+
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+
+                func MakeNamed(seed int32) Mapper {
+                    return (value int32) -> seed + value
+                }
+
+                func Get() (System.Action[int32], int32) {
+                    let handler System.Action[int32] = (value int32) -> Console.WriteLine("tuple:{0}", value)
+                    return (handler, 0)
+                }
+
+                func Arr() []int32 {
+                    return []int32{41}
+                }
+            }
+
+            let live = Guard()
+            Console.WriteLine(live?.Make(40)(2))
+            Console.WriteLine(live?.MakeNamed(40)(2))
+            Console.WriteLine(live?.Make(40)!!(2))
+            Console.WriteLine(live?.Make(40)!!!!(2))
+
+            let g Guard = nil
+            g?.Plain(1)
+            Console.WriteLine("A ok")
+            g?.Make(40)(2)
+            Console.WriteLine("B ok")
+            g?.MakeNamed(40)(2)
+            Console.WriteLine("B named ok")
+            g?.Make(40)!!(2)
+            Console.WriteLine("B asserted ok")
+            g?.Make(40)!!!!(2)
+            Console.WriteLine("B repeated assertion ok")
+            g?.Get().0(1)
+            Console.WriteLine("C ok")
+
+            let t (System.Action[int32], int32)? = nil
+            t?.0(1)
+            Console.WriteLine("D ok")
+
+            let ignored = g?.Arr()[0]
+            Console.WriteLine("E ok")
+            """;
+
+        var output = CompileVerifyLoadAndRun(Source);
+
+        Assert.Equal("42\n42\n42\n42\nA ok\nB ok\nB named ok\nB asserted ok\nB repeated assertion ok\nC ok\nD ok\nE ok\n", output);
+    }
+
+    [Fact]
+    public void NumericSelectorAssignments_WriteTupleElement()
+    {
+        const string Source = """
+            package Issue2924Assignments
+            import System
+
+            var assigned = (1, 2)
+            assigned.0 = 5
+            Console.WriteLine(assigned.0)
+
+            var compounded = (1, 2)
+            compounded.0 += 6
+            Console.WriteLine(compounded.0)
+            """;
+
+        var output = CompileVerifyLoadAndRun(Source);
+
+        Assert.Equal("5\n7\n", output);
+    }
+
+    [Fact]
     public void NonCallableTupleElement_ReportsNotAFunction()
     {
         var result = Compile("""

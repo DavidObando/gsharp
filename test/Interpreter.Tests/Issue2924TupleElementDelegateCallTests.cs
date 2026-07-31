@@ -95,6 +95,88 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
+    public void NullConditionalCurriedMemberCall_InvokesNonNilReceiver()
+    {
+        var output = RunSubmission("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let factory = Factory()
+            Console.WriteLine(factory?.Make(40)(2))
+            """);
+
+        Assert.Equal("42\n", output);
+    }
+
+    [Fact]
+    public void NullConditionalCurriedMemberCall_ShortCircuitsNilReceiver()
+    {
+        var output = RunSubmission("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let factory Factory = nil
+            factory?.Make(40)(2)
+            Console.WriteLine("end")
+            """);
+
+        Assert.Equal("end\n", output);
+    }
+
+    [Fact]
+    public void NullConditionalNumericSelectorCall_ShortCircuitsNilTuple()
+    {
+        var output = RunSubmission("""
+            let t (System.Func[int32, int32], int32)? = nil
+            t?.0(1)
+            Console.WriteLine("end")
+            """);
+
+        Assert.Equal("end\n", output);
+    }
+
+    [Fact]
+    public void NullConditionalAssertedCall_InvokesAndShortCircuits()
+    {
+        var output = RunSubmission("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let live = Factory()
+            Console.WriteLine(live?.Make(40)!!(2))
+            Console.WriteLine(live?.Make(40)!!!!(2))
+            let missing Factory = nil
+            missing?.Make(40)!!(2)
+            missing?.Make(40)!!!!(2)
+            Console.WriteLine("end")
+            """);
+
+        Assert.Equal("42\n42\nend\n", output);
+    }
+
+    [Fact]
+    public void NumericSelectorAssignments_WriteTupleElement()
+    {
+        var output = RunSubmission("""
+            var assigned = (1, 2)
+            assigned.0 = 5
+            Console.WriteLine(assigned.0)
+
+            var compounded = (1, 2)
+            compounded.0 += 6
+            Console.WriteLine(compounded.0)
+            """);
+
+        Assert.Equal("5\n7\n", output);
+    }
+
+    [Fact]
     public void NonCallableTupleElement_ReportsNotAFunction()
     {
         var output = RunSubmission("""
@@ -114,7 +196,7 @@ public class Issue2924TupleElementDelegateCallTests
             t.0(1)
             """);
 
-        Assert.Contains("error GS", output);
+        Assert.Contains("Non-static method requires a target.", output);
     }
 
     [Fact]

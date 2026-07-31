@@ -115,6 +115,123 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
+    public void PointerMemberCurriedCall_ParsesAsReceiverWideIndirectCall()
+    {
+        var tree = SyntaxTree.Parse("""
+            package P
+            q[0]->m(x)(y)
+            """);
+
+        Assert.Empty(tree.Diagnostics);
+        var call = Walk(tree.Root)
+            .OfType<CallExpressionSyntax>()
+            .Single(expression => expression.Callee != null);
+        Assert.Equal("q[0]->m(x)", tree.Text.ToString(call.Callee.Span));
+    }
+
+    [Fact]
+    public void NullConditionalAssertedCurriedCall_ParsesAsReceiverWideIndirectCall()
+    {
+        var tree = SyntaxTree.Parse("""
+            package P
+            a?.b!!(x)(y)
+            """);
+
+        Assert.Empty(tree.Diagnostics);
+        var calls = Walk(tree.Root)
+            .OfType<CallExpressionSyntax>()
+            .Where(expression => expression.Callee != null)
+            .OrderBy(expression => expression.Span.Length)
+            .ToArray();
+        Assert.Equal(2, calls.Length);
+        Assert.Equal("a?.b!!", tree.Text.ToString(calls[0].Callee.Span));
+        Assert.Equal("a?.b!!(x)", tree.Text.ToString(calls[1].Callee.Span));
+    }
+
+    [Fact]
+    public void NullConditionalCurriedMemberCall_ShortCircuitsNilReceiver()
+    {
+        var result = Evaluate("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let factory Factory = nil
+            factory?.Make(40)(2)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
+    public void NullConditionalCurriedMemberCall_InvokesNonNilReceiver()
+    {
+        var result = Evaluate("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let factory = Factory()
+            factory?.Make(40)(2)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void NullConditionalNumericSelectorCall_ShortCircuitsNilTuple()
+    {
+        var result = Evaluate("""
+            let t (System.Func[int32, int32], int32)? = nil
+            t?.0(1)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
+    public void NullConditionalAssertedCall_InvokesAndShortCircuits()
+    {
+        var result = Evaluate("""
+            class Factory {
+                func Make(seed int32) (int32) -> int32 {
+                    return (value int32) -> seed + value
+                }
+            }
+            let live = Factory()
+            let answer = live?.Make(40)!!(2)
+            let repeated = live?.Make(40)!!!!(2)
+            let missing Factory = nil
+            missing?.Make(40)!!(2)
+            missing?.Make(40)!!!!(2)
+            answer + repeated
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(84, result.Value);
+    }
+
+    [Fact]
+    public void NumericSelectorAssignments_WriteTupleElement()
+    {
+        var result = Evaluate("""
+            var assigned = (1, 2)
+            assigned.0 = 5
+            var compounded = (1, 2)
+            compounded.0 += 6
+            assigned.0 + compounded.0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(12, result.Value);
+    }
+
+    [Fact]
     public void NonCallableTupleElement_ReportsNotAFunction()
     {
         var result = Evaluate("""
@@ -169,6 +286,19 @@ public class Issue2924TupleElementDelegateCallTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(5.0, result.Value);
+    }
+
+    [Fact]
+    public void AllDigitLeadingDotAcrossNewline_IsTupleSelector()
+    {
+        var result = Evaluate("""
+            let t = (0, 1, 2, 3, 4, 5)
+            t
+            .5
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
     }
 
     [Fact]

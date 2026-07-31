@@ -212,6 +212,11 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            if (boundReceiver.Type is TupleTypeSymbol tupleType)
+            {
+                eventName = GetTupleFieldName(eventName, tupleType);
+            }
+
             // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
             // ADR-0112 A5: TryGetEvent walks the base chain, so inherited instance
             // events on `open class` bases now resolve (parity with the bare-`this`

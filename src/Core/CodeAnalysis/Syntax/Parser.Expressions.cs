@@ -763,7 +763,7 @@ public partial class Parser
                 // emitter reuse the existing `(*p).field` / `(*p).method(...)`
                 // bound shape without any new bound-node kinds.
                 var arrowToken = NextToken();
-                var rightSide = ParseNameOrCallExpression();
+                var rightSide = ParseNameOrCallExpression(stopBeforeIndirectInvocation: true);
                 var starToken = new SyntaxToken(syntaxTree, SyntaxKind.StarToken, arrowToken.Position, "*", null);
                 var deref = new UnaryExpressionSyntax(syntaxTree, starToken, current);
                 current = new AccessorExpressionSyntax(syntaxTree, deref, arrowToken, rightSide);
@@ -851,7 +851,7 @@ public partial class Parser
         {
             var bangBangToken = NextToken();
             continuation = new UnaryExpressionSyntax(syntaxTree, bangBangToken, continuation);
-            continuation = ParsePostfixChain(continuation);
+            continuation = ParsePostfixChain(continuation, stopBeforeIndirectInvocation: true);
         }
 
         return continuation;
@@ -880,7 +880,6 @@ public partial class Parser
         var digitStart = includesDot ? 1 : 0;
         if (token.Kind != SyntaxKind.NumberToken
             || string.IsNullOrEmpty(text)
-            || text.Length <= digitStart
             || (includesDot ? text[0] != '.' : text[0] == '.'))
         {
             return false;
