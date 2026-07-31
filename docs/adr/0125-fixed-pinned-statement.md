@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043)
+- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900)
 
 ## Context
 
@@ -92,8 +92,17 @@ The binder produces a `BoundFixedStatement` carrying the user-visible pointer
 local (`*T`, read-only, scoped to the body) and a **synthetic pinned local**
 whose slot type is a `PinnedTypeSymbol(underlying)` marker. The slot planner
 allocates both IL slots; `EncodeLocalVariableType` detects `PinnedTypeSymbol`
-and sets the local-signature **`pinned`** flag. The emitter mirrors the C#
-compiler's codegen exactly:
+and sets the local-signature **`pinned`** flag. The emitter follows the C#
+compiler's protected-cleanup shape.
+
+The pin prologue runs before a protected body. The body is a CLR
+`try` region and the release is its `finally` handler, so normal fallthrough,
+`break`, `continue`, `goto`, `return`, and exceptions all clear the pinned
+local before control reaches an external target. Region-crossing branches emit
+`leave`; value returns first store their result in an emitter-planned local and
+then `leave` to a `ret` outside the protected region.
+
+For each source kind:
 
 **Array/slice** (`T[] pinned`):
 
@@ -105,7 +114,10 @@ NULL:     ldc.i4.0; conv.u; stloc ptr       // empty/null ⇒ null pointer
           br AFTER
 NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>; conv.u; stloc ptr
 AFTER:    <body>
-          ldnull; stloc pinned              // release
+          leave DONE
+FINALLY:  ldnull; stloc pinned              // release on every exit
+          endfinally
+DONE:
 ```
 
 **String** (`string pinned`):
@@ -115,8 +127,9 @@ EmitExpr(source); dup; stloc pinned; conv.i
 dup; brfalse SKIP
 call get_OffsetToStringData; add            // skip the string header
 SKIP: conv.u; stloc ptr
-<body>
-ldnull; stloc pinned                        // release
+try { <body> } finally {
+    ldnull; stloc pinned                     // release on every exit
+}
 ```
 
 `RuntimeHelpers.OffsetToStringData` is `[Obsolete]`, so the property getter is
@@ -132,8 +145,9 @@ EmitExpr(span); stloc src                    // spill the source for addressing
 ldloca src; call instance T& GetPinnableReference()
 stloc pinned                                 // T& pinned = ref
 ldloc pinned; conv.u; stloc ptr
-<body>
-ldc.i4.0; conv.u; stloc pinned               // release (null the pinned ref)
+try { <body> } finally {
+    ldc.i4.0; conv.u; stloc pinned            // release on every exit
+}
 ```
 
 The source value is spilled to a synthetic local so its address can feed the
@@ -168,6 +182,10 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
   (`Unverifiable`, `UnmanagedPointer`, `StackUnexpected`, `StackByRef`,
   `ExpectedPtr`, …) to `ignoredErrorCodes` and assert runtime output, rather
   than disabling ilverify globally.
+- `await` and `yield` are rejected inside a `fixed` body with **`GS0506`**.
+  A state-machine suspension cannot preserve a pinned local. Suspension inside
+  a nested lambda remains legal because that lambda has its own function body;
+  normal fixed-pointer escape rules still prevent capturing the pointer.
 - Deferred: fixed-size buffers.
 
 ## Diagnostics
@@ -175,3 +193,4 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
 - **`GS0400`** — a `fixed` statement used outside an `unsafe` context.
 - **`GS0401`** — a `fixed` statement source is not a pinnable array/slice or
   string, or the pointer's pointee does not match the buffer's element type.
+- **`GS0506`** — `await` or `yield` appears directly inside a `fixed` body.

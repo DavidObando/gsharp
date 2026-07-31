@@ -129,6 +129,7 @@ public static class AsyncCaptureWalker
     private sealed class ReferenceCollector : BoundTreeRewriter
     {
         private readonly HashSet<LocalVariableSymbol> seen = new HashSet<LocalVariableSymbol>();
+        private readonly HashSet<VariableSymbol> fixedLocals = new HashSet<VariableSymbol>();
         private readonly List<LocalVariableSymbol> orderedLocals = new List<LocalVariableSymbol>();
 
         public IReadOnlyList<LocalVariableSymbol> Locals => orderedLocals;
@@ -157,6 +158,12 @@ public static class AsyncCaptureWalker
         {
             Record(node.Variable);
             return base.RewriteVariableDeclaration(node);
+        }
+
+        protected override BoundStatement RewriteFixedStatement(BoundFixedStatement node)
+        {
+            fixedLocals.Add(node.PointerVariable);
+            return base.RewriteFixedStatement(node);
         }
 
         /// <summary>
@@ -209,7 +216,9 @@ public static class AsyncCaptureWalker
 
         private void Record(VariableSymbol variable)
         {
-            if (variable is LocalVariableSymbol local && seen.Add(local))
+            if (variable is LocalVariableSymbol local
+                && !fixedLocals.Contains(variable)
+                && seen.Add(local))
             {
                 orderedLocals.Add(local);
             }

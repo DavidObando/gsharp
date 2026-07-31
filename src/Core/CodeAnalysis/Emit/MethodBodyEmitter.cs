@@ -100,6 +100,9 @@ internal sealed partial class MethodBodyEmitter
     private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
     private readonly StateMachineEmitter.IteratorEmitContext iteratorEmitCtx;
     private readonly Dictionary<VariableSymbol, object> constValues;
+    private readonly bool hasFixedReturns;
+    private readonly int fixedReturnSlot;
+    private LabelHandle? fixedReturnLabel;
 
     // Issue #503 follow-up: when this MethodBodyEmitter is emitting the Invoke
     // method of a synthesized closure class, captures of the *enclosing*
@@ -165,7 +168,9 @@ internal sealed partial class MethodBodyEmitter
         StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null,
         Dictionary<VariableSymbol, object> constValues = null,
         ClosureEmitter.ClosureInfo enclosingClosure = null,
-        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
+        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null,
+        bool hasFixedReturns = false,
+        int fixedReturnSlot = -1)
     {
         this.outer = outer;
         this.il = il;
@@ -194,6 +199,8 @@ internal sealed partial class MethodBodyEmitter
         this.constValues = constValues;
         this.enclosingClosure = enclosingClosure;
         this.stackAllocResultSlots = stackAllocResultSlots ?? new Dictionary<BoundStackAllocExpression, int>();
+        this.hasFixedReturns = hasFixedReturns;
+        this.fixedReturnSlot = fixedReturnSlot;
     }
 
     private EntityHandle ResolveCurrentStateMachineFieldToken(FieldSymbol field)
@@ -234,12 +241,40 @@ internal sealed partial class MethodBodyEmitter
     {
         this.EmitBlock(body);
 
+        if (this.EmitFixedReturnEpilogue())
+        {
+            this.il.OpCode(ILOpCode.Ret);
+            return;
+        }
+
         // Preserve the legacy trailing ret on void bodies. For value bodies,
         // cap only an emitted dead-code tail that follows the real terminator.
         if (alwaysAppendRet || !this.currentPositionEndsInTerminator)
         {
             this.il.OpCode(ILOpCode.Ret);
         }
+    }
+
+    public bool EmitFixedReturnEpilogue()
+    {
+        if (!this.fixedReturnLabel.HasValue)
+        {
+            return false;
+        }
+
+        this.il.MarkLabel(this.fixedReturnLabel.Value);
+        if (this.fixedReturnSlot >= 0)
+        {
+            this.il.LoadLocal(this.fixedReturnSlot);
+        }
+
+        return true;
+    }
+
+    private LabelHandle GetFixedReturnLabel()
+    {
+        this.fixedReturnLabel ??= this.il.DefineLabel();
+        return this.fixedReturnLabel.Value;
     }
 
     private void EmitBlockExpression(BoundBlockExpression blockExpression)
@@ -312,7 +347,20 @@ internal sealed partial class MethodBodyEmitter
                     }
                 }
 
-                this.il.OpCode(ILOpCode.Ret);
+                if (this.protectedRegionStack.Count > 0 && this.hasFixedReturns)
+                {
+                    if (ret.Expression is not null)
+                    {
+                        this.il.StoreLocal(this.fixedReturnSlot);
+                    }
+
+                    this.il.Branch(ILOpCode.Leave, this.GetFixedReturnLabel());
+                }
+                else
+                {
+                    this.il.OpCode(ILOpCode.Ret);
+                }
+
                 break;
             case BoundVariableDeclaration decl:
                 if (decl.ConstantValue != null)

@@ -201,9 +201,7 @@ internal sealed class ConstructorBodyEmitter
             EmitDiagnosticException.Wrap(fallbackAnchor, ex);
         }
 
-        il.OpCode(ILOpCode.Ret);
-
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }
 
     /// <summary>
@@ -248,8 +246,7 @@ internal sealed class ConstructorBodyEmitter
             EmitDiagnosticException.Wrap(anchor, ex);
         }
 
-        il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }
 
     /// <summary>
@@ -321,8 +318,7 @@ internal sealed class ConstructorBodyEmitter
             EmitDiagnosticException.Wrap(anchor, ex);
         }
 
-        il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }
 
     internal static bool NeedsInstanceFieldInitializerStatements(StructSymbol classSym)
@@ -445,8 +441,7 @@ internal sealed class ConstructorBodyEmitter
             }
         }
 
-        il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }
 
     /// <summary>
@@ -572,8 +567,7 @@ internal sealed class ConstructorBodyEmitter
             EmitDiagnosticException.Wrap(anchor, ex);
         }
 
-        il.OpCode(ILOpCode.Ret);
-        return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }
 
     // ADR-0068 / issue #698: emits the body of the synthesized `Finalize`
@@ -648,6 +642,17 @@ internal sealed class ConstructorBodyEmitter
 
         il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
+    }
+
+    private int AddCompletedMethodBody(
+        InstructionEncoder il,
+        MethodBodyEmitter emitter,
+        StandaloneSignatureHandle localsSignature)
+    {
+        // Every constructor-family body funnels through this helper so a
+        // protected fixed return cannot leave its shared target unmarked.
+        emitter.EmitFixedReturnEpilogue();
         il.OpCode(ILOpCode.Ret);
         return this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il), localVariablesSignature: localsSignature);
     }

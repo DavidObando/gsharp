@@ -787,6 +787,8 @@ internal sealed partial class StatementBinder
             Diagnostics.ReportFixedRequiresUnsafeContext(syntax.FixedKeyword.Location);
         }
 
+        ReportSuspensionPointsInFixedBody(syntax.Body);
+
         // Open a fresh lexical scope: the pointer binding (and any inner
         // declarations) live only for the duration of the pinned block.
         scope = new BoundScope(scope);
@@ -904,6 +906,34 @@ internal sealed partial class StatementBinder
         finally
         {
             scope = scope.Parent;
+        }
+    }
+
+    private void ReportSuspensionPointsInFixedBody(SyntaxNode node)
+    {
+        if (node == null
+            || node is FunctionLiteralExpressionSyntax
+                or LambdaExpressionSyntax
+                or FixedStatementSyntax)
+        {
+            return;
+        }
+
+        switch (node)
+        {
+            case AwaitExpressionSyntax or AwaitForRangeStatementSyntax or AwaitUsingStatementSyntax:
+                Diagnostics.ReportFixedStatementCannotSuspend(node.Location, "await");
+                break;
+            case YieldStatementSyntax yieldStatement:
+                Diagnostics.ReportFixedStatementCannotSuspend(
+                    yieldStatement.YieldKeyword.Location,
+                    yieldStatement.YieldKeyword.Text);
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            ReportSuspensionPointsInFixedBody(child);
         }
     }
 
