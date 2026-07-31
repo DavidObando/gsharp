@@ -171,13 +171,8 @@ internal sealed class FunctionEmitter
             try
             {
                 // MoveNextBodyRewriter owns this synthesized epilogue and
-                // guarantees that the body already ends in ret. Finalize only
-                // if an emitted fixed return introduced a shared leave target.
+                // guarantees that the body already ends in ret.
                 emitter.EmitBlock(body);
-                if (emitter.EmitFixedReturnEpilogue())
-                {
-                    il.OpCode(ILOpCode.Ret);
-                }
             }
             catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
             {
