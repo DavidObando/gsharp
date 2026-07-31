@@ -95,6 +95,17 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
+    public void TupleHeldFunction_NumericSelectorInvokesCallable()
+    {
+        var output = RunSubmission("""
+            let functions = ((value int32) -> value + 1, 0)
+            Console.WriteLine(functions.0(41))
+            """);
+
+        Assert.Equal("42\n", output);
+    }
+
+    [Fact]
     public void NullConditionalCurriedMemberCall_InvokesNonNilReceiver()
     {
         var output = RunSubmission("""
