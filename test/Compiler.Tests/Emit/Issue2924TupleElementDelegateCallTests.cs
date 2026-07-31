@@ -134,11 +134,20 @@ public class Issue2924TupleElementDelegateCallTests
                 }
             }
 
+            var receiverEvaluations int32
+
+            func Next(value Guard) Guard {
+                receiverEvaluations += 1
+                return value
+            }
+
             let live = Guard()
             Console.WriteLine(live?.Make(40)(2))
             Console.WriteLine(live?.MakeNamed(40)(2))
             Console.WriteLine(live?.Make(40)!!(2))
             Console.WriteLine(live?.Make(40)!!!!(2))
+            Console.WriteLine(Next(live)?.Make(40)(2))
+            Console.WriteLine(receiverEvaluations)
 
             let g Guard = nil
             g?.Plain(1)
@@ -153,6 +162,8 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine("B repeated assertion ok")
             g?.Get().0(1)
             Console.WriteLine("C ok")
+            Next(g)?.Get().0(1)
+            Console.WriteLine(receiverEvaluations)
 
             let t (System.Action[int32], int32)? = nil
             t?.0(1)
@@ -164,7 +175,7 @@ public class Issue2924TupleElementDelegateCallTests
 
         var output = CompileVerifyLoadAndRun(Source);
 
-        Assert.Equal("42\n42\n42\n42\nA ok\nB ok\nB named ok\nB asserted ok\nB repeated assertion ok\nC ok\nD ok\nE ok\n", output);
+        Assert.Equal("42\n42\n42\n42\n42\n1\nA ok\nB ok\nB named ok\nB asserted ok\nB repeated assertion ok\nC ok\n2\nD ok\nE ok\n", output);
     }
 
     [Fact]
