@@ -1870,19 +1870,21 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax receiverSyntax = null)
     {
         var methodName = ce.Identifier.Text;
-        SyntaxNode effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
-        var receiverLocation = effectiveReceiverSyntax?.Location ?? ce.Identifier.Location;
-        var receiverName = effectiveReceiverSyntax == null
-            ? methodName
-            : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
-        if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal)
-            && overloads.TryReportNullableDelegateReceiver(
+        if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
+        {
+            SyntaxNode effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
+            var receiverLocation = effectiveReceiverSyntax?.Location ?? ce.Identifier.Location;
+            var receiverName = effectiveReceiverSyntax == null
+                ? methodName
+                : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+            if (overloads.TryReportNullableDelegateReceiver(
                 receiver?.Type,
                 receiverLocation,
                 receiverName,
-                supportsNullSafeInvocation: true))
-        {
-            return new BoundErrorExpression(null);
+                OverloadResolver.GetNullableDelegateNullSafeInvocation(effectiveReceiverSyntax as ExpressionSyntax)))
+            {
+                return new BoundErrorExpression(null);
+            }
         }
 
         var hasNamedArguments = ce.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);

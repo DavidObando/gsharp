@@ -1689,7 +1689,11 @@ properties cannot declare `init` accessors.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | For name/member receivers, use `?(...)` for null-safe invocation. Otherwise bind with `if let`, or assert non-null with `!!` before calling. |
+| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `func Run(d System.Action[int32]?) { d(1) }` |
+
+Use `?(...)` for null-safe invocation of a name or member receiver. For an
+indexed or call-result receiver, use `?.Invoke(...)`. Alternatively, bind the
+delegate with `if let`, or assert non-null with `!!` before calling.
 
 ## Suspension inside fixed statement (GS0506)
 

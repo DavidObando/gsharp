@@ -313,7 +313,7 @@ internal sealed partial class OverloadResolver
         TypeSymbol receiverType,
         TextLocation location,
         string receiverName,
-        bool supportsNullSafeInvocation)
+        string nullSafeInvocation)
     {
         if (receiverType is not NullableTypeSymbol nullableReceiver
             || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableReceiver.UnderlyingType, out _))
@@ -324,9 +324,14 @@ internal sealed partial class OverloadResolver
         Diagnostics.ReportNullableDelegateReceiverInvocation(
             location,
             receiverName,
-            supportsNullSafeInvocation);
+            nullSafeInvocation);
         return true;
     }
+
+    internal static string GetNullableDelegateNullSafeInvocation(ExpressionSyntax receiverSyntax)
+        => receiverSyntax is NameExpressionSyntax or AccessorExpressionSyntax
+            ? "?(...)"
+            : "?.Invoke(...)";
 
     private BoundScope Scope => binderCtx.RootScope;
 

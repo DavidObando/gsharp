@@ -517,7 +517,7 @@ internal sealed partial class ExpressionBinder
                 effectiveMemberType,
                 ce.Identifier.Location,
                 methodName,
-                supportsNullSafeInvocation: true))
+                nullSafeInvocation: "?(...)"))
         {
             result = new BoundErrorExpression(null);
             return true;
@@ -755,7 +755,7 @@ internal sealed partial class ExpressionBinder
                 effectiveMemberType,
                 ce.Identifier.Location,
                 methodName,
-                supportsNullSafeInvocation: true))
+                nullSafeInvocation: "?(...)"))
         {
             result = new BoundErrorExpression(null);
             return true;

@@ -863,7 +863,7 @@ internal sealed partial class OverloadResolver
                 narrowedCallTargetType ?? directDelegateVar.Type,
                 syntax.Identifier.Location,
                 directDelegateVar.Name,
-                supportsNullSafeInvocation: true))
+                nullSafeInvocation: "?(...)"))
         {
             return new BoundErrorExpression(null);
         }

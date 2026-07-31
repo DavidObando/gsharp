@@ -203,10 +203,10 @@ public class Issue2885NullableDelegateReceiverTests
     }
 
     [Fact]
-    public void ImportedClrStableDelegateMembers_NarrowAndRun()
+    public void ImportedClrReadonlyDelegateField_NarrowsAndRuns()
     {
-        const string accepted = """
-            package Issue2885ImportedAccepted
+        const string source = """
+            package Issue2885ImportedReadonly
             import System
             import Issue2885Fixture
 
@@ -216,17 +216,68 @@ public class Issue2885NullableDelegateReceiverTests
                 if box.Readonly != nil {
                     box.Readonly(41)
                 }
+            }
+            """;
+
+        Assert.Equal("41\n", CompileAndRun(source, "imported-readonly", ImportedFixture));
+    }
+
+    [Fact]
+    public void ImportedClrGetOnlyDelegateProperty_NarrowsAndRuns()
+    {
+        const string source = """
+            package Issue2885ImportedGetOnly
+            import System
+            import Issue2885Fixture
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                let box = Box(write)
                 if box.GetOnly != nil {
                     box.GetOnly(42)
                 }
+            }
+            """;
+
+        Assert.Equal("42\n", CompileAndRun(source, "imported-get-only", ImportedFixture));
+    }
+
+    [Fact]
+    public void ImportedClrMutableDelegateField_IfLetRuns()
+    {
+        const string source = """
+            package Issue2885ImportedIfLet
+            import System
+            import Issue2885Fixture
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                let box = Box(write)
                 if let mutable = box.Mutable {
                     mutable(43)
                 }
+            }
+            """;
+
+        Assert.Equal("43\n", CompileAndRun(source, "imported-if-let", ImportedFixture));
+    }
+
+    [Fact]
+    public void ImportedClrMutableDelegateField_NullAssertionRuns()
+    {
+        const string source = """
+            package Issue2885ImportedAssertion
+            import System
+            import Issue2885Fixture
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                let box = Box(write)
                 box.Mutable!!(44)
             }
             """;
 
-        Assert.Equal("41\n42\n43\n44\n", CompileAndRun(accepted, "imported-stable", ImportedFixture));
+        Assert.Equal("44\n", CompileAndRun(source, "imported-assertion", ImportedFixture));
     }
 
     [Theory]
@@ -239,6 +290,7 @@ public class Issue2885NullableDelegateReceiverTests
     [InlineData("and-condition", "7\n")]
     [InlineData("source-type-while", "8\n")]
     [InlineData("source-type-for", "9\n")]
+    [InlineData("type-test-while", "4\n")]
     public void LoopConditionNarrowing_CompilesAndRuns(string shape, string expectedOutput)
     {
         Assert.Equal(expectedOutput, CompileAndRun(BuildLoopGuardSource(shape), "loop-" + shape));
@@ -302,10 +354,78 @@ public class Issue2885NullableDelegateReceiverTests
             import System
             func Run(values []System.Action[int32]?) { values[0](1) }
             """;
+        const string namedInvoke = """
+            package Issue2885AdviceNamedInvoke
+            import System
+            func Run(d System.Action[int32]?) { d.Invoke(1) }
+            """;
+        const string memberInvoke = """
+            package Issue2885AdviceMemberInvoke
+            import System
+            class Holder { var Handler System.Action[int32]? }
+            func Run(holder Holder) { holder.Handler.Invoke(1) }
+            """;
+        const string result = """
+            package Issue2885AdviceResult
+            import System
+            func Get() System.Action[int32]? -> nil
+            func Run() { Get()(1) }
+            """;
+        const string indexedInvoke = """
+            package Issue2885AdviceIndexedInvoke
+            import System
+            func Run(values []System.Action[int32]?) { values[0].Invoke(1) }
+            """;
+        const string resultInvoke = """
+            package Issue2885AdviceResultInvoke
+            import System
+            func Get() System.Action[int32]? -> nil
+            func Run() { Get().Invoke(1) }
+            """;
 
-        Assert.Contains("'?(...)'", GetGs0503(named).Message, StringComparison.Ordinal);
-        Assert.Contains("'?(...)'", GetGs0503(member).Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("'?(...)'", GetGs0503(indexed).Message, StringComparison.Ordinal);
+        AssertNameAdvice(named);
+        AssertNameAdvice(member);
+        AssertNameAdvice(namedInvoke);
+        AssertNameAdvice(memberInvoke);
+        AssertIndexedAdvice(indexed);
+        AssertIndexedAdvice(result);
+        AssertIndexedAdvice(indexedInvoke);
+        AssertIndexedAdvice(resultInvoke);
+
+        static void AssertNameAdvice(string source)
+        {
+            var message = GetGs0503(source).Message;
+            Assert.Contains("'?(...)'", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("'?.Invoke(...)'", message, StringComparison.Ordinal);
+        }
+
+        static void AssertIndexedAdvice(string source)
+        {
+            var message = GetGs0503(source).Message;
+            Assert.Contains("'?.Invoke(...)'", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("'?(...)'", message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void NullSafeInvokeRemedy_ForIndexedAndCallResultReceivers_LoadsAndRuns()
+    {
+        const string source = """
+            package Issue2885NullSafeInvokeRemedy
+            import System
+
+            func Get(handler System.Action[int32]) System.Action[int32]? -> handler
+
+            func Main() {
+                let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
+                var values = [1]System.Action[int32]?
+                values[0] = write
+                values[0]?.Invoke(1)
+                Get(write)?.Invoke(2)
+            }
+            """;
+
+        Assert.Equal("1\n2\n", CompileAndRun(source, "nullsafe-invoke-remedy"));
     }
 
     [Fact]
@@ -633,6 +753,15 @@ public class Issue2885NullableDelegateReceiverTests
                     var d System.Action[Src]? = write
                     for var i = 0; d != nil && i < 1; i++ {
                         d(Src())
+                    }
+                }
+                """,
+            "type-test-while" => """
+                func Main() {
+                    var value object? = "text"
+                    while value is string {
+                        Console.WriteLine(value.Length)
+                        break
                     }
                 }
                 """,

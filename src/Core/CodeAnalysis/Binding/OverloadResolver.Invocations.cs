@@ -734,7 +734,7 @@ internal sealed partial class OverloadResolver
             callee.Type,
             syntax.Callee.Location,
             calleeName,
-            supportsNullSafeInvocation: false))
+            GetNullableDelegateNullSafeInvocation(syntax.Callee)))
         {
             return new BoundErrorExpression(null);
         }

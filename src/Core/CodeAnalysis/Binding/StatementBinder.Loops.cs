@@ -636,7 +636,7 @@ internal sealed partial class StatementBinder
     {
         var loopNarrow = condition == null
             ? null
-            : TryClassifyNilGuard(condition).NonNil;
+            : ComputeConditionNarrowing(condition).Then;
         if (loopNarrow == null)
         {
             return BindLoopBody(bodySyntax, labelName, out breakLabel, out continueLabel);

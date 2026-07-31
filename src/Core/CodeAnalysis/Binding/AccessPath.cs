@@ -38,7 +38,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 public sealed class AccessPath : IEquatable<AccessPath>
 {
-    private AccessPath(VariableSymbol root, ImmutableArray<object> members)
+    private AccessPath(VariableSymbol root, ImmutableArray<PathMember> members)
     {
         Root = root;
         Members = members;
@@ -52,7 +52,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
     /// the root, outermost last.
     /// Empty for a plain variable narrowing.
     /// </summary>
-    public ImmutableArray<object> Members { get; }
+    public ImmutableArray<PathMember> Members { get; }
 
     /// <summary>
     /// Gets a value indicating whether this path reads at least one member
@@ -73,15 +73,15 @@ public sealed class AccessPath : IEquatable<AccessPath>
     /// <param name="variable">The root variable.</param>
     /// <returns>The access path, or <c>null</c> when <paramref name="variable"/> is <c>null</c>.</returns>
     public static AccessPath ForVariable(VariableSymbol variable)
-        => variable == null ? null : new AccessPath(variable, ImmutableArray<object>.Empty);
+        => variable == null ? null : new AccessPath(variable, ImmutableArray<PathMember>.Empty);
 
     /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
     /// <param name="member">The immutable source member read after this path.</param>
     /// <returns>The extended path.</returns>
     public AccessPath Append(Symbol member)
     {
-        var members = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
-        return new AccessPath(Root, members.Add(member));
+        var members = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        return new AccessPath(Root, members.Add(new PathMember(member)));
     }
 
     /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
@@ -89,8 +89,8 @@ public sealed class AccessPath : IEquatable<AccessPath>
     /// <returns>The extended path.</returns>
     public AccessPath Append(MemberInfo member)
     {
-        var members = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
-        return new AccessPath(Root, members.Add(member));
+        var members = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        return new AccessPath(Root, members.Add(new PathMember(member)));
     }
 
     /// <summary>
@@ -107,8 +107,8 @@ public sealed class AccessPath : IEquatable<AccessPath>
             return false;
         }
 
-        var thisMembers = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
-        var otherMembers = other.Members.IsDefault ? ImmutableArray<object>.Empty : other.Members;
+        var thisMembers = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        var otherMembers = other.Members.IsDefault ? ImmutableArray<PathMember>.Empty : other.Members;
         if (otherMembers.Length > thisMembers.Length)
         {
             return false;
@@ -116,7 +116,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
 
         for (var i = 0; i < otherMembers.Length; i++)
         {
-            if (!ReferenceEquals(thisMembers[i], otherMembers[i]))
+            if (!thisMembers[i].Equals(otherMembers[i]))
             {
                 return false;
             }
@@ -133,8 +133,8 @@ public sealed class AccessPath : IEquatable<AccessPath>
             return false;
         }
 
-        var a = Members.IsDefault ? ImmutableArray<object>.Empty : Members;
-        var b = other.Members.IsDefault ? ImmutableArray<object>.Empty : other.Members;
+        var a = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        var b = other.Members.IsDefault ? ImmutableArray<PathMember>.Empty : other.Members;
         if (a.Length != b.Length)
         {
             return false;
@@ -142,7 +142,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
 
         for (var i = 0; i < a.Length; i++)
         {
-            if (!ReferenceEquals(a[i], b[i]))
+            if (!a[i].Equals(b[i]))
             {
                 return false;
             }
@@ -178,12 +178,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
         {
             foreach (var member in Members)
             {
-                builder.Append('.').Append(member switch
-                {
-                    Symbol symbol => symbol.Name,
-                    MemberInfo clrMember => clrMember.Name,
-                    _ => member?.ToString(),
-                });
+                builder.Append('.').Append(member.Name);
             }
         }
 
