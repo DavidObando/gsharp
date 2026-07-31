@@ -305,6 +305,14 @@ public sealed class BoundScope
             return false;
         }
 
+        if (ReferenceEquals(a.Declaration, b.Declaration)
+            && a.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None
+            && b.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None
+            && a.NullableSequenceSpecialization != b.NullableSequenceSpecialization)
+        {
+            return false;
+        }
+
         var ap = SigCallableParameters(a);
         var bp = SigCallableParameters(b);
         if (ap.Length != bp.Length)

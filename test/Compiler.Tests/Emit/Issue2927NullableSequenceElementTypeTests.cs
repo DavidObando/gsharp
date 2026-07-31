@@ -295,88 +295,384 @@ public class Issue2927NullableSequenceElementTypeTests
         Assert.Equal("A\nnil\n", RunBounded(assemblyPath, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns)));
     }
 
-    [Theory]
-    [InlineData("Direct", """
-        for value in values[int32](5) {
-            Console.WriteLine(value)
-        }
-        """)]
-    [InlineData("ConcreteParameter", """
-        func consume(values sequence[int32?]) {
-            for value in values {
-                Console.WriteLine(value)
-            }
-        }
-
-        consume(values[int32](5))
-        """)]
-    [InlineData("AnnotatedVariable", """
-        var concrete sequence[int32?] = values[int32](5)
-        for value in concrete {
-            Console.WriteLine(value)
-        }
-        """)]
-    [InlineData("PassthroughFunction", """
-        func pass(values sequence[int32?]) sequence[int32?] -> values
-        for value in pass(values[int32](5)) {
-            Console.WriteLine(value)
-        }
-        """)]
-    public void GenericNullableSequenceReportsSingleGS0508(string shape, string usage)
+    [Fact]
+    public void GenericNullableSequenceSpecializesValueAndReferenceElements()
     {
-        var source = $$"""
-            package Issue2927Generic{{shape}}
+        const string Source = """
+            package Issue2927GenericSync
             import System
+            import System.Collections.Generic
 
+            func intText(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func boolText(value bool?) string { if value == nil { return "nil" } return value.ToString() }
+            func stringText(value string?) string { if value == nil { return "nil" } return value }
             func values[T](value T) sequence[T?] {
                 yield value
                 yield nil
             }
 
-            {{usage}}
+            func consume(values IEnumerable[int32?]) {
+                for value in values { Console.WriteLine(intText(value)) }
+            }
+
+            var iterator = values[int32](5).GetEnumerator()
+            iterator.MoveNext()
+            Console.WriteLine(intText(iterator.Current))
+            iterator.MoveNext()
+            Console.WriteLine(intText(iterator.Current))
+            consume(values[int32](7))
+            for value in values[bool](true) { Console.WriteLine(boolText(value)) }
+            for value in values[string]("x") { Console.WriteLine(stringText(value)) }
+            for value in values(9) { Console.WriteLine(intText(value)) }
+            for value in values("y") { Console.WriteLine(stringText(value)) }
             """;
 
-        // GS0508 prevents emission, so no assembly exists to load or pass to IlVerifier.
-        AssertSingleGS0508(source, $"{nameof(GenericNullableSequenceReportsSingleGS0508)}_{shape}");
+        AssertEmittedProgram(Source, "5\nnil\n7\nnil\nTrue\nnil\nx\nnil\n9\nnil\ny\nnil\n", nameof(GenericNullableSequenceSpecializesValueAndReferenceElements));
     }
 
     [Fact]
-    public void GenericAsyncNullableSequenceReportsSingleGS0508()
+    public void GenericAsyncNullableSequenceSpecializesValueAndReferenceElements()
     {
         const string Source = """
             package Issue2927GenericAsync
             import System
             import System.Threading.Tasks
 
-            func text(value int32?) string {
-                if value == nil {
-                    return "nil"
+            class Resource : IAsyncDisposable {
+                func DisposeAsync() ValueTask {
+                    Console.WriteLine("disposed")
+                    return ValueTask.CompletedTask
                 }
-
-                return value.ToString()
             }
 
+            func intText(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func stringText(value string?) string { if value == nil { return "nil" } return value }
             async func values[T](value T) async sequence[T?] {
+                await using let resource = Resource{}
                 yield value
                 await Task.Delay(1)
                 yield nil
             }
 
-            public var result = ""
-
             async func collect() {
-                await for value in values[int32](5) {
-                    result = result + text(value) + ","
-                }
+                await for value in values[int32](5) { Console.WriteLine(intText(value)) }
+                await for value in values[string]("x") { Console.WriteLine(stringText(value)) }
             }
 
             collect().Wait()
-            Console.WriteLine(result)
             """;
 
-        // GS0508 prevents emission, so no assembly exists to load or pass to IlVerifier.
-        AssertSingleGS0508(Source, nameof(GenericAsyncNullableSequenceReportsSingleGS0508));
+        AssertEmittedProgram(Source, "5\nnil\ndisposed\nx\nnil\ndisposed\n", nameof(GenericAsyncNullableSequenceSpecializesValueAndReferenceElements));
     }
+
+    [Fact]
+    public void GenericNullableSequenceSupportsExplicitTypeArgumentsWithoutValueArguments()
+    {
+        const string Source = """
+            package Issue2927GenericExplicit
+            import System
+
+            func intText(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func stringText(value string?) string { if value == nil { return "nil" } return value }
+            func empty[T]() sequence[T?] { yield nil }
+
+            for value in empty[int32]() { Console.WriteLine(intText(value)) }
+            for value in empty[string]() { Console.WriteLine(stringText(value)) }
+            """;
+
+        AssertEmittedProgram(Source, "nil\nnil\n", nameof(GenericNullableSequenceSupportsExplicitTypeArgumentsWithoutValueArguments));
+    }
+
+    [Fact]
+    public void SpecializedGenericIteratorResultConvertsToConcreteNullableSequence()
+    {
+        const string Source = """
+            package Issue2927ConcreteSequence
+            import System
+
+            func text(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func values[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            var concrete sequence[int32?] = values[int32](5)
+            for value in concrete { Console.WriteLine(text(value)) }
+            """;
+
+        AssertEmittedProgram(Source, "5\nnil\n", nameof(SpecializedGenericIteratorResultConvertsToConcreteNullableSequence));
+    }
+
+    [Fact]
+    public void GenericNullableSequenceSpecializesTopLevelExtensionInstanceAndStaticIterators()
+    {
+        const string Source = """
+            package Issue2927GenericForms
+            import System
+
+            func text(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func top[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            func (self string) extensionValues[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            class Box {
+                func instanceValues[T](value T) sequence[T?] {
+                    yield value
+                    yield nil
+                }
+
+                func instanceEmpty[T]() sequence[T?] { yield nil }
+
+                shared {
+                    func staticValues[T](value T) sequence[T?] {
+                        yield value
+                        yield nil
+                    }
+
+                    func staticEmpty[T]() sequence[T?] { yield nil }
+                }
+            }
+
+            func (self Box) receiverValues[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            for value in top[int32](1) { Console.WriteLine(text(value)) }
+            for value in "x".extensionValues[int32](2) { Console.WriteLine(text(value)) }
+            var box = Box()
+            for value in box.instanceValues[int32](3) { Console.WriteLine(text(value)) }
+            for value in Box.staticValues[int32](4) { Console.WriteLine(text(value)) }
+            for value in box.instanceEmpty[int32]() { Console.WriteLine(text(value)) }
+            for value in Box.staticEmpty[int32]() { Console.WriteLine(text(value)) }
+            for value in box.receiverValues[int32](5) { Console.WriteLine(text(value)) }
+            """;
+
+        AssertEmittedProgram(Source, "1\nnil\n2\nnil\n3\nnil\n4\nnil\nnil\nnil\n5\nnil\n", nameof(GenericNullableSequenceSpecializesTopLevelExtensionInstanceAndStaticIterators));
+    }
+
+    [Fact]
+    public void GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces()
+    {
+        const string Source = """
+            package Issue2927GenericMetadata
+            import System
+            import System.Threading.Tasks
+
+            func values[T](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            async func asyncValues[T](value T) async sequence[T?] {
+                yield value
+                await Task.Delay(1)
+                yield nil
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var assemblyPath = Compile(Source, nameof(GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var types = assembly.GetTypes();
+        Assert.NotEmpty(types);
+
+        AssertSpecializedMethods(types, "values", typeof(IEnumerable<>));
+        AssertSpecializedMethods(types, "asyncValues", typeof(IAsyncEnumerable<>));
+        AssertSpecializedIteratorInterfaces(types, typeof(IEnumerable<>));
+        AssertSpecializedIteratorInterfaces(types, typeof(IAsyncEnumerable<>));
+        Assert.Equal("ok\n", RunBounded(assemblyPath, nameof(GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces)));
+    }
+
+    [Fact]
+    public void NestedNullableSequenceGuardLoadsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2927Nested
+            import System
+
+            func text(value int32?) string { if value == nil { return "nil" } return value.ToString() }
+            func inner() sequence[int32?] {
+                yield 3
+                yield nil
+            }
+
+            func outer() sequence[sequence[int32?]] { yield inner() }
+            for group in outer() {
+                for value in group { Console.WriteLine(text(value)) }
+            }
+            """;
+
+        AssertEmittedProgram(Source, "3\nnil\n", nameof(NestedNullableSequenceGuardLoadsVerifiesAndRuns));
+    }
+
+    [Fact]
+    public void UnconstrainedNullableSequenceOutsideIteratorStillReportsSingleGS0508()
+    {
+        const string Source = """
+            package Issue2927DiagnosticGuard
+            func consume[T](values sequence[T?]) int32 -> 1
+            """;
+
+        AssertSingleGS0508(Source, nameof(UnconstrainedNullableSequenceOutsideIteratorStillReportsSingleGS0508));
+    }
+
+    [Fact]
+    public void UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508()
+    {
+        const string Source = """
+            package Issue2927NonIteratorReturnDiagnosticGuard
+            func consume[T]() sequence[T?] -> nil
+            """;
+
+        var result = InvokeCompiler(Source, nameof(UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508));
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0508:", StringComparison.Ordinal)));
+        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0155:", StringComparison.Ordinal)));
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void UnconstrainedEnclosingTypeParameterIteratorStillReportsSingleGS0508()
+    {
+        const string Source = """
+            package Issue2927EnclosingTypeDiagnosticGuard
+            class Box[T] {
+                func values(value T) sequence[T?] {
+                    yield value
+                    yield nil
+                }
+            }
+            """;
+
+        AssertSingleGS0508(Source, nameof(UnconstrainedEnclosingTypeParameterIteratorStillReportsSingleGS0508));
+    }
+
+    [Fact]
+    public void SpecializedIteratorBodyDiagnosticIsReportedOnce()
+    {
+        const string Source = """
+            package Issue2927DiagnosticDeduplication
+            func values[T](value T) sequence[T?] { yield missing }
+            """;
+
+        var result = InvokeCompiler(Source, nameof(SpecializedIteratorBodyDiagnosticIsReportedOnce));
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0125:", StringComparison.Ordinal)));
+        Assert.DoesNotContain("error GS0508:", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
+    }
+
+    [Fact]
+    public void UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics()
+    {
+        const string InferredSource = """
+            package Issue2927InferredDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt(u) }
+            """;
+        const string NamedSource = """
+            package Issue2927NamedDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt(v: u) }
+            """;
+        const string ExplicitSource = """
+            package Issue2927ExplicitDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt[U](u) }
+            """;
+        const string NullableSource = """
+            package Issue2927NullableArgumentDiagnostic
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            let value int32? = 1
+            let values = opt[int32?](2)
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(InferredSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_inferred"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(NamedSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_named"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(ExplicitSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_explicit"),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+        AssertSingleDiagnostic(
+            InvokeCompiler(NullableSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_nullable"),
+            "GS0152",
+            "does not satisfy the 'struct' constraint.");
+    }
+
+    private static void AssertEmittedProgram(string source, string expected, string name)
+    {
+        var assemblyPath = Compile(source, name);
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal(expected, RunBounded(assemblyPath, name));
+    }
+
+    private static void AssertSpecializedMethods(Type[] types, string methodName, Type openReturnType)
+    {
+        var methods = types
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            .Where(method => method.Name == methodName)
+            .ToArray();
+        Assert.Equal(2, methods.Length);
+
+        var referenceMethod = methods.Single(method =>
+            (method.GetGenericArguments()[0].GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0);
+        var valueMethod = methods.Single(method =>
+            (method.GetGenericArguments()[0].GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0);
+
+        Assert.Equal(openReturnType, referenceMethod.ReturnType.GetGenericTypeDefinition());
+        Assert.True(referenceMethod.ReturnType.GetGenericArguments()[0].IsGenericParameter);
+        Assert.Equal(openReturnType, valueMethod.ReturnType.GetGenericTypeDefinition());
+        AssertNullableGenericParameter(valueMethod.ReturnType.GetGenericArguments()[0]);
+    }
+
+    private static void AssertSpecializedIteratorInterfaces(Type[] types, Type openInterface)
+    {
+        var elements = types
+            .SelectMany(type => type.GetInterfaces())
+            .Where(@interface => @interface.IsGenericType && @interface.GetGenericTypeDefinition() == openInterface)
+            .Select(@interface => @interface.GetGenericArguments()[0])
+            .ToArray();
+
+        Assert.Contains(elements, element => element.IsGenericParameter);
+        Assert.Contains(elements, IsNullableGenericParameter);
+    }
+
+    private static void AssertNullableGenericParameter(Type type)
+        => Assert.True(IsNullableGenericParameter(type), $"Expected Nullable<T>, got '{type}'.");
+
+    private static bool IsNullableGenericParameter(Type type)
+        => type.IsGenericType
+        && type.GetGenericTypeDefinition() == typeof(Nullable<>)
+        && type.GetGenericArguments()[0].IsGenericParameter;
 
     private static async Task AssertParity(string source, string expected, string name, bool evaluateWithInterpreter)
     {
@@ -414,6 +710,21 @@ public class Issue2927NullableSequenceElementTypeTests
         Assert.Single(diagnostics);
         Assert.Contains("error GS0508:", diagnostics[0], StringComparison.Ordinal);
         Assert.False(File.Exists(result.AssemblyPath), "gsc must not emit an assembly after GS0508");
+    }
+
+    private static void AssertSingleDiagnostic(
+        (int ExitCode, string Output, string AssemblyPath) result,
+        string id,
+        string message)
+    {
+        Assert.NotEqual(0, result.ExitCode);
+        var diagnostics = result.Output.Split('\n')
+            .Where(line => line.Contains("error GS", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(diagnostics);
+        Assert.Contains($"error {id}:", diagnostics[0], StringComparison.Ordinal);
+        Assert.Contains(message, diagnostics[0], StringComparison.Ordinal);
+        Assert.False(File.Exists(result.AssemblyPath));
     }
 
     private static (int ExitCode, string Output, string AssemblyPath) InvokeCompiler(string source, string name)

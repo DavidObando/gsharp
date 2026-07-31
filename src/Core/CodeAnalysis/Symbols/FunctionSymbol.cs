@@ -9,6 +9,19 @@ using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
+/// <summary>Identifies compiler-generated CLR-representation variants of an unconstrained nullable sequence iterator.</summary>
+internal enum NullableSequenceSpecializationKind
+{
+    /// <summary>Ordinary function.</summary>
+    None,
+
+    /// <summary>Reference-type specialization.</summary>
+    ReferenceType,
+
+    /// <summary>Value-type specialization.</summary>
+    ValueType,
+}
+
 /// <summary>
 /// Represents a function symbol in the language.
 /// </summary>
@@ -438,6 +451,8 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
     internal bool IsStaticInitializer { get; set; }
+
+    internal NullableSequenceSpecializationKind NullableSequenceSpecialization { get; set; }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) function symbol at the

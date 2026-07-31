@@ -995,7 +995,7 @@ internal sealed partial class DeclarationBinder
 
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
-                    var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    var returnType = BindIteratorReturnType(methodSyntax);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
 
                     // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
@@ -1239,6 +1239,26 @@ internal sealed partial class DeclarationBinder
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
+                    }
+
+                    var nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol);
+                    if (nullableSequenceSpecializations.Length > 1)
+                    {
+                        foreach (var specialization in nullableSequenceSpecializations)
+                        {
+                            if (methodsBuilder.Any(existing => BoundScope.FunctionSignaturesEqual(existing, specialization)))
+                            {
+                                Diagnostics.ReportDuplicateOverloadSignature(
+                                    methodSyntax.Identifier.Location,
+                                    methodName,
+                                    Binder.FormatOverloadSignature(specialization));
+                                break;
+                            }
+
+                            methodsBuilder.Add(specialization);
+                        }
+
+                        continue;
                     }
 
                     // ADR-0149: a method declared with an explicit-interface
@@ -2238,7 +2258,7 @@ internal sealed partial class DeclarationBinder
 
                     ValidateVariadicParameterShape(methodSyntax.Parameters);
 
-                    var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+                    var returnType = BindIteratorReturnType(methodSyntax);
                     var methodAccessibility = resolveAccessibility(methodSyntax.AccessibilityModifier);
 
                     // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
@@ -2294,6 +2314,26 @@ internal sealed partial class DeclarationBinder
                     if (!isStaticPInvoke)
                     {
                         PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(methodSyntax, Diagnostics);
+                    }
+
+                    var nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol);
+                    if (nullableSequenceSpecializations.Length > 1)
+                    {
+                        foreach (var specialization in nullableSequenceSpecializations)
+                        {
+                            if (staticMethodsBuilder.Any(existing => BoundScope.FunctionSignaturesEqual(existing, specialization)))
+                            {
+                                Diagnostics.ReportDuplicateOverloadSignature(
+                                    methodSyntax.Identifier.Location,
+                                    methodName,
+                                    Binder.FormatOverloadSignature(specialization));
+                                break;
+                            }
+
+                            staticMethodsBuilder.Add(specialization);
+                        }
+
+                        continue;
                     }
 
                     // ADR-0063 §11: detect duplicate-signature within the static block.

@@ -1865,14 +1865,35 @@ public sealed class Binder
             && bodySyntax != null
             && cache.TryReuse(member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
         {
-            diagnostics.AddRange(reusedDiagnostics);
+            AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member);
             return reusedBody;
         }
 
         var (body, bodyDiagnostics) = bindAndLower();
-        diagnostics.AddRange(bodyDiagnostics);
+        AppendBodyDiagnostics(diagnostics, bodyDiagnostics, member);
         cache?.Store(member, bodySyntax, body, bodyDiagnostics);
         return body;
+    }
+
+    private static void AppendBodyDiagnostics(
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        ImmutableArray<Diagnostic> bodyDiagnostics,
+        FunctionSymbol member)
+    {
+        foreach (var diagnostic in bodyDiagnostics)
+        {
+            if (member.NullableSequenceSpecialization != NullableSequenceSpecializationKind.None
+                && diagnostics.Any(existing =>
+                    existing.Id == diagnostic.Id
+                    && existing.Severity == diagnostic.Severity
+                    && existing.Message == diagnostic.Message
+                    && existing.Location.CompareTo(diagnostic.Location) == 0))
+            {
+                continue;
+            }
+
+            diagnostics.Add(diagnostic);
+        }
     }
 
     /// <summary>
@@ -2942,7 +2963,8 @@ public sealed class Binder
                 return null;
             }
 
-            if (elementType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol typeParameter }
+            if (!ReferenceEquals(syntax, binderCtx.UnconstrainedNullableSequenceElementReturn)
+                && elementType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol typeParameter }
                 && !typeParameter.HasValueTypeConstraint
                 && !typeParameter.HasReferenceTypeConstraint
                 && typeParameter.ClassConstraint == null)
