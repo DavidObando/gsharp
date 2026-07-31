@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -73,10 +74,9 @@ internal static class SmartCastStability
     /// Attempts to derive the stable <see cref="AccessPath"/> that
     /// <paramref name="expr"/> reads. Returns <c>null</c> unless the whole chain
     /// is stable: a stable root variable optionally followed by immutable
-    /// field / property links read through stable receivers. Reads of
-    /// imported / CLR members (<see cref="BoundClrPropertyAccessExpression"/>),
-    /// mutable members, computed properties, indexers, and method results are
-    /// never stable, so the recursion bottoms out at <c>null</c> for them.
+    /// field / property links read through stable receivers. Imported read-only
+    /// fields and get-only auto-properties are stable too. Mutable members,
+    /// computed properties, indexers, and method results are never stable.
     /// </summary>
     /// <param name="expr">The candidate access expression.</param>
     /// <returns>The stable access path, or <c>null</c>.</returns>
@@ -97,6 +97,12 @@ internal static class SmartCastStability
                 {
                     var parent = TryGetStablePath(pa.Receiver);
                     return parent?.Append(pa.Property);
+                }
+
+            case BoundClrPropertyAccessExpression ca when ca.Receiver != null && IsStableClrMember(ca.Member):
+                {
+                    var parent = TryGetStablePath(ca.Receiver);
+                    return parent?.Append(ca.Member);
                 }
 
             default:
@@ -308,6 +314,30 @@ internal static class SmartCastStability
         }
 
         return false;
+    }
+
+    private static bool IsStableClrMember(MemberInfo member)
+    {
+        if (member is FieldInfo field)
+        {
+            return !field.IsStatic && field.IsInitOnly;
+        }
+
+        if (member is not PropertyInfo property
+            || property.GetIndexParameters().Length != 0
+            || property.GetGetMethod(nonPublic: false) is not MethodInfo getter
+            || getter.IsStatic
+            || getter.IsVirtual
+            || property.GetSetMethod(nonPublic: true) != null)
+        {
+            return false;
+        }
+
+        var backingField = ClrTypeUtilities.SafeGetField(
+            property.DeclaringType,
+            $"<{property.Name}>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        return backingField?.IsInitOnly == true;
     }
 
     private static bool IsAcceptableBareVariable(VariableSymbol variable, bool restrictToLocalsAndParams)

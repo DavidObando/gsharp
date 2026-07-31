@@ -1685,6 +1685,16 @@ the property explicitly with a `set` accessor. An init-only interface property
 must instead be implemented with a matching `init` accessor. Static interface
 properties cannot declare `init` accessors.
 
+## Nullable delegate invocation diagnostics (GS0503)
+
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `func Run(d System.Action[int32]?) { d(1) }` |
+
+Use `?(...)` for null-safe invocation of a name or member receiver. For an
+indexed or call-result receiver, use `?.Invoke(...)`. Alternatively, bind the
+delegate with `if let`, or assert non-null with `!!` before calling.
+
 ## Suspension inside fixed statement (GS0506)
 
 | ID | Severity | Description |

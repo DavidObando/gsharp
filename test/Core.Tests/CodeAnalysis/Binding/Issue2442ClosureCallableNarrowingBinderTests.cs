@@ -29,13 +29,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// (<c>System.Func&lt;...&gt;</c>/<c>Action&lt;...&gt;</c>) both erase to a
 /// real CLR delegate <see cref="System.Type"/> at the
 /// <c>NullableTypeSymbol</c>/<c>FunctionTypeSymbol</c> level, so
-/// <c>OverloadResolver.CallBinding</c>'s "ClrType is a delegate type"
-/// fallback binds the call successfully whether or not any narrowing is in
-/// scope — a separate, pre-existing quirk this issue does not change. Only a
-/// same-compilation <c>DelegateTypeSymbol</c> reaches the
-/// narrowing-dependent branch and therefore reproduces the reported GS0131.
-/// Both shapes are covered below: the named-delegate cases prove the fix,
-/// the bare-function-type/CLR-delegate cases are regression coverage.
+/// Both named and imported delegate shapes are covered below. Invalidated
+/// nullable named-delegate calls report GS0503, matching imported delegates.
 /// </remarks>
 public class Issue2442ClosureCallableNarrowingBinderTests
 {
@@ -258,11 +253,7 @@ Run[int32](nil, 1)
 
     // ---- Positive: coverage for bare function types and CLR delegates -----
     //
-    // These shapes never reproduced GS0131 (see the class remarks) because
-    // OverloadResolver.CallBinding's ClrType-delegate fallback already binds
-    // the call regardless of narrowing. They are kept as permanent
-    // regression coverage: the closure-narrowing rule must not regress
-    // these either, even though they were never the differentiating case.
+    // These shapes remain regression coverage for valid closure narrowing.
 
     [Fact]
     public void BareNullableFunctionType_NarrowsInsideClosure()
@@ -315,7 +306,7 @@ func Run(convertActionIn ConvertFunc?, data []uint8) {
 Run(nil, []uint8{})
 ");
 
-        AssertContainsError(result, "GS0131");
+        AssertContainsError(result, "GS0503");
     }
 
     [Fact]
@@ -338,7 +329,7 @@ func Run(convertActionIn ConvertFunc?, data []uint8) {
 Run(nil, []uint8{})
 ");
 
-        AssertContainsError(result, "GS0131");
+        AssertContainsError(result, "GS0503");
     }
 
     [Fact]
@@ -358,7 +349,7 @@ func Run(convertActionIn ConvertFunc?, data []uint8) {
 Run(nil, []uint8{})
 ");
 
-        AssertContainsError(result, "GS0131");
+        AssertContainsError(result, "GS0503");
     }
 
     [Fact]

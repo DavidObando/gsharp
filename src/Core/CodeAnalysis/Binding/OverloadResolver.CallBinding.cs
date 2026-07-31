@@ -858,6 +858,16 @@ internal sealed partial class OverloadResolver
             return nullableDelegateCall;
         }
 
+        if (symbol is VariableSymbol directDelegateVar
+            && TryReportNullableDelegateReceiver(
+                narrowedCallTargetType ?? directDelegateVar.Type,
+                syntax.Identifier.Location,
+                directDelegateVar.Name,
+                nullSafeInvocation: "?(...)"))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         // Phase 4.7: invoking a function-typed variable goes through the
         // indirect-call path. Sites like `add(1, 2)` where `add` is `let
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.

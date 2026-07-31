@@ -1863,9 +1863,30 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    internal BoundExpression BindAccessorCall(BoundExpression receiver, ImportedClassSymbol classSymbol, CallExpressionSyntax ce)
+    internal BoundExpression BindAccessorCall(
+        BoundExpression receiver,
+        ImportedClassSymbol classSymbol,
+        CallExpressionSyntax ce,
+        ExpressionSyntax receiverSyntax = null)
     {
         var methodName = ce.Identifier.Text;
+        if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
+        {
+            SyntaxNode effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
+            var receiverLocation = effectiveReceiverSyntax?.Location ?? ce.Identifier.Location;
+            var receiverName = effectiveReceiverSyntax == null
+                ? methodName
+                : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+            if (overloads.TryReportNullableDelegateReceiver(
+                receiver?.Type,
+                receiverLocation,
+                receiverName,
+                OverloadResolver.GetNullableDelegateNullSafeInvocation(effectiveReceiverSyntax as ExpressionSyntax)))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+
         var hasNamedArguments = ce.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
         if (classSymbol == null && methodName == "copy" && (hasNamedArguments || (receiver?.Type is StructSymbol copyStruct && copyStruct.IsData)))
         {

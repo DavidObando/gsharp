@@ -298,6 +298,19 @@ public sealed partial class DiagnosticBag
     public void ReportUnableToFindMember(TextLocation location, string text)
     => Report(location, DiagnosticDescriptors.UnableToFindMember, text);
 
+    /// <summary>GS0503: Reports a direct call through a nullable delegate receiver without a valid narrowing.</summary>
+    /// <param name="location">The nullable receiver location.</param>
+    /// <param name="receiverName">The receiver spelling.</param>
+    /// <param name="nullSafeInvocation">The null-safe call syntax valid for this receiver shape.</param>
+    public void ReportNullableDelegateReceiverInvocation(
+        TextLocation location,
+        string receiverName,
+        string nullSafeInvocation)
+    {
+        var advice = $"Use '{nullSafeInvocation}' for null-safe invocation, bind it with 'if let', or assert non-null with '!!' before calling.";
+        Report(location, DiagnosticDescriptors.NullableDelegateReceiverInvocation, receiverName, advice);
+    }
+
     /// <summary>
     /// Reports that we couldn't find the specified function.
     /// </summary>

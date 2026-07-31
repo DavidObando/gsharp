@@ -24,7 +24,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
-    private BoundExpression BindAccessorStep(BoundExpression receiver, ImportedClassSymbol classSymbol, ExpressionSyntax rightPart)
+    private BoundExpression BindAccessorStep(
+        BoundExpression receiver,
+        ImportedClassSymbol classSymbol,
+        ExpressionSyntax rightPart,
+        ExpressionSyntax receiverSyntax = null)
     {
         switch (rightPart)
         {
@@ -91,10 +95,10 @@ internal sealed partial class ExpressionBinder
                     return BindNullConditionalAccessExpressionCore(head, nested.RightPart);
                 }
 
-                return BindAccessorStep(head, null, nested.RightPart);
+                return BindAccessorStep(head, null, nested.RightPart, nested.LeftPart);
 
             case CallExpressionSyntax ce:
-                var callResult = BindAccessorCall(receiver, classSymbol, ce);
+                var callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax);
                 CheckValueTaskGetAwaiterGetResult(callResult, ce);
                 return callResult;
 

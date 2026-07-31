@@ -512,6 +512,17 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        if (ce.NullableQuestionToken == null
+            && overloads.TryReportNullableDelegateReceiver(
+                effectiveMemberType,
+                ce.Identifier.Location,
+                methodName,
+                nullSafeInvocation: "?(...)"))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
         if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
         {
             return false;
@@ -735,13 +746,26 @@ internal sealed partial class ExpressionBinder
             _ => TypeSymbol.FromClrType(memberClrType),
         };
 
+        BoundExpression delegateLoad = ApplyMemberNarrowing(
+            new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
+        var effectiveMemberType = delegateLoad.Type;
+
+        if (ce.NullableQuestionToken == null
+            && overloads.TryReportNullableDelegateReceiver(
+                effectiveMemberType,
+                ce.Identifier.Location,
+                methodName,
+                nullSafeInvocation: "?(...)"))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
         // The delegate value load — `ldfld` for a field, `call get_X` for a
         // property. The shared BoundClrPropertyAccessExpression node carries
         // either MemberInfo shape, and EmitClrPropertyAccess already handles
         // both (including the value-type-receiver `ldloca` step we need for
         // a CLR struct field).
-        var delegateLoad = new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol);
-
         // Strip nullable annotation when dispatching through Invoke.
         var underlyingDelegateClr = memberClrType;
 
@@ -749,9 +773,9 @@ internal sealed partial class ExpressionBinder
         BoundExpression invokeReceiver = delegateLoad;
         if (ce.NullableQuestionToken != null)
         {
-            var captureType = memberTypeSymbol is NullableTypeSymbol nullableMember
+            var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
                 ? nullableMember.UnderlyingType
-                : memberTypeSymbol;
+                : effectiveMemberType;
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);

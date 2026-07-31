@@ -730,6 +730,15 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        if (TryReportNullableDelegateReceiver(
+            callee.Type,
+            syntax.Callee.Location,
+            calleeName,
+            GetNullableDelegateNullSafeInvocation(syntax.Callee)))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         if (callee.Type is FunctionTypeSymbol fnType)
         {
             if (!TryBindFunctionTypeArguments(calleeName, fnType, syntax, boundArguments.ToImmutable(), out var convertedArgs))

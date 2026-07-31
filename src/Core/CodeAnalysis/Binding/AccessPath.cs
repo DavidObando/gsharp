@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Reflection;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -23,7 +24,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <see cref="Members"/>). The root is the variable the chain starts at
 /// (a local, parameter, the receiver/<c>this</c> parameter, or a read-only
 /// top-level <c>let</c>); the members are the immutable field / property
-/// symbols read in order, outermost last. A path with an empty
+/// symbols or imported CLR members read in order, outermost last. A path with an empty
 /// <see cref="Members"/> list denotes a plain variable narrowing and is
 /// equivalent to the historical <see cref="VariableSymbol"/> key — hence the
 /// implicit conversion from <see cref="VariableSymbol"/> so the existing
@@ -31,14 +32,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </para>
 /// <para>
 /// Equality is structural: two paths are equal when they share the same root
-/// symbol and the same member symbols, by reference (symbols are reference
-/// unique within a compilation). This lets the analysis re-derive an equal key
-/// every time it re-binds the same access expression.
+/// symbol and equal member identities. This lets analysis re-derive an equal
+/// key every time it re-binds the same access expression.
 /// </para>
 /// </remarks>
 public sealed class AccessPath : IEquatable<AccessPath>
 {
-    private AccessPath(VariableSymbol root, ImmutableArray<Symbol> members)
+    private AccessPath(VariableSymbol root, ImmutableArray<PathMember> members)
     {
         Root = root;
         Members = members;
@@ -48,11 +48,11 @@ public sealed class AccessPath : IEquatable<AccessPath>
     public VariableSymbol Root { get; }
 
     /// <summary>
-    /// Gets the immutable member symbols (<see cref="FieldSymbol"/> or
-    /// <see cref="PropertySymbol"/>) read after the root, outermost last.
+    /// Gets the immutable source symbols or imported CLR members read after
+    /// the root, outermost last.
     /// Empty for a plain variable narrowing.
     /// </summary>
-    public ImmutableArray<Symbol> Members { get; }
+    public ImmutableArray<PathMember> Members { get; }
 
     /// <summary>
     /// Gets a value indicating whether this path reads at least one member
@@ -73,15 +73,24 @@ public sealed class AccessPath : IEquatable<AccessPath>
     /// <param name="variable">The root variable.</param>
     /// <returns>The access path, or <c>null</c> when <paramref name="variable"/> is <c>null</c>.</returns>
     public static AccessPath ForVariable(VariableSymbol variable)
-        => variable == null ? null : new AccessPath(variable, ImmutableArray<Symbol>.Empty);
+        => variable == null ? null : new AccessPath(variable, ImmutableArray<PathMember>.Empty);
 
     /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
-    /// <param name="member">The immutable member read after this path.</param>
+    /// <param name="member">The immutable source member read after this path.</param>
     /// <returns>The extended path.</returns>
     public AccessPath Append(Symbol member)
     {
-        var members = Members.IsDefault ? ImmutableArray<Symbol>.Empty : Members;
-        return new AccessPath(Root, members.Add(member));
+        var members = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        return new AccessPath(Root, members.Add(new PathMember(member)));
+    }
+
+    /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
+    /// <param name="member">The immutable imported CLR member read after this path.</param>
+    /// <returns>The extended path.</returns>
+    public AccessPath Append(MemberInfo member)
+    {
+        var members = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        return new AccessPath(Root, members.Add(new PathMember(member)));
     }
 
     /// <summary>
@@ -98,8 +107,8 @@ public sealed class AccessPath : IEquatable<AccessPath>
             return false;
         }
 
-        var thisMembers = Members.IsDefault ? ImmutableArray<Symbol>.Empty : Members;
-        var otherMembers = other.Members.IsDefault ? ImmutableArray<Symbol>.Empty : other.Members;
+        var thisMembers = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        var otherMembers = other.Members.IsDefault ? ImmutableArray<PathMember>.Empty : other.Members;
         if (otherMembers.Length > thisMembers.Length)
         {
             return false;
@@ -107,7 +116,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
 
         for (var i = 0; i < otherMembers.Length; i++)
         {
-            if (!ReferenceEquals(thisMembers[i], otherMembers[i]))
+            if (!thisMembers[i].Equals(otherMembers[i]))
             {
                 return false;
             }
@@ -124,8 +133,8 @@ public sealed class AccessPath : IEquatable<AccessPath>
             return false;
         }
 
-        var a = Members.IsDefault ? ImmutableArray<Symbol>.Empty : Members;
-        var b = other.Members.IsDefault ? ImmutableArray<Symbol>.Empty : other.Members;
+        var a = Members.IsDefault ? ImmutableArray<PathMember>.Empty : Members;
+        var b = other.Members.IsDefault ? ImmutableArray<PathMember>.Empty : other.Members;
         if (a.Length != b.Length)
         {
             return false;
@@ -133,7 +142,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
 
         for (var i = 0; i < a.Length; i++)
         {
-            if (!ReferenceEquals(a[i], b[i]))
+            if (!a[i].Equals(b[i]))
             {
                 return false;
             }

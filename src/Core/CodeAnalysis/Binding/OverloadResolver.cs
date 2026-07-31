@@ -309,6 +309,30 @@ internal sealed partial class OverloadResolver
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
 
+    internal bool TryReportNullableDelegateReceiver(
+        TypeSymbol receiverType,
+        TextLocation location,
+        string receiverName,
+        string nullSafeInvocation)
+    {
+        if (receiverType is not NullableTypeSymbol nullableReceiver
+            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableReceiver.UnderlyingType, out _))
+        {
+            return false;
+        }
+
+        Diagnostics.ReportNullableDelegateReceiverInvocation(
+            location,
+            receiverName,
+            nullSafeInvocation);
+        return true;
+    }
+
+    internal static string GetNullableDelegateNullSafeInvocation(ExpressionSyntax receiverSyntax)
+        => receiverSyntax is NameExpressionSyntax or AccessorExpressionSyntax
+            ? "?(...)"
+            : "?.Invoke(...)";
+
     private BoundScope Scope => binderCtx.RootScope;
 
     /// <summary>

@@ -806,6 +806,37 @@ internal sealed partial class ExpressionBinder
                             nt => new BoundPropertyAccessExpression(null, pa.Receiver, pa.StructType, pa.Property, nt));
                 }
 
+            case BoundClrPropertyAccessExpression ca:
+                {
+                    if (!SmartCastStability.TryGetStableMemberPath(ca, out var path, out _))
+                    {
+                        return node;
+                    }
+
+                    var narrowed = TryGetNarrowedType(path);
+                    return narrowed == null
+                        ? node
+                        : BuildNarrowedRead(
+                            new BoundClrPropertyAccessExpression(
+                                null,
+                                ca.Receiver,
+                                ca.Member,
+                                ca.Type,
+                                ca.StaticContainerType,
+                                ca.ConstrainedReceiverTypeParameter,
+                                ca.ConstrainedInterfaceType),
+                            ca.Type,
+                            narrowed,
+                            nt => new BoundClrPropertyAccessExpression(
+                                null,
+                                ca.Receiver,
+                                ca.Member,
+                                nt,
+                                ca.StaticContainerType,
+                                ca.ConstrainedReceiverTypeParameter,
+                                ca.ConstrainedInterfaceType));
+                }
+
             default:
                 return node;
         }
