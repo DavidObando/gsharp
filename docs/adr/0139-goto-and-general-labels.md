@@ -78,6 +78,9 @@ If that lifted `finally` transfers control with `break`, `continue`, `goto`,
 or `return`, the transfer replaces the pending exception, so the exception is
 discarded. This matches evaluator behavior and ECMA-335 III.1.7.5; C# instead
 rejects transfers out of a `finally` with CS0157.
+Known limitation [#2953](https://github.com/DavidObando/gsharp/issues/2953):
+`fixed`-containing non-void functions bypass the fall-through guard and
+silently return the fixed-return epilogue's default slot instead of throwing.
 
 ### Diagnostics
 

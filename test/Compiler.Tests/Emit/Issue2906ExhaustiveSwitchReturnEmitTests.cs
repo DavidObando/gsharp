@@ -312,8 +312,9 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             "UnnamedFixed",
             Source,
             ignoredVerificationErrors: new[] { "ExpectedNumericType" });
-        // The fixed-return epilogue is intentionally emitted before the
-        // missing-return guard, so an unmatched value returns its default slot.
+        // Known limitation (#2953): the fixed-return epilogue must be emitted first,
+        // so fixed-containing non-void functions bypass the fall-through guard and
+        // silently return the default slot instead of throwing.
         Assert.Equal(0, GetField(assembly, "result"));
     }
 
