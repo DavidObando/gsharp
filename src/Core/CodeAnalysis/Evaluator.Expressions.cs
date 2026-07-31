@@ -27,6 +27,9 @@ namespace GSharp.Core.CodeAnalysis;
 public sealed partial class Evaluator
 #pragma warning restore CA1001
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, Func<Func<object[], object>, Delegate>> InterpreterDelegateFactories = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Delegate, ClosureValue> InterpreterClosures = new();
+
     private object EvaluateExpression(BoundExpression node)
     {
         try
@@ -812,6 +815,13 @@ public sealed partial class Evaluator
 
         if (targetValue is Delegate target)
         {
+            if (InterpreterClosures.TryGetValue(target, out var closure))
+            {
+                return closure.Function.IsAsync
+                    ? InvokeMaterializedClosure(closure, arguments)
+                    : InvokeClosure(closure, arguments);
+            }
+
             return InvokeDelegate(target, arguments);
         }
 
@@ -820,14 +830,23 @@ public sealed partial class Evaluator
 
     private object MaterializeClosure(ClosureValue closure)
     {
-        return closure.FunctionType.ClrType is Type delegateType
-            ? CreateInterpreterDelegate(delegateType, args => InvokeMaterializedClosure(closure, args))
-            : closure;
+        if (closure.FunctionType.ClrType is not Type delegateType)
+        {
+            return closure;
+        }
+
+        var result = CreateInterpreterDelegate(delegateType, args => InvokeMaterializedClosure(closure, args));
+        InterpreterClosures.Add(result, closure);
+        return result;
     }
 
     private static Delegate CreateInterpreterDelegate(Type delegateType, Func<object[], object> invoke)
+        => InterpreterDelegateFactories.GetValue(delegateType, BuildInterpreterDelegateFactory)(invoke);
+
+    private static Func<Func<object[], object>, Delegate> BuildInterpreterDelegateFactory(Type delegateType)
     {
         var invokeMethod = delegateType.GetMethod(nameof(Action.Invoke));
+        var invokeParameter = System.Linq.Expressions.Expression.Parameter(typeof(Func<object[], object>), "invoke");
         var parameters = invokeMethod.GetParameters()
             .Select(parameter => System.Linq.Expressions.Expression.Parameter(parameter.ParameterType, parameter.Name))
             .ToArray();
@@ -835,12 +854,15 @@ public sealed partial class Evaluator
             typeof(object),
             parameters.Select(parameter => System.Linq.Expressions.Expression.Convert(parameter, typeof(object))));
         var invocation = System.Linq.Expressions.Expression.Invoke(
-            System.Linq.Expressions.Expression.Constant(invoke),
+            invokeParameter,
             arguments);
         System.Linq.Expressions.Expression body = invokeMethod.ReturnType.IsSameAs(typeof(void))
             ? System.Linq.Expressions.Expression.Block(invocation, System.Linq.Expressions.Expression.Empty())
             : System.Linq.Expressions.Expression.Convert(invocation, invokeMethod.ReturnType);
-        return System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters).Compile();
+        var inner = System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters);
+        return System.Linq.Expressions.Expression.Lambda<Func<Func<object[], object>, Delegate>>(
+            inner,
+            invokeParameter).Compile();
     }
 
     private static object InvokeDelegate(Delegate target, object[] arguments)

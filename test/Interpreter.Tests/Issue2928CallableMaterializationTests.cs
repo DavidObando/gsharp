@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -156,6 +157,22 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
+    public void Callable_DelegateFactoryIsReusedPerType()
+    {
+        const string Source = """
+            let first (int32) -> int32 = (value int32) -> value + 1
+            let second (int32) -> int32 = (value int32) -> value + 2
+            (first, second)
+            """;
+
+        var pair = Assert.IsType<ValueTuple<Func<int, int>, Func<int, int>>>(Evaluate(Source));
+
+        Assert.Equal(pair.Item1.Method, pair.Item2.Method);
+        Assert.Equal(2, pair.Item1(1));
+        Assert.Equal(3, pair.Item2(1));
+    }
+
+    [Fact]
     public void Callable_ExceptionStillReachesInterpreterCatch()
     {
         const string Source = """
@@ -175,7 +192,7 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
-    public void Callable_UncaughtExceptionKeepsOriginalDiagnostic()
+    public void Callable_DirectUncaughtExceptionKeepsOriginalDiagnostic()
     {
         const string Source = """
             import System
