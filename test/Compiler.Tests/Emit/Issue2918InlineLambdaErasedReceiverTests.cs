@@ -321,7 +321,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 let predicate Predicate[Src] = (item Src) -> item.N > 2
                 let box = DelegateBox[Predicate[Src]](predicate)
                 Console.WriteLine(box.RuntimeTypeName)
-                Console.WriteLine(box.Value(Src(3)))
+                Console.WriteLine(box.Value!!(Src(3)))
             }
             """;
 
