@@ -61,7 +61,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.LoadArgument(argIndex);
             if (ps.RefKind != RefKind.None
-                || (argIndex == 0 && ReferenceEquals(ps, this.structThisParameter)))
+                || ReferenceEquals(ps, this.structThisParameter))
             {
                 // Ref parameters and value-type `this` slots hold managed
                 // pointers; an ordinary value read must dereference them.

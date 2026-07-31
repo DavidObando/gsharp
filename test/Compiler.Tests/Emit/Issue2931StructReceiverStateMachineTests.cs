@@ -27,7 +27,19 @@ public class Issue2931StructReceiverStateMachineTests
             struct Box {
                 var N int32
                 func vals() sequence[int32] { yield N }
+
+                func runSyncClosure() int32 {
+                    var read = func() int32 { return N }
+                    return read()
+                }
+
+                func runAsyncClosure() int32 {
+                    var read = async func() int32 { return N }
+                    return read().Result
+                }
             }
+
+            func (box Box) receiverVals() sequence[int32] { yield box.N }
 
             struct Holder {
                 var B Box
@@ -103,12 +115,15 @@ public class Issue2931StructReceiverStateMachineTests
             print(repeated)
 
             print(OuterIterator{B: Box{N: 180}}.vals())
+            Console.WriteLine(Box{N: 81}.runSyncClosure())
+            Console.WriteLine(Box{N: 82}.runAsyncClosure())
+            print(Box{N: 101}.receiverVals())
             """;
 
         AssertRunsWithExactOutput(
             Source,
             nameof(StructIteratorReceiversRetainValueCopies),
-            "100\n110\n120\n130\n140\n150\n160\n163\n3\n160\n170\n170\n180\n");
+            "100\n110\n120\n130\n140\n150\n160\n163\n3\n160\n170\n170\n180\n81\n82\n101\n");
     }
 
     [Fact]
@@ -201,17 +216,25 @@ public class Issue2931StructReceiverStateMachineTests
                 }
             }
 
+            class CBox(N int32) {
+                async func val() int32 {
+                    await Task.Delay(1)
+                    return N
+                }
+            }
+
             Console.WriteLine(Box{N: 300}.val().Result)
 
             var box = Box{N: 310}
             Console.WriteLine(box.val().Result)
             Console.WriteLine(GenericBox[int32]{Value: 320}.val().Result)
+            Console.WriteLine(CBox(91).val().Result)
             """;
 
         AssertRunsWithExactOutput(
             Source,
             nameof(AsyncStructMethodReceiversRetainValueCopies),
-            "300\n310\n320\n");
+            "300\n310\n320\n91\n");
     }
 
     [Fact]
