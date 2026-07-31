@@ -35,6 +35,7 @@ public class AccessPathTests
         var first = AccessPath.ForVariable(root).Append(intProperty);
         var second = AccessPath.ForVariable(root).Append(stringProperty);
 
+        // Closed generic instantiations share metadata identity; root identity fixes the constructed receiver type.
         Assert.Equal(first, second);
         Assert.True(first.StartsWith(second));
         Assert.Equal(first.GetHashCode(), second.GetHashCode());
