@@ -98,7 +98,7 @@ internal sealed partial class MethodBodyEmitter
     private readonly ParameterSymbol structThisParameter;
     private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
     private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
-    private readonly StateMachineEmitter.AsyncIteratorEmitContext asyncIteratorEmitCtx;
+    private readonly StateMachineEmitter.IteratorEmitContext iteratorEmitCtx;
     private readonly Dictionary<VariableSymbol, object> constValues;
 
     // Issue #503 follow-up: when this MethodBodyEmitter is emitting the Invoke
@@ -162,7 +162,7 @@ internal sealed partial class MethodBodyEmitter
         ParameterSymbol structThisParameter = null,
         Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
         Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
-        StateMachineEmitter.AsyncIteratorEmitContext asyncIteratorEmitCtx = null,
+        StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null,
         Dictionary<VariableSymbol, object> constValues = null,
         ClosureEmitter.ClosureInfo enclosingClosure = null,
         Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
@@ -190,7 +190,7 @@ internal sealed partial class MethodBodyEmitter
         this.structThisParameter = structThisParameter;
         this.asyncFieldMap = asyncFieldMap;
         this.asyncPlan = asyncPlan;
-        this.asyncIteratorEmitCtx = asyncIteratorEmitCtx;
+        this.iteratorEmitCtx = iteratorEmitCtx;
         this.constValues = constValues;
         this.enclosingClosure = enclosingClosure;
         this.stackAllocResultSlots = stackAllocResultSlots ?? new Dictionary<BoundStackAllocExpression, int>();
@@ -198,7 +198,7 @@ internal sealed partial class MethodBodyEmitter
 
     private EntityHandle ResolveCurrentStateMachineFieldToken(FieldSymbol field)
     {
-        var stateMachine = this.asyncFieldMap?.StructType ?? this.asyncIteratorEmitCtx?.SmClass;
+        var stateMachine = this.asyncFieldMap?.StructType ?? this.iteratorEmitCtx?.SmClass;
         if (stateMachine == null)
         {
             throw new InvalidOperationException(

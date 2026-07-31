@@ -54,11 +54,12 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
 
     private static Type MakeClrType(TypeSymbol elementType)
     {
-        if (elementType.ClrType == null)
+        var elementClrType = NullableTypeSymbol.GetEffectiveClrType(elementType);
+        if (elementClrType == null)
         {
             return null;
         }
 
-        return typeof(IAsyncEnumerable<>).MakeGenericType(elementType.ClrType);
+        return typeof(IAsyncEnumerable<>).MakeGenericType(elementClrType);
     }
 }

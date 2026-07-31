@@ -6,6 +6,9 @@
 
 using System;
 using System.IO;
+using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Xunit;
 using Xunit.Sdk;
 
@@ -73,6 +76,59 @@ public class IlVerifierTests
             () => IlVerifier.Verify(typeof(IlVerifierTests).Assembly.Location, new[] { bogus }));
 
         Assert.Contains("reference assembly not found", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Verify_InvalidMethodBody_ReportsErrors()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_ilv_bad_").FullName;
+        try
+        {
+            var srcPath = Path.Combine(tempDir, "bad.gs");
+            var outPath = Path.Combine(tempDir, "bad.dll");
+            File.WriteAllText(srcPath, "package P\n\npublic func Bad() {\n}\n");
+
+            var exit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+            Assert.Equal(0, exit);
+
+            var bytes = File.ReadAllBytes(outPath);
+            using (var peReader = new PEReader(new MemoryStream(bytes, writable: false)))
+            {
+                var metadata = peReader.GetMetadataReader();
+                var method = metadata.MethodDefinitions
+                    .Select(metadata.GetMethodDefinition)
+                    .Single(m => metadata.GetString(m.Name) == "Bad");
+                var body = peReader.GetMethodBody(method.RelativeVirtualAddress);
+                Assert.Equal(new byte[] { 0x2A }, body.GetILBytes());
+
+                var section = peReader.PEHeaders.SectionHeaders.Single(s =>
+                    method.RelativeVirtualAddress >= s.VirtualAddress
+                    && method.RelativeVirtualAddress < s.VirtualAddress + s.SizeOfRawData);
+                var bodyOffset = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData;
+                var headerSize = 1;
+                bytes[bodyOffset + headerSize] = 0x26;
+            }
+
+            File.WriteAllBytes(outPath, bytes);
+            var exception = Assert.Throws<XunitException>(() => IlVerifier.Verify(outPath));
+            Assert.Contains("Error(s)", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     [Fact]

@@ -43,7 +43,7 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitStateMachineAwaitOnCompleted(BoundStateMachineAwaitOnCompleted node)
     {
-        this.outer.stateMachines.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan, this.asyncIteratorEmitCtx);
+        this.outer.stateMachines.EmitAwaitOnCompletedCall(this.il, this.locals, this.parameters, node, this.asyncPlan, this.iteratorEmitCtx);
     }
 
     /// <summary>

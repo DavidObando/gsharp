@@ -2921,6 +2921,16 @@ public sealed class Binder
                 return null;
             }
 
+            if (elementType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol typeParameter }
+                && !typeParameter.HasValueTypeConstraint
+                && !typeParameter.HasReferenceTypeConstraint
+                && typeParameter.ClassConstraint == null)
+            {
+                Diagnostics.ReportUnconstrainedNullableSequenceElement(
+                    syntax.SequenceElementType.Location,
+                    typeParameter.Name);
+            }
+
             if (syntax.IsAsyncSequence)
             {
                 return AsyncSequenceTypeSymbol.Get(elementType);

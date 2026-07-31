@@ -50,11 +50,11 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <c>EmitStateMachineSetStateMachine</c>, <c>EmitAwaitOnCompletedCall</c>,
 /// <c>EmitAsyncKickoffBody</c>) plus the nested helper classes
 /// (<see cref="IteratorStateMachineInfo"/>,
-/// <see cref="AsyncIteratorEmitContext"/>) and the state-machine caches
+/// <see cref="IteratorEmitContext"/>) and the state-machine caches
 /// (<see cref="IteratorKickoffBodies"/>,
 /// <see cref="IteratorStateMachineInfos"/>, <see cref="AsyncStateMachinePlans"/>,
 /// <see cref="IteratorPlans"/>, <see cref="AsyncIteratorPlans"/>,
-/// <see cref="AsyncIteratorInfos"/>, <see cref="AsyncIteratorEmitContexts"/>,
+/// <see cref="AsyncIteratorInfos"/>, <see cref="IteratorEmitContexts"/>,
 /// <see cref="AsyncSmEnclosingClosures"/>).
 /// <strong>These move here.</strong>
 /// </item>
@@ -63,7 +63,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// (<c>EmitStateMachineAwaitOnCompleted</c>,
 /// <c>EmitAsyncIteratorBuilderMoveNext</c>) that reference
 /// <c>BodyEmitter</c>'s private <c>il</c>, <c>locals</c>, <c>parameters</c>,
-/// <c>asyncPlan</c>, and <c>asyncIteratorEmitCtx</c> fields and immediately
+/// <c>asyncPlan</c>, and <c>iteratorEmitCtx</c> fields and immediately
 /// call back into <c>this.outer.stateMachines.EmitAwaitOnCompletedCall</c>
 /// for the actual emit. <strong>These are deferred to PR-E-11
 /// <c>MethodBodyEmitter</c></strong>, where <c>BodyEmitter</c> is promoted to
@@ -218,12 +218,10 @@ internal sealed class StateMachineEmitter
     public Dictionary<StructSymbol, IteratorStateMachineGenericInfo> AsyncIteratorStateMachineGenericInfos { get; } = [];
 
     /// <summary>
-    /// Gets per-async-iterator-SM emit-time context (builder field + builder
-    /// info). Read by <see cref="EmitAwaitOnCompletedCall"/> and by
-    /// <c>BodyEmitter</c> via the root emitter when threading the async
-    /// iterator MoveNext path through the await pipeline.
+    /// Gets per-iterator-SM emit-time context. Sync iterators use the state
+    /// machine and hoisted-field map; async iterators also use builder info.
     /// </summary>
-    public Dictionary<StructSymbol, AsyncIteratorEmitContext> AsyncIteratorEmitContexts { get; } = [];
+    public Dictionary<StructSymbol, IteratorEmitContext> IteratorEmitContexts { get; } = [];
 
     /// <summary>
     /// Gets the map from a capture-bearing async lambda's SM struct to the
@@ -372,13 +370,13 @@ internal sealed class StateMachineEmitter
     }
 
     /// <summary>
-    /// Lightweight emit-time context for async iterator MoveNext methods.
-    /// Carries the builder field, SM class, builder info, and hoisted-variable
-    /// map needed by async-iterator body emission.
+    /// Lightweight emit-time context for iterator MoveNext methods.
+    /// Carries the SM class and hoisted-variable map plus async-only builder
+    /// state when applicable.
     /// </summary>
-    public sealed class AsyncIteratorEmitContext
+    public sealed class IteratorEmitContext
     {
-        public AsyncIteratorEmitContext(
+        public IteratorEmitContext(
             StructSymbol smClass,
             FieldSymbol builderField,
             AsyncMethodBuilderInfo builderInfo,
@@ -597,7 +595,8 @@ internal sealed class StateMachineEmitter
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
                 TypeSymbol.ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
-                || plan.ElementType?.ClrType == null;
+                || plan.ElementType?.ClrType == null
+                || plan.ElementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                     typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(typeof(object)),
@@ -662,6 +661,14 @@ internal sealed class StateMachineEmitter
                 new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(kickoffSmType, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
                     thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
             this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, outerMethodTPs, classTPs);
+
+            // Issue #2907: closure materialization inside the SYNC MoveNext body is
+            // emitter-owned and bypasses IteratorMoveNextBodyBuilder's variable->field
+            // substitution, so it needs the hoisted-field map. Three consumers read
+            // this context: closure materialization needs FieldMap; field-token
+            // resolution safely uses SmClass; EmitAwaitOnCompletedCall needs builder
+            // state but only fires on `await`, which a sync iterator cannot contain.
+            this.IteratorEmitContexts[smClass] = new IteratorEmitContext(smClass, null, null, fieldMap);
             this.closures.SynthesizedClosureClasses.Add(smClass);
         }
     }
@@ -884,6 +891,7 @@ internal sealed class StateMachineEmitter
                 // strongly-typed `IAsyncEnumerator<Shape>` GENERICINST blob
                 // referencing the user TypeDef.
                 TypeSymbol enumeratorType = elementType?.ClrType == null
+                    || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
                     ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                         typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
                         typeof(System.Collections.Generic.IAsyncEnumerator<>),
@@ -994,7 +1002,7 @@ internal sealed class StateMachineEmitter
             this.AsyncIteratorInfos[smClass] = plan;
             this.closures.SynthesizedClosureClasses.Add(smClass);
 
-            // Resolve builder info for async iterator emit context. Issue #1489:
+            // Resolve builder info for the async iterator's emit context. Issue #1489:
             // a generic async iterator's return type is an AsyncSequenceTypeSymbol
             // over an open type parameter, whose ClrType is null — but the
             // builder for EVERY async iterator is the element-agnostic,
@@ -1005,7 +1013,7 @@ internal sealed class StateMachineEmitter
             var returnClrType = plan.Function.Type?.ClrType
                 ?? typeof(System.Collections.Generic.IAsyncEnumerable<object>);
             var aiBuilderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, this.emitCtx.References);
-            this.AsyncIteratorEmitContexts[smClass] = new AsyncIteratorEmitContext(smClass, builderField, aiBuilderInfo, fieldMap);
+            this.IteratorEmitContexts[smClass] = new IteratorEmitContext(smClass, builderField, aiBuilderInfo, fieldMap);
         }
     }
 
@@ -1720,11 +1728,11 @@ internal sealed class StateMachineEmitter
         Dictionary<ParameterSymbol, int> parameters,
         BoundStateMachineAwaitOnCompleted node,
         AsyncStateMachinePlan currentPlan = null,
-        AsyncIteratorEmitContext aiCtx = null)
+        IteratorEmitContext iteratorCtx = null)
     {
         // Use the explicitly-passed plan when available; fall back to the
         // legacy search for backward compatibility with top-level async.
-        if (currentPlan == null && aiCtx == null)
+        if (currentPlan == null && iteratorCtx == null)
         {
             foreach (var plan in this.AsyncStateMachinePlans)
             {
@@ -1744,11 +1752,11 @@ internal sealed class StateMachineEmitter
         AsyncMethodBuilderInfo builderInfo;
         bool smIsValueType;
 
-        if (aiCtx != null)
+        if (iteratorCtx != null)
         {
-            builderField = aiCtx.BuilderField;
-            smStruct = aiCtx.SmClass;
-            builderInfo = aiCtx.BuilderInfo;
+            builderField = iteratorCtx.BuilderField;
+            smStruct = iteratorCtx.SmClass;
+            builderInfo = iteratorCtx.BuilderInfo;
             smIsValueType = false; // async iterator SM is a class
         }
         else if (currentPlan != null)

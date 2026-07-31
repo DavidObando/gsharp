@@ -333,11 +333,11 @@ internal sealed class FunctionEmitter
 
                 var localsSignature = session.BuildLocalsSignature();
 
-                // Detect async iterator MoveNext and thread emit context.
-                StateMachineEmitter.AsyncIteratorEmitContext aiEmitCtx = null;
+                // Detect iterator MoveNext and thread emit context.
+                StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null;
                 if (function.Name == "MoveNext" && function.ReceiverType is StructSymbol owningSmClass)
                 {
-                    this.outer.stateMachines.AsyncIteratorEmitContexts.TryGetValue(owningSmClass, out aiEmitCtx);
+                    this.outer.stateMachines.IteratorEmitContexts.TryGetValue(owningSmClass, out iteratorEmitCtx);
                 }
 
                 // For struct instance methods, pass structThisParameter so the
@@ -355,7 +355,7 @@ internal sealed class FunctionEmitter
                 var emitter = session.CreateEmitter(
                     parameters,
                     structThisParameter: structThis,
-                    asyncIteratorEmitCtx: aiEmitCtx,
+                    iteratorEmitCtx: iteratorEmitCtx,
                     enclosingClosure: enclosingClosureInfo);
 
                 // 6.2 SilentEmitFailure invariant: wrap the per-function

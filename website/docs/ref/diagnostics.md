@@ -1684,3 +1684,15 @@ it can satisfy a get-only interface property but not a settable one. Declare
 the property explicitly with a `set` accessor. An init-only interface property
 must instead be implemented with a matching `init` accessor. Static interface
 properties cannot declare `init` accessors.
+
+## Unconstrained nullable sequence element (GS0508)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+
+`sequence[T?]` needs one stable CLR element representation. Use a `struct`
+constraint when `T?` must be `System.Nullable<T>`, or a `class`/base-class
+constraint when it must use reference-type nullability. An unconstrained `T`
+can represent either shape and is rejected until generic sequence
+specialization supports both.

@@ -912,7 +912,9 @@ internal sealed class MethodBodyPlanner
         // through the symbolic TypeSpec encoder (which emits a real
         // reference to the user TypeDef) so the interface rows carry the
         // strongly-typed `IEnumerable<Shape>` / `IEnumerator<Shape>`.
-        var elementNeedsSymbolic = elementContainsTp || elementType?.ClrType == null;
+        var elementNeedsSymbolic = elementContainsTp
+            || elementType?.ClrType == null
+            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
         EntityHandle enumerableHandle;
         EntityHandle enumeratorHandle;
         if (elementNeedsSymbolic)
@@ -970,7 +972,8 @@ internal sealed class MethodBodyPlanner
         // through the symbolic TypeSpec encoder so the interface rows
         // carry the strongly-typed `IAsyncEnumerable<Shape>` /
         // `IAsyncEnumerator<Shape>`.
-        var elementNeedsSymbolic = elementType?.ClrType == null;
+        var elementNeedsSymbolic = elementType?.ClrType == null
+            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
         EntityHandle asyncEnumeratorHandle;
         EntityHandle asyncEnumerableHandle;
         if (elementNeedsSymbolic)
