@@ -1500,7 +1500,8 @@ internal sealed partial class ExpressionBinder
                     symbolicTypeArgs,
                     out var mappedDelegate,
                     out var candidate)
-                || !IsCanonicalFunctionDelegate(mappedDelegate)
+                || (parameters[paramIndex].ParameterType.IsGenericParameter
+                    && !IsCanonicalFunctionDelegate(mappedDelegate))
                 || candidate == null)
             {
                 continue;

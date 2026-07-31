@@ -69,6 +69,13 @@ public class Issue2918InlineLambdaErasedReceiverTests
             public string Kind { get; }
         }
 
+        public sealed class PredHolder<T>
+        {
+            public PredHolder(Predicate<T> callback) => Kind = "pred";
+
+            public string Kind { get; }
+        }
+
         public sealed class DelegateBox<T>
         {
             public DelegateBox(T value) => Value = value;
@@ -199,6 +206,35 @@ public class Issue2918InlineLambdaErasedReceiverTests
         Assert.Equal(
             "10\n",
             CompileVerifyLoadAndRun(source, "Issue2918Constructor.Src"));
+    }
+
+    [Fact]
+    public void ImportedConstructedPredicateConstructor_TargetsInlineLambda_LoadsAndRuns()
+    {
+        const string source = """
+            package Issue2918PredicateHolder
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let holder = PredHolder[Src]((item Src) -> item.N > 2)
+                Console.WriteLine(holder.Kind)
+            }
+            """;
+
+        // Direct named-delegate construction retains the pre-existing #313/#939
+        // IL mismatch on main; real execution is the compatibility pin here.
+        Assert.Equal(
+            "pred\n",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue2918PredicateHolder.Src",
+                verifyIl: false));
     }
 
     [Fact]

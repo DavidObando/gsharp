@@ -666,6 +666,8 @@ internal sealed partial class ExpressionBinder
             var openParamType = openParameters[i].ParameterType;
             var symbolicParamType = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, symbolicArgs);
 
+            // Nominal identity remains on the explicit symbolicDelegateParam
+            // conversion below; only the mapped Invoke shape is needed here.
             if (LambdaBinder.TryGetFunctionLiteral(argument, out var functionLiteral)
                 && symbolicParamType is ImportedTypeSymbol symbolicDelegateParam
                 && symbolicDelegateParam.OpenDefinition != null
