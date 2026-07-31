@@ -817,9 +817,7 @@ public sealed partial class Evaluator
         {
             if (InterpreterClosures.TryGetValue(target, out var closure))
             {
-                return closure.Function.IsAsync
-                    ? InvokeMaterializedClosure(closure, arguments)
-                    : InvokeClosure(closure, arguments);
+                return InvokeMaterializedClosure(closure, arguments);
             }
 
             return InvokeDelegate(target, arguments);

@@ -157,6 +157,19 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
+    public void Callable_AsyncDirectInvocation_ReturnsAwaitableTask()
+    {
+        const string Source = """
+            import System.Threading.Tasks
+
+            let handler (int32) -> Task[int32] = async (value int32) -> value + 1
+            await handler(41)
+            """;
+
+        Assert.Equal(42, Evaluate(Source));
+    }
+
+    [Fact]
     public void Callable_DelegateFactoryIsReusedPerType()
     {
         const string Source = """
