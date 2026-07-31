@@ -185,6 +185,37 @@ public class Issue2927NullableSequenceElementTypeTests
     }
 
     [Fact]
+    public void BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns()
+    {
+        const string Source = """
+            package Issue2927BaseClassConstrained
+            import System
+
+            open class Animal { open func Speak() string { return "..." } }
+            open class Dog : Animal { override func Speak() string { return "woof" } }
+
+            func values[T Animal](value T) sequence[T?] {
+                yield value
+                yield nil
+            }
+
+            for value in values[Dog](Dog()) {
+                if value == nil {
+                    Console.WriteLine("nil")
+                } else {
+                    Console.WriteLine(value.Speak())
+                }
+            }
+            """;
+
+        var assemblyPath = Compile(Source, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns));
+        IlVerifier.Verify(assemblyPath);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+        Assert.Equal("woof\nnil\n", RunBounded(assemblyPath, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+    }
+
+    [Fact]
     public void StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns()
     {
         const string Source = """
