@@ -18,18 +18,18 @@ public sealed class BoundBlockStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="statements">The immutable array of bound statements.</param>
     public BoundBlockStatement(SyntaxNode syntax, ImmutableArray<BoundStatement> statements)
-        : this(syntax, statements, definiteReturnAnalysisBody: null)
+        : this(syntax, statements, preEmitAnalysisBody: null)
     {
     }
 
     internal BoundBlockStatement(
         SyntaxNode syntax,
         ImmutableArray<BoundStatement> statements,
-        BoundBlockStatement definiteReturnAnalysisBody)
+        BoundBlockStatement preEmitAnalysisBody)
         : base(syntax)
     {
         Statements = statements;
-        DefiniteReturnAnalysisBody = definiteReturnAnalysisBody;
+        PreEmitAnalysisBody = preEmitAnalysisBody;
     }
 
     /// <inheritdoc/>
@@ -41,7 +41,7 @@ public sealed class BoundBlockStatement : BoundStatement
     public ImmutableArray<BoundStatement> Statements { get; }
 
     /// <summary>
-    /// Gets the pre-emit-rewrite body used only by definite-return analysis.
+    /// Gets the pre-emit-rewrite body used by control-flow analyses.
     /// </summary>
-    internal BoundBlockStatement DefiniteReturnAnalysisBody { get; }
+    internal BoundBlockStatement PreEmitAnalysisBody { get; }
 }

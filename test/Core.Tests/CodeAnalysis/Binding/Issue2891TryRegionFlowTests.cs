@@ -131,6 +131,21 @@ public class Issue2891TryRegionFlowTests
                 var reached = true
             }
             """);
+        yield return Case("GotoIntoTryThenBreak", """
+            func F(returnFromTry bool) int32 {
+                for {
+                    goto inside
+                    try {
+                    inside:
+                        if returnFromTry {
+                            return 1
+                        }
+                        break
+                    } finally {
+                    }
+                }
+            }
+            """);
         yield return Case("CatchGoto", """
             import System
             func F() int32 {

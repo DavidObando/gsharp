@@ -74,6 +74,10 @@ regions separately, however: a branch that leaves `try` or `catch` must run
 `finally` before reaching its target, and a branch that leaves `finally`
 cannot be emitted as CLR `leave` from the handler. The lowering pass therefore
 funnels those exits through a lifted finally body before dispatching them.
+If that lifted `finally` transfers control with `break`, `continue`, `goto`,
+or `return`, the transfer replaces the pending exception, so the exception is
+discarded. This matches evaluator behavior and ECMA-335 III.1.7.5; C# instead
+rejects transfers out of a `finally` with CS0157.
 
 ### Diagnostics
 

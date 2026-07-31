@@ -1386,13 +1386,13 @@ public sealed class Lowerer : BoundTreeRewriter
     private static BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
     {
         var flattened = Flatten(statement);
-        var definiteReturnBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
+        var preEmitAnalysisBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
         flattened = FinallyExitRewriter.Rewrite(flattened);
         var emittedBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
         return new BoundBlockStatement(
             emittedBody.Syntax,
             emittedBody.Statements,
-            definiteReturnBody);
+            preEmitAnalysisBody);
     }
 
     /// <summary>

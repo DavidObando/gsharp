@@ -60,11 +60,11 @@ public sealed class ControlFlowGraph
     /// <returns>Whether all its paths return or not.</returns>
     public static bool AllPathsReturn(BoundBlockStatement body)
     {
-        body = body.DefiniteReturnAnalysisBody ?? body;
+        body = body.PreEmitAnalysisBody ?? body;
 
         // This projection is intentionally limited to definite-return. Other
-        // data-flow analyzers call Create(body) and still treat these compound
-        // statements as opaque, so their region-specific behavior is unchanged.
+        // data-flow analyzers use the same pre-emit body but retain their
+        // existing opaque treatment of compound statements.
         var graph = Create(ProjectRegionsForDefiniteReturn(body), treatThrowsAsTerminators: true);
 
         foreach (var branch in graph.End.Incoming)
@@ -212,16 +212,19 @@ public sealed class ControlFlowGraph
         BoundLabel methodExitLabel = null;
         BoundReturnStatement methodExitReturn = null;
 
-        if (statement is BoundBlockStatement functionBody
-            && functionBody.Statements.Length >= 3
-            && functionBody.Statements[0] is BoundVariableDeclaration returnTempDeclaration
-            && functionBody.Statements[^2] is BoundLabelStatement exitLabel
-            && functionBody.Statements[^1] is BoundReturnStatement { Expression: BoundVariableExpression returnExpression } exitReturn
-            && returnTempDeclaration.Variable.Name == "$returnTemp"
-            && ReferenceEquals(returnTempDeclaration.Variable, returnExpression.Variable))
+        if (statement is BoundBlockStatement functionBody && functionBody.Statements.Length >= 3)
         {
-            methodExitLabel = exitLabel.Label;
-            methodExitReturn = exitReturn;
+            var returnTempDeclaration = functionBody.Statements
+                .OfType<BoundVariableDeclaration>()
+                .FirstOrDefault(declaration => declaration.Variable.Name == "$returnTemp");
+            if (returnTempDeclaration != null
+                && functionBody.Statements[^2] is BoundLabelStatement exitLabel
+                && functionBody.Statements[^1] is BoundReturnStatement { Expression: BoundVariableExpression returnExpression } exitReturn
+                && ReferenceEquals(returnTempDeclaration.Variable, returnExpression.Variable))
+            {
+                methodExitLabel = exitLabel.Label;
+                methodExitReturn = exitReturn;
+            }
         }
 
         Add(statement);
@@ -402,7 +405,6 @@ public sealed class ControlFlowGraph
 
             foreach (var (body, label) in alternatives)
             {
-                var localLabels = CollectLabels(body);
                 builder.Add(new BoundLabelStatement(null, label));
 
                 if (tryStatement.FinallyBlock == null)
@@ -414,12 +416,6 @@ public sealed class ControlFlowGraph
 
                 void RouteThroughFinally(BoundStatement transfer)
                 {
-                    if (transfer is BoundGotoStatement go && localLabels.Contains(go.Label))
-                    {
-                        builder.Add(transfer);
-                        return;
-                    }
-
                     Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
                     Add(transfer, outerRoute);
                 }

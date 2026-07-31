@@ -16,8 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2906: closed-discriminant exhaustiveness must feed definite-return
-/// analysis without treating guarded, nullable, flags, or incomplete switches
-/// as total.
+/// analysis without treating guarded, nullable, or incomplete switches as total.
 /// </summary>
 public class Issue2906ExhaustiveSwitchReturnFlowTests
 {
@@ -188,16 +187,6 @@ public class Issue2906ExhaustiveSwitchReturnFlowTests
                 }
             }
             """);
-        yield return Case("FlagsEnum", """
-            import System
-            func F(x StringSplitOptions) int32 {
-                switch x {
-                    case StringSplitOptions.None { return 1 }
-                    case StringSplitOptions.RemoveEmptyEntries { return 2 }
-                    case StringSplitOptions.TrimEntries { return 3 }
-                }
-            }
-            """);
         yield return Case("OrdinaryInt", """
             func F(x int32) int32 {
                 switch x {
@@ -226,6 +215,35 @@ public class Issue2906ExhaustiveSwitchReturnFlowTests
         var (diagnostics, emittedLength) = Compile(source);
         Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0100");
         Assert.Equal(0, emittedLength);
+    }
+
+    [Fact]
+    public void ImportedFlagsEnums_RetainStatementAndExpressionExhaustivenessDiagnostics()
+    {
+        const string StatementSource = """
+            package Issue2906.FlagsStatement
+            import System
+            func F(x StringSplitOptions) {
+                switch x {
+                    case StringSplitOptions.None { }
+                }
+            }
+            """;
+        const string ExpressionSource = """
+            package Issue2906.FlagsExpression
+            import System
+            func F(x StringSplitOptions) int32 {
+                return switch x {
+                    case StringSplitOptions.None: 0
+                }
+            }
+            """;
+
+        var (statementDiagnostics, _) = Compile(StatementSource);
+        var (expressionDiagnostics, _) = Compile(ExpressionSource);
+        Assert.Contains(statementDiagnostics, diagnostic => diagnostic.Id == "GS0178");
+        Assert.Contains(expressionDiagnostics, diagnostic => diagnostic.Id == "GS0177");
+        Assert.DoesNotContain(expressionDiagnostics, diagnostic => diagnostic.Id == "GS0176");
     }
 
     private static object[] Case(string name, string body)

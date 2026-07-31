@@ -23,8 +23,7 @@ public static class ExhaustivenessAnalyzer
     /// <returns>True for enum types, sealed interfaces, and sealed-hierarchy classes; otherwise false.</returns>
     public static bool IsExhaustiveDiscriminant(TypeSymbol type)
         => type is EnumSymbol
-        || (type?.ClrType.IsEnumSafe() == true
-            && !HasFlagsAttribute(type.ClrType))
+        || type?.ClrType.IsEnumSafe() == true
         || type is InterfaceSymbol { IsSealed: true }
         || type is StructSymbol { IsSealedHierarchy: true };
 
@@ -78,10 +77,6 @@ public static class ExhaustivenessAnalyzer
 
         return true;
     }
-
-    private static bool HasFlagsAttribute(System.Type type)
-        => type.GetCustomAttributesData()
-            .Any(attribute => attribute.AttributeType.FullName == typeof(System.FlagsAttribute).FullName);
 
     private static bool TryGetMissingVariants(
         TypeSymbol discriminantType,

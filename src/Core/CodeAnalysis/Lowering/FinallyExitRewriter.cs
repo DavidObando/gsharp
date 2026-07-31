@@ -74,17 +74,17 @@ internal static class FinallyExitRewriter
     private sealed class ExitFunneler : BoundTreeRewriter
     {
         private readonly ExitPlan plan;
-        private readonly HashSet<BoundLabel> localLabels;
+        private readonly ProtectedRegionBranchAnalysis branches;
 
-        public ExitFunneler(ExitPlan plan, HashSet<BoundLabel> localLabels)
+        public ExitFunneler(ExitPlan plan, ProtectedRegionBranchAnalysis branches)
         {
             this.plan = plan;
-            this.localLabels = localLabels;
+            this.branches = branches;
         }
 
         protected override BoundStatement RewriteGotoStatement(BoundGotoStatement node)
         {
-            if (localLabels.Contains(node.Label))
+            if (branches.ContainsLabel(node.Label))
             {
                 return node;
             }
@@ -105,64 +105,6 @@ internal static class FinallyExitRewriter
                     new BoundLiteralExpression(null, discriminator)));
     }
 
-    private sealed class LabelCollector : BoundTreeWalker
-    {
-        private readonly HashSet<BoundLabel> labels = [];
-
-        public static HashSet<BoundLabel> Collect(BoundStatement body)
-        {
-            var collector = new LabelCollector();
-            collector.VisitStatement(body);
-            return collector.labels;
-        }
-
-        public override void VisitStatement(BoundStatement node)
-        {
-            if (node is BoundLabelStatement label)
-            {
-                labels.Add(label.Label);
-            }
-
-            base.VisitStatement(node);
-        }
-    }
-
-    private sealed class EscapingBranchDetector : BoundTreeWalker
-    {
-        private readonly HashSet<BoundLabel> localLabels;
-
-        private EscapingBranchDetector(HashSet<BoundLabel> localLabels)
-        {
-            this.localLabels = localLabels;
-        }
-
-        public bool Found { get; private set; }
-
-        public static bool ContainsEscapingBranch(BoundStatement body)
-        {
-            var detector = new EscapingBranchDetector(LabelCollector.Collect(body));
-            detector.VisitStatement(body);
-            return detector.Found;
-        }
-
-        public override void VisitStatement(BoundStatement node)
-        {
-            if (Found)
-            {
-                return;
-            }
-
-            if ((node is BoundGotoStatement go && !localLabels.Contains(go.Label))
-                || (node is BoundConditionalGotoStatement conditional && !localLabels.Contains(conditional.Label)))
-            {
-                Found = true;
-                return;
-            }
-
-            base.VisitStatement(node);
-        }
-    }
-
     private sealed class Rewriter : BoundTreeRewriter
     {
         private int ordinal;
@@ -170,8 +112,13 @@ internal static class FinallyExitRewriter
         protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
         {
             var rewritten = (BoundTryStatement)base.RewriteTryStatement(node);
-            if (rewritten.FinallyBlock == null
-                || !EscapingBranchDetector.ContainsEscapingBranch(rewritten.FinallyBlock))
+            if (rewritten.FinallyBlock == null)
+            {
+                return rewritten;
+            }
+
+            var finallyBranches = ProtectedRegionBranchAnalysis.Create(rewritten.FinallyBlock);
+            if (!finallyBranches.HasEscapingBranch)
             {
                 return rewritten;
             }
@@ -182,13 +129,13 @@ internal static class FinallyExitRewriter
 
             var tryBody = new ExitFunneler(
                 plan,
-                LabelCollector.Collect(rewritten.TryBlock)).RewriteStatement(rewritten.TryBlock);
+                ProtectedRegionBranchAnalysis.Create(rewritten.TryBlock)).RewriteStatement(rewritten.TryBlock);
             var catches = ImmutableArray.CreateBuilder<BoundCatchClause>(rewritten.CatchClauses.Length);
             foreach (var clause in rewritten.CatchClauses)
             {
                 var catchBody = new ExitFunneler(
                     plan,
-                    LabelCollector.Collect(clause.Body)).RewriteStatement(clause.Body);
+                    ProtectedRegionBranchAnalysis.Create(clause.Body)).RewriteStatement(clause.Body);
                 catches.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, catchBody));
             }
 

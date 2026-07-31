@@ -92,13 +92,6 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitStatement(defaultArm.Body);
         }
-        else if (node.IsExhaustive)
-        {
-            var constructor = typeof(InvalidOperationException).GetConstructor(Type.EmptyTypes);
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
-            this.il.OpCode(ILOpCode.Throw);
-        }
 
         this.il.MarkLabel(endLabel);
     }

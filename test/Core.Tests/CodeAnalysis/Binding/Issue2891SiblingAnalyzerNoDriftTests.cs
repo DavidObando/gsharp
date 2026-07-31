@@ -58,6 +58,16 @@ public class Issue2891SiblingAnalyzerNoDriftTests
                 }
             }
             """);
+        yield return Case("OutEscapingFinallyGoto", "GS0238", """
+            func F(out value int32) {
+                try {
+                } finally {
+                    goto done
+                }
+            done:
+                var reached = true
+            }
+            """);
         yield return Case("RefTryOnlyCatchCompletes", "GS0239", """
             import System
             func Bump(ref value int32) {
@@ -142,6 +152,20 @@ public class Issue2891SiblingAnalyzerNoDriftTests
                     var length = span.Length
                 }
                 return 0
+            }
+            """);
+        yield return Case("SpanEscapingFinallyGotoLiveAcrossAwait", "GS0219", """
+            import System
+            import System.Threading.Tasks
+            async func F(values []int32) Task[int32] {
+                var span ReadOnlySpan[int32] = values
+                try {
+                    await Task.Yield()
+                } finally {
+                    goto done
+                }
+            done:
+                return span.Length
             }
             """);
         yield return Case("SpanExhaustiveSwitchLiveAcrossAwait", "GS0219", """

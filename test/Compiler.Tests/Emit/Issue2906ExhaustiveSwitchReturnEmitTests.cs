@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -16,8 +17,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2906: exhaustive closed-type switches without default arms must emit
-/// a defensive no-match throw, verify, load, and execute their matched arms.
+/// Issue #2906: exhaustive closed-type switches can satisfy definite return,
+/// while ordinary switch statements retain unmatched-value fallthrough.
 /// </summary>
 public class Issue2906ExhaustiveSwitchReturnEmitTests
 {
@@ -161,10 +162,99 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             """);
     }
 
+    /// <summary>Gets exhaustive switch statements whose unmatched runtime value must fall through.</summary>
+    public static IEnumerable<object[]> FallthroughCases()
+    {
+        yield return Case("ReturnAfterSwitch", 99, """
+            import System
+            func F(x DateTimeKind) int32 {
+                switch x {
+                    case DateTimeKind.Unspecified { return 1 }
+                    case DateTimeKind.Utc { return 2 }
+                    case DateTimeKind.Local { return 3 }
+                }
+                return 99
+            }
+            public var result = F(DateTimeKind(99))
+            result
+            """);
+        yield return Case("NonTerminalArms", 0, """
+            import System
+            func F(x DateTimeKind) int32 {
+                var value = 0
+                switch x {
+                    case DateTimeKind.Unspecified { value = 1 }
+                    case DateTimeKind.Utc { value = 2 }
+                    case DateTimeKind.Local { value = 3 }
+                }
+                return value
+            }
+            public var result = F(DateTimeKind(99))
+            result
+            """);
+        yield return Case("VoidFunctionContinues", 7, """
+            import System
+            func F(x DateTimeKind, out value int32) {
+                switch x {
+                    case DateTimeKind.Unspecified { value = 1 }
+                    case DateTimeKind.Utc { value = 2 }
+                    case DateTimeKind.Local { value = 3 }
+                }
+                value = 7
+            }
+            var result int32
+            F(DateTimeKind(99), &result)
+            result
+            """);
+        yield return Case("CapturedArmState", 0, """
+            import System
+            func F(x DateTimeKind) int32 {
+                var value = 0
+                let read = func() int32 { return value }
+                switch x {
+                    case DateTimeKind.Unspecified { value = 1 }
+                    case DateTimeKind.Utc { value = 2 }
+                    case DateTimeKind.Local { value = 3 }
+                }
+                return read()
+            }
+            public var result = F(DateTimeKind(99))
+            result
+            """);
+        yield return Case("SealedInterfaceNil", 0, """
+            sealed interface Expr { }
+            class Literal : Expr { }
+            func F(x Expr) int32 {
+                switch x {
+                    case _ is Literal { return 1 }
+                }
+                return 0
+            }
+            public var result = F(nil)
+            result
+            """);
+    }
+
     [Theory]
     [MemberData(nameof(Cases))]
     public void ExhaustiveSwitch_VerifiesLoadsAndRuns(string name, int expected, string source)
     {
+        var assembly = CompileVerifyLoadAndRun(name, source);
+        Assert.Equal(expected, GetField(assembly, "result"));
+    }
+
+    [Theory]
+    [MemberData(nameof(FallthroughCases))]
+    public void ExhaustiveSwitchStatement_UnmatchedValueFallsThroughInBothEngines(
+        string name,
+        int expected,
+        string source)
+    {
+        var evaluation = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+        Assert.Empty(evaluation.Diagnostics);
+        Assert.Equal(expected, evaluation.Value);
+
         var assembly = CompileVerifyLoadAndRun(name, source);
         Assert.Equal(expected, GetField(assembly, "result"));
     }
@@ -186,65 +276,13 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             try {
                 F(E(99))
             } catch (ex InvalidOperationException) {
-                result = 7
+                result = ex.Message == "Compiler-generated guard reached: non-void function fell through without returning a value."
+                    ? 7
+                    : -1
             }
             """;
 
         var assembly = CompileVerifyLoadAndRun("Unnamed", Source);
-        Assert.Equal(7, GetField(assembly, "result"));
-    }
-
-    [Fact]
-    public void ExhaustiveEnum_FollowedByCode_StillThrowsOnUnnamedValue()
-    {
-        const string Source = """
-            package Issue2906.EmitUnnamedBeforeReturn
-            import System
-            enum E { A, B }
-            func F(x E) int32 {
-                switch x {
-                    case E.A { return 1 }
-                    case E.B { return 2 }
-                }
-                return 99
-            }
-            public var result = 0
-            try {
-                F(E(99))
-            } catch (ex InvalidOperationException) {
-                result = 7
-            }
-            """;
-
-        var assembly = CompileVerifyLoadAndRun("UnnamedBeforeReturn", Source);
-        Assert.Equal(7, GetField(assembly, "result"));
-    }
-
-    [Fact]
-    public void CapturedArmState_PreservesExhaustiveEmitterMarker()
-    {
-        const string Source = """
-            package Issue2906.EmitCaptured
-            import System
-            enum E { A, B }
-            func F(x E) int32 {
-                var value = 0
-                let read = func() int32 { return value }
-                switch x {
-                    case E.A { value = 1 }
-                    case E.B { value = 2 }
-                }
-                return read()
-            }
-            public var result = 0
-            try {
-                F(E(99))
-            } catch (ex InvalidOperationException) {
-                result = 7
-            }
-            """;
-
-        var assembly = CompileVerifyLoadAndRun("Captured", Source);
         Assert.Equal(7, GetField(assembly, "result"));
     }
 
