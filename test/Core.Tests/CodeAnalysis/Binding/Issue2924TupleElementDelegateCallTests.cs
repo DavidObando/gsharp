@@ -94,24 +94,25 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
-    public void CurriedMemberCall_ParsesAsReceiverWideIndirectCall()
+    public void CurriedMemberCallShapes_ParseAsReceiverWideIndirectCalls()
     {
-        var tree = SyntaxTree.Parse("""
-            package P
-            class Factory {
-                func Make() (int32) -> int32 {
-                    return (value int32) -> value + 1
-                }
-            }
-            let factory = Factory()
-            factory.Make()(41)
-            """);
+        var shapes = new[]
+        {
+            ("factory.Make(40)(2)", "factory.Make(40)"),
+            ("factory.Make[int32](40)(2)", "factory.Make[int32](40)"),
+            ("factory.Make(40)[0](2)", "factory.Make(40)[0]"),
+            ("factory.Make(40)(2)(3)", "factory.Make(40)(2)"),
+        };
 
-        Assert.Empty(tree.Diagnostics);
-        var call = Walk(tree.Root)
-            .OfType<CallExpressionSyntax>()
-            .Single(expression => expression.Callee != null);
-        Assert.Equal("factory.Make()", tree.Text.ToString(call.Callee.Span));
+        foreach (var (expression, expectedCallee) in shapes)
+        {
+            var tree = SyntaxTree.Parse($"package P\n{expression}");
+            Assert.Empty(tree.Diagnostics);
+            Assert.Contains(
+                Walk(tree.Root).OfType<CallExpressionSyntax>(),
+                call => call.Callee != null
+                    && tree.Text.ToString(call.Callee.Span) == expectedCallee);
+        }
     }
 
     [Fact]
