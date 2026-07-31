@@ -1594,6 +1594,12 @@ internal sealed class StateMachineEmitter
             var thisFieldHandle = this.resolveFieldToken(kickoffSmStruct, plan.FieldMap.ThisField);
             il.LoadLocalAddress(0);
             il.LoadArgument(0);
+            if (function.ReceiverType is StructSymbol { IsClass: false } receiverStruct)
+            {
+                il.OpCode(ILOpCode.Ldobj);
+                il.Token(this.getStructTypeToken(receiverStruct));
+            }
+
             il.OpCode(ILOpCode.Stfld);
             il.Token(thisFieldHandle);
         }
