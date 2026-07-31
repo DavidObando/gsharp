@@ -542,6 +542,17 @@ public class Issue2900FixedPinReleaseEmitTests
         using var program = Compile(Source, "shapes");
         Assert.Equal("7\n8\n0\n65\n7\n7\n7\nTRCFBLESGUW1\n", program.Run());
 
+        var spanPin = program.ReadMethod("SpanPin");
+        var spanCleanup = Assert.Single(
+            spanPin.Regions,
+            region => region.Kind == ExceptionRegionKind.Finally);
+        var spanHandler = spanPin.Instructions
+            .Where(instruction => instruction.Offset >= spanCleanup.HandlerOffset
+                && instruction.Offset < spanCleanup.HandlerOffset + spanCleanup.HandlerLength)
+            .ToArray();
+        Assert.Equal(OpCodes.Ldc_I4_0, spanHandler[0].OpCode);
+        Assert.Equal(OpCodes.Conv_U, spanHandler[1].OpCode);
+
         foreach (var methodName in new[]
         {
             "ArrayPin",
@@ -754,6 +765,62 @@ public class Issue2900FixedPinReleaseEmitTests
 
         using var program = Compile(ValidSource, "nested_lambda");
         Assert.Equal("7\n", program.Run());
+    }
+
+    [Fact]
+    public void SuspensionInsideFixed_AwaitForReportsGs0506()
+    {
+        const string Source = """
+            package Issue2900.AwaitForError
+            import System.Collections.Generic
+
+            async func Source() IAsyncEnumerable[int32] {
+                yield 1
+            }
+
+            async func Run() {
+                var xs = []int32{1}
+                unsafe {
+                    fixed p *int32 = xs {
+                        await for item in Source() {
+                        }
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = CompileErrors(Source, "await_for_error");
+        Assert.Equal(1, diagnostics.Split("GS0506").Length - 1);
+        Assert.Contains("'await' cannot appear inside a 'fixed' statement", diagnostics);
+    }
+
+    [Fact]
+    public void SuspensionInsideFixed_AwaitUsingReportsGs0506()
+    {
+        const string Source = """
+            package Issue2900.AwaitUsingError
+            import System
+            import System.Threading.Tasks
+
+            class Resource : IAsyncDisposable {
+                func DisposeAsync() ValueTask {
+                    return ValueTask.CompletedTask
+                }
+            }
+
+            async func Run() {
+                var xs = []int32{1}
+                unsafe {
+                    fixed p *int32 = xs {
+                        await using let resource = Resource{}
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = CompileErrors(Source, "await_using_error");
+        Assert.Equal(1, diagnostics.Split("GS0506").Length - 1);
+        Assert.Contains("'await' cannot appear inside a 'fixed' statement", diagnostics);
     }
 
     private static void AssertEscapingLeave(MethodIl method, int expectedFinallyCount)

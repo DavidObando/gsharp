@@ -162,13 +162,7 @@ public static class AsyncCaptureWalker
 
         protected override BoundStatement RewriteFixedStatement(BoundFixedStatement node)
         {
-            fixedLocals.Add(node.PinnedVariable);
             fixedLocals.Add(node.PointerVariable);
-            if (node.SourceVariable != null)
-            {
-                fixedLocals.Add(node.SourceVariable);
-            }
-
             return base.RewriteFixedStatement(node);
         }
 

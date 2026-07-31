@@ -102,7 +102,7 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<VariableSymbol, object> constValues;
     private readonly bool hasFixedReturns;
     private readonly int fixedReturnSlot;
-    private readonly LabelHandle fixedReturnLabel;
+    private LabelHandle? fixedReturnLabel;
 
     // Issue #503 follow-up: when this MethodBodyEmitter is emitting the Invoke
     // method of a synthesized closure class, captures of the *enclosing*
@@ -201,7 +201,6 @@ internal sealed partial class MethodBodyEmitter
         this.stackAllocResultSlots = stackAllocResultSlots ?? new Dictionary<BoundStackAllocExpression, int>();
         this.hasFixedReturns = hasFixedReturns;
         this.fixedReturnSlot = fixedReturnSlot;
-        this.fixedReturnLabel = hasFixedReturns ? this.il.DefineLabel() : default;
     }
 
     private EntityHandle ResolveCurrentStateMachineFieldToken(FieldSymbol field)
@@ -258,18 +257,24 @@ internal sealed partial class MethodBodyEmitter
 
     public bool EmitFixedReturnEpilogue()
     {
-        if (!this.hasFixedReturns)
+        if (!this.fixedReturnLabel.HasValue)
         {
             return false;
         }
 
-        this.il.MarkLabel(this.fixedReturnLabel);
+        this.il.MarkLabel(this.fixedReturnLabel.Value);
         if (this.fixedReturnSlot >= 0)
         {
             this.il.LoadLocal(this.fixedReturnSlot);
         }
 
         return true;
+    }
+
+    private LabelHandle GetFixedReturnLabel()
+    {
+        this.fixedReturnLabel ??= this.il.DefineLabel();
+        return this.fixedReturnLabel.Value;
     }
 
     private void EmitBlockExpression(BoundBlockExpression blockExpression)
@@ -349,7 +354,7 @@ internal sealed partial class MethodBodyEmitter
                         this.il.StoreLocal(this.fixedReturnSlot);
                     }
 
-                    this.il.Branch(ILOpCode.Leave, this.fixedReturnLabel);
+                    this.il.Branch(ILOpCode.Leave, this.GetFixedReturnLabel());
                 }
                 else
                 {

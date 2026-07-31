@@ -1685,6 +1685,18 @@ the property explicitly with a `set` accessor. An init-only interface property
 must instead be implemented with a matching `init` accessor. Static interface
 properties cannot declare `init` accessors.
 
+## Suspension inside fixed statement (GS0506)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0506 | Error | An `await`, `await for`, `await using`, or `yield` suspension point appears inside a `fixed` statement. |
+
+A pinned region cannot survive an async or iterator suspension because the
+generated state machine would have to resume by branching into the protected
+region. Move the suspension point outside the `fixed` statement. Suspension in
+a lambda declared inside `fixed` remains valid because the lambda runs in a
+different method.
+
 ## Unconstrained nullable sequence element (GS0508)
 
 | ID | Severity | Description |
