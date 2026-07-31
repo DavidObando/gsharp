@@ -983,11 +983,10 @@ types are `System.Int32` and `System.Nullable<System.Int32>`.
 |----|----------|-------------|
 | GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
 
-`sequence[T?]` needs one stable CLR element representation. Use a `struct`
-constraint when `T?` must be `System.Nullable<T>`, or a `class`/base-class
-constraint when it must use reference-type nullability. An unconstrained `T`
-can represent either shape and is rejected until generic sequence
-specialization supports both.
+`sequence[T?]` needs one stable CLR element representation. Iterator return
+types are specialized into `class` and `struct` variants automatically.
+Other unconstrained sequence type positions still require an explicit
+`struct`, `class`, or base-class constraint.
 
 ## Internal compiler error diagnostics (GS9998–GS9999)
 

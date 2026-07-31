@@ -38,6 +38,33 @@ internal sealed partial class OverloadResolver
         // selection so generic candidates are filtered for applicability against
         // either the explicit type arguments or, in their absence, type inference.
         var explicitTypeArgCount = ce.TypeArgumentList?.Arguments.Count ?? 0;
+        if (explicitTypeArgCount > 0)
+        {
+            var explicitTypeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(explicitTypeArgCount);
+            foreach (var explicitArgument in ce.TypeArgumentList.Arguments)
+            {
+                var typeArgument = bindTypeClause(explicitArgument);
+                if (typeArgument == null)
+                {
+                    return null;
+                }
+
+                explicitTypeArguments.Add(typeArgument);
+            }
+
+            var boundTypeArguments = explicitTypeArguments.MoveToImmutable();
+            var constraintMatches = overloads
+                .Where(candidate => candidate.TypeParameters.Length == boundTypeArguments.Length)
+                .Where(candidate => candidate.TypeParameters
+                    .Select((typeParameter, index) => satisfiesConstraint(boundTypeArguments[index], typeParameter))
+                    .All(matches => matches))
+                .ToImmutableArray();
+            if (!constraintMatches.IsDefaultOrEmpty)
+            {
+                overloads = constraintMatches;
+            }
+        }
+
         var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, out var nullSafetyFailure, explicitTypeArgCount);
         if (selected != null)
         {
@@ -223,6 +250,25 @@ internal sealed partial class OverloadResolver
             if (filtered.Count > 0)
             {
                 applicable = filtered;
+            }
+        }
+
+        if (applicable.Count > 1)
+        {
+            var constrained = new List<FunctionSymbol>(applicable.Count);
+            foreach (var cand in applicable)
+            {
+                if (!cand.IsGeneric
+                    || (GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out var substitution)
+                        && cand.TypeParameters.All(tp => satisfiesConstraint(substitution[tp], tp))))
+                {
+                    constrained.Add(cand);
+                }
+            }
+
+            if (constrained.Count > 0)
+            {
+                applicable = constrained;
             }
         }
 

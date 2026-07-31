@@ -104,6 +104,7 @@ internal sealed class BinderContext
     /// Mutated in place via <see cref="PushUnsafeContext"/>.
     /// </summary>
     public int UnsafeDepth;
+
 #pragma warning restore SA1401
 
     /// <summary>
@@ -157,6 +158,9 @@ internal sealed class BinderContext
     /// permitted.
     /// </summary>
     public bool InUnsafeContext => UnsafeDepth > 0;
+
+    /// <summary>Gets or sets the iterator return clause allowed to carry an unconstrained nullable sequence element.</summary>
+    public TypeClauseSyntax UnconstrainedNullableSequenceElementReturn { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether the current <c>checked</c>/<c>unchecked</c>

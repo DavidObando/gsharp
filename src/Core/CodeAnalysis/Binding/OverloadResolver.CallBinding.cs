@@ -1075,8 +1075,36 @@ internal sealed partial class OverloadResolver
         // and, where useful, types). The legacy `TryLookupSymbol` returned the
         // first declared overload; we now consult the overload-set store.
         var overloadSet = Scope.TryLookupFunctions(syntax.Identifier.Text);
+        var explicitOverloadTypeArguments = default(ImmutableArray<TypeSymbol>);
         if (overloadSet.Length > 1)
         {
+            if (syntax.TypeArgumentList != null)
+            {
+                var explicitArguments = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArgumentList.Arguments.Count);
+                foreach (var explicitArgument in syntax.TypeArgumentList.Arguments)
+                {
+                    var boundTypeArgument = bindTypeClause(explicitArgument);
+                    if (boundTypeArgument == null)
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
+                    explicitArguments.Add(boundTypeArgument);
+                }
+
+                explicitOverloadTypeArguments = explicitArguments.MoveToImmutable();
+                var constraintMatches = overloadSet
+                    .Where(candidate => candidate.TypeParameters.Length == explicitOverloadTypeArguments.Length)
+                    .Where(candidate => candidate.TypeParameters
+                        .Select((typeParameter, index) => satisfiesConstraint(explicitOverloadTypeArguments[index], typeParameter))
+                        .All(matches => matches))
+                    .ToImmutableArray();
+                if (!constraintMatches.IsDefaultOrEmpty)
+                {
+                    overloadSet = constraintMatches;
+                }
+            }
+
             var selected = SelectBestUserOverload(overloadSet, syntax.Arguments.Count, argumentNames, boundArguments, out var overloadAmbiguous, out var nullSafetyFailure, syntax.TypeArgumentList?.Arguments.Count ?? 0);
             if (selected == null)
             {
@@ -1234,7 +1262,9 @@ internal sealed partial class OverloadResolver
 
                 for (var i = 0; i < explicitArgs.Count; i++)
                 {
-                    var ta = bindTypeClause(explicitArgs[i]);
+                    var ta = !explicitOverloadTypeArguments.IsDefault
+                        ? explicitOverloadTypeArguments[i]
+                        : bindTypeClause(explicitArgs[i]);
                     if (ta == null)
                     {
                         return new BoundErrorExpression(null);

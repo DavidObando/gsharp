@@ -331,20 +331,25 @@ internal sealed partial class DeclarationBinder
             function.SetAttributes(functionAttributes);
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
 
+            var methodCandidates = ExpandNullableSequenceIteratorSpecializations(function);
+
             // ADR-0063 §11: detect duplicate-signature against existing methods on the receiver.
-            foreach (var existingMethod in methodReceiverStruct.Methods)
+            foreach (var candidate in methodCandidates)
             {
-                if (BoundScope.FunctionSignaturesEqual(existingMethod, function))
+                foreach (var existingMethod in methodReceiverStruct.Methods)
                 {
-                    Diagnostics.ReportDuplicateOverloadSignature(
-                        syntax.Identifier.Location,
-                        methodName,
-                        Binder.FormatOverloadSignature(function));
-                    return;
+                    if (BoundScope.FunctionSignaturesEqual(existingMethod, candidate))
+                    {
+                        Diagnostics.ReportDuplicateOverloadSignature(
+                            syntax.Identifier.Location,
+                            methodName,
+                            Binder.FormatOverloadSignature(candidate));
+                        return;
+                    }
                 }
             }
 
-            methodReceiverStruct.AddMethods(ImmutableArray.Create(function));
+            methodReceiverStruct.AddMethods(methodCandidates);
 
             // ADR-0096 / issue #762: a receiver-clause method is
             // never a P/Invoke (GS0326 would also fire for the
@@ -385,35 +390,46 @@ internal sealed partial class DeclarationBinder
             PInvokeBinder.ReportMarshalAsOnNonPInvokeFunction(syntax, Diagnostics);
         }
 
+        var functions = ExpandNullableSequenceIteratorSpecializations(function);
+
         if (syntax.IsExtension)
         {
-            function.IsExtension = true;
-            function.ExtensionReceiverType = receiverType;
-
             // Issue #1188: extension functions overload like ordinary
             // methods and free functions. A collision now means a genuine
             // duplicate signature (same receiver type, name, and callable
             // parameters) — report it as a duplicate-overload-signature
             // error to match the method/free-function path rather than a
             // generic redeclaration.
-            if (function.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(function))
+            foreach (var candidate in functions)
             {
-                Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
+                candidate.IsExtension = true;
+                candidate.ExtensionReceiverType = Binder.SubstituteType(
+                    receiverType,
+                    BuildTypeParameterSubstitution(function.TypeParameters, candidate.TypeParameters));
+                if (candidate.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(candidate))
+                {
+                    Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, candidate.Name, Binder.FormatOverloadSignature(candidate));
+                }
             }
 
             return;
         }
 
-        if (function.Declaration.Identifier.Text != null && !scope.TryDeclareFunction(function))
+        foreach (var candidate in functions)
         {
+            if (candidate.Declaration.Identifier.Text == null || scope.TryDeclareFunction(candidate))
+            {
+                continue;
+            }
+
             // ADR-0063 §11: if the collision is with another callable of
             // the same name, it is a duplicate-signature error rather
             // than a generic redeclaration.
-            var existingOverloads = scope.TryLookupFunctions(function.Name);
+            var existingOverloads = scope.TryLookupFunctions(candidate.Name);
             var duplicateSig = false;
             foreach (var existing in existingOverloads)
             {
-                if (BoundScope.FunctionSignaturesEqual(existing, function))
+                if (BoundScope.FunctionSignaturesEqual(existing, candidate))
                 {
                     duplicateSig = true;
                     break;
@@ -422,12 +438,153 @@ internal sealed partial class DeclarationBinder
 
             if (duplicateSig)
             {
-                Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, function.Name, Binder.FormatOverloadSignature(function));
+                Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, candidate.Name, Binder.FormatOverloadSignature(candidate));
             }
             else
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, function.Name);
+                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, candidate.Name);
             }
+        }
+    }
+
+    private ImmutableArray<FunctionSymbol> ExpandNullableSequenceIteratorSpecializations(FunctionSymbol function)
+    {
+        if (function?.Declaration?.Body == null)
+        {
+            return ImmutableArray.Create(function);
+        }
+
+        if (!IteratorDetection.ContainsYield(function.Declaration.Body))
+        {
+            return ImmutableArray.Create(function);
+        }
+
+        var elementType = function.Type switch
+        {
+            SequenceTypeSymbol sequence => sequence.ElementType,
+            AsyncSequenceTypeSymbol sequence => sequence.ElementType,
+            _ => null,
+        };
+        if (elementType is not NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target }
+            || target.HasValueTypeConstraint
+            || target.HasReferenceTypeConstraint
+            || target.ClassConstraint != null)
+        {
+            return ImmutableArray.Create(function);
+        }
+
+        var targetIndex = function.TypeParameters.IndexOf(target);
+        if (targetIndex < 0)
+        {
+            Diagnostics.ReportUnconstrainedNullableSequenceElement(
+                function.Declaration.Type.SequenceElementType.Location,
+                target.Name);
+            return ImmutableArray.Create(function);
+        }
+
+        return ImmutableArray.Create(
+            CreateNullableSequenceIteratorSpecialization(function, targetIndex, isValueType: false),
+            CreateNullableSequenceIteratorSpecialization(function, targetIndex, isValueType: true));
+    }
+
+    private FunctionSymbol CreateNullableSequenceIteratorSpecialization(
+        FunctionSymbol function,
+        int targetIndex,
+        bool isValueType)
+    {
+        var typeParameters = SynthesizedClosureReifier.CloneWithRemappedConstraints(function.TypeParameters);
+        typeParameters[targetIndex].HasReferenceTypeConstraint = !isValueType;
+        typeParameters[targetIndex].HasValueTypeConstraint = isValueType;
+        var substitution = BuildTypeParameterSubstitution(function.TypeParameters, typeParameters);
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(function.Parameters.Length);
+        foreach (var parameter in function.Parameters)
+        {
+            var clone = new ParameterSymbol(
+                parameter.Name,
+                Binder.SubstituteType(parameter.Type, substitution),
+                parameter.IsVariadic,
+                parameter.DeclaringSyntax,
+                parameter.IsScoped,
+                parameter.RefKind);
+            if (parameter.HasExplicitDefaultValue)
+            {
+                clone.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+            }
+
+            clone.SetAttributes(parameter.Attributes);
+            parameters.Add(clone);
+        }
+
+        var specializedParameters = parameters.MoveToImmutable();
+        ParameterSymbol specializedExplicitReceiver = null;
+        if (function.ExplicitReceiverParameter != null)
+        {
+            for (var i = 0; i < function.Parameters.Length; i++)
+            {
+                if (ReferenceEquals(function.Parameters[i], function.ExplicitReceiverParameter))
+                {
+                    specializedExplicitReceiver = specializedParameters[i];
+                    break;
+                }
+            }
+        }
+
+        var specializedReceiverType = Binder.SubstituteType(function.ReceiverType, substitution);
+        var specialized = new FunctionSymbol(
+            function.Name,
+            specializedParameters,
+            Binder.SubstituteType(function.Type, substitution),
+            function.Declaration,
+            function.Package,
+            function.Accessibility,
+            specializedReceiverType,
+            specializedExplicitReceiver,
+            function.IsOpen,
+            function.IsOverride);
+        specialized.TypeParameters = typeParameters;
+        specialized.OverriddenMethod = function.OverriddenMethod;
+        specialized.ExternalOverriddenMethod = function.ExternalOverriddenMethod;
+        specialized.ExternalOverrideContainingType = Binder.SubstituteType(function.ExternalOverrideContainingType, substitution);
+        specialized.IsAsync = function.IsAsync;
+        specialized.AsyncReturnsValueTask = function.AsyncReturnsValueTask;
+        specialized.IsUnsafe = function.IsUnsafe;
+        specialized.ReturnRefKind = function.ReturnRefKind;
+        specialized.IsStatic = function.IsStatic;
+        specialized.StaticOwnerType = Binder.SubstituteType(function.StaticOwnerType, substitution);
+        specialized.IsSpecialName = function.IsSpecialName;
+        specialized.SetAttributes(function.Attributes);
+        specialized.SetDocumentation(function.GetDocumentation());
+        specialized.NullableSequenceSpecialization = isValueType
+            ? NullableSequenceSpecializationKind.ValueType
+            : NullableSequenceSpecializationKind.ReferenceType;
+        return specialized;
+    }
+
+    private static Dictionary<TypeParameterSymbol, TypeSymbol> BuildTypeParameterSubstitution(
+        ImmutableArray<TypeParameterSymbol> originals,
+        ImmutableArray<TypeParameterSymbol> replacements)
+    {
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>(originals.Length);
+        for (var i = 0; i < originals.Length; i++)
+        {
+            substitution[originals[i]] = replacements[i];
+        }
+
+        return substitution;
+    }
+
+    private TypeSymbol BindIteratorReturnType(FunctionDeclarationSyntax syntax)
+    {
+        var previous = binderCtx.UnconstrainedNullableSequenceElementReturn;
+        binderCtx.UnconstrainedNullableSequenceElementReturn =
+            syntax.Body != null && IteratorDetection.ContainsYield(syntax.Body) ? syntax.Type : null;
+        try
+        {
+            return bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
+        }
+        finally
+        {
+            binderCtx.UnconstrainedNullableSequenceElementReturn = previous;
         }
     }
 
@@ -565,7 +722,7 @@ internal sealed partial class DeclarationBinder
         ParameterSymbol[] parameterSymbolBySyntax)
     {
         // ADR-0041: bind the return type with async-aware alias resolution.
-        var type = bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
+        var type = BindIteratorReturnType(syntax);
 
         // ADR-0146 (Kotlin visibility narrowing follow-up): infer/narrow the
         // return type when the (omitted-type) body is `-> object { ... }`.
