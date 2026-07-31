@@ -190,6 +190,27 @@ public class Issue2898SymbolDisplayHeadersTests
         Assert.Equal("Outer[string].Color", SymbolDisplay.ToTypeDisplayString(stringConstruction));
     }
 
+    [Fact]
+    public void NestedEnumSubstitution_PropagatesReferenceNullabilityErasure()
+    {
+        var compilation = Compile("""
+            package P
+            struct Outer[T] { enum Color { Red } }
+            """);
+        var definition = compilation.GlobalScope.Enums.Single(e => e.Name == "Color");
+        var typeParameter = Assert.Single(compilation.GlobalScope.Structs.Single(s => s.Name == "Outer").TypeParameters);
+        var openNullable = EnumSymbol.ConstructNested(
+            definition,
+            ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(typeParameter)));
+
+        var substituted = Assert.IsType<EnumSymbol>(StructSymbol.SubstituteTypeParameters(
+            openNullable,
+            new Dictionary<TypeParameterSymbol, TypeSymbol> { [typeParameter] = TypeSymbol.String },
+            eraseReferenceNullability: true));
+
+        Assert.Same(TypeSymbol.String, Assert.Single(substituted.EnclosingTypeArguments));
+    }
+
     private static void AssertEnumLiteral(Compilation compilation, string functionName, EnumSymbol expectedType)
     {
         var function = compilation.BoundProgram.Functions.Keys.Single(f => f.Name == functionName);

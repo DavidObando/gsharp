@@ -2424,7 +2424,7 @@ public sealed class StructSymbol : TypeSymbol
         {
             var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(
                 nestedEnum,
-                t => SubstituteTypeForConstruction(t, subst, mapClrType));
+                SubstituteNested);
             if (!newEnclosing.IsDefault)
             {
                 return EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, newEnclosing);
