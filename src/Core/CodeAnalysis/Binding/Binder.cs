@@ -3069,45 +3069,10 @@ public sealed class Binder
                     return null;
                 }
 
-                // #313: an in-scope generic type parameter used as a type
-                // argument (e.g. `List[T]` inside `func First[T](...)`) is a
-                // valid type in any position. Under the type-erased generic
-                // model (ADR-0004; type parameters encode as System.Object at
-                // emit) the type argument projects onto `object` for the closed
-                // CLR shape so member / index / conversion resolution keeps
-                // working, while the symbolic `[T]` is preserved on the result
-                // for inference, substitution, and erased emit.
-                if (TypeSymbol.RequiresSymbolicProjection(ta))
-                {
-                    hasSymbolicArg = true;
-
-                    // Issue #2391: source enums use Int32 as their established
-                    // CLR ride-through. Preserve that surrogate when closing
-                    // an imported generic receiver as well; using object for a
-                    // struct-constrained interface leaves Nullable<T> member
-                    // signatures unconstructable and hides parameterized
-                    // methods from overload resolution.
-                    if (TypeSymbol.ContainsTypeParameter(ta) || TypeSymbol.ContainsSameCompilationUserType(ta))
-                    {
-                        var erasedArgument = ta is EnumSymbol ? typeof(int) : typeof(object);
-                        clrArgs[i] = scope.References.MapClrTypeToReferences(erasedArgument);
-                    }
-                    else
-                    {
-                        clrArgs[i] = ResolveClrTypeForGenericArg(ta)
-                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
-                    }
-
-                    continue;
-                }
-
-                // Project host CLR type arguments onto the resolver's reference
-                // set so they share clrOpenType's load context (its
-                // MetadataLoadContext when references are supplied via /r:),
-                // which MakeGenericType requires.
-                // Issue #530: use ResolveClrTypeForGenericArg so that
-                // `int32?` resolves to `Nullable<int>` (not bare `int`).
-                clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+                // Issue #2391: this caller alone retains the established Int32
+                // ride-through for a top-level source enum.
+                var erasedArgument = ta is EnumSymbol ? typeof(int) : typeof(object);
+                clrArgs[i] = ProjectGenericArgument(ta, erasedArgument, ref hasSymbolicArg);
             }
 
             try
@@ -3903,21 +3868,7 @@ public sealed class Binder
                 return null;
             }
 
-            // #313 / #671: keep any symbolic projection alongside the erased
-            // closed CLR shape, including nested generic/array/nullable forms.
-            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta.ClrType == null)
-            {
-                hasSymbolicArg = true;
-                clrArgs[i] = TypeSymbol.ContainsTypeParameter(ta)
-                    || TypeSymbol.ContainsSameCompilationUserType(ta)
-                    || ta.ClrType == null
-                        ? scope.References.MapClrTypeToReferences(typeof(object))
-                        : ResolveClrTypeForGenericArg(ta)
-                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
-                continue;
-            }
-
-            clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+            clrArgs[i] = ProjectGenericArgument(ta, typeof(object), ref hasSymbolicArg);
         }
 
         try
@@ -4146,21 +4097,7 @@ public sealed class Binder
                 return null;
             }
 
-            // #313 / #671: in-scope type parameters and user types without a
-            // ClrType project onto System.Object under the type-erased model.
-            if (TypeSymbol.RequiresSymbolicProjection(ta) || ta.ClrType == null)
-            {
-                hasSymbolicArg = true;
-                clrArgs[i] = TypeSymbol.ContainsTypeParameter(ta)
-                    || TypeSymbol.ContainsSameCompilationUserType(ta)
-                    || ta.ClrType == null
-                        ? scope.References.MapClrTypeToReferences(typeof(object))
-                        : ResolveClrTypeForGenericArg(ta)
-                            ?? scope.References.MapClrTypeToReferences(ta.ClrType);
-                continue;
-            }
-
-            clrArgs[i] = ResolveClrTypeForGenericArg(ta) ?? scope.References.MapClrTypeToReferences(ta.ClrType);
+            clrArgs[i] = ProjectGenericArgument(ta, typeof(object), ref hasSymbolicArg);
         }
 
         try
@@ -4178,6 +4115,40 @@ public sealed class Binder
             Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Projects a symbolic generic argument onto a closed CLR type while
+    /// retaining any type information that the CLR shape cannot represent.
+    /// </summary>
+    /// <param name="type">The symbolic generic argument.</param>
+    /// <param name="erasedArgument">
+    /// The caller-specific CLR surrogate for a same-compilation user type.
+    /// </param>
+    /// <param name="hasSymbolicArgument">
+    /// Set when the symbolic argument must be retained beside the CLR shape.
+    /// </param>
+    /// <returns>The reference-context CLR argument used to close the generic.</returns>
+    private Type ProjectGenericArgument(
+        TypeSymbol type,
+        Type erasedArgument,
+        ref bool hasSymbolicArgument)
+    {
+        // #313 / #671: preserve symbolic type parameters, user types, and
+        // nested generic/array/nullable shapes beside their erased CLR form.
+        if (TypeSymbol.RequiresSymbolicProjection(type) || type.ClrType == null)
+        {
+            hasSymbolicArgument = true;
+            return TypeSymbol.ContainsTypeParameter(type)
+                || TypeSymbol.ContainsSameCompilationUserType(type)
+                || type.ClrType == null
+                    ? scope.References.MapClrTypeToReferences(erasedArgument)
+                    : ResolveClrTypeForGenericArg(type)
+                        ?? scope.References.MapClrTypeToReferences(type.ClrType);
+        }
+
+        return ResolveClrTypeForGenericArg(type)
+            ?? scope.References.MapClrTypeToReferences(type.ClrType);
     }
 
     /// <summary>
