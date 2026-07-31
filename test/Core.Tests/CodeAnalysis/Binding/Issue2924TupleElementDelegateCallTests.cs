@@ -233,6 +233,18 @@ public class Issue2924TupleElementDelegateCallTests
     }
 
     [Fact]
+    public void MissingTupleSelector_ReportsCleanDiagnostic()
+    {
+        var result = Evaluate("""
+            var t = (1, 2)
+            t. = 5
+            """);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0158");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
+    }
+
+    [Fact]
     public void NonCallableTupleElement_ReportsNotAFunction()
     {
         var result = Evaluate("""

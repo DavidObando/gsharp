@@ -29,7 +29,14 @@ internal sealed partial class ExpressionBinder
         TupleTypeSymbol tupleType,
         out int zeroBased)
     {
+        if (string.IsNullOrEmpty(memberName))
+        {
+            zeroBased = -1;
+            return false;
+        }
+
         if (int.TryParse(memberName, out var numericIndex)
+            && numericIndex >= 0
             && numericIndex < tupleType.Arity)
         {
             zeroBased = numericIndex;
@@ -52,7 +59,7 @@ internal sealed partial class ExpressionBinder
     private static string GetTupleFieldName(string memberName, TupleTypeSymbol tupleType) =>
         TryGetTupleElementIndex(memberName, tupleType, out var index)
             ? "Item" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : memberName;
+            : memberName ?? string.Empty;
 
     private BoundExpression BindAccessorStep(
         BoundExpression receiver,
