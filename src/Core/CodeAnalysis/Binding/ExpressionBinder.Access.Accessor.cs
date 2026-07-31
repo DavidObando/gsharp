@@ -707,31 +707,16 @@ internal sealed partial class ExpressionBinder
         var outerArguments = constructedOuter.GetGenericArguments();
         if (nestedType.GetGenericArguments().Length != outerArguments.Length)
         {
-            if (nestedType.IsEnum)
-            {
-                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, nestedType.FullName ?? nestedType.Name);
-            }
-
             return nested;
         }
 
         try
         {
             var closedType = nestedType.MakeGenericType(outerArguments);
-            if (closedType.IsEnum && closedType.ContainsGenericParameters)
-            {
-                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, closedType.FullName ?? closedType.Name);
-            }
-
             return new ImportedClassSymbol(closedType, syntax, references: scope.References);
         }
         catch (ArgumentException)
         {
-            if (nestedType.IsEnum)
-            {
-                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, nestedType.FullName ?? nestedType.Name);
-            }
-
             return nested;
         }
     }

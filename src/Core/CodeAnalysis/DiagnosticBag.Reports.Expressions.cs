@@ -247,12 +247,6 @@ public sealed partial class DiagnosticBag
         string reason)
     => Report(location, DiagnosticDescriptors.StructuralProjectionFailure, fromType, toType, reason);
 
-    /// <summary>Reports that a nested enum's enclosing generic arguments could not be resolved.</summary>
-    /// <param name="location">The nested enum reference location.</param>
-    /// <param name="typeName">The nested enum type name.</param>
-    public void ReportUnresolvedNestedEnumEnclosingArguments(TextLocation location, string typeName)
-    => Report(location, DiagnosticDescriptors.UnresolvedNestedEnumEnclosingArguments, typeName);
-
     /// <summary>
     /// Reports that there's no implicit conversion from one type to the other.
     /// </summary>

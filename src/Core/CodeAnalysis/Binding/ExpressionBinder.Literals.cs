@@ -2106,6 +2106,11 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        if (elementType is EnumSymbol bareElementEnum)
+        {
+            elementType = CloseNestedEnumOverCurrentTypeParameters(bareElementEnum);
+        }
+
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements?.Count ?? 0);
 
         // Issue #1272: the runtime/zero-initialised allocation form `[n]T`

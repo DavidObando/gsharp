@@ -267,9 +267,50 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         }
     }
 
+    [Fact]
+    public void BareNestedEnumEmptySliceLiteral_ClosesOverCurrentTypeParameters()
+    {
+        const string source = """
+            package P
+
+            struct Outer[T] {
+                public enum Color { Red = 1, Green = 2, Blue = 3 }
+                public func Values() []Color { return []Color{} }
+            }
+            """;
+
+        var values = InvokeOuterArrayMethod(source, "Values");
+        Assert.Empty(values);
+        Assert.Equal(typeof(int), Assert.Single(values.GetType().GetElementType()!.GenericTypeArguments));
+    }
+
+    [Fact]
+    public void BareNestedEnumPopulatedSliceLiteral_ClosesOverCurrentTypeParameters()
+    {
+        const string source = """
+            package P
+
+            struct Outer[T] {
+                public enum Color { Red = 1, Green = 2, Blue = 3 }
+                public func Values() []Color { return []Color{Color.Red, Color.Blue} }
+            }
+            """;
+
+        var values = InvokeOuterArrayMethod(source, "Values");
+        Assert.Equal(new[] { 1, 3 }, values.Cast<object>().Select(Convert.ToInt32));
+        Assert.Equal(typeof(int), Assert.Single(values.GetType().GetElementType()!.GenericTypeArguments));
+    }
+
     private static MethodInfo GetMethod(Type type, string name)
         => type.GetMethod(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
             ?? throw new InvalidOperationException($"Missing method {type.FullName}.{name}");
+
+    private static Array InvokeOuterArrayMethod(string source, string methodName)
+    {
+        var assembly = CompileAndLoad(source);
+        var outer = assembly.GetTypes().Single(t => t.Name == "Outer`1").MakeGenericType(typeof(int));
+        return Assert.IsAssignableFrom<Array>(GetMethod(outer, methodName).Invoke(Activator.CreateInstance(outer), null));
+    }
 
     private static Assembly CompileAndLoad(string source)
     {
