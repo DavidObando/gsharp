@@ -59,6 +59,15 @@ public class Issue2918InlineLambdaErasedReceiverTests
 
             public static void InvokeLast(object argument) => last!.DynamicInvoke(argument);
         }
+
+        public sealed class Holder<T>
+        {
+            public Holder(Action<T> callback) => Kind = "symbolic";
+
+            public Holder(Action<int> callback) => Kind = "closed";
+
+            public string Kind { get; }
+        }
         """;
 
     [Fact]
@@ -180,6 +189,129 @@ public class Issue2918InlineLambdaErasedReceiverTests
         Assert.Equal(
             "10\n",
             CompileVerifyLoadAndRun(source, "Issue2918Constructor.Src"));
+    }
+
+    [Fact]
+    public void ImportedGenericConstructorOverloads_DisagreeWithoutForcingSymbolicTarget_VerifyLoadAndRun()
+    {
+        const string source = """
+            package Issue2918ConstructorOverloads
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let symbolic = Holder[Src](
+                    (item Src) -> Console.WriteLine(item.N))
+                Console.WriteLine(symbolic.Kind)
+
+                let closed = Holder[Src](
+                    (item int32) -> Console.WriteLine(item))
+                Console.WriteLine(closed.Kind)
+            }
+            """;
+
+        Assert.Equal(
+            "symbolic\nclosed\n",
+            CompileVerifyLoadAndRun(source, "Issue2918ConstructorOverloads.Src"));
+    }
+
+    [Fact]
+    public void PublicLibraryDelegateSignatures_RoundTripThroughCSharp()
+    {
+        var directory = CreateDirectory("Issue2918_PublicApi_");
+        try
+        {
+            var librarySourcePath = Path.Combine(directory, "library.gs");
+            var libraryPath = Path.Combine(directory, "Issue2918PublicApi.dll");
+            File.WriteAllText(librarySourcePath, """
+                package Issue2918PublicApi
+                import System
+                import System.Collections.Generic
+
+                class Src {
+                    let N int32
+                    init(n int32) { N = n }
+                }
+
+                class Api {
+                    shared {
+                        func Callbacks() List[System.Action[Src]] {
+                            let callbacks = List[System.Action[Src]]()
+                            callbacks.Add((item Src) -> Console.WriteLine(item.N))
+                            return callbacks
+                        }
+
+                        func Transforms() Dictionary[string, System.Func[Src, int32]] {
+                            let transforms =
+                                Dictionary[string, System.Func[Src, int32]]()
+                            transforms.Add("value", (item Src) -> item.N)
+                            return transforms
+                        }
+                    }
+                }
+                """);
+            Compile(
+            [
+                "/out:" + libraryPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                librarySourcePath,
+            ]);
+            IlVerifier.Verify(libraryPath);
+
+            var consumerPath = Path.Combine(directory, "consumer.dll");
+            CompileCSharp(
+                """
+                using System;
+                using System.Collections.Generic;
+                using Issue2918PublicApi;
+
+                namespace Consumer;
+
+                public static class Runner
+                {
+                    public static int Run()
+                    {
+                        List<Action<Src>> callbacks = Api.Callbacks();
+                        Dictionary<string, Func<Src, int>> transforms = Api.Transforms();
+                        return callbacks.Count + transforms["value"](new Src(41));
+                    }
+                }
+                """,
+                consumerPath,
+                "Issue2918CSharpConsumer",
+                libraryPath);
+            IlVerifier.Verify(consumerPath, additionalReferences: new[] { libraryPath });
+
+            var loadContext = new AssemblyLoadContext(
+                "Issue2918_PublicApi_" + Guid.NewGuid().ToString("N"),
+                isCollectible: true);
+            try
+            {
+                var library = loadContext.LoadFromAssemblyPath(libraryPath);
+                loadContext.Resolving += (_, name) =>
+                    name.Name == library.GetName().Name ? library : null;
+                Assert.NotEmpty(library.GetTypes());
+
+                var consumer = loadContext.LoadFromAssemblyPath(consumerPath);
+                Assert.NotEmpty(consumer.GetTypes());
+                var run = consumer.GetType("Consumer.Runner")!.GetMethod("Run")!;
+                Assert.Equal(42, run.Invoke(null, null));
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
     }
 
     [Fact]
@@ -489,14 +621,20 @@ public class Issue2918InlineLambdaErasedReceiverTests
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
     }
 
-    private static void CompileCSharp(string source, string outputPath, string assemblyName)
+    private static void CompileCSharp(
+        string source,
+        string outputPath,
+        string assemblyName,
+        params string[] additionalReferences)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
         var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
                 ?.Split(Path.PathSeparator)
                 ?? Array.Empty<string>())
             .Where(File.Exists)
-            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .Concat(additionalReferences.Select(path =>
+                (MetadataReference)MetadataReference.CreateFromFile(path)));
         var compilation = CSharpCompilation.Create(
             assemblyName,
             new[] { syntaxTree },

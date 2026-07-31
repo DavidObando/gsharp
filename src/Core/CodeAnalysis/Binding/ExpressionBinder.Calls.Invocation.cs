@@ -782,21 +782,6 @@ internal sealed partial class ExpressionBinder
         Type openDefinition,
         ImmutableArray<TypeSymbol> symbolicArgs,
         out FunctionTypeSymbol target)
-        => TryBuildSymbolicDelegateTarget(
-            openParameterType,
-            openDefinition,
-            symbolicArgs,
-            openMethodDefinition: null,
-            methodTypeArguments: default,
-            out target);
-
-    private static bool TryBuildSymbolicDelegateTarget(
-        Type openParameterType,
-        Type openDefinition,
-        ImmutableArray<TypeSymbol> symbolicArgs,
-        MethodInfo openMethodDefinition,
-        ImmutableArray<TypeSymbol> methodTypeArguments,
-        out FunctionTypeSymbol target)
     {
         target = null;
         if (openParameterType == null)
@@ -810,18 +795,8 @@ internal sealed partial class ExpressionBinder
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
             openParameterType,
             openDefinition,
-            symbolicArgs,
-            openMethodDefinition,
-            methodTypeArguments);
-        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(mapped, out var candidate)
-            || candidate == null)
-        {
-            return false;
-        }
-
-        var carries = TypeSymbol.RequiresSymbolicProjection(candidate.ReturnType)
-            || candidate.ParameterTypes.Any(TypeSymbol.RequiresSymbolicProjection);
-        if (!carries)
+            symbolicArgs);
+        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(mapped, out var candidate))
         {
             return false;
         }
@@ -1488,15 +1463,11 @@ internal sealed partial class ExpressionBinder
                 FunctionTypeSymbol functionType;
                 if (openParameterType.IsGenericParameter)
                 {
-                    if (!AllMethodTypeParametersResolved(openParameterType, openMethod, inferred)
-                        || !TryBuildSymbolicDelegateTarget(
+                    if (!TryBuildSymbolicDelegateTarget(
                             openParameterType,
                             receiverOpenDefinition,
                             receiverTypeArguments,
-                            openMethod,
-                            methodTypeArgs,
-                            out functionType)
-                        || functionType.ParameterTypes.Length != arityByIndex[idx])
+                            out functionType))
                     {
                         candidateUsable = false;
                         break;
@@ -1529,6 +1500,17 @@ internal sealed partial class ExpressionBinder
                         break;
                     }
 
+                    // Issue #903: only trust this candidate's delegate parameter
+                    // shape when every method type parameter reachable from it was
+                    // actually resolved by unifying the receiver/arguments. When a
+                    // candidate's "this" parameter does not match the receiver
+                    // shape (e.g. a `Single` overload over `IQueryable<T>` against a
+                    // `List` receiver), the relevant slot stays unresolved and
+                    // MapOpenClrTypeToSymbolic would otherwise surface a bogus open
+                    // parameter (an ImportedTypeSymbol named "T") that neither
+                    // ContainsTypeParameter nor ContainsSameCompilationUserType
+                    // flags — which would then disagree with the correct candidate
+                    // and abort the whole inference. Skip such candidates instead.
                     var unresolvedSlot = false;
                     foreach (var invokeParameter in invokeParameters)
                     {
@@ -1582,17 +1564,6 @@ internal sealed partial class ExpressionBinder
                     functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType);
                 }
 
-                // Issue #903: only trust this candidate's delegate parameter
-                // shape when every method type parameter reachable from it was
-                // actually resolved by unifying the receiver/arguments. When a
-                // candidate's "this" parameter does not match the receiver
-                // shape (e.g. a `Single` overload over `IQueryable<T>` against a
-                // `List` receiver), the relevant slot stays unresolved and
-                // MapOpenClrTypeToSymbolic would otherwise surface a bogus open
-                // parameter (an ImportedTypeSymbol named "T") that neither
-                // ContainsTypeParameter nor ContainsSameCompilationUserType
-                // flags — which would then disagree with the correct candidate
-                // and abort the whole inference. Skip such candidates instead.
                 foreach (var parameterType in functionType.ParameterTypes)
                 {
                     if (TypeSymbol.RequiresSymbolicProjection(parameterType))
