@@ -176,6 +176,20 @@ public class Issue2921LambdaBodyDefiniteReturnTests
         Assert.Equal(expectedOutput, RunBounded(result.AssemblyPath, name));
     }
 
+    [Fact]
+    public void UnknownReturnTypeDoesNotCascadeGs0100()
+    {
+        var result = InvokeCompiler("""
+            package Issue2921.UnknownReturnType
+            var bad (bool) -> MissingType[int32] = (v bool) -> {
+                if v { return MissingFunction() }
+            }
+            """, "UnknownReturnType");
+
+        Assert.Contains("error GS0113:", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("error GS0100:", result.Output, StringComparison.Ordinal);
+    }
+
     private static object[] Case(string name, string source) => new object[] { name, source };
 
     private static object[] Case(string name, string expectedOutput, string source) =>
@@ -244,7 +258,7 @@ public class Issue2921LambdaBodyDefiniteReturnTests
         if (!exited)
         {
             process.Kill(entireProcessTree: true);
-            process.WaitForExit();
+            Assert.True(process.WaitForExit(5_000), $"{name}: emitted program did not stop after kill");
         }
 
         Assert.True(exited, $"{name}: emitted program timed out");
