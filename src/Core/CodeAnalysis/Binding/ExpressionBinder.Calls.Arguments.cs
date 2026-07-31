@@ -773,9 +773,9 @@ internal sealed partial class ExpressionBinder
         BoundExpression invokeReceiver = delegateLoad;
         if (ce.NullableQuestionToken != null)
         {
-            var captureType = memberTypeSymbol is NullableTypeSymbol nullableMember
+            var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
                 ? nullableMember.UnderlyingType
-                : memberTypeSymbol;
+                : effectiveMemberType;
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);

@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -117,6 +118,8 @@ public class Issue2885NullableDelegateReceiverTests
     [InlineData("array-index", "arr[0]")]
     [InlineData("call-result", "Get()")]
     [InlineData("explicit-invoke", "d")]
+    [InlineData("indexed-explicit-invoke", "arr[0]")]
+    [InlineData("result-explicit-invoke", "Get()")]
     [InlineData("qualified-explicit-invoke", "Handler")]
     [InlineData("named-delegate", "h")]
     public void OtherNullableDelegateCallPaths_ReportNullableReceiver(string shape, string receiverName)
@@ -144,6 +147,22 @@ public class Issue2885NullableDelegateReceiverTests
                 import System
 
                 func RunInvoke(d System.Action[int32]?) { d.Invoke(1) }
+                """,
+            "indexed-explicit-invoke" => """
+                package Issue2885IndexedInvoke
+                import System
+
+                func RunInvoke() {
+                    let arr = [1]System.Action[int32]?
+                    arr[0].Invoke(1)
+                }
+                """,
+            "result-explicit-invoke" => """
+                package Issue2885ResultInvoke
+                import System
+
+                func Get() System.Action[int32]? -> nil
+                func RunInvoke() { Get().Invoke(1) }
                 """,
             "qualified-explicit-invoke" => """
                 package Issue2885QualifiedInvoke
@@ -824,6 +843,14 @@ public class Issue2885NullableDelegateReceiverTests
                 assemblyPath,
                 additionalReferences: fixturePath == null ? null : new[] { fixturePath });
 
+            if (fixturePath != null)
+            {
+                Assembly.Load(File.ReadAllBytes(fixturePath));
+            }
+
+            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            _ = assembly.GetTypes();
+
             using var process = Process.Start(new ProcessStartInfo("dotnet")
             {
                 ArgumentList =
@@ -839,9 +866,17 @@ public class Issue2885NullableDelegateReceiverTests
                 UseShellExecute = false,
             });
             Assert.NotNull(process);
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(30_000))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+                Assert.Fail("dotnet exec timed out");
+            }
+
+            var output = outputTask.GetAwaiter().GetResult();
+            var error = errorTask.GetAwaiter().GetResult();
             Assert.True(process.ExitCode == 0, error);
             return output.Replace("\r\n", "\n", StringComparison.Ordinal);
         }
