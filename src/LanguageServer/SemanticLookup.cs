@@ -422,7 +422,7 @@ public static class SemanticLookup
 
     public static bool CanRename(Symbol symbol)
     {
-        return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol
+        return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol and not TypeParameterSymbol
             && !ReferenceEquals(symbol, TypeSymbol.Bool)
             && !ReferenceEquals(symbol, TypeSymbol.Int32)
             && !ReferenceEquals(symbol, TypeSymbol.String)

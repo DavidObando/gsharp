@@ -3179,6 +3179,13 @@ public sealed class Binder
             // positions, type aliases, etc.).
             ReportObsoleteUseIfApplicable(syntax.Identifier.Location, element, element.Name);
 
+            if (element is EnumSymbol nestedEnum)
+            {
+                element = EnumSymbol.ConstructNestedFromTypeParameterScope(
+                    nestedEnum,
+                    binderCtx.CurrentTypeParameters);
+            }
+
             // Phase 4.3c / ADR-0020: handle generic type construction `Foo[T1, T2]` in
             // type position (currently interfaces; structs follow up later).
             if (syntax.HasTypeArguments)

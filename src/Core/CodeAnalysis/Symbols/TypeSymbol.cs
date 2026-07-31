@@ -396,6 +396,16 @@ public class TypeSymbol : Symbol
                 return false;
             case ByRefTypeSymbol br:
                 return AnyTypeParameter(br.PointeeType, match);
+            case EnumSymbol en when !en.EnclosingTypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in en.EnclosingTypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in st.TypeArguments)
                 {
@@ -735,6 +745,15 @@ public class TypeSymbol : Symbol
                 rightStruct.TypeArguments);
         }
 
+        if (left is EnumSymbol leftEnum && right is EnumSymbol rightEnum)
+        {
+            return AreSameConstructedUserTypeCore(
+                leftEnum.Definition ?? leftEnum,
+                leftEnum.EnclosingTypeArguments,
+                rightEnum.Definition ?? rightEnum,
+                rightEnum.EnclosingTypeArguments);
+        }
+
         if (left is InterfaceSymbol leftInterface && right is InterfaceSymbol rightInterface)
         {
             return AreSameConstructedUserTypeCore(
@@ -894,7 +913,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="type">The wrapper/constructed type to unwrap.</param>
     /// <returns>The type's immediate inner type(s); empty for a leaf kind.</returns>
-    public static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
+    internal static IEnumerable<TypeSymbol> GetWrappedTypes(TypeSymbol type)
     {
         switch (type)
         {

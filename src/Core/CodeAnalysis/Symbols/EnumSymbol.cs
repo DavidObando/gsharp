@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -122,16 +123,10 @@ public sealed class EnumSymbol : TypeSymbol
         EnumSymbol nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
     {
-        if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
-        {
-            return nestedDefinition;
-        }
-
-        var def = nestedDefinition.Definition ?? nestedDefinition;
         var key = new TypeArgsKey(enclosingTypeArguments);
         return ConstructedNestedCache.GetOrAdd(
-            (def, key),
-            _ => CreateConstructedNested(def, enclosingTypeArguments));
+            (nestedDefinition, key),
+            _ => CreateConstructedNested(nestedDefinition, enclosingTypeArguments));
     }
 
     /// <summary>
@@ -178,6 +173,38 @@ public sealed class EnumSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Closes a nested enum over the generic parameters currently in lexical scope.
+    /// </summary>
+    /// <param name="nested">The open nested enum.</param>
+    /// <param name="typeParameters">Type parameters indexed by source name.</param>
+    /// <returns>The constructed nested enum, or <paramref name="nested"/> when its enclosing parameters are not all in scope.</returns>
+    internal static EnumSymbol ConstructNestedFromTypeParameterScope(
+        EnumSymbol nested,
+        IReadOnlyDictionary<string, TypeParameterSymbol> typeParameters)
+    {
+        if (nested == null || !nested.EnclosingTypeArguments.IsDefaultOrEmpty || typeParameters == null)
+        {
+            return nested;
+        }
+
+        var enclosingParameters = StructSymbol.CollectEnclosingTypeParameters(nested);
+        var enclosingArguments = ImmutableArray.CreateBuilder<TypeSymbol>(enclosingParameters.Length);
+        foreach (var parameter in enclosingParameters)
+        {
+            if (!typeParameters.TryGetValue(parameter.Name, out var argument))
+            {
+                return nested;
+            }
+
+            enclosingArguments.Add(argument);
+        }
+
+        return enclosingArguments.Count == 0
+            ? nested
+            : ConstructNested(nested.Definition ?? nested, enclosingArguments.MoveToImmutable());
     }
 
     /// <summary>

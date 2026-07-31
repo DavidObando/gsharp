@@ -414,7 +414,7 @@ internal sealed partial class ExpressionBinder
                 // symbol directly.
                 if (aliasedType is EnumSymbol foundAliasEnum)
                 {
-                    enumSymbol = foundAliasEnum;
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundAliasEnum);
                 }
                 else if (aliasedType is StructSymbol foundAliasStruct)
                 {
@@ -446,7 +446,7 @@ internal sealed partial class ExpressionBinder
                 // already used by Binder.LookupType (type-clause position).
                 if (typeAlias is EnumSymbol foundEnum)
                 {
-                    enumSymbol = foundEnum;
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
                 }
                 else if (typeAlias is StructSymbol foundStruct)
                 {
@@ -707,15 +707,31 @@ internal sealed partial class ExpressionBinder
         var outerArguments = constructedOuter.GetGenericArguments();
         if (nestedType.GetGenericArguments().Length != outerArguments.Length)
         {
+            if (nestedType.IsEnum)
+            {
+                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, nestedType.FullName ?? nestedType.Name);
+            }
+
             return nested;
         }
 
         try
         {
-            return new ImportedClassSymbol(nestedType.MakeGenericType(outerArguments), syntax, references: scope.References);
+            var closedType = nestedType.MakeGenericType(outerArguments);
+            if (closedType.IsEnum && closedType.ContainsGenericParameters)
+            {
+                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, closedType.FullName ?? closedType.Name);
+            }
+
+            return new ImportedClassSymbol(closedType, syntax, references: scope.References);
         }
         catch (ArgumentException)
         {
+            if (nestedType.IsEnum)
+            {
+                Diagnostics.ReportUnresolvedNestedEnumEnclosingArguments(syntax.Location, nestedType.FullName ?? nestedType.Name);
+            }
+
             return nested;
         }
     }
@@ -732,6 +748,11 @@ internal sealed partial class ExpressionBinder
         InterfaceSymbol i => i.ContainingType,
         _ => null,
     };
+
+    private EnumSymbol CloseNestedEnumOverCurrentTypeParameters(EnumSymbol enumSymbol)
+        => EnumSymbol.ConstructNestedFromTypeParameterScope(
+            enumSymbol,
+            binderCtx.CurrentTypeParameters);
 
     /// <summary>
     /// Issue #2203: returns the dotted package name a user-defined aggregate
@@ -1913,12 +1934,9 @@ internal sealed partial class ExpressionBinder
                 // when the left portion is not a nested type.
                 if (TryResolveNestedTypeChainUnderReceiver(structSym, nested.LeftPart, out var innerReceiver))
                 {
-                    return innerReceiver switch
-                    {
-                        StructSymbol innerStruct => BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart),
-                        EnumSymbol innerEnum => BindEnumAccessorStep(innerEnum, nested.RightPart),
-                        _ => new BoundErrorExpression(null),
-                    };
+                    return innerReceiver is EnumSymbol innerEnum
+                        ? BindEnumAccessorStep(innerEnum, nested.RightPart)
+                        : BindUserTypeStaticAccessorStep((StructSymbol)innerReceiver, nested.RightPart);
                 }
 
                 if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)

@@ -67,6 +67,17 @@ public class Issue2898SymbolDisplayHeadersTests
         Assert.Equal("enum P.Outer[string].Color { Red }", SymbolDisplay.ToDisplayString(stringEnum, SymbolDisplayFormat.Hover));
 
         var outerDefinition = compilation.GlobalScope.Structs.Single(s => s.Name == "Outer");
+        var openEnum = EnumSymbol.ConstructNested(
+            intEnum.Definition,
+            ImmutableArray.Create<TypeSymbol>(Assert.Single(outerDefinition.TypeParameters)));
+        Assert.True(TypeSymbol.ContainsTypeParameter(openEnum));
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(intEnum, stringEnum));
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            stringEnum,
+            EnumSymbol.ConstructNested(
+                stringEnum.Definition,
+                ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(TypeSymbol.String)))));
+
         var intOuter = StructSymbol.Construct(
             outerDefinition,
             ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));

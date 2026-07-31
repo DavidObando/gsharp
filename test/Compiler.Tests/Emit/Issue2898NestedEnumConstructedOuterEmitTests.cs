@@ -41,12 +41,14 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
             func Remap[A, B](c Outer[B].Color) int32 {
                 var outer = List[Outer[B].Color]()
                 outer.Add(c)
+                var outerRed = Outer[B].Color.Red
                 let f (Outer[B].Color) -> int32 = (value Outer[B].Color) -> {
                     var inner = List[Outer[B].Color]()
                     inner.Add(value)
-                    return int32(inner[0])
+                    var innerRed = Outer[B].Color.Red
+                    return int32(inner[0]) + int32(innerRed)
                 }
-                return f(outer[0])
+                return int32(outerRed) + f(outer[0])
             }
             struct Holder {
                 var IntRed Outer[int32].Color

@@ -1040,7 +1040,7 @@ internal sealed class UserTokenResolver
     }
 
     /// <summary>
-    /// Resolves a nested enum's enclosing construction or open self-instantiation.
+    /// Resolves a nested enum's enclosing construction.
     /// </summary>
     internal ImmutableArray<TypeSymbol> ResolveUserEnumTypeSpecArguments(EnumSymbol enumSym, EnumSymbol def)
     {
@@ -1049,13 +1049,8 @@ internal sealed class UserTokenResolver
             return enumSym.EnclosingTypeArguments;
         }
 
-        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(def.TypeParameters.Length);
-        foreach (var parameter in def.TypeParameters)
-        {
-            builder.Add(parameter);
-        }
-
-        return builder.MoveToImmutable();
+        throw new InvalidOperationException(
+            $"Open nested enum '{def.Name}' escaped its generic context; enclosing type arguments must be resolved before emission.");
     }
 
     /// <summary>

@@ -837,11 +837,17 @@ internal sealed class TypeDefEmitter
         // is the enum's own typedef (the standard CLR convention for enum
         // literals). The Constant row is added below after all field rows
         // have been emitted so they remain in increasing parent-token order.
+        var memberType = enumSym.TypeParameters.IsDefaultOrEmpty
+            ? enumSym
+            : EnumSymbol.ConstructNested(
+                enumSym,
+                ImmutableArray.CreateRange(enumSym.TypeParameters, static parameter => (TypeSymbol)parameter));
+
         var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
         foreach (var member in enumSym.Members)
         {
             var memberSigBlob = new BlobBuilder();
-            this.encodeTypeSymbol(new BlobEncoder(memberSigBlob).FieldSignature(), enumSym);
+            this.encodeTypeSymbol(new BlobEncoder(memberSigBlob).FieldSignature(), memberType);
             var memberFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
                 name: this.emitCtx.Metadata.GetOrAddString(member.Name),

@@ -52,6 +52,22 @@ public class RenameHandlerTests
     }
 
     [Fact]
+    public void ComputeRename_RejectsTypeParameterUse()
+    {
+        const string source = "class Box[T] { var Value T }\n";
+        var content = LanguageServerTestHelpers.Content(source);
+        var uri = DocumentUri.From("file:///rename.gs");
+
+        var edit = RenameComputer.ComputeRename(
+            uri,
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "T", 1),
+            "ZZ");
+
+        Assert.Null(edit);
+    }
+
+    [Fact]
     public void ComputeRename_ConstructedUserTypeRenamesEveryConstruction()
     {
         const string source = """
