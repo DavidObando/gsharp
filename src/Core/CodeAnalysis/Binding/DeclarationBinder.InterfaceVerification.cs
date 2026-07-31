@@ -675,8 +675,20 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
-        var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
+        // The interface slot signature is emitted from the declared type, not
+        // the construction: `T?` on an unconstrained `T` erases to `T`, so
+        // `I[int32]` returns `Int32`, never `Nullable<Int32>`.
+        var interfaceSlotIsValueNullable = interfaceType is NullableTypeSymbol declaredNullable
+            && NullableLifting.IsAnyValueTypeNullable(declaredNullable);
         var implementationIsNullable = implementationType is NullableTypeSymbol;
+        var implementationSlotIsValueNullable = implementationIsNullable
+            && NullableLifting.IsAnyValueTypeNullable((NullableTypeSymbol)implementationType);
+        if (interfaceSlotIsValueNullable != implementationSlotIsValueNullable)
+        {
+            return false;
+        }
+
+        var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
         var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
         return hasSetter
             ? interfaceIsNullable == implementationIsNullable
