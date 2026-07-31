@@ -208,6 +208,30 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             class OpenGenericCovariant[T] : IOpenNullable[T] {
                 prop Value T { get; }
             }
+
+            interface IExact[T] { prop Value T { get; } }
+            class NullableValueArgument : IExact[int32?] {
+                prop Value int32? -> nil
+            }
+            class NullableReferenceArgument : IExact[string?] {
+                prop Value string? -> nil
+            }
+            class ExplicitNullableArgument : IExact[int32?] {
+                private prop (IExact[int32?]) Value int32? -> nil
+            }
+
+            interface INestedNullable[T] { prop Value T? { get; } }
+            class NestedNullableArgument : INestedNullable[int32?] {
+                prop Value int32? -> nil
+            }
+
+            interface ISetExact[T] { prop Value T { get; set; } }
+            class NullableSetArgument : ISetExact[int32?] {
+                prop Value int32? { get; set; }
+            }
+
+            interface IPositionalExact[T] { prop Value T { get; } }
+            data class NullablePositional(Value int32?) : IPositionalExact[int32?]
             """;
 
         AssertEmitsAndLoads(source);
@@ -331,6 +355,59 @@ public class Issue2888InterfacePropertyTypeMismatchTests
         {
             _ = CompileExpectingFailure(rejected);
         }
+    }
+
+    [Fact]
+    public void ImplicitStaticVirtualNullableErasureGap_RejectsWithoutOutput()
+    {
+        const string source = """
+            package StaticImplicitCovarianceRejected
+            sealed interface I[T] {
+                shared { prop Value T? { get; } }
+            }
+            struct C : I[int32] {
+                shared { prop Value int32 -> 1 }
+            }
+            """;
+
+        _ = CompileExpectingFailure(source);
+    }
+
+    [Fact]
+    public void ExplicitStaticVirtualNullableErasureGap_RejectsWithoutOutput()
+    {
+        const string source = """
+            package StaticExplicitCovarianceRejected
+            sealed interface I[T] {
+                shared { prop Value T? { get; } }
+            }
+            struct C : I[int32] {
+                shared {
+                    private prop (I[int32]) Value int32 -> 1
+                }
+            }
+            """;
+
+        _ = CompileExpectingFailure(source);
+    }
+
+    [Fact]
+    public void ImportedGenericDisplayCollision_ReportsGS0187InsteadOfMisleadingGS0504()
+    {
+        const string source = """
+            package ImportedGenericMismatch
+            import System.Collections.Generic
+
+            interface ISeq[T] { prop Items List[T] { get; } }
+            class IntSeq : ISeq[int32] {
+                prop Items List[int32] { get; }
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Contains("GS0187", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0504", output, StringComparison.Ordinal);
     }
 
     [Fact]

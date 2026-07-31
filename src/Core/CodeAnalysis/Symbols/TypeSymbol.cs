@@ -694,29 +694,9 @@ public class TypeSymbol : Symbol
     /// <param name="right">The second type.</param>
     /// <returns><see langword="true"/> when the runtime signatures are equivalent.</returns>
     public static bool AreRuntimeEquivalentIgnoringReferenceNullability(TypeSymbol left, TypeSymbol right)
-        => AreRuntimeEquivalentIgnoringReferenceNullability(left, right, leftTypeParameterMap: null);
-
-    /// <summary>
-    /// Compares runtime type identity after substituting type parameters on the
-    /// left and ignoring nullable-reference annotations.
-    /// </summary>
-    /// <param name="left">The first type.</param>
-    /// <param name="right">The second type.</param>
-    /// <param name="leftTypeParameterMap">Type-parameter substitutions for the first type.</param>
-    /// <returns><see langword="true"/> when the runtime signatures are equivalent.</returns>
-    public static bool AreRuntimeEquivalentIgnoringReferenceNullability(
-        TypeSymbol left,
-        TypeSymbol right,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> leftTypeParameterMap)
     {
         left = StripReferenceNullabilityCore(left);
         right = StripReferenceNullabilityCore(right);
-        if (leftTypeParameterMap != null
-            && left is TypeParameterSymbol strippedTypeParameter
-            && leftTypeParameterMap.TryGetValue(strippedTypeParameter, out var strippedSubstitution))
-        {
-            left = StripReferenceNullabilityCore(strippedSubstitution);
-        }
 
         if (ReferenceEquals(left, right))
         {
@@ -736,8 +716,7 @@ public class TypeSymbol : Symbol
                 && rightNullable != null
                 && AreRuntimeEquivalentIgnoringReferenceNullability(
                     leftNullable.UnderlyingType,
-                    rightNullable.UnderlyingType,
-                    leftTypeParameterMap);
+                    rightNullable.UnderlyingType);
         }
 
         if (left is StructSymbol leftStruct && right is StructSymbol rightStruct)
@@ -746,8 +725,7 @@ public class TypeSymbol : Symbol
                 leftStruct.Definition ?? leftStruct,
                 leftStruct.TypeArguments,
                 rightStruct.Definition ?? rightStruct,
-                rightStruct.TypeArguments,
-                leftTypeParameterMap);
+                rightStruct.TypeArguments);
         }
 
         if (left is InterfaceSymbol leftInterface && right is InterfaceSymbol rightInterface)
@@ -756,8 +734,7 @@ public class TypeSymbol : Symbol
                 leftInterface.Definition ?? leftInterface,
                 leftInterface.TypeArguments,
                 rightInterface.Definition ?? rightInterface,
-                rightInterface.TypeArguments,
-                leftTypeParameterMap);
+                rightInterface.TypeArguments);
         }
 
         if (left is DelegateTypeSymbol leftDelegate && right is DelegateTypeSymbol rightDelegate)
@@ -766,8 +743,7 @@ public class TypeSymbol : Symbol
                 leftDelegate.Definition ?? leftDelegate,
                 leftDelegate.TypeArguments,
                 rightDelegate.Definition ?? rightDelegate,
-                rightDelegate.TypeArguments,
-                leftTypeParameterMap);
+                rightDelegate.TypeArguments);
         }
 
         if (left.GetType() != right.GetType())
@@ -797,12 +773,7 @@ public class TypeSymbol : Symbol
                 && (left.ClrType == null
                     || right.ClrType == null
                     || ClrTypeUtilities.AreSame(left.ClrType, right.ClrType))
-                && leftParts.Zip(
-                    rightParts,
-                    (leftPart, rightPart) => AreRuntimeEquivalentIgnoringReferenceNullability(
-                        leftPart,
-                        rightPart,
-                        leftTypeParameterMap)).All(equal => equal);
+                && leftParts.Zip(rightParts, AreRuntimeEquivalentIgnoringReferenceNullability).All(equal => equal);
         }
 
         return left.ClrType != null
@@ -831,8 +802,7 @@ public class TypeSymbol : Symbol
             TypeSymbol leftDefinition,
             ImmutableArray<TypeSymbol> leftArguments,
             TypeSymbol rightDefinition,
-            ImmutableArray<TypeSymbol> rightArguments,
-            IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+            ImmutableArray<TypeSymbol> rightArguments)
         {
             if (!ReferenceEquals(leftDefinition, rightDefinition)
                 || leftArguments.Length != rightArguments.Length)
@@ -842,10 +812,7 @@ public class TypeSymbol : Symbol
 
             for (var i = 0; i < leftArguments.Length; i++)
             {
-                if (!AreRuntimeEquivalentIgnoringReferenceNullability(
-                    leftArguments[i],
-                    rightArguments[i],
-                    typeParameterMap))
+                if (!AreRuntimeEquivalentIgnoringReferenceNullability(leftArguments[i], rightArguments[i]))
                 {
                     return false;
                 }
