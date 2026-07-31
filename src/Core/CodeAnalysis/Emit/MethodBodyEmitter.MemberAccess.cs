@@ -60,10 +60,11 @@ internal sealed partial class MethodBodyEmitter
         if (variable is ParameterSymbol ps && this.parameters.TryGetValue(ps, out var argIndex))
         {
             this.il.LoadArgument(argIndex);
-            if (ps.RefKind != RefKind.None)
+            if (ps.RefKind != RefKind.None
+                || ReferenceEquals(ps, this.structThisParameter))
             {
-                // ADR-0060: the parameter slot holds a managed pointer T&; an
-                // ordinary read of `p` in the body must dereference it.
+                // Ref parameters and value-type `this` slots hold managed
+                // pointers; an ordinary value read must dereference them.
                 this.EmitLoadIndirect(ps.Type);
             }
 
