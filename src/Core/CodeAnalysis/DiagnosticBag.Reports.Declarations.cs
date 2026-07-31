@@ -1101,4 +1101,33 @@ public sealed partial class DiagnosticBag
         implementationAccessor,
         requiredAccessor,
         fix);
+
+    /// <summary>
+    /// Issue #2888: reports that an ordinary property has the wrong type for
+    /// an interface property slot.
+    /// </summary>
+    /// <param name="location">The implementing type's source location.</param>
+    /// <param name="typeName">The implementing type.</param>
+    /// <param name="propertyName">The implementing property.</param>
+    /// <param name="interfaceName">The required interface.</param>
+    /// <param name="interfacePropertyName">The required interface property.</param>
+    /// <param name="expectedType">The interface property's substituted type.</param>
+    /// <param name="actualType">The implementation property's type.</param>
+    public void ReportInterfacePropertyTypeMismatch(
+        TextLocation location,
+        string typeName,
+        string propertyName,
+        string interfaceName,
+        string interfacePropertyName,
+        TypeSymbol expectedType,
+        TypeSymbol actualType)
+    => Report(
+        location,
+        DiagnosticDescriptors.InterfacePropertyTypeMismatch,
+        typeName,
+        propertyName,
+        interfaceName,
+        interfacePropertyName,
+        expectedType,
+        actualType);
 }

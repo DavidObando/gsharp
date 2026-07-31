@@ -960,6 +960,23 @@ Use `?(...)` for null-safe invocation of a name or member receiver. For an
 indexed or call-result receiver, use `?.Invoke(...)`. Alternatively, bind the
 delegate with `if let`, or assert non-null with `!!` before calling.
 
+## Interface property type mismatch (GS0504)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0504 | Error | An ordinary property has a different type from the interface property it would implement. |
+
+The diagnostic names the implementing type and property, the interface
+property, and both the required and actual types. Get-only properties may
+erase reference nullability covariantly: a `string` implementation can satisfy
+a `string?` contract. A declared unconstrained `T?` slot erases to `T`, so
+`I[int32]` requires an `int32` implementation, not `int32?`. Settable
+properties remain source-nullability invariant, and their emitted slot type
+must also match. The same erasure rule applies recursively inside slices,
+arrays, and generic constructions. Declared value-type nullability is never
+erased: `int32` cannot implement a get-only `int32?` property because the CLR
+types are `System.Int32` and `System.Nullable<System.Int32>`.
+
 ## Unconstrained nullable sequence element (GS0508)
 
 | ID | Severity | Description |

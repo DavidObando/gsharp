@@ -85,7 +85,7 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void TypeMismatchedPositionalParam_ReportsSingleGS0187()
+    public void TypeMismatchedPositionalParam_ReportsSingleGS0504()
     {
         // A positional parameter whose name matches but whose type is
         // incompatible does NOT satisfy the contract, and the diagnostic is
@@ -99,8 +99,9 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
-        Assert.Single(gs0187);
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0504", diagnostic.Id);
+        Assert.Contains("expected type 'int32', actual type 'string'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,11 +121,10 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GetOnlyNullableInterfaceProperty_SatisfiedByNonNullablePositionalParam_NoDiagnostics()
+    public void GetOnlyNullableValueInterfaceProperty_NotSatisfiedByNonNullablePositionalParam_ReportsGS0504()
     {
-        // Kotlin-style sound widening: `T <: T?`, so a non-nullable
-        // implementation always satisfies a nullable get-only contract:
-        // iface `int32?` <- impl `int32`.
+        // `int32?` is CLR Nullable<int32>, not an erased annotation. Its getter
+        // signature therefore differs from `int32`, so covariance is invalid.
         const string source = """
             package Test
             interface IHasNullableX {
@@ -134,7 +134,23 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        Assert.Empty(Bind(source));
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0504", diagnostic.Id);
+        Assert.Contains("expected type 'int32?', actual type 'int32'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetOnlyNullableReferenceInterfaceProperty_SatisfiedByNonNullablePositionalParam_EmitsAndLoads()
+    {
+        const string source = """
+            package Test
+            interface IHasNullableX {
+                prop X string? { get; }
+            }
+            data class NonNullableX(X string) : IHasNullableX
+            """;
+
+        AssertEmitsAndLoads(source);
     }
 
     [Fact]
@@ -154,7 +170,7 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GetOnlyNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0187()
+    public void GetOnlyNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0504()
     {
         // Unsound direction, now rejected: iface `int32` <- impl `int32?`.
         // A get-only interface property is a covariant (return) position, so
@@ -173,8 +189,9 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
-        Assert.Single(gs0187);
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0504", diagnostic.Id);
+        Assert.Contains("expected type 'string', actual type 'string?'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -195,7 +212,7 @@ public class Issue2150DataClassInterfacePropertyTests
     }
 
     [Fact]
-    public void GetSetNullableInterfaceProperty_NotSatisfiedByNonNullablePositionalParam_ReportsGS0187()
+    public void GetSetNullableInterfaceProperty_NotSatisfiedByNonNullablePositionalParam_ReportsGS0504()
     {
         // Invariant mismatch: iface `int32?` <- impl `int32`. A setter makes
         // the interface property invariant (both a producer, via get, and a
@@ -211,12 +228,13 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
-        Assert.Single(gs0187);
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0504", diagnostic.Id);
+        Assert.Contains("expected type 'int32?', actual type 'int32'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void GetSetNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0187()
+    public void GetSetNonNullableInterfaceProperty_NotSatisfiedByNullablePositionalParam_ReportsGS0504()
     {
         // Invariant mismatch (reverse direction): iface `int32` <- impl
         // `int32?`. Also unsound via the `get` side (as in the get-only case).
@@ -229,8 +247,9 @@ public class Issue2150DataClassInterfacePropertyTests
             }
             """;
 
-        var gs0187 = Bind(source).Where(d => d.Id == "GS0187").ToList();
-        Assert.Single(gs0187);
+        var diagnostic = Assert.Single(Bind(source));
+        Assert.Equal("GS0504", diagnostic.Id);
+        Assert.Contains("expected type 'int32', actual type 'int32?'", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
