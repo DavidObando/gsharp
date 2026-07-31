@@ -14,11 +14,17 @@ public sealed class BoundPatternSwitchStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="discriminant">The discriminant expression.</param>
     /// <param name="arms">The switch arms.</param>
-    public BoundPatternSwitchStatement(SyntaxNode syntax, BoundExpression discriminant, ImmutableArray<BoundPatternSwitchArm> arms)
+    /// <param name="isExhaustive">Whether closed-type analysis proved that the arms cover every value.</param>
+    public BoundPatternSwitchStatement(
+        SyntaxNode syntax,
+        BoundExpression discriminant,
+        ImmutableArray<BoundPatternSwitchArm> arms,
+        bool isExhaustive = false)
         : base(syntax)
     {
         Discriminant = discriminant;
         Arms = arms;
+        IsExhaustive = isExhaustive;
     }
 
     /// <inheritdoc/>
@@ -29,4 +35,7 @@ public sealed class BoundPatternSwitchStatement : BoundStatement
 
     /// <summary>Gets the switch arms.</summary>
     public ImmutableArray<BoundPatternSwitchArm> Arms { get; }
+
+    /// <summary>Gets a value indicating whether closed-type analysis proved that the switch is exhaustive.</summary>
+    public bool IsExhaustive { get; }
 }

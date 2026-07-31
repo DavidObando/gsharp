@@ -247,11 +247,18 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Preserve the legacy trailing ret on void bodies. For value bodies,
-        // cap only an emitted dead-code tail that follows the real terminator.
-        if (alwaysAppendRet || !this.currentPositionEndsInTerminator)
+        if (alwaysAppendRet)
         {
             this.il.OpCode(ILOpCode.Ret);
+        }
+        else if (!this.currentPositionEndsInTerminator)
+        {
+            const string Message = "Compiler-generated guard reached: non-void function fell through without returning a value.";
+            var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message));
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
+            this.il.OpCode(ILOpCode.Throw);
         }
     }
 

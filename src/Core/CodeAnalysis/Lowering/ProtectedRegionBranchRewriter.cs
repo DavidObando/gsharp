@@ -71,53 +71,17 @@ internal static class ProtectedRegionBranchRewriter
         public bool HasRoutes => Routes.Count != 0;
     }
 
-    private sealed class Planner : BoundTreeWalker
+    private sealed class Planner
     {
-        private readonly List<BoundTryStatement> tryStack = new();
-        private readonly Dictionary<BoundLabel, ImmutableArray<BoundTryStatement>> labelRegions = new();
-        private readonly List<(BoundStatement Branch, BoundLabel Target, ImmutableArray<BoundTryStatement> Regions)> branches = new();
+        private readonly ProtectedRegionBranchAnalysis analysis;
+
+        private Planner(ProtectedRegionBranchAnalysis analysis)
+        {
+            this.analysis = analysis;
+        }
 
         public static Plan Create(BoundStatement body)
-        {
-            var planner = new Planner();
-            planner.VisitStatement(body);
-            return planner.Build();
-        }
-
-        public override void VisitStatement(BoundStatement node)
-        {
-            switch (node)
-            {
-                case BoundLabelStatement label:
-                    labelRegions[label.Label] = tryStack.ToImmutableArray();
-                    return;
-                case BoundGotoStatement go:
-                    branches.Add((go, go.Label, tryStack.ToImmutableArray()));
-                    return;
-                case BoundConditionalGotoStatement conditional:
-                    branches.Add((conditional, conditional.Label, tryStack.ToImmutableArray()));
-                    break;
-            }
-
-            base.VisitStatement(node);
-        }
-
-        protected override void VisitTryStatement(BoundTryStatement node)
-        {
-            tryStack.Add(node);
-            VisitStatement(node.TryBlock);
-            tryStack.RemoveAt(tryStack.Count - 1);
-
-            foreach (var clause in node.CatchClauses)
-            {
-                VisitStatement(clause.Body);
-            }
-
-            if (node.FinallyBlock != null)
-            {
-                VisitStatement(node.FinallyBlock);
-            }
-        }
+            => new Planner(ProtectedRegionBranchAnalysis.Create(body)).Build();
 
         private Plan Build()
         {
@@ -126,17 +90,17 @@ internal static class ProtectedRegionBranchRewriter
             var nextSelector = 1;
             var nextEntry = 0;
 
-            foreach (var (branch, target, sourceRegions) in branches)
+            foreach (var branch in analysis.Branches)
             {
-                if (!labelRegions.TryGetValue(target, out var targetRegions))
+                if (!analysis.TryGetLabelRegions(branch.Target, out var targetRegions))
                 {
                     continue;
                 }
 
                 var commonDepth = 0;
-                while (commonDepth < sourceRegions.Length
+                while (commonDepth < branch.Regions.Length
                     && commonDepth < targetRegions.Length
-                    && ReferenceEquals(sourceRegions[commonDepth], targetRegions[commonDepth]))
+                    && ReferenceEquals(branch.Regions[commonDepth], targetRegions[commonDepth]))
                 {
                     commonDepth++;
                 }
@@ -146,11 +110,11 @@ internal static class ProtectedRegionBranchRewriter
                     continue;
                 }
 
-                if (!selectors.TryGetValue(target, out var selector))
+                if (!selectors.TryGetValue(branch.Target, out var selector))
                 {
                     selector = nextSelector++;
-                    selectors[target] = selector;
-                    plan.RoutedTargets.Add(target);
+                    selectors[branch.Target] = selector;
+                    plan.RoutedTargets.Add(branch.Target);
                 }
 
                 BoundLabel EntryLabel(BoundTryStatement tryStatement)
@@ -164,13 +128,13 @@ internal static class ProtectedRegionBranchRewriter
                     return label;
                 }
 
-                plan.Routes[branch] = new Route(selector, EntryLabel(targetRegions[commonDepth]));
+                plan.Routes[branch.Statement] = new Route(selector, EntryLabel(targetRegions[commonDepth]));
 
                 for (var depth = commonDepth; depth < targetRegions.Length; depth++)
                 {
                     var region = targetRegions[depth];
                     var dispatchTarget = depth + 1 == targetRegions.Length
-                        ? target
+                        ? branch.Target
                         : EntryLabel(targetRegions[depth + 1]);
 
                     if (!plan.DispatchEntries.TryGetValue(region, out var entries))

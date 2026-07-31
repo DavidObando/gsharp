@@ -56,17 +56,26 @@ public static class ExhaustivenessAnalyzer
     /// <param name="arms">The bound switch-statement arms.</param>
     /// <param name="structs">All user-defined aggregate types in scope.</param>
     /// <param name="diagnostics">The diagnostic sink.</param>
-    public static void AnalyzeSwitchStatement(
+    /// <returns>Whether the switch covers every value of a closed discriminant type.</returns>
+    public static bool AnalyzeSwitchStatement(
         TextLocation location,
         TypeSymbol discriminantType,
         ImmutableArray<BoundPatternSwitchArm> arms,
         ImmutableArray<StructSymbol> structs,
         DiagnosticBag diagnostics)
     {
+        if (!IsExhaustiveDiscriminant(discriminantType))
+        {
+            return false;
+        }
+
         if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
         {
             diagnostics.ReportSwitchStatementNotExhaustive(location, discriminantDescription, missingNames);
+            return false;
         }
+
+        return true;
     }
 
     private static bool TryGetMissingVariants(
