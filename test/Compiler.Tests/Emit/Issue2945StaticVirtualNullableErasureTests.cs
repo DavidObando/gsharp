@@ -97,6 +97,21 @@ public class Issue2945StaticVirtualNullableErasureTests
                     }
                 }
             }
+
+            sealed interface ISliceGet[T] { shared { prop Value []T? { get; } } }
+            struct SliceGet : ISliceGet[int32] { shared { prop Value []int32 -> []int32{1} } }
+
+            sealed interface IArrayGet[T] { shared { prop Value [3]T? { get; } } }
+            struct ArrayGet : IArrayGet[int32] { shared { prop Value [3]int32 -> [3]int32{1, 2, 3} } }
+
+            sealed interface IMapGet[T] { shared { prop Value map[string,T?] { get; } } }
+            struct MapGet : IMapGet[int32] { shared { prop Value map[string,int32] -> map[string,int32]{"one": 1} } }
+
+            sealed interface IFuncArgumentGet[T] { shared { prop Value func(T?) int32 { get; } } }
+            struct FuncArgumentGet : IFuncArgumentGet[int32] { shared { prop Value func(int32) int32 -> func(value int32) int32 { return value + 1 } } }
+
+            sealed interface IFuncReturnGet[T] { shared { prop Value func(int32) T? { get; } } }
+            struct FuncReturnGet : IFuncReturnGet[int32] { shared { prop Value func(int32) int32 -> func(value int32) int32 { return value + 2 } } }
             """;
 
         const string consumer = """
@@ -245,6 +260,7 @@ public class Issue2945StaticVirtualNullableErasureTests
     {
         const string source = """
             package Issue2945Rejected
+            import System.Collections.Generic
 
             sealed interface IConcrete {
                 shared { prop Value int32? { get; } }
@@ -280,6 +296,13 @@ public class Issue2945StaticVirtualNullableErasureTests
             class WrongType : IWrongType {
                 shared { prop Value string -> "wrong" }
             }
+
+            interface INestedList[T] {
+                prop Value List[T?] { get; }
+            }
+            class NestedListMismatch : INestedList[int32] {
+                prop Value List[int32] { get; }
+            }
             """;
 
         var directory = CreateWorkDirectory();
@@ -298,6 +321,7 @@ public class Issue2945StaticVirtualNullableErasureTests
             Assert.NotEqual(0, exitCode);
             Assert.False(File.Exists(outputPath));
             Assert.Equal(5, CountOccurrences(output, "error GS0397:"));
+            Assert.Equal(1, CountOccurrences(output, "error GS0187:"));
         }
         finally
         {

@@ -442,22 +442,8 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
     // imported (BCL) interfaces.
     // ----------------------------------------------------------------------
     [Fact]
-    public void PlainNonExplicitIndexer_DoesNotSatisfyInterfaceIndexerContract_ReportsGS0187()
+    public void PlainNonExplicitIndexer_DispatchesThroughInterfaceTypedReceiver()
     {
-        // ADR-0118 (issue #944): an indexer's CLR name ("Item") is not
-        // reachable by ordinary member-name lookup — only through `obj[i]`
-        // index syntax — so `TypeMemberModel.TryGetProperty` deliberately
-        // excludes indexers, and `VerifyInterfaceImplementations` has no
-        // separate by-shape indexer-matching path. By design (pre-existing,
-        // unrelated to this fix), only an EXPLICIT `(IFace)` clause indexer
-        // implementation can satisfy an interface's indexer contract; a
-        // plain non-explicit indexer of the identical shape does not count
-        // and GS0187 correctly fires. This is a control confirming the new
-        // interface-typed-receiver dispatch work does not (and should not)
-        // change that pre-existing, intentional restriction. See
-        // ImportedBclInterfaceIndexer_DispatchesThroughInterfaceTypedReceiver
-        // below for the genuine "ordinary" (non-G#-explicit-clause) control
-        // proving the receiver-dispatch fix itself is general.
         const string source = """
             package GapCheck
 
@@ -468,44 +454,14 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
             class Store : IRepo {
                 prop this[key string] int32 { get { return 1 } set { } }
             }
+
+            var store = Store()
+            var asIface IRepo = store
+            asIface["key"] = 99
+            public var result = asIface["key"]
             """;
 
-        var (exitCode, output) = CompileExpectingFailure(source);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0187", output);
-    }
-
-    private static (int ExitCode, string Output) CompileExpectingFailure(string source)
-    {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue2370_fail_").FullName;
-        var srcPath = Path.Combine(tempDir, "test.gs");
-        var outPath = Path.Combine(tempDir, "test.dll");
-        File.WriteAllText(srcPath, source);
-
-        using var stdoutWriter = new StringWriter();
-        using var stderrWriter = new StringWriter();
-        var prevOut = Console.Out;
-        var prevErr = Console.Error;
-        Console.SetOut(stdoutWriter);
-        Console.SetError(stderrWriter);
-        int compileExit;
-        try
-        {
-            compileExit = Program.Main(new[]
-            {
-                "/out:" + outPath,
-                "/target:library",
-                "/targetframework:net10.0",
-                srcPath,
-            });
-        }
-        finally
-        {
-            Console.SetOut(prevOut);
-            Console.SetError(prevErr);
-        }
-
-        return (compileExit, stdoutWriter.ToString() + stderrWriter.ToString());
+        Assert.Equal(1, RunAndGetIntResult(source));
     }
 
     [Fact]

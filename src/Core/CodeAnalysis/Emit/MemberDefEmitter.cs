@@ -5,6 +5,7 @@
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: each public entry point is followed by its own private helpers — instance-property group, static-property group, instance-event group, static-event group, interface group)
 
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -355,7 +356,7 @@ internal sealed class MemberDefEmitter
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
-        else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
+        else if (PropertyImplicitlyImplementsInterface(structSym, prop))
         {
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -365,13 +366,11 @@ internal sealed class MemberDefEmitter
             // Issue #2362: a mangled-name explicit interface property
             // implementation is bound to its interface slot purely via an
             // explicit MethodImpl row (see
-            // EmitExplicitInterfacePropertyMethodImpls) — its accessor's own
-            // name never matches the interface member's name, so
-            // PropertyImplicitlyImplementsInterface (a name-based check)
-            // never fires for it. Per ECMA-335 §II.10.3.3, a MethodImpl body
-            // method must be virtual; Final additionally prevents a derived
-            // class from accidentally overriding this synthetic accessor by
-            // name (it has no natural override point, exactly like the
+            // EmitExplicitInterfacePropertyMethodImpls).
+            // PropertyImplicitlyImplementsInterface deliberately excludes explicit implementations.
+            // Per ECMA-335 §II.10.3.3, a MethodImpl body method must be virtual;
+            // Final prevents a derived class from overriding this synthetic accessor
+            // by name (it has no natural override point, exactly like the
             // #2010 mangled explicit method convention's own methods, which
             // get Virtual | NewSlot | Final unconditionally via EmitFunction).
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final;
@@ -470,7 +469,7 @@ internal sealed class MemberDefEmitter
         {
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
         }
-        else if (this.PropertyImplicitlyImplementsInterface(structSym, prop))
+        else if (PropertyImplicitlyImplementsInterface(structSym, prop))
         {
             // Issue #248: implicit interface implementation requires Virtual | NewSlot.
             methodAttrs |= MethodAttributes.Virtual | MethodAttributes.NewSlot;
@@ -878,8 +877,16 @@ internal sealed class MemberDefEmitter
     /// Issue #248: determines whether a property on a class/struct implicitly implements
     /// an interface property (same name and type on any implemented interface).
     /// </summary>
-    private bool PropertyImplicitlyImplementsInterface(StructSymbol structSym, PropertySymbol prop)
+    /// <param name="structSym">The type declaring the candidate property.</param>
+    /// <param name="prop">The candidate property.</param>
+    /// <returns><see langword="true"/> when the property implements an interface property.</returns>
+    internal static bool PropertyImplicitlyImplementsInterface(StructSymbol structSym, PropertySymbol prop)
     {
+        if (prop.HasExplicitInterfaceClause)
+        {
+            return false;
+        }
+
         if (!structSym.Interfaces.IsDefaultOrEmpty)
         {
             foreach (var iface in structSym.Interfaces)
@@ -901,9 +908,10 @@ internal sealed class MemberDefEmitter
                     continue;
                 }
 
+                var typeParameterMap = DeclarationBinder.BuildInterfaceTypeParameterMap(iface);
                 foreach (var ifaceProp in defIface.Properties)
                 {
-                    if (ifaceProp.Name == prop.Name)
+                    if (PropertyMatchesInterfaceSlot(prop, ifaceProp, typeParameterMap))
                     {
                         return true;
                     }
@@ -925,7 +933,6 @@ internal sealed class MemberDefEmitter
             // (ILVerify: "Class implements interface but not method"). The
             // binder-side `MemberLookup.FindMatchingProperty` already gets
             // this right; this call brings the emitter in line with it.
-            var propClr = NullableLifting.GetEffectiveClrType(prop.Type);
             foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
                 var clrIface = ifaceSym?.ClrType;
@@ -936,7 +943,34 @@ internal sealed class MemberDefEmitter
 
                 foreach (var clrProp in clrIface.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 {
-                    if (clrProp.Name == prop.Name && (propClr == null || ClrTypeUtilities.AreSame(propClr, clrProp.PropertyType)))
+                    var indexParameters = clrProp.GetIndexParameters();
+                    if (clrProp.Name != prop.Name
+                        || prop.IsIndexer != (indexParameters.Length > 0)
+                        || prop.Parameters.Length != indexParameters.Length
+                        || (clrProp.GetMethod != null && !prop.HasGetter)
+                        || (clrProp.SetMethod != null && !prop.HasSetter)
+                        || !DeclarationBinder.IsInterfacePropertyTypeCompatible(
+                            prop.Type,
+                            MemberLookup.GetClrPropertyTypeSymbol(ifaceSym, clrProp),
+                            clrProp.SetMethod != null,
+                            typeParameterMap: null))
+                    {
+                        continue;
+                    }
+
+                    var parametersMatch = true;
+                    for (var i = 0; i < indexParameters.Length; i++)
+                    {
+                        if (!DeclarationBinder.TypeSignaturesEquivalent(
+                            prop.Parameters[i].Type,
+                            MemberLookup.GetIndexerParameterTypeSymbol(ifaceSym, clrProp, i)))
+                        {
+                            parametersMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (parametersMatch)
                     {
                         return true;
                     }
@@ -945,6 +979,39 @@ internal sealed class MemberDefEmitter
         }
 
         return false;
+    }
+
+    private static bool PropertyMatchesInterfaceSlot(
+        PropertySymbol property,
+        PropertySymbol interfaceProperty,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        if (property.Name != interfaceProperty.Name
+            || property.IsIndexer != interfaceProperty.IsIndexer
+            || property.Parameters.Length != interfaceProperty.Parameters.Length
+            || (interfaceProperty.HasGetter && !property.HasGetter)
+            || (interfaceProperty.HasSetter && !property.HasSetter)
+            || !DeclarationBinder.IsInterfacePropertyTypeCompatible(
+                property.Type,
+                interfaceProperty.Type,
+                interfaceProperty.HasSetter,
+                typeParameterMap))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < property.Parameters.Length; i++)
+        {
+            if (!DeclarationBinder.TypeSignaturesEquivalent(
+                interfaceProperty.Parameters[i].Type,
+                property.Parameters[i].Type,
+                typeParameterMap))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -45,6 +45,17 @@ internal static class MethodInfoHelpers
             return true;
         }
 
+        foreach (var property in receiverStruct.Properties)
+        {
+            if ((ReferenceEquals(property.GetterSymbol, function)
+                    || ReferenceEquals(property.SetterSymbol, function))
+                && (property.HasExplicitInterfaceClause
+                    || MemberDefEmitter.PropertyImplicitlyImplementsInterface(receiverStruct, property)))
+            {
+                return true;
+            }
+        }
+
         return MethodImplicitlyImplementsInterface(receiverStruct, function);
     }
 

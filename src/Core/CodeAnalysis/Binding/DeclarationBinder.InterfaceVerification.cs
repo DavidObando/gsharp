@@ -508,7 +508,6 @@ internal sealed partial class DeclarationBinder
             // property implemented (or inherited) ANYWHERE in the base chain.
             var found = TryGetConstructedInterfacePropertyImplementation(
                 structSymbol,
-                iface,
                 iprop,
                 typeParameterMap,
                 out var implProp,
@@ -516,7 +515,6 @@ internal sealed partial class DeclarationBinder
             if (!found
                 && HasMatchingImportedBaseProperty(
                     structSymbol,
-                    iface,
                     iprop,
                     typeParameterMap))
             {
@@ -702,12 +700,6 @@ internal sealed partial class DeclarationBinder
             typeParameterMap,
             eraseReferenceNullability: true);
 
-    private static bool IsUnsupportedImplicitInterfaceIndexer(
-        InterfaceSymbol iface,
-        PropertySymbol interfaceProperty)
-        => interfaceProperty.IsIndexer
-            && ReferenceEquals(iface.Definition ?? iface, iface);
-
     private static TypeSymbol SubstituteInterfacePropertyType(
         TypeSymbol interfaceType,
         Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
@@ -740,7 +732,6 @@ internal sealed partial class DeclarationBinder
 
     private static bool TryGetConstructedInterfacePropertyImplementation(
         StructSymbol structSymbol,
-        InterfaceSymbol iface,
         PropertySymbol interfaceProperty,
         Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap,
         out PropertySymbol implementation,
@@ -753,7 +744,6 @@ internal sealed partial class DeclarationBinder
             {
                 if (candidate.HasExplicitInterfaceClause
                     || candidate.Name != interfaceProperty.Name
-                    || IsUnsupportedImplicitInterfaceIndexer(iface, interfaceProperty)
                     || (!ReferenceEquals(current, structSymbol) && candidate.Accessibility != Accessibility.Public)
                     || candidate.IsIndexer != interfaceProperty.IsIndexer
                     || candidate.Parameters.Length != interfaceProperty.Parameters.Length)
@@ -800,13 +790,11 @@ internal sealed partial class DeclarationBinder
 
     private static bool HasMatchingImportedBaseProperty(
         StructSymbol structSymbol,
-        InterfaceSymbol iface,
         PropertySymbol interfaceProperty,
         Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
         var importedBase = TypeMemberModel.GetNearestImportedBase(structSymbol);
-        if (importedBase?.ClrType == null
-            || IsUnsupportedImplicitInterfaceIndexer(iface, interfaceProperty))
+        if (importedBase?.ClrType == null)
         {
             return false;
         }
