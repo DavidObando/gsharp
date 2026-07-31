@@ -434,32 +434,6 @@ public class Issue2889LambdaThunkNestedGenericTests
     }
 
     [Fact]
-    public void InlineLambdaThroughNestedErasedReceiver_ReportsCurrentDiagnostics()
-    {
-        var diagnostics = CompileExpectingFailure("""
-            package i2889inline
-            import System
-            import System.Collections.Generic
-
-            class Src {
-                let N int32
-                init(n int32) { N = n }
-            }
-
-            func Main() {
-                let callbacks = List[System.Action[List[Src]]]()
-                callbacks.Add((items List[Src]) -> Console.WriteLine(items[0].N))
-            }
-            """);
-
-        Assert.Contains("error GS0159: Cannot find function Add.", diagnostics, StringComparison.Ordinal);
-        Assert.Contains(
-            "error GS0155: Cannot convert type 'object' to 'System.Collections.Generic.List[Src]'.",
-            diagnostics,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void PublicLibraryDelegateSignature_RoundTripsThroughCSharp()
     {
         var directory = Path.Combine(
@@ -720,33 +694,6 @@ public class Issue2889LambdaThunkNestedGenericTests
         finally
         {
             loadContext.Unload();
-        }
-    }
-
-    private static string CompileExpectingFailure(string source)
-    {
-        var directory = Path.Combine(
-            AppContext.BaseDirectory,
-            "Issue2889_Failure_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        try
-        {
-            var sourcePath = Path.Combine(directory, "test.gs");
-            var assemblyPath = Path.Combine(directory, "test.dll");
-            File.WriteAllText(sourcePath, source);
-            var result = RunCompiler(
-            [
-                "/out:" + assemblyPath,
-                "/target:exe",
-                "/targetframework:net10.0",
-                sourcePath,
-            ]);
-            Assert.NotEqual(0, result.ExitCode);
-            return result.Diagnostics;
-        }
-        finally
-        {
-            TryDeleteDirectory(directory);
         }
     }
 
