@@ -2062,8 +2062,10 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
-        var fieldName = syntax.FieldIdentifier.Text;
         var receiverType = receiver.Type;
+        var fieldName = receiverType is TupleTypeSymbol tupleType
+            ? GetTupleFieldName(syntax.FieldIdentifier.Text, tupleType)
+            : syntax.FieldIdentifier.Text;
         BoundExpression value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 

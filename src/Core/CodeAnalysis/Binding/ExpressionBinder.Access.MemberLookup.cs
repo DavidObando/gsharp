@@ -24,6 +24,43 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    private static bool TryGetTupleElementIndex(
+        string memberName,
+        TupleTypeSymbol tupleType,
+        out int zeroBased)
+    {
+        if (string.IsNullOrEmpty(memberName))
+        {
+            zeroBased = -1;
+            return false;
+        }
+
+        if (int.TryParse(memberName, out var numericIndex)
+            && numericIndex >= 0
+            && numericIndex < tupleType.Arity)
+        {
+            zeroBased = numericIndex;
+            return true;
+        }
+
+        if (memberName.StartsWith("Item", System.StringComparison.Ordinal)
+            && int.TryParse(memberName.Substring(4), out var oneBased)
+            && oneBased >= 1
+            && oneBased <= tupleType.Arity)
+        {
+            zeroBased = oneBased - 1;
+            return true;
+        }
+
+        zeroBased = -1;
+        return false;
+    }
+
+    private static string GetTupleFieldName(string memberName, TupleTypeSymbol tupleType) =>
+        TryGetTupleElementIndex(memberName, tupleType, out var index)
+            ? "Item" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : memberName ?? string.Empty;
+
     private BoundExpression BindAccessorStep(
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
@@ -436,13 +473,12 @@ internal sealed partial class ExpressionBinder
                 }
                 else if (receiver != null && receiver.Type is TupleTypeSymbol tupleSym)
                 {
-                    // Phase 4.5: tuple element access via Item1..ItemN.
+                    // Phase 4.5 / issue #2924: tuple element access via
+                    // one-based Item1..ItemN or zero-based .0...N selectors.
                     var memberName = ne.IdentifierToken.Text;
-                    if (memberName.StartsWith("Item", System.StringComparison.Ordinal)
-                        && int.TryParse(memberName.Substring(4), out var oneBased)
-                        && oneBased >= 1 && oneBased <= tupleSym.Arity)
+                    if (TryGetTupleElementIndex(memberName, tupleSym, out var zeroBased))
                     {
-                        return new BoundTupleElementAccessExpression(null, receiver, tupleSym, oneBased - 1);
+                        return new BoundTupleElementAccessExpression(null, receiver, tupleSym, zeroBased);
                     }
 
                     return BindExtensionMethodGroupOrError(receiver, ne);

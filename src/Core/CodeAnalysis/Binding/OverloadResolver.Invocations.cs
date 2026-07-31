@@ -128,7 +128,7 @@ internal sealed partial class OverloadResolver
     private BoundExpression BuildNullConditionalDelegateResult(
         CallExpressionSyntax syntax,
         BoundExpression receiverLoad,
-        LocalVariableSymbol capture,
+        VariableSymbol capture,
         BoundExpression whenNotNull,
         TypeSymbol returnType)
     {
@@ -685,9 +685,44 @@ internal sealed partial class OverloadResolver
             return callee;
         }
 
+        BoundNullConditionalAccessExpression nullConditionalCallee = null;
+        var assertions = new Stack<BoundUnaryExpression>();
+        var assertedCallee = callee;
+        while (assertedCallee is BoundUnaryExpression assertion
+            && assertion.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
+        {
+            assertions.Push(assertion);
+            assertedCallee = assertion.Operand;
+        }
+
+        if (assertedCallee is BoundNullConditionalAccessExpression assertedNullConditional)
+        {
+            nullConditionalCallee = assertedNullConditional;
+            callee = assertedNullConditional.WhenNotNull;
+            while (assertions.TryPop(out var assertion))
+            {
+                var assertionOperator = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, callee.Type);
+                callee = new BoundUnaryExpression(
+                    assertion.Syntax,
+                    assertionOperator,
+                    callee,
+                    assertion.IsChecked);
+            }
+        }
+
         // The verbatim source spelling of the callee (`(value)`, `handler!!`, ...)
         // used in diagnostics — SyntaxNode.ToString() pretty-prints the whole tree.
         var calleeName = syntax.Callee.SyntaxTree.Text.ToString(syntax.Callee.Span);
+
+        BoundExpression CompleteInvocation(BoundExpression invocation) =>
+            nullConditionalCallee == null
+                ? invocation
+                : BuildNullConditionalDelegateResult(
+                    syntax,
+                    nullConditionalCallee.Receiver,
+                    nullConditionalCallee.Capture,
+                    invocation,
+                    invocation.Type);
 
         // Named args have no meaning without preserved parameter names.
         if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
@@ -746,7 +781,7 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            return new BoundIndirectCallExpression(syntax, callee, fnType, convertedArgs);
+            return CompleteInvocation(new BoundIndirectCallExpression(syntax, callee, fnType, convertedArgs));
         }
 
         if (callee.Type is DelegateTypeSymbol delegateSym)
@@ -762,12 +797,12 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            return new BoundIndirectCallExpression(
+            return CompleteInvocation(new BoundIndirectCallExpression(
                 syntax,
                 callee,
                 delegateSym.EquivalentFunctionType,
                 convertedDelegateArgs,
-                delegateRefKinds);
+                delegateRefKinds));
         }
 
         // A value whose CLR type is a delegate (e.g. `Func[int32, int32]`) is
@@ -776,7 +811,7 @@ internal sealed partial class OverloadResolver
         {
             if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
-                return invokeCall;
+                return CompleteInvocation(invokeCall);
             }
         }
 

@@ -583,7 +583,7 @@ public partial class Parser
         return false;
     }
 
-    private ExpressionSyntax ParseNameOrCallExpression()
+    private ExpressionSyntax ParseNameOrCallExpression(bool stopBeforeIndirectInvocation = false)
     {
         ExpressionSyntax current;
         if (Current.Kind == SyntaxKind.IdentifierToken
@@ -656,7 +656,7 @@ public partial class Parser
             current = ParseNameExpression();
         }
 
-        return ParsePostfixChain(current);
+        return ParsePostfixChain(current, stopBeforeIndirectInvocation);
     }
 
     // Phase 4.1 / ADR-0020: bounded-lookahead disambiguation between

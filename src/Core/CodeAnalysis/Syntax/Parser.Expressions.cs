@@ -688,13 +688,13 @@ public partial class Parser
     // iterative, but an index argument re-enters the full expression grammar
     // (`a[a[a[…`), so the chain participates in the recursion cycle and ticks
     // the guard while an index (or accessor) argument parse is in flight.
-    private ExpressionSyntax ParsePostfixChain(ExpressionSyntax current)
+    private ExpressionSyntax ParsePostfixChain(ExpressionSyntax current, bool stopBeforeIndirectInvocation = false)
     {
         EnsureNestedParseAllowed();
         recursionDepth++;
         try
         {
-            return ParsePostfixChainCore(current);
+            return ParsePostfixChainCore(current, stopBeforeIndirectInvocation);
         }
         finally
         {
@@ -702,11 +702,30 @@ public partial class Parser
         }
     }
 
-    private ExpressionSyntax ParsePostfixChainCore(ExpressionSyntax current)
+    private ExpressionSyntax ParsePostfixChainCore(ExpressionSyntax current, bool stopBeforeIndirectInvocation)
     {
         while (true)
         {
-            if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
+            if (IsTupleElementSelectorToken(Current, includesDot: true))
+            {
+                // Issue #2924: the lexer keeps `.5` as a leading-dot float
+                // token. In postfix position the same token spells a zero-based
+                // tuple selector, so split it into the existing accessor shape.
+                var selectorToken = NextToken();
+                var dotToken = new SyntaxToken(syntaxTree, SyntaxKind.DotToken, selectorToken.Position, ".", null);
+                var identifierToken = new SyntaxToken(
+                    syntaxTree,
+                    SyntaxKind.IdentifierToken,
+                    selectorToken.Position + 1,
+                    selectorToken.Text.Substring(1),
+                    null);
+                current = new AccessorExpressionSyntax(
+                    syntaxTree,
+                    current,
+                    dotToken,
+                    new NameExpressionSyntax(syntaxTree, identifierToken));
+            }
+            else if (Current.Kind == SyntaxKind.DotToken || Current.Kind == SyntaxKind.QuestionDotToken)
             {
                 var dotToken = NextToken();
 
@@ -732,7 +751,7 @@ public partial class Parser
                 {
                     var rightSide = dotToken.Kind == SyntaxKind.QuestionDotToken
                         ? ParseNullConditionalContinuation()
-                        : ParseNameOrCallExpression();
+                        : ParseMemberContinuation();
                     current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, rightSide);
                 }
             }
@@ -744,7 +763,7 @@ public partial class Parser
                 // emitter reuse the existing `(*p).field` / `(*p).method(...)`
                 // bound shape without any new bound-node kinds.
                 var arrowToken = NextToken();
-                var rightSide = ParseNameOrCallExpression();
+                var rightSide = ParseNameOrCallExpression(stopBeforeIndirectInvocation: true);
                 var starToken = new SyntaxToken(syntaxTree, SyntaxKind.StarToken, arrowToken.Position, "*", null);
                 var deref = new UnaryExpressionSyntax(syntaxTree, starToken, current);
                 current = new AccessorExpressionSyntax(syntaxTree, deref, arrowToken, rightSide);
@@ -776,6 +795,11 @@ public partial class Parser
             else if (Current.Kind == SyntaxKind.OpenParenthesisToken
                 && !IsCurrentOnNewLineAfter(current))
             {
+                if (stopBeforeIndirectInvocation)
+                {
+                    break;
+                }
+
                 // Issue #2185: a same-line `(args)` following an arbitrary
                 // postfix expression is an *indirect* invocation of that
                 // expression's (function-typed) value — e.g. `(h)(value)`,
@@ -822,15 +846,54 @@ public partial class Parser
 
     private ExpressionSyntax ParseNullConditionalContinuation()
     {
-        var continuation = ParseNameOrCallExpression();
+        var continuation = ParseMemberContinuation();
         while (Current.Kind == SyntaxKind.BangBangToken)
         {
             var bangBangToken = NextToken();
             continuation = new UnaryExpressionSyntax(syntaxTree, bangBangToken, continuation);
-            continuation = ParsePostfixChain(continuation);
+            continuation = ParsePostfixChain(continuation, stopBeforeIndirectInvocation: true);
         }
 
         return continuation;
+    }
+
+    private ExpressionSyntax ParseMemberContinuation()
+    {
+        if (!IsTupleElementSelectorToken(Current, includesDot: false))
+        {
+            return ParseNameOrCallExpression(stopBeforeIndirectInvocation: true);
+        }
+
+        var selectorToken = NextToken();
+        var identifierToken = new SyntaxToken(
+            syntaxTree,
+            SyntaxKind.IdentifierToken,
+            selectorToken.Position,
+            selectorToken.Text,
+            null);
+        return new NameExpressionSyntax(syntaxTree, identifierToken);
+    }
+
+    private static bool IsTupleElementSelectorToken(SyntaxToken token, bool includesDot)
+    {
+        var text = token.Text;
+        var digitStart = includesDot ? 1 : 0;
+        if (token.Kind != SyntaxKind.NumberToken
+            || string.IsNullOrEmpty(text)
+            || (includesDot ? text[0] != '.' : text[0] == '.'))
+        {
+            return false;
+        }
+
+        for (var i = digitStart; i < text.Length; i++)
+        {
+            if (text[i] < '0' || text[i] > '9')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // Issue #1016: parse the argument of an index expression, allowing a
