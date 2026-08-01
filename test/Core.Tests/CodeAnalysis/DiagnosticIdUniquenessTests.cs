@@ -201,6 +201,7 @@ public class DiagnosticIdUniquenessTests
         string path,
         IReadOnlyDictionary<string, string> expectedSeverities)
     {
+        var referencePath = Path.GetRelativePath(FindRepoRoot(), path);
         var documentedSeverityGroups = Regex.Matches(
                 File.ReadAllText(path),
                 @"^\|\s*(GS\d{4})\s*\|\s*([^|]+?)\s*\|",
@@ -221,7 +222,7 @@ public class DiagnosticIdUniquenessTests
 
         Assert.True(
             conflictingSeverities.Length == 0,
-            $"{path} documents diagnostics with conflicting severities:\n" +
+            $"{referencePath} documents diagnostics with conflicting severities:\n" +
             string.Join("\n", conflictingSeverities));
 
         var documentedSeverities = documentedSeverityGroups
@@ -246,10 +247,10 @@ public class DiagnosticIdUniquenessTests
 
         Assert.True(
             missing.Length == 0 && unexpected.Length == 0 && mismatched.Length == 0,
-            $"{path} is out of sync with compiler diagnostics:\n" +
-            $"Missing: {string.Join(", ", missing)}\n" +
-            $"Unexpected: {string.Join(", ", unexpected)}\n" +
-            $"Severity mismatches:\n{string.Join("\n", mismatched)}");
+            $"{referencePath} is out of sync with compiler diagnostics:\n" +
+            $"Missing from {referencePath}: {string.Join(", ", missing)}\n" +
+            $"Unexpected in {referencePath}: {string.Join(", ", unexpected)}\n" +
+            $"Severity mismatches in {referencePath}:\n{string.Join("\n", mismatched)}");
     }
 
     private static string NormalizeDocumentedSeverity(Match match)
