@@ -58,7 +58,7 @@
     <BaseOutputPath>$(OutRoot)/bin/$(Configuration)</BaseOutputPath>
     <OutputPath>$(BaseOutputPath)/$(MSBuildProjectName)</OutputPath>
     <BaseIntermediateOutputPath>$(OutRoot)/obj/$(MSBuildProjectName)</BaseIntermediateOutputPath>
-    <!-- <IntermediateOutputPath>$(BaseIntermediateOutputPath)/$(MSBuildProjectName)</IntermediateOutputPath> -->
+    <IntermediateOutputPath Condition="'$(GsharpObjRoot)'!=''">$(GsharpObjRoot)/$(MSBuildProjectName)/$(Configuration)/</IntermediateOutputPath>
     <PackageOutputPath>$(BaseOutputPath)/nupkgs</PackageOutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AssemblyName>GSharp.$(MSBuildProjectName)</AssemblyName>

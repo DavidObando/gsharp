@@ -99,7 +99,7 @@
     <RemoveDir Directories="$(_GsharpCompilerPublishDir)" Condition="Exists('$(_GsharpCompilerPublishDir)')" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\Compiler\Compiler.csproj"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpCompilerPublishDir);BaseOutputPath=$(_GsharpCompilerStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsc-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
     <ItemGroup>
       <_GsharpCompilerPayload Include="$(_GsharpCompilerPublishDir)**\*" />
     </ItemGroup>
@@ -125,7 +125,7 @@
     <RemoveDir Directories="$(_GsgenPublishDir)" Condition="Exists('$(_GsgenPublishDir)')" />
     <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\..\tools\gsgen\Gsgen.Cli\Gsgen.Cli.csproj"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsgenPublishDir);BaseOutputPath=$(_GsgenStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsgen-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
     <ItemGroup>
       <_GsgenPayload Include="$(_GsgenPublishDir)**\*" />
     </ItemGroup>
