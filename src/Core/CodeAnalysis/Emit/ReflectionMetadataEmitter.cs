@@ -1281,8 +1281,8 @@ internal sealed class ReflectionMetadataEmitter
             if (this.remaps.TryGetLambdaMethodRemap(kvp.Value.Plan.Function, out var lambdaRemap))
             {
                 remap ??= new Dictionary<TypeParameterSymbol, int>();
-                var offset = kvp.Value.ClassTypeParameters.Length
-                    - kvp.Value.OuterMethodTypeParameters.Length;
+                var offset = kvp.Value.SourceTypeParameters.Length
+                    - kvp.Value.Plan.Function.TypeParameters.Length;
                 foreach (var pair in lambdaRemap)
                 {
                     remap[pair.Key] = offset + pair.Value;

@@ -273,15 +273,6 @@ internal sealed class SignatureEncoder
                 encoder.GenericTypeParameter(classOrdinal);
             }
 
-            // Issue #1477: a synthesized closure / capture-box class is generic
-            // over enclosing TYPE parameters too, so any TP in the active remap
-            // (class or method) encodes the synthesized class's own Var(idx).
-            else if (this.remaps.ActiveIteratorStateMachineRemap != null
-                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
-            {
-                encoder.GenericTypeParameter(classOrdinal2);
-            }
-
             // Issue #2118: inside a generic-promoted non-capturing lambda's
             // signature/body, references to the enclosing type parameters map to
             // the lambda method's own MVar(idx) slots.
@@ -289,6 +280,15 @@ internal sealed class SignatureEncoder
                 && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
             {
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
+            }
+
+            // Issue #1477: a synthesized closure / capture-box class is generic
+            // over enclosing TYPE parameters too, so any remaining TP in the
+            // active remap encodes the synthesized class's own Var(idx).
+            else if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
+            {
+                encoder.GenericTypeParameter(classOrdinal2);
             }
 
             // ADR-0087 §3 R2: a user-declared open type parameter encodes as

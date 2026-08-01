@@ -274,10 +274,6 @@ internal sealed class ImportedMemberRefFactory
 
             // Issue #810: inside an iterator state-machine method body,
             // outer-method TPs are remapped to the SM class's own TPs.
-            // Issue #1477: a synthesized closure / capture-box class is also
-            // generic over enclosing TYPE parameters, so any TP present in the
-            // active remap (class or method) maps to the synthesized class's
-            // own VAR(idx) slot.
             if (this.remaps.ActiveIteratorStateMachineRemap != null
                 && tpSym.IsMethodTypeParameter
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
@@ -291,6 +287,13 @@ internal sealed class ImportedMemberRefFactory
                 // generic-promoted non-capturing lambda's signature/body maps to
                 // the lambda method's own MVar(idx) slot.
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
+            }
+            else if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd2))
+            {
+                // Issue #1477: synthesized closure, capture-box, and nested-type
+                // remaps still map class type parameters to their own VAR slots.
+                encoder.GenericTypeParameter(smClassOrd2);
             }
             else if (tpSym.IsMethodTypeParameter)
             {
