@@ -67,6 +67,27 @@ public class Issue2999TargetInvocationExceptionInterpreterTests
         Assert.Equal("outer", result.Value);
     }
 
+    [Fact]
+    public void ReflectionWrappedFormatException_IsCatchable()
+    {
+        const string Source = """
+            import System
+
+            var caught = false
+            try {
+                Convert.ToInt32("x")
+            } catch (ex FormatException) {
+                caught = true
+            }
+            caught
+            """;
+
+        var result = Evaluate(Source);
+
+        Assert.Equal(true, result.Value);
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EvaluationResult Evaluate(string source)
         => new Compilation(SyntaxTree.Parse(source))
             .Evaluate(new Dictionary<VariableSymbol, object>());

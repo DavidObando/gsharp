@@ -723,7 +723,8 @@ public sealed partial class Evaluator
     }
 
     private static bool IsReflectionInvocationWrapper(TargetInvocationException ex)
-        => ex.TargetSite?.DeclaringType?.Assembly == typeof(TargetInvocationException).Assembly;
+        => ex.TargetSite?.DeclaringType?.Assembly is not { } assembly
+            || assembly == typeof(TargetInvocationException).Assembly;
 
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
