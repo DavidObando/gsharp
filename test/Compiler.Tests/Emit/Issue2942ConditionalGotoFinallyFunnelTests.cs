@@ -378,6 +378,7 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(exited, $"child execution timed out\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.InRange(expectedExitCode, 0, byte.MaxValue);
             Assert.Equal(expectedExitCode, process.ExitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
