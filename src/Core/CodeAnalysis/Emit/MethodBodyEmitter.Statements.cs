@@ -641,7 +641,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.outer.memberRefs.GetMethodReference(tryRead));
         this.il.Branch(ILOpCode.Brfalse, closedLabel);
-        this.EmitStatement(arm.Body);
+        this.EmitSelectReceiveArmBody(arm, slots.OutSlots[index]);
         this.il.Branch(ILOpCode.Br, endLabel);
 
         this.il.MarkLabel(closedLabel);
@@ -654,9 +654,27 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodReference(isCompleted));
         this.il.Branch(ILOpCode.Brfalse, nextLabel);
         this.EmitZeroInit(slots.OutSlots[index], chType.ElementType, elementClr);
-        this.EmitStatement(arm.Body);
+        this.EmitSelectReceiveArmBody(arm, slots.OutSlots[index]);
         this.il.Branch(ILOpCode.Br, endLabel);
         this.il.MarkLabel(nextLabel);
+    }
+
+    private void EmitSelectReceiveArmBody(BoundSelectCase arm, int outSlot)
+    {
+        FieldSymbol hoistedField = null;
+        if (arm.Variable != null
+            && ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(arm.Variable, out hoistedField))
+                || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(arm.Variable, out hoistedField))))
+        {
+            // TryRead writes through the local out slot; the rewritten
+            // MoveNext arm body reads the hoisted state-machine field.
+            this.il.OpCode(ILOpCode.Ldarg_0);
+            this.il.LoadLocal(outSlot);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField));
+        }
+
+        this.EmitStatement(arm.Body);
     }
 
     private void EmitSelectSendProbe(
