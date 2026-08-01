@@ -6,7 +6,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -195,8 +198,155 @@ public sealed class Issue2957FunctionLiteralIteratorTests
         Assert.Equal(expectedOutput, RunBounded(name, assemblyPath));
     }
 
+    [Fact]
+    public void GenericReceiverStateMachineMemberSignatures_UseSourceTypeParameterOrdinals()
+    {
+        const string name = "GenericStateMachineMemberSignatures";
+        const string source = """
+            package GenericSignatures
+            import System
+
+            class Factory[T any] {
+                func make[U any]() (T, U) -> sequence[U] {
+                    return func(first T, second U) sequence[U] {
+                        yield second
+                    }
+                }
+            }
+
+            for value in Factory[int32]().make[string]()(42, "ok") {
+                Console.WriteLine(value)
+            }
+            """;
+
+        var assemblyPath = Compile(name, source);
+        using (var stream = File.OpenRead(assemblyPath))
+        using (var peReader = new PEReader(stream))
+        {
+            var metadata = peReader.GetMetadataReader();
+            var stateMachine = metadata.TypeDefinitions
+                .Select(metadata.GetTypeDefinition)
+                .Single(type => metadata.GetString(type.Name).Contains(">d__", StringComparison.Ordinal));
+
+            Assert.Equal(2, stateMachine.GetGenericParameters().Count);
+            AssertFieldTypeParameterOrdinal(metadata, stateMachine, "<>3__first", 0);
+            AssertFieldTypeParameterOrdinal(metadata, stateMachine, "<>3__second", 1);
+            AssertFieldTypeParameterOrdinal(metadata, stateMachine, "<>2__current", 1);
+            AssertMemberReferenceTypeParameterEncoding(
+                metadata,
+                "<>3__first",
+                SignatureTypeCode.GenericTypeParameter,
+                0);
+            AssertMemberReferenceTypeParameterEncoding(
+                metadata,
+                "<>3__second",
+                SignatureTypeCode.GenericTypeParameter,
+                1);
+
+            var currentOrdinal = stateMachine.GetMethods()
+                .Select(metadata.GetMethodDefinition)
+                .Where(method => metadata.GetString(method.Name) == "get_Current")
+                .Select(method => ReadMethodReturnTypeParameterOrdinal(metadata, method))
+                .Single(ordinal => ordinal.HasValue);
+            Assert.Equal(1, currentOrdinal);
+        }
+
+        IlVerifier.Verify(assemblyPath);
+        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        Assert.Equal("ok\n", RunBounded(name, assemblyPath));
+    }
+
     private static object[] Case(string name, string source, string expectedOutput)
         => new object[] { name, source, expectedOutput };
+
+    private static void AssertFieldTypeParameterOrdinal(
+        MetadataReader metadata,
+        TypeDefinition stateMachine,
+        string fieldName,
+        int expectedOrdinal)
+    {
+        var field = stateMachine.GetFields()
+            .Select(metadata.GetFieldDefinition)
+            .Single(candidate => metadata.GetString(candidate.Name) == fieldName);
+        var signature = metadata.GetBlobReader(field.Signature);
+
+        Assert.Equal(SignatureKind.Field, signature.ReadSignatureHeader().Kind);
+        Assert.Equal(SignatureTypeCode.GenericTypeParameter, signature.ReadSignatureTypeCode());
+        Assert.Equal(expectedOrdinal, signature.ReadCompressedInteger());
+        Assert.Equal(0, signature.RemainingBytes);
+    }
+
+    private static void AssertMemberReferenceTypeParameterEncoding(
+        MetadataReader metadata,
+        string memberName,
+        SignatureTypeCode expectedCode,
+        int expectedOrdinal)
+    {
+        foreach (var handle in metadata.MemberReferences)
+        {
+            var member = metadata.GetMemberReference(handle);
+            if (metadata.GetString(member.Name) != memberName)
+            {
+                continue;
+            }
+
+            var signature = metadata.GetBlobReader(member.Signature);
+            if (signature.ReadSignatureHeader().Kind == SignatureKind.Field
+                && signature.ReadSignatureTypeCode() == expectedCode
+                && signature.ReadCompressedInteger() == expectedOrdinal
+                && ParentUsesGenericMethodTypeArguments(metadata, member.Parent))
+            {
+                return;
+            }
+        }
+
+        Assert.Fail(
+            $"Member reference '{memberName}' did not encode {expectedCode}({expectedOrdinal}).");
+    }
+
+    private static bool ParentUsesGenericMethodTypeArguments(
+        MetadataReader metadata,
+        EntityHandle parent)
+    {
+        const byte GenericInstance = 0x15;
+        const byte GenericMethodParameter = 0x1e;
+        if (parent.Kind != HandleKind.TypeSpecification)
+        {
+            return false;
+        }
+
+        var specification = metadata.GetTypeSpecification((TypeSpecificationHandle)parent);
+        var signature = metadata.GetBlobReader(specification.Signature);
+        if (signature.ReadByte() != GenericInstance)
+        {
+            return false;
+        }
+
+        signature.ReadByte();
+        signature.ReadCompressedInteger();
+        return signature.ReadCompressedInteger() > 0
+            && signature.ReadByte() == GenericMethodParameter;
+    }
+
+    private static int? ReadMethodReturnTypeParameterOrdinal(
+        MetadataReader metadata,
+        MethodDefinition method)
+    {
+        var signature = metadata.GetBlobReader(method.Signature);
+        var header = signature.ReadSignatureHeader();
+        if (header.IsGeneric)
+        {
+            signature.ReadCompressedInteger();
+        }
+
+        signature.ReadCompressedInteger();
+        if (signature.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeParameter)
+        {
+            return null;
+        }
+
+        return signature.ReadCompressedInteger();
+    }
 
     private static string Compile(string name, string source)
     {

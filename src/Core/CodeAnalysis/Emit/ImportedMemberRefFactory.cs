@@ -272,10 +272,9 @@ internal sealed class ImportedMemberRefFactory
             var sigBlob = new BlobBuilder();
             var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
 
-            // Issue #810: inside an iterator state-machine method body,
-            // outer-method TPs are remapped to the SM class's own TPs.
+            // Issue #810: inside an iterator state-machine member,
+            // source TPs are remapped to the SM class's own TPs.
             if (this.remaps.ActiveIteratorStateMachineRemap != null
-                && tpSym.IsMethodTypeParameter
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
             {
                 encoder.GenericTypeParameter(smClassOrd);
