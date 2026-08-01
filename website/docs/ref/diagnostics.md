@@ -1011,7 +1011,7 @@ ECMA-335 II.15.4.2.4 and III.2.1).
 | GS0330 | Error | `Only 'func' members are allowed inside the 'shared' block of interface '<Name>'; interface static state is not supported in this release (ADR-0089).` Raised for an `event` member in any interface `shared` block. Interface static `var`/`let`/`const` state is supported on both non-generic and generic interfaces. |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
-| GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
+| GS0333 | Error | `Constrained static access '<Name>' on type parameter '<T>' must name a static-virtual member declared by an interface constraint (ADR-0089).` |
 | GS0396 | Error | **Retired.** Default-bodied static-virtual interface properties (`prop Name T { get { … } }`) are now supported, so this diagnostic is no longer raised. |
 | GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` Not raised for a fully default-bodied static property (the interface supplies the body). |
 
@@ -1040,8 +1040,8 @@ Cause/fix:
   `shared { … }` block. An instance method cannot satisfy a
   static-virtual slot because the CLR routes the call through
   the type, not through an instance receiver.
-- **GS0333** — change the receiver to a type parameter whose
-  constraint actually declares the slot. For example,
+- **GS0333** — use a member name declared as a static-virtual slot by
+  the receiver type parameter's constraint. For example,
   `func Sum[T IAdd](xs sequence[T]) T { … T.Add(a, b) … }`
   requires `T` to be constrained by `IAdd` — the interface that
   declares the static-virtual `Add`.

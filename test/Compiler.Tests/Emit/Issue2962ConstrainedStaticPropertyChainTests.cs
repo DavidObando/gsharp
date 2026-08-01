@@ -209,6 +209,56 @@ public class Issue2962ConstrainedStaticPropertyChainTests
         }
     }
 
+    [Fact]
+    public void NonMemberStaticSuffix_ReportsSourceTextInsteadOfIce()
+    {
+        const string Source = """
+            package Issue2962.InvalidSuffix
+
+            sealed interface I[T] {
+                shared { prop V T { get; } }
+            }
+
+            struct C : I[string] {
+                shared { prop V string -> "value" }
+            }
+
+            func Read[T I[string]](w T) int32 {
+                return T.sizeof(int32)
+            }
+
+            func Main() {
+                Read(C{})
+            }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(directory, "Issue2962InvalidSuffix.gs");
+            var outputPath = Path.Combine(directory, "Issue2962InvalidSuffix.dll");
+            File.WriteAllText(sourcePath, Source);
+
+            var (exitCode, output) = Compile(
+                "/out:" + outputPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                sourcePath);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains(
+                "error GS0333: Constrained static access 'sizeof(int32)' on type parameter 'T' must name a static-virtual member declared by an interface constraint (ADR-0089).",
+                output,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9999", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("member '?'", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CompileSource(string source, string directory, string outputName, string target)
     {
         var sourcePath = Path.Combine(directory, Path.GetFileNameWithoutExtension(outputName) + ".gs");

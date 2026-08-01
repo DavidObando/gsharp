@@ -730,8 +730,8 @@ public sealed partial class DiagnosticBag
     /// <summary>
     /// Reports GS0333 — ADR-0089 / issue #755: the dispatch expression
     /// <c>T.Member(...)</c> where <c>T</c> is a generic type parameter
-    /// constrained to some interface(s) refers to a name that is not a
-    /// static-virtual member on any of those interfaces.
+    /// constrained to some interface(s) either does not name a member or
+    /// names no static-virtual member on any of those interfaces.
     /// </summary>
     /// <param name="location">The accessor expression location.</param>
     /// <param name="typeParameterName">The type parameter name.</param>

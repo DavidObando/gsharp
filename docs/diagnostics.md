@@ -938,7 +938,7 @@ nesting depth.
 | GS0330 | Error | An event is declared inside an interface `shared` block; interface static events are not supported. |
 | GS0331 | Error | A class or struct does not implement a required static-virtual interface method that has no default body. |
 | GS0332 | Error | A class or struct declares an instance method where its interface requires a static-virtual method. |
-| GS0333 | Error | A member access through a type parameter names no static-virtual member on any of its interface constraints. |
+| GS0333 | Error | A constrained static access through a type parameter either is not a member name or names no static-virtual member on any interface constraint. |
 | GS0334 | Error | Code outside an interface declaration accesses one of the interface's private helpers. |
 | GS0335 | Error | A private interface method is declared without a body. |
 | GS0336 | Error | An implementer declares a method that clashes with a private helper on one of its interfaces. |
