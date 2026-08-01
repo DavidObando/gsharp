@@ -37,6 +37,7 @@ public sealed partial class Evaluator
 {
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
+    private readonly bool evaluateEntryPoint;
 
     // Issue #1651: everything below this point used to be an ordinary
     // instance field. That is correct only because the interpreter was
@@ -100,9 +101,21 @@ public sealed partial class Evaluator
     /// <param name="program">The program.</param>
     /// <param name="variables">The variables.</param>
     public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables)
+        : this(program, variables, evaluateEntryPoint: true)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Evaluator"/> class.
+    /// </summary>
+    /// <param name="program">The program.</param>
+    /// <param name="variables">The variables.</param>
+    /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
+    public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables, bool evaluateEntryPoint)
     {
         this.program = program;
         globals = variables;
+        this.evaluateEntryPoint = evaluateEntryPoint;
         Locals.Push(new ConcurrentDictionary<VariableSymbol, object>());
     }
 
@@ -156,11 +169,14 @@ public sealed partial class Evaluator
     {
         // The binder has already resolved top-level-statement versus explicit-Main precedence.
         // A null declaration identifies the synthesized top-level entry point.
-        if (program.EntryPoint?.Declaration != null
-            && program.Functions.TryGetValue(program.EntryPoint, out var entryPointBody))
+        if (evaluateEntryPoint && program.EntryPoint?.Declaration != null)
         {
+            // Every resolved explicit entry point must have a bound body; fail loudly if that
+            // invariant is broken rather than silently evaluating an empty top-level block.
+            var entryPointBody = program.Functions[program.EntryPoint];
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
-            if (program.EntryPoint.Parameters.Length > 0)
+            if (program.EntryPoint.Parameters.Length == 1
+                && program.EntryPoint.Parameters[0].Type == SliceTypeSymbol.Get(TypeSymbol.String))
             {
                 locals[program.EntryPoint.Parameters[0]] = Array.Empty<string>();
             }

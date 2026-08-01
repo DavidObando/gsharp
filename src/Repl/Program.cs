@@ -54,7 +54,7 @@ public static class Program
             return 1;
         }
 
-        var engine = new SessionEngine();
+        var engine = new SessionEngine { RunEntryPoint = true };
         var cell = engine.Evaluate(File.ReadAllText(arg), arg);
         if (cell.Diagnostics.Length > 0)
         {
