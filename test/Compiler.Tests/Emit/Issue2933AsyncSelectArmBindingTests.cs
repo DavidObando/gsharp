@@ -236,6 +236,61 @@ public class Issue2933AsyncSelectArmBindingTests
         Assert.Equal(10, values[0]);
     }
 
+    [Fact]
+    public void AsyncIteratorReceiveBindingsMatchAsyncFunctionAtRuntime()
+    {
+        const string Source = """
+            package Issue2933.StateMachineKinds
+            import System
+            import Gsharp.Extensions.Go
+
+            async func AsyncFunction() int32 {
+                let ch = make(chan int32, 1)
+                ch <- 3
+                var result = 0
+                select {
+                    case let value = <-ch { result = 7 + value }
+                }
+                return result
+            }
+
+            async func YieldInArm() async sequence[int32] {
+                let ch = make(chan int32, 1)
+                ch <- 3
+                select {
+                    case let value = <-ch { yield 7 + value }
+                }
+            }
+
+            async func YieldAfterArm() async sequence[int32] {
+                let ch = make(chan int32, 1)
+                ch <- 3
+                var result = 0
+                select {
+                    case let value = <-ch { result = 7 + value }
+                }
+                yield result
+            }
+
+            func First(values async sequence[int32]) int32 {
+                let e = values.GetAsyncEnumerator()
+                if e.MoveNextAsync().AsTask().Result { return e.Current }
+                return -1
+            }
+
+            Console.WriteLine(AsyncFunction().GetAwaiter().GetResult())
+            Console.WriteLine(First(YieldInArm()))
+            Console.WriteLine(First(YieldAfterArm()))
+            """;
+
+        var output = CompileLoadAndRun(Source, nameof(AsyncIteratorReceiveBindingsMatchAsyncFunctionAtRuntime));
+        var values = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(int.Parse)
+            .ToArray();
+
+        Assert.Equal(new[] { 10, 10, 10 }, values);
+    }
+
     [Theory]
     [MemberData(nameof(SelectShapes))]
     public void RequestedSelectShapesLoadAndRun(string name, string expectedOutput, string source)

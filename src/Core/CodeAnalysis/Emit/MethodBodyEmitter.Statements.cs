@@ -661,14 +661,17 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitSelectReceiveArmBody(BoundSelectCase arm, int outSlot)
     {
+        FieldSymbol hoistedField = null;
         if (arm.Variable != null
-            && this.asyncFieldMap != null
-            && this.asyncFieldMap.TryGetHoistedField(arm.Variable, out _))
+            && ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(arm.Variable, out hoistedField))
+                || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(arm.Variable, out hoistedField))))
         {
             // TryRead writes through the local out slot; the rewritten
             // MoveNext arm body reads the hoisted state-machine field.
+            this.il.OpCode(ILOpCode.Ldarg_0);
             this.il.LoadLocal(outSlot);
-            this.EmitStoreVariable(arm.Variable);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(this.ResolveCurrentStateMachineFieldToken(hoistedField));
         }
 
         this.EmitStatement(arm.Body);
