@@ -6,9 +6,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Compiler;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -133,11 +135,12 @@ public class Issue3015ImportedBaseIdentityTests
             var second = OverloadedSentinel("explicit-3015")
             Console.WriteLine(first.Label)
             Console.WriteLine(second.Label)
+            Console.WriteLine(first.GetType().FullName)
             Console.WriteLine(Object.ReferenceEquals(first.GetType(), second.GetType()))
             """;
 
         Assert.Equal(
-            "default-3015\nexplicit-3015\nTrue\n",
+            "default-3015\nexplicit-3015\nIssue3015.Constructor.OverloadedSentinel\nTrue\n",
             Evaluate(Source));
     }
 
@@ -162,6 +165,74 @@ public class Issue3015ImportedBaseIdentityTests
             "Issue3015.Generic.OrdinaryGenericSentinel`1[System.Int32]\n"
                 + "Issue3015.Generic.LiteralGenericSentinel`1[System.String]\n",
             Evaluate(Source));
+    }
+
+    [Fact]
+    public void NullableGenericConstruction_PreservesNullableTypeArgument()
+    {
+        const string Source = """
+            package Issue3015.NullableGeneric
+            import System
+
+            class Box[T] : EventArgs {
+            }
+
+            var value = Box[int32?]()
+            Console.WriteLine(value.GetType().FullName)
+            """;
+
+        var output = Evaluate(Source);
+
+        Assert.Contains("Issue3015.NullableGeneric.Box`1", output);
+        Assert.Contains("System.Nullable`1", output);
+    }
+
+    [Fact]
+    public void CompilerAndInterpreter_AgreeOnDerivedRuntimeType()
+    {
+        const string Source = """
+            package Issue3015.CompilerParity
+            import System
+
+            class Sentinel : EventArgs {
+            }
+
+            var value = Sentinel()
+            Console.WriteLine(value.GetType().FullName)
+            """;
+
+        var interpreterTypeName = Evaluate(Source).Trim();
+        var artifactDirectory = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3015-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(artifactDirectory);
+        var sourcePath = Path.Combine(artifactDirectory, "Issue3015.gs");
+        var assemblyPath = Path.Combine(artifactDirectory, "Issue3015.dll");
+
+        try
+        {
+            File.WriteAllText(sourcePath, Source);
+            var exit = Program.Main(new[]
+            {
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                sourcePath,
+            });
+
+            Assert.Equal(0, exit);
+            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            var emittedType = Assert.Single(
+                assembly.GetTypes(),
+                static type => type.FullName == "Issue3015.CompilerParity.Sentinel");
+            Assert.Equal(emittedType.FullName, interpreterTypeName);
+        }
+        finally
+        {
+            Directory.Delete(artifactDirectory, recursive: true);
+        }
     }
 
     [Fact]
@@ -210,6 +281,18 @@ public class Issue3015ImportedBaseIdentityTests
         }
 
         return outWriter.ToString().Replace("\r\n", "\n");
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate repository root.");
     }
 }
 
