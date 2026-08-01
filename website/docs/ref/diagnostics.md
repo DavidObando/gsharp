@@ -55,6 +55,11 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 
 ### Binder / semantic diagnostics (GS0100–GS0189)
 
+> **Enum exhaustiveness.** Enum switches cover named constants only.
+> `[Flags]` does not add unnamed bit combinations as required switch arms.
+> This rule is identical for imported CLR enums and source-declared enums.
+> If a switch expression receives a value that matches no arm, compiled and interpreted execution fail with `Unmatched switch expression value.` instead of producing a default value.
+
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0100 | Error | Not all code paths return a value. | A non-void function is missing a `return` on some branch. |
@@ -134,8 +139,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0174 | Error | Relational pattern operator not defined for type. | `case > 5:` where the switched type doesn't support `>`. |
 | GS0175 | Error | List pattern requires an array or slice. | List pattern `[a, b]` applied to a non-array/slice value. |
 | GS0176 | Error | Switch expression is missing a `default` arm. | A `switch` expression that cannot be proven exhaustive and has no `default`. |
-| GS0177 | Error | Switch expression on enum is not exhaustive. | One or more enum members not covered and no `default` arm. |
-| GS0178 | Error | Switch statement on enum is not exhaustive. | One or more enum members not covered and no `default` arm. |
+| GS0177 | Error | Switch expression on enum is not exhaustive. | One or more named enum constants not covered and no `default` arm. |
+| GS0178 | Error | Switch statement on enum is not exhaustive. | One or more named enum constants not covered and no `default` arm. |
 | GS0179 | Error | Switch expression arm type mismatch. | Different arms of a `switch` expression produce incompatible types. |
 | GS0180 | Error | Accessibility modifier not allowed here. | `pub` or `priv` used on a local variable or inside a function body. |
 | GS0181 | Error | Base class is not open. | Inheriting from a class that was not declared `open`. |
