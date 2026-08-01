@@ -330,7 +330,7 @@ public class Compilation
             ex.Node?.WriteTo(textWriter);
             var sourceText = SourceText.From(textWriter.ToString());
             var location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
-            var message = ex.Message;
+            var message = Evaluator.UnwrapDiagnosticException(ex).Message;
             var diagnostic = new Diagnostic(location, ex.DiagnosticId, ex.Severity, message);
             return new EvaluationResult(allWarnings.Add(diagnostic), null);
         }
