@@ -235,6 +235,36 @@ public class Issue2943LoopBackEdgeNarrowingTests
     }
 
     [Fact]
+    public void SpeculativeRebind_DoesNotDuplicateLambdaReturnDiagnostic()
+    {
+        const string Source = """
+            class C {
+                func M() { }
+            }
+
+            func Run() {
+                var c C? = C()
+                if c != nil {
+                    for var i = 0; i < 2; i++ {
+                        let choose = func(flag bool) int32 {
+                            if flag {
+                                return 1
+                            }
+                        }
+                        c.M()
+                        c = nil
+                    }
+                }
+            }
+            """;
+
+        var errors = Compile(Source).BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+
+        Assert.Single(errors, diagnostic => diagnostic.Id == "GS0100");
+        Assert.Single(errors, diagnostic => diagnostic.Id == "GS0159");
+    }
+
+    [Fact]
     public void SpeculativeRebind_RestoresLoopStack()
     {
         const string Source = """

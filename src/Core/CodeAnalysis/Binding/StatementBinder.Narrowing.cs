@@ -953,34 +953,42 @@ internal sealed partial class StatementBinder
 
         public override void VisitExpression(BoundExpression node)
         {
-            switch (node?.Kind)
+            if (node != null && IsPotentiallyMutatingMemberPathExpression(node.Kind))
             {
-                case BoundNodeKind.CallExpression:
-                case BoundNodeKind.FunctionPointerInvocationExpression:
-                case BoundNodeKind.ImportedCallExpression:
-                case BoundNodeKind.ImportedInstanceCallExpression:
-                case BoundNodeKind.ConstrainedStaticCallExpression:
-                case BoundNodeKind.ConstructorCallExpression:
-                case BoundNodeKind.UserInstanceCallExpression:
-                case BoundNodeKind.BaseInterfaceCallExpression:
-                case BoundNodeKind.BaseClassCallExpression:
-                case BoundNodeKind.IndirectCallExpression:
-                case BoundNodeKind.ClrConstructorCallExpression:
-                case BoundNodeKind.ClrStaticCallExpression:
-                case BoundNodeKind.ClrConversionCallExpression:
-                case BoundNodeKind.FieldAssignmentExpression:
-                case BoundNodeKind.PropertyAssignmentExpression:
-                case BoundNodeKind.IndexAssignmentExpression:
-                case BoundNodeKind.ClrPropertyAssignmentExpression:
-                case BoundNodeKind.ClrIndexAssignmentExpression:
-                case BoundNodeKind.IndirectAssignmentExpression:
-                    MayMutateMemberPaths = true;
-                    break;
+                MayMutateMemberPaths = true;
             }
 
             base.VisitExpression(node);
         }
     }
+
+    /// <summary>
+    /// Returns whether an expression kind can invoke user code or assign
+    /// through a member-bearing path.
+    /// </summary>
+    /// <param name="kind">Bound expression kind.</param>
+    /// <returns><see langword="true"/> when member-path narrowings must be invalidated.</returns>
+    internal static bool IsPotentiallyMutatingMemberPathExpression(BoundNodeKind kind)
+        => kind is
+            BoundNodeKind.CallExpression
+            or BoundNodeKind.FunctionPointerInvocationExpression
+            or BoundNodeKind.ImportedCallExpression
+            or BoundNodeKind.ImportedInstanceCallExpression
+            or BoundNodeKind.ConstrainedStaticCallExpression
+            or BoundNodeKind.ConstructorCallExpression
+            or BoundNodeKind.UserInstanceCallExpression
+            or BoundNodeKind.BaseInterfaceCallExpression
+            or BoundNodeKind.BaseClassCallExpression
+            or BoundNodeKind.IndirectCallExpression
+            or BoundNodeKind.ClrConstructorCallExpression
+            or BoundNodeKind.ClrStaticCallExpression
+            or BoundNodeKind.ClrConversionCallExpression
+            or BoundNodeKind.FieldAssignmentExpression
+            or BoundNodeKind.PropertyAssignmentExpression
+            or BoundNodeKind.IndexAssignmentExpression
+            or BoundNodeKind.ClrPropertyAssignmentExpression
+            or BoundNodeKind.ClrIndexAssignmentExpression
+            or BoundNodeKind.IndirectAssignmentExpression;
 
     /// <summary>
     /// Issue #1123: whether <paramref name="type"/> is a reference-like type —
