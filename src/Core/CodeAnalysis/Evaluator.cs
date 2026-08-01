@@ -154,6 +154,23 @@ public sealed partial class Evaluator
     /// <returns>The evaluation result.</returns>
     public object Evaluate()
     {
+        // The binder has already resolved top-level-statement versus explicit-Main precedence.
+        // A null declaration identifies the synthesized top-level entry point.
+        if (program.EntryPoint?.Declaration != null
+            && program.Functions.TryGetValue(program.EntryPoint, out var entryPointBody))
+        {
+            var locals = new ConcurrentDictionary<VariableSymbol, object>();
+            if (program.EntryPoint.Parameters.Length > 0)
+            {
+                locals[program.EntryPoint.Parameters[0]] = Array.Empty<string>();
+            }
+
+            using (PushFrame(locals))
+            {
+                return EvaluateFunctionBody(entryPointBody);
+            }
+        }
+
         return EvaluateFunctionBody(program.Statement);
     }
 
