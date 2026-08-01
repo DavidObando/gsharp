@@ -487,12 +487,23 @@ internal sealed class SignatureEncoder
         else if (type is ChannelTypeSymbol chType)
         {
             // Phase E: chan T -> System.Threading.Channels.Channel<T>.
-            // For element types that lack a ClrType we erase to object,
-            // matching the interpreter's `ElementType.ClrType ?? typeof(object)`
-            // fallback (ADR-0022 §interpreter).
-            var elementClr = chType.ElementType.ClrType ?? typeof(object);
-            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
-            this.EncodeClrType(encoder, channelClr);
+            // Compiled metadata must retain symbolic element identity under
+            // generic invariance. The interpreter can independently keep its
+            // object fallback because channel values are boxed there.
+            var channelOpen = typeof(System.Threading.Channels.Channel<>);
+            if (MethodBodyEmitter.ChannelElementNeedsSymbolicType(chType.ElementType))
+            {
+                var genericInst = encoder.GenericInstantiation(
+                    this.outer.memberRefs.GetTypeReference(channelOpen),
+                    1,
+                    isValueType: false);
+                this.EncodeTypeSymbol(genericInst.AddArgument(), chType.ElementType);
+            }
+            else
+            {
+                var elementClr = MethodBodyEmitter.ResolveChannelElementClrType(chType.ElementType);
+                this.EncodeClrType(encoder, channelOpen.MakeGenericType(elementClr));
+            }
         }
         else if (type is TupleTypeSymbol tupleWithNullClr && tupleWithNullClr.ClrType == null)
         {

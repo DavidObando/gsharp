@@ -636,10 +636,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
+        this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
         this.il.LoadLocalAddress(slots.OutSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(tryRead));
+        this.il.Token(this.GetChannelMethodEntityHandle(tryRead, chType.ElementType));
         this.il.Branch(ILOpCode.Brfalse, closedLabel);
         this.EmitSelectReceiveArmBody(arm, slots.OutSlots[index]);
         this.il.Branch(ILOpCode.Br, endLabel);
@@ -647,9 +647,9 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(closedLabel);
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
+        this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(completion));
+        this.il.Token(this.GetChannelMethodEntityHandle(completion, chType.ElementType));
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.outer.memberRefs.GetMethodReference(isCompleted));
         this.il.Branch(ILOpCode.Brfalse, nextLabel);
@@ -693,10 +693,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
+        this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
         this.il.LoadLocal(slots.ValueSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(tryWrite));
+        this.il.Token(this.GetChannelMethodEntityHandle(tryWrite, chType.ElementType));
         this.il.Branch(ILOpCode.Brfalse, nextLabel);
         this.EmitStatement(arm.Body);
         this.il.Branch(ILOpCode.Br, endLabel);
@@ -774,10 +774,10 @@ internal sealed partial class MethodBodyEmitter
                 new[] { typeof(System.Threading.CancellationToken) });
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
+            this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(waitToWrite));
+            this.il.Token(this.GetChannelMethodEntityHandle(waitToWrite, chType.ElementType));
         }
         else
         {
@@ -788,10 +788,10 @@ internal sealed partial class MethodBodyEmitter
                 new[] { typeof(System.Threading.CancellationToken) });
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
+            this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
             this.EmitCancellationTokenNone();
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(waitToRead));
+            this.il.Token(this.GetChannelMethodEntityHandle(waitToRead, chType.ElementType));
         }
 
         this.il.StoreLocal(slots.WaitValueTaskSlot);
@@ -818,13 +818,13 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
+        this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
 
         this.EmitExpression(node.Value);
         this.EmitCancellationTokenNone();
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(writeAsync));
+        this.il.Token(this.GetChannelMethodEntityHandle(writeAsync, chType.ElementType));
 
         this.il.StoreLocal(vtSlot);
         this.il.LoadLocalAddress(vtSlot);
