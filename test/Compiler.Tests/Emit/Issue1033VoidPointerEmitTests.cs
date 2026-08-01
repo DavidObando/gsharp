@@ -29,6 +29,10 @@ public class Issue1033VoidPointerEmitTests
 {
     private static readonly string[] UnsafeIlVerifyIgnored =
     {
+        // Roslyn emits the same managed-pointer + conv.u sequence for fixed
+        // array and span pins. ilverify reports ExpectedNumericType even though
+        // ECMA-335 III.1.6 permits this unverifiable unsafe conversion.
+        "ExpectedNumericType",
         "UnmanagedPointer",
         "StackUnexpected",
         "StackByRef",

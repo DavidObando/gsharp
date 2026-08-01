@@ -311,7 +311,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
         var assembly = CompileVerifyLoadAndRun(
             "UnnamedFixed",
             Source,
-            ignoredVerificationErrors: new[] { "UnmanagedPointer", "StackByRef" },
+            ignoredVerificationErrors: new[] { "ExpectedNumericType" },
             ignoredVerificationScope: @"<Program>\.F$");
         // Known limitation (#2953): the fixed-return epilogue must be emitted first,
         // so fixed-containing non-void functions bypass the fall-through guard and

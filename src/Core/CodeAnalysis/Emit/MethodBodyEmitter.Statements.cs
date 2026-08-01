@@ -15,7 +15,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -97,7 +96,7 @@ internal sealed partial class MethodBodyEmitter
 
     // Array-pin form: pin the array reference (`T[] pinned`) and derive
     // `&a[0]` via `ldelema`, guarding the null / zero-length array (→ null
-    // pointer).
+    // pointer), exactly as Roslyn emits for fixed array pins in .NET 10.
     private void EmitFixedArrayPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
         var elementType = ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType;
@@ -128,7 +127,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
-        this.EmitManagedPointerAsUnmanagedPointer(elementType);
+        this.il.OpCode(ILOpCode.Conv_u);
         this.il.StoreLocal(pointerSlot);
 
         this.il.MarkLabel(afterLabel);
@@ -155,7 +154,7 @@ internal sealed partial class MethodBodyEmitter
             types: Type.EmptyTypes,
             modifiers: null);
         this.il.Call(this.outer.memberRefs.GetMethodReference(getPinnableReference));
-        this.EmitManagedPointerAsUnmanagedPointer(TypeSymbol.Char);
+        this.il.OpCode(ILOpCode.Conv_u);
         this.il.StoreLocal(pointerSlot);
         this.il.Branch(ILOpCode.Br, afterLabel);
 
@@ -169,9 +168,9 @@ internal sealed partial class MethodBodyEmitter
     // Span-like pin form (ADR-0125 / issue #1043): pin the `T&` returned by a
     // public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` /
     // `System.ReadOnlySpan[T]`) into a `T& pinned` local, then derive `*T` via
-    // `Unsafe.AsPointer<T>`. `GetPinnableReference()` already returns the data
-    // pointer for an empty span (a ref to where element 0 would be), so no
-    // null/empty guard is required.
+    // `conv.u`, matching Roslyn's .NET 10 output. `GetPinnableReference()`
+    // already returns the data pointer for an empty span (a ref to where
+    // element 0 would be), so no null/empty guard is required.
     private void EmitFixedPinnableReferencePin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
         var sourceSlot = this.locals[node.SourceVariable];
@@ -207,22 +206,8 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getPinnableReference, node.PinnedSource.Type)); // -> T&
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
         this.il.LoadLocal(pinnedSlot);
-        this.EmitManagedPointerAsUnmanagedPointer(
-            ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType);
+        this.il.OpCode(ILOpCode.Conv_u);
         this.il.StoreLocal(pointerSlot);         // p = (T*)ref
-    }
-
-    private void EmitManagedPointerAsUnmanagedPointer(TypeSymbol pointeeType)
-    {
-        var openAsPointer = typeof(System.Runtime.CompilerServices.Unsafe)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(method => method.Name == "AsPointer"
-                && method.IsGenericMethodDefinition
-                && method.GetParameters().Length == 1);
-        var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
-        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
-            closedAsPointer,
-            ImmutableArray.Create(pointeeType)));
     }
 
     private void EmitTryStatement(BoundTryStatement node)

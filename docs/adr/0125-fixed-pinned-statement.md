@@ -112,8 +112,7 @@ brfalse NULL
 ldloc pinned; ldlen; conv.i4; brtrue NOTEMPTY
 NULL:     ldc.i4.0; conv.u; stloc ptr       // empty/null ⇒ null pointer
           br AFTER
-NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>
-          call void* Unsafe.AsPointer<elem>(ref elem); stloc ptr
+NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>; conv.u; stloc ptr
 AFTER:    <body>
           leave DONE
 FINALLY:  ldnull; stloc pinned              // release on every exit
@@ -126,7 +125,7 @@ DONE:
 ```
 EmitExpr(source); dup; stloc pinned; brfalse NULL
 ldloc pinned; call char& string.GetPinnableReference()
-call void* Unsafe.AsPointer<char>(ref char); stloc ptr
+conv.u; stloc ptr
 br AFTER
 NULL: ldc.i4.0; conv.u; stloc ptr
 AFTER:
@@ -136,9 +135,7 @@ try { <body> } finally {
 ```
 
 `string.GetPinnableReference()` returns `ref readonly char`; the MemberRef
-retains its `modreq(InAttribute)` return signature. `Unsafe.AsPointer<T>`
-converts that managed pointer to the numeric native pointer stored in the
-user-visible `*T` local.
+retains its `modreq(InAttribute)` return signature.
 
 **Span-like / `GetPinnableReference`** (`T& pinned`, issue #1043):
 
@@ -146,7 +143,7 @@ user-visible `*T` local.
 EmitExpr(span); stloc src                    // spill the source for addressing
 ldloca src; call instance T& GetPinnableReference()
 stloc pinned                                 // T& pinned = ref
-ldloc pinned; call void* Unsafe.AsPointer<T>(ref T); stloc ptr
+ldloc pinned; conv.u; stloc ptr
 try { <body> } finally {
     ldc.i4.0; conv.u; stloc pinned            // release on every exit
 }
@@ -165,10 +162,12 @@ return-signature encoder reproduces required custom modifiers on by-ref returns
 (the same mechanism used for `ref readonly` indexers in ADR-0056), so the call
 binds at runtime instead of throwing `MissingMethodException`.
 
-The `Unsafe.AsPointer<T>` call is deliberate for every managed-pointer source.
-Emitting `conv.u` directly after `ldelema` or a ref-return leaves a managed
-pointer at an instruction that requires a numeric stack value, producing
-ilverify's `ExpectedNumericType` error even though RyuJIT accepts the method.
+ECMA-335 III.1.6 permits `conv.u` on a managed pointer, and current .NET 10
+`csc` emits the same sequence for array and span pins. The resulting unsafe IL
+is unverifiable: `ilverify` reports `ExpectedNumericType` for the byte-identical
+array and span sequence from both compilers. Emit tests classify that diagnostic
+as a known unsafe-code limitation rather than moving the conversion into a
+framework helper.
 
 ### 5. New node kinds, exhaustiveness, coverage matrix
 

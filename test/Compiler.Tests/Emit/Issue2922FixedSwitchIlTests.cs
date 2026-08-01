@@ -3,12 +3,13 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Threading.Tasks;
 using GSharp.Compiler;
 using Xunit;
@@ -16,8 +17,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2922: fixed sources must become numeric unmanaged pointers before
-/// switch control flow is emitted.
+/// Issue #2922: string pins use <c>GetPinnableReference</c>; array and span
+/// pins retain Roslyn's managed-pointer + <c>conv.u</c> lowering.
 /// </summary>
 public class Issue2922FixedSwitchIlTests
 {
@@ -247,129 +248,208 @@ public class Issue2922FixedSwitchIlTests
         Console.WriteLine(trace)
         """;
 
-    /// <summary>Gets fixed source kinds whose old conv.u lowering failed verification.</summary>
-    public static IEnumerable<object[]> PinKinds()
+    [Fact]
+    public void FixedControlFlowMatrix_VerifiesLoadsAndRuns()
     {
-        yield return new object[]
-        {
-            "Slice",
-            """
-            package Issue2922.Slice
-            import System
-            func F(x int32, xs []int32) int32 {
-                unsafe {
-                    fixed p *int32 = xs {
-                        switch x {
-                            case 0 { return xs.Length }
-                            default { return 1 }
-                        }
-                    }
-                }
-            }
-            Console.WriteLine(F(0, []int32{1, 2}))
-            """,
-            "2\n",
-            Array.Empty<string>(),
-        };
-        yield return new object[]
-        {
-            "String",
-            """
-            package Issue2922.String
-            import System
-            func F(x int32, text string) int32 {
-                unsafe {
-                    fixed p *uint16 = text {
-                        switch x {
-                            case 0 { return text.Length }
-                            default { return 1 }
-                        }
-                    }
-                }
-            }
-            Console.WriteLine(F(0, "AB"))
-            Console.WriteLine(F(0, ""))
-            """,
-            "2\n0\n",
-            Array.Empty<string>(),
-        };
-        yield return new object[]
-        {
-            "Span",
-            """
-            package Issue2922.Span
-            import System
-            func F(x int32, xs []int32) int32 {
-                var span Span[int32] = xs
-                unsafe {
-                    fixed p *int32 = span {
-                        switch x {
-                            case 0 { return xs.Length }
-                            default { return 1 }
-                        }
-                    }
-                }
-            }
-            Console.WriteLine(F(0, []int32{1, 2}))
-            """,
-            "2\n",
-            new[] { "StackUnexpected" },
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(PinKinds))]
-    public void FixedSource_VerifiesLoadsAndRuns(
-        string name,
-        string source,
-        string expectedOutput,
-        string[] ignoredVerificationErrors)
-    {
-        using var program = Compile(name, source);
+        using var program = Compile("Matrix", MatrixSource);
         IlVerifier.Verify(
             program.AssemblyPath,
             additionalReferences: null,
-            ignoredErrorCodes: ignoredVerificationErrors,
-            ignoredErrorScope: ignoredVerificationErrors.Length == 0 ? null : @"<Program>\.F$");
-        program.AssertLoadable();
-        Assert.Equal(expectedOutput, program.Run());
-    }
-
-    [Fact]
-    public void FixedControlFlowMatrix_Verifies()
-    {
-        using var program = Compile("MatrixVerify", MatrixSource);
-        IlVerifier.Verify(program.AssemblyPath);
-    }
-
-    [Fact]
-    public void FixedControlFlowMatrix_LoadsAndRuns()
-    {
-        using var program = Compile("MatrixRun", MatrixSource);
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.");
         program.AssertLoadable();
         Assert.Equal(ExpectedMatrixOutput, program.Run());
     }
 
     [Fact]
-    public void SlicePin_ConvertsManagedPointerThroughUnsafeAsPointer()
+    public void ArrayPointerDereference_VerifiesLoadsAndRuns()
     {
-        using var program = Compile("Instruction", PinKinds().First()[1].ToString()!);
-        var assembly = program.Load();
-        var method = assembly.GetTypes()
-            .Single(type => type.Name == "<Program>")
-            .GetMethod("F", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
-        var instructions = IlInstructionReader.Read(method.GetMethodBody()!.GetILAsByteArray()!);
-        var loadElementAddressIndex = Array.FindIndex(
+        const string Source = """
+            package Issue2922.Array
+            import System
+
+            func F(xs []int32) int32 {
+                unsafe {
+                    fixed p *int32 = xs {
+                        switch xs.Length {
+                            case 2 { return *p + p[1] }
+                            default { return -1 }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine(F([]int32{10, 20}))
+            """;
+
+        using var program = Compile("Array", Source);
+        IlVerifier.Verify(
+            program.AssemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.F$");
+        program.AssertLoadable();
+        Assert.Equal("30\n", program.Run());
+
+        var instructions = program.ReadMethod("F");
+        var loadElementAddress = Array.FindIndex(
             instructions,
             instruction => instruction.OpCode == OpCodes.Ldelema);
+        Assert.True(loadElementAddress >= 0);
+        Assert.Equal(OpCodes.Conv_U, instructions[loadElementAddress + 1].OpCode);
+        Assert.DoesNotContain(program.MemberReferenceNames(), name => name == "AsPointer");
+    }
 
-        Assert.True(loadElementAddressIndex >= 0);
-        Assert.True(loadElementAddressIndex + 1 < instructions.Length);
-        var call = instructions[loadElementAddressIndex + 1];
-        Assert.Equal(OpCodes.Call, call.OpCode);
-        Assert.True(call.MetadataToken.HasValue);
-        var calledMethod = method.Module.ResolveMethod(call.MetadataToken.Value);
-        Assert.Equal("AsPointer", calledMethod!.Name);
+    [Fact]
+    public void StructPointerDereference_VerifiesLoadsAndRuns()
+    {
+        const string Source = """
+            package Issue2922.Struct
+            import System
+            import System.Runtime.InteropServices
+
+            @StructLayout(LayoutKind.Sequential)
+            struct Point {
+                var x int32
+                var y int32
+            }
+
+            func F(values []Point) int32 {
+                unsafe {
+                    fixed p *Point = values {
+                        switch values.Length {
+                            case 1 { return p->x + p->y }
+                            default { return -1 }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine(F([]Point{Point{x: 30, y: 47}}))
+            """;
+
+        using var program = Compile("Struct", Source);
+        IlVerifier.Verify(
+            program.AssemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.F$");
+        program.AssertLoadable();
+        Assert.Equal("77\n", program.Run());
+    }
+
+    [Fact]
+    public void SpanPointerDereference_VerifiesLoadsAndRuns()
+    {
+        const string Source = """
+            package Issue2922.Span
+            import System
+
+            func F(xs []int32) int32 {
+                var span Span[int32] = xs
+                unsafe {
+                    fixed p *int32 = span {
+                        switch xs.Length {
+                            case 1 { return *p }
+                            default { return -1 }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine(F([]int32{5}))
+            """;
+
+        using var program = Compile("Span", Source);
+        IlVerifier.Verify(
+            program.AssemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.F$");
+        program.AssertLoadable();
+        Assert.Equal("5\n", program.Run());
+        Assert.DoesNotContain(program.MemberReferenceNames(), name => name == "AsPointer");
+    }
+
+    [Fact]
+    public void StringPin_UsesPinnableReferenceAndPreservesModreq()
+    {
+        const string Source = """
+            package Issue2922.String
+            import System
+
+            func F(text string) int32 {
+                unsafe {
+                    fixed p *uint16 = text {
+                        switch text.Length {
+                            case 1 { return int32(*p) }
+                            default { return -1 }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine(F("Z"))
+            """;
+
+        using var program = Compile("String", Source);
+        IlVerifier.Verify(
+            program.AssemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.F$");
+        program.AssertLoadable();
+        Assert.Equal("90\n", program.Run());
+
+        using var stream = File.OpenRead(program.AssemblyPath);
+        using var pe = new PEReader(stream);
+        var metadata = pe.GetMetadataReader();
+        var stringPinnableReference = Assert.Single(
+            metadata.MemberReferences,
+            handle =>
+            {
+                var reference = metadata.GetMemberReference(handle);
+                return metadata.GetString(reference.Name) == "GetPinnableReference"
+                    && reference.Parent.Kind == HandleKind.TypeReference
+                    && metadata.GetString(
+                        metadata.GetTypeReference((TypeReferenceHandle)reference.Parent).Name) == "String";
+            });
+        var signature = metadata.GetBlobBytes(
+            metadata.GetMemberReference(stringPinnableReference).Signature);
+        Assert.Contains((byte)0x1F, signature); // ELEMENT_TYPE_CMOD_REQD
+        Assert.DoesNotContain(
+            metadata.MemberReferences,
+            handle => metadata.GetString(metadata.GetMemberReference(handle).Name)
+                == "get_OffsetToStringData");
+    }
+
+    [Fact]
+    public void NullStringPin_LoadsAndRuns()
+    {
+        const string Source = """
+            package Issue2922.NullString
+            import System
+
+            func F(text string) int32 {
+                unsafe {
+                    fixed p *uint16 = text {
+                        return 7
+                    }
+                }
+            }
+
+            let missing string = default
+            Console.WriteLine(F(missing))
+            """;
+
+        using var program = Compile("NullString", Source);
+        IlVerifier.Verify(
+            program.AssemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: new[] { "ExpectedNumericType" },
+            ignoredErrorScope: @"<Program>\.F$");
+        program.AssertLoadable();
+        Assert.Equal("7\n", program.Run());
     }
 
     [Fact]
@@ -443,6 +523,29 @@ public class Issue2922FixedSwitchIlTests
         public Assembly Load() => Assembly.Load(File.ReadAllBytes(AssemblyPath));
 
         public void AssertLoadable() => Assert.NotEmpty(Load().GetTypes());
+
+        public IlInstruction[] ReadMethod(string name)
+        {
+            using var stream = File.OpenRead(AssemblyPath);
+            using var pe = new PEReader(stream);
+            var metadata = pe.GetMetadataReader();
+            var handle = Assert.Single(
+                metadata.MethodDefinitions,
+                candidate => metadata.GetString(metadata.GetMethodDefinition(candidate).Name) == name);
+            var definition = metadata.GetMethodDefinition(handle);
+            return IlInstructionReader.Read(
+                pe.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes());
+        }
+
+        public string[] MemberReferenceNames()
+        {
+            using var stream = File.OpenRead(AssemblyPath);
+            using var pe = new PEReader(stream);
+            var metadata = pe.GetMetadataReader();
+            return metadata.MemberReferences
+                .Select(handle => metadata.GetString(metadata.GetMemberReference(handle).Name))
+                .ToArray();
+        }
 
         public string Run()
         {
