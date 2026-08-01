@@ -322,6 +322,31 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
     }
 
     [Fact]
+    public void NestedEnumUnderNonGenericMiddle_ClosesOverGenericAncestor()
+    {
+        const string source = """
+            package P
+
+            struct Gen[T] {
+                public struct Mid {
+                    public enum Tone { A = 1, B = 2 }
+                    public func R() int32 {
+                        var tone = Tone.B
+                        return int32(tone)
+                    }
+                }
+            }
+            """;
+
+        var assembly = CompileAndLoad(source);
+        var midDefinition = assembly.GetTypes().Single(t => t.Name == "Mid");
+        var mid = midDefinition.IsGenericTypeDefinition
+            ? midDefinition.MakeGenericType(typeof(int))
+            : midDefinition;
+        Assert.Equal(2, GetMethod(mid, "R").Invoke(Activator.CreateInstance(mid), null));
+    }
+
+    [Fact]
     public void NestedEnumTwoGenericLevelsDeep_LocalExpressionClosesAllEnclosingParameters()
     {
         const string source = """

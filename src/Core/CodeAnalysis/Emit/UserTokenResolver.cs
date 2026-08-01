@@ -1050,7 +1050,7 @@ internal sealed class UserTokenResolver
         }
 
         throw new InvalidOperationException(
-            $"Open nested enum '{def.Name}' escaped its generic context; enclosing type arguments must be resolved before emission.");
+            $"Open nested enum '{def.ContainingType}.{def.Name}' escaped its generic context; enclosing type arguments must be resolved before emission.");
     }
 
     /// <summary>
