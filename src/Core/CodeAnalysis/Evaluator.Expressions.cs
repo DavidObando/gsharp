@@ -759,7 +759,8 @@ public sealed partial class Evaluator
             captured[v] = LookupVariable(v);
         }
 
-        return MaterializeClosure(new ClosureValue(node.Function, node.Body, node.FunctionType, captured));
+        var body = node.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(node.Body);
+        return MaterializeClosure(new ClosureValue(node.Function, body, node.FunctionType, captured));
     }
 
     private object EvaluateMethodGroupExpression(BoundMethodGroupExpression node)
