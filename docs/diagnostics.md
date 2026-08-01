@@ -121,7 +121,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `int x = 3.14` — an explicit cast is available but was not written. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
 | GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
-| GS0159 | Error | Cannot find function. | A package-qualified function name that resolves to nothing. |
+| GS0159 | Error | Cannot resolve function call. | A function name does not resolve, or its nullable receiver lacks valid non-null narrowing. |
 | GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |

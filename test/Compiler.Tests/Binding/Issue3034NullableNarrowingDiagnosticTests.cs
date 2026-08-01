@@ -62,6 +62,46 @@ public class Issue3034NullableNarrowingDiagnosticTests
     }
 
     [Fact]
+    public void MissingMethodOnNullableReceiver_KeepsLookupMessage()
+    {
+        var diagnostic = GetGs0159("""
+            class C {
+                func M() { }
+            }
+
+            func Run() {
+                var c C? = nil
+                c.Frobnicate()
+            }
+            """);
+
+        Assert.Equal("Cannot find function Frobnicate.", diagnostic.Message);
+    }
+
+    [Fact]
+    public void QualifiedNullableReceiver_PreservesQualifier()
+    {
+        var diagnostic = GetGs0159("""
+            class C {
+                func M() { }
+            }
+
+            class Box {
+                var Inner C?
+            }
+
+            func Run() {
+                var b Box = Box()
+                b.Inner.M()
+            }
+            """);
+
+        Assert.Equal(
+            "Cannot call function M because receiver 'b.Inner' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            diagnostic.Message);
+    }
+
+    [Fact]
     public void InvalidExplicitTypeArgument_KeepsLookupMessage()
     {
         var diagnostic = GetGs0159("""

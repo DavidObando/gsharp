@@ -1913,7 +1913,8 @@ internal sealed partial class ExpressionBinder
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
         CallExpressionSyntax ce,
-        ExpressionSyntax receiverSyntax = null)
+        ExpressionSyntax receiverSyntax = null,
+        int? receiverStart = null)
     {
         var methodName = ce.Identifier.Text;
         if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
@@ -2552,12 +2553,14 @@ internal sealed partial class ExpressionBinder
                 return ifaceObjectCall;
             }
 
-            if (receiver?.Type is NullableTypeSymbol)
+            var effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
+            if (receiver?.Type is NullableTypeSymbol nullableRecvType
+                && (nullableRecvType.UnderlyingType as StructSymbol)?.GetMethods(methodName).Length > 0
+                && effectiveReceiverSyntax != null)
             {
-                var effectiveReceiverSyntax = receiverSyntax ?? receiver.Syntax;
-                var receiverName = effectiveReceiverSyntax == null
-                    ? "receiver"
-                    : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+                var receiverName = effectiveReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
+                    receiverStart ?? effectiveReceiverSyntax.Span.Start,
+                    effectiveReceiverSyntax.Span.End));
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
             }
             else
