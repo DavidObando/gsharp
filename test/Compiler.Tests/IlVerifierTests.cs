@@ -177,7 +177,8 @@ public class IlVerifierTests
     {
         // A regression that starts either drain after WaitForExit hangs this test.
         // xUnit's Fact timeout is unavailable because this assembly disables test
-        // parallelization, so treat such a hang as the deadlock regression, not a flake.
+        // parallelization, and RunProcess's timeout cannot cover a deadlock placed
+        // before its wait. Treat such a hang as the regression, not a flake.
         const int OutputLength = 128 * 1024;
         var result = IlVerifier.RunProcess(
             CreateChildProcess(
