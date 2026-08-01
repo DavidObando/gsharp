@@ -75,6 +75,7 @@ internal static class FinallyExitRewriter
     {
         private readonly ExitPlan plan;
         private readonly ProtectedRegionBranchAnalysis branches;
+        private int skipOrdinal;
 
         public ExitFunneler(ExitPlan plan, ProtectedRegionBranchAnalysis branches)
         {
@@ -94,6 +95,27 @@ internal static class FinallyExitRewriter
                 ImmutableArray.Create<BoundStatement>(
                     AssignBranch(plan.GetDiscriminator(node.Label)),
                     new BoundGotoStatement(null, plan.TailLabel)));
+        }
+
+        protected override BoundStatement RewriteConditionalGotoStatement(BoundConditionalGotoStatement node)
+        {
+            if (branches.ContainsLabel(node.Label))
+            {
+                return node;
+            }
+
+            var skip = new BoundLabel("<>finally_exit_skip_" + skipOrdinal++);
+            return new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundConditionalGotoStatement(
+                        null,
+                        skip,
+                        node.Condition,
+                        jumpIfTrue: !node.JumpIfTrue),
+                    AssignBranch(plan.GetDiscriminator(node.Label)),
+                    new BoundGotoStatement(null, plan.TailLabel),
+                    new BoundLabelStatement(null, skip)));
         }
 
         private BoundStatement AssignBranch(int discriminator)
