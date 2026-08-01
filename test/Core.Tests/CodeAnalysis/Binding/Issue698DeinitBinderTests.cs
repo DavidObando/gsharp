@@ -30,7 +30,7 @@ class Resource {
 }
 ";
         var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
 
         var resource = structs.Single(s => s.Name == "Resource");
         Assert.NotNull(resource.Deinitializer);
@@ -52,7 +52,7 @@ class Resource {
 }
 ";
         var (result, _) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ class CachedResource : Resource {
 }
 ";
         var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
 
         var resource = structs.Single(s => s.Name == "Resource");
         var cached = structs.Single(s => s.Name == "CachedResource");

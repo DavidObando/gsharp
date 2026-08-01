@@ -118,6 +118,7 @@ public class Issue2988DeinitInterpreterTests
         {
             var exitCode = GSharp.Repl.Program.Main([sourcePath]);
 
+            // Unlike GS0513, GS0517 skips only a GC-scheduled side effect after evaluation completes.
             Assert.Equal(0, exitCode);
             Assert.Equal("body-33\n", output.ToString());
             Assert.Contains("warning GS0517", error.ToString(), StringComparison.Ordinal);
