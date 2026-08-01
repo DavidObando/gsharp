@@ -278,18 +278,18 @@ internal sealed class ImportedMemberRefFactory
             // generic over enclosing TYPE parameters, so any TP present in the
             // active remap (class or method) maps to the synthesized class's
             // own VAR(idx) slot.
-            if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
+            if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
+            {
+                encoder.GenericTypeParameter(smClassOrd);
+            }
+            else if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
                 && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tpSym, out var lambdaMethodOrd))
             {
                 // Issue #2118: reference to an enclosing type parameter inside a
                 // generic-promoted non-capturing lambda's signature/body maps to
                 // the lambda method's own MVar(idx) slot.
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
-            }
-            else if (this.remaps.ActiveIteratorStateMachineRemap != null
-                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
-            {
-                encoder.GenericTypeParameter(smClassOrd);
             }
             else if (tpSym.IsMethodTypeParameter)
             {

@@ -258,15 +258,6 @@ internal sealed class SignatureEncoder
         }
         else if (type is TypeParameterSymbol tp)
         {
-            // Issue #2118: inside a generic-promoted non-capturing lambda's
-            // signature/body, references to the enclosing type parameters map to
-            // the lambda method's own MVar(idx) slots.
-            if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
-                && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
-            {
-                encoder.GenericMethodTypeParameter(lambdaMethodOrd);
-            }
-
             // Issue #810: when emitting a state-machine method (or the
             // state-machine class itself), references to the OUTER
             // method's type parameters are encoded as the SM class's
@@ -275,7 +266,7 @@ internal sealed class SignatureEncoder
             // `!0` on the SM class. The remap is pushed by
             // EmitIteratorStateMachineMember and is keyed by the
             // method TP's instance identity.
-            else if (this.remaps.ActiveIteratorStateMachineRemap != null
+            if (this.remaps.ActiveIteratorStateMachineRemap != null
                 && tp.IsMethodTypeParameter
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
             {
@@ -289,6 +280,15 @@ internal sealed class SignatureEncoder
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal2))
             {
                 encoder.GenericTypeParameter(classOrdinal2);
+            }
+
+            // Issue #2118: inside a generic-promoted non-capturing lambda's
+            // signature/body, references to the enclosing type parameters map to
+            // the lambda method's own MVar(idx) slots.
+            else if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
+                && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tp, out var lambdaMethodOrd))
+            {
+                encoder.GenericMethodTypeParameter(lambdaMethodOrd);
             }
 
             // ADR-0087 §3 R2: a user-declared open type parameter encodes as
