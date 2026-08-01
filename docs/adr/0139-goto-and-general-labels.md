@@ -81,7 +81,14 @@ rejects transfers out of a `finally` with CS0157.
 Issue [#2953](https://github.com/DavidObando/gsharp/issues/2953) routes ordinary
 fallthrough around fixed and protected-region return epilogues to the
 compiler-generated non-void guard. Only an actual rewritten return reaches
-the epilogue's value slot.
+the epilogue's value slot. Protected-region lowering is also consumed by
+`gsi`, where reaching this guard reports GS0100 instead of the GS9999
+internal-error fallback. This is an intended interpreter behavior change:
+`gsi` now rejects the fallthrough instead of returning a default value.
+GS0506 (`FixedStatementCannotSuspend`, issue
+[#2917](https://github.com/DavidObando/gsharp/issues/2917)) is existing
+precedent that a deliberate `fixed`-boundary rejection uses a semantic
+diagnostic rather than GS9999.
 
 ### Diagnostics
 

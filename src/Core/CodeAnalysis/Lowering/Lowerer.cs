@@ -1405,7 +1405,8 @@ public sealed class Lowerer : BoundTreeRewriter
                             exceptionType,
                             constructor,
                             ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, Message)),
-                            TypeSymbol.FromClrType(exceptionType))));
+                            TypeSymbol.FromClrType(exceptionType)),
+                        DiagnosticDescriptors.AllPathsMustReturn));
                 }
 
                 statements.Add(current);

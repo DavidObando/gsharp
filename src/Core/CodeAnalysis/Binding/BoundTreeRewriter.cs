@@ -322,7 +322,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundThrowStatement(null, expression);
+        return new BoundThrowStatement(null, expression, node.DiagnosticDescriptor);
     }
 
     /// <summary>

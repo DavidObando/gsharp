@@ -661,6 +661,11 @@ public sealed partial class Evaluator
     {
         var value = EvaluateExpression(node.Expression);
 
+        if (node.DiagnosticDescriptor is { } diagnosticDescriptor && value is Exception diagnosticException)
+        {
+            throw EvaluatorException.CreateDiagnostic(diagnosticDescriptor, diagnosticException, node);
+        }
+
         // Issue #319: a GSharp class that inherits a CLR Exception type carries a
         // real CLR backing instance (allocated via AllocateClrBacking). Throw that
         // backing so the runtime catch path observes the correct type and inherited
