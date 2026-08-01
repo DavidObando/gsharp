@@ -28,8 +28,6 @@ public class Issue1305ChainedLinqEmitTests
     // the (host-keyed) FunctionTypeSymbol cache for `Func<TStruct, …>` selector
     // delegates is not torn down between compilations; a shared struct name
     // would alias a prior compilation's struct symbol into the next emit.
-    private static readonly string[] InitOnlyStructLiteral = { "InitOnly" };
-
     [Fact]
     public void StructElement_WhereThenSelect_SumsKept()
     {
@@ -59,7 +57,7 @@ public class Issue1305ChainedLinqEmitTests
             """;
 
         // Keeps V>1 → 5 + 9 = 14.
-        Assert.Equal("14\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("14\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -91,7 +89,7 @@ public class Issue1305ChainedLinqEmitTests
             """;
 
         // V>0 keeps all three; V>3 keeps 5 and 9 → 2.
-        Assert.Equal("2\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("2\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -125,7 +123,7 @@ public class Issue1305ChainedLinqEmitTests
         Assert.Equal("28\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1305_").FullName;
         try
@@ -161,7 +159,7 @@ public class Issue1305ChainedLinqEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

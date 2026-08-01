@@ -119,7 +119,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
         Assert.Equal("6\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1320_").FullName;
         try
@@ -155,7 +155,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

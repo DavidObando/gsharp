@@ -77,7 +77,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
         Assert.Equal("11\n", output);
     }
 
@@ -109,7 +109,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
         Assert.Equal("7\n", output);
     }
 
@@ -161,7 +161,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.(UseFoo|UseBar)$");
         Assert.Equal("1\n2\n", output);
     }
 
@@ -210,7 +210,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.(UseFoo|UseBar)$");
         Assert.Equal("10\n20\n", output);
     }
 
@@ -249,7 +249,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
         Assert.Equal("5\n", output);
     }
 
@@ -391,7 +391,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             compileExit == 0,
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+        IlVerifier.Verify(outPath);
         return outPath;
     }
 
@@ -430,7 +430,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
         return (compileExit, stdoutWriter.ToString() + stderrWriter.ToString());
     }
 
-    private static string CompileAndRun(string source)
+    private static string CompileAndRun(string source, string ignoredErrorScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2370_static_exe_").FullName;
         try
@@ -468,7 +468,12 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: ignoredErrorScope is null
+                    ? null
+                    : IlVerifier.KnownIssues.StaticVirtualInterface,
+                ignoredErrorScope: ignoredErrorScope);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

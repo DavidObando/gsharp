@@ -24,8 +24,6 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue1302EnumeratorInterfaceUserElementEmitTests
 {
-    private static readonly string[] InitOnlyStructLiteral = { "InitOnly" };
-
     [Fact]
     public void StructElementList_EnumeratorToInterface_Iterates()
     {
@@ -50,7 +48,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("3\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -138,7 +136,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
 
     // The struct case prints the iteration count over a three-element list,
     // proving the converted IEnumerator[Ch] yields every element at runtime.
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1302_").FullName;
         try
@@ -174,7 +172,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

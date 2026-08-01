@@ -233,7 +233,10 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "return_throw");
+        using var program = Compile(
+            Source,
+            "return_throw",
+            ignoredErrorScope: @"(Box\.\.ctor|<Program>\.(ComputedReturn|MixedReturn))$");
         Assert.Equal("42\n9\nvoid\n20\n5\n20\n2\n", program.Run());
 
         var returned = program.ReadMethod("ComputedReturn");
@@ -285,7 +288,10 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "static_initializer");
+        using var program = Compile(
+            Source,
+            "static_initializer",
+            ignoredErrorScope: @"Holder\.\.cctor$");
         Assert.Equal("41\n", program.Run());
         AssertEscapingLeave(program.ReadMethod(".cctor"), expectedFinallyCount: 1);
     }
@@ -334,7 +340,10 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "movement");
+        using var program = Compile(
+            Source,
+            "movement",
+            ignoredErrorScope: @"<Program>\.Released$");
         Assert.Equal("True\n", program.Run());
         var method = program.ReadMethod("Released");
         var regions = method.Regions.Where(region => region.Kind == ExceptionRegionKind.Finally).ToArray();
@@ -531,7 +540,11 @@ public class Issue2900FixedPinReleaseEmitTests
             Console.WriteLine(trace)
             """;
 
-        using var program = Compile(Source, "shapes");
+        using var program = Compile(
+            Source,
+            "shapes",
+            ignoredErrorScope:
+                @"<Program>\.(ArrayPin|FixedArrayPin|EmptyPin|StringPin|SpanPin|TryInsideFixed|FixedInsideTry)$");
         Assert.Equal("7\n8\n0\n65\n7\n7\n7\nTRCFBLESGUW1\n", program.Run());
 
         var spanPin = program.ReadMethod("SpanPin");
@@ -590,7 +603,10 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "switch_return");
+        using var program = Compile(
+            Source,
+            "switch_return",
+            ignoredErrorScope: @"<Program>\.FromSwitch$");
         Assert.Equal("8\n", program.Run());
         AssertEscapingLeave(program.ReadMethod("FromSwitch"), expectedFinallyCount: 1);
     }
@@ -623,7 +639,10 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "select_return");
+        using var program = Compile(
+            Source,
+            "select_return",
+            ignoredErrorScope: @"<Program>\.FromSelect$");
         Assert.Equal("9\n", program.Run());
         AssertEscapingLeave(program.ReadMethod("FromSelect"), expectedFinallyCount: 1);
     }
@@ -683,7 +702,11 @@ public class Issue2900FixedPinReleaseEmitTests
             }
             """;
 
-        using var program = Compile(Source, "state_machines");
+        using var program = Compile(
+            Source,
+            "state_machines",
+            ignoredErrorScope:
+                @"<(Values|AfterFixed|ReturnFromFixed)>d__\d+\.MoveNext$");
         Assert.Equal("11\n10\n12\n10\n11\n", program.Run());
         Assert.True(
             program.ReadAllMethods().Any(method =>
@@ -859,7 +882,10 @@ public class Issue2900FixedPinReleaseEmitTests
     private static bool IsLeave(OpCode opcode)
         => opcode == OpCodes.Leave || opcode == OpCodes.Leave_S;
 
-    private static CompiledProgram Compile(string source, string tag)
+    private static CompiledProgram Compile(
+        string source,
+        string tag,
+        string ignoredErrorScope = null)
     {
         var directory = Directory.CreateTempSubdirectory($"gs_i2900_{tag}_").FullName;
         var sourcePath = Path.Combine(directory, "test.gs");
@@ -892,7 +918,11 @@ public class Issue2900FixedPinReleaseEmitTests
         Assert.True(
             exitCode == 0,
             $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        IlVerifier.Verify(assemblyPath, additionalReferences: null, ignoredErrorCodes: FixedIlVerifyIgnored);
+        IlVerifier.Verify(
+            assemblyPath,
+            additionalReferences: null,
+            ignoredErrorCodes: ignoredErrorScope is null ? null : FixedIlVerifyIgnored,
+            ignoredErrorScope: ignoredErrorScope);
         return new CompiledProgram(directory, assemblyPath);
     }
 

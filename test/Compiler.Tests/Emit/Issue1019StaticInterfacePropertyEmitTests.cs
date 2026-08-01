@@ -184,7 +184,7 @@ public class Issue1019StaticInterfacePropertyEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Describe$");
         Assert.Equal("apple\n", output);
     }
 
@@ -293,11 +293,11 @@ public class Issue1019StaticInterfacePropertyEmitTests
             compileExit == 0,
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+        IlVerifier.Verify(outPath);
         return outPath;
     }
 
-    private static string CompileAndRun(string source)
+    private static string CompileAndRun(string source, string ignoredErrorScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_sviprop_exe_").FullName;
         try
@@ -335,7 +335,12 @@ public class Issue1019StaticInterfacePropertyEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: ignoredErrorScope is null
+                    ? null
+                    : IlVerifier.KnownIssues.StaticVirtualInterface,
+                ignoredErrorScope: ignoredErrorScope);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

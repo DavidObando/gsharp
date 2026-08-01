@@ -104,6 +104,8 @@ internal static class IlVerifier
                 ignoredErrorCodes: null,
                 includedScope: null,
                 excludedScope: ignoredErrorScope);
+            // ponytail: -g remains category-wide inside the matched method;
+            // parse exact verifier instances only if method scope proves too broad.
             VerifyCore(
                 command,
                 leadingArgs,
@@ -345,33 +347,37 @@ internal static class IlVerifier
     }
 
     /// <summary>
-    /// Maps a sample name (as it appears under <c>samples/</c>) to the bundle
-    /// of ilverify error codes that the conformance harness should treat as
-    /// known issues. Samples not present in this map are verified strictly.
+    /// Maps a sample name (as it appears under <c>samples/</c>) to ilverify
+    /// error codes and the methods where the conformance harness should treat
+    /// them as known issues. Samples not present in this map are verified strictly.
     /// Keys are matched case-insensitively against the sample's base name
     /// without extension.
     /// </summary>
-    public static IReadOnlyList<string> GetKnownIssuesForSample(string sampleBaseName)
+    public static (IReadOnlyList<string> ErrorCodes, string? Scope) GetKnownIssuesForSample(
+        string sampleBaseName)
     {
         var key = sampleBaseName.TrimEnd('/');
-        if (SampleKnownIssues.TryGetValue(key, out var codes))
+        if (SampleKnownIssues.TryGetValue(key, out var knownIssues))
         {
-            return codes;
+            return knownIssues;
         }
 
-        return Array.Empty<string>();
+        return (Array.Empty<string>(), null);
     }
 
-    private static readonly Dictionary<string, string[]> SampleKnownIssues = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, (IReadOnlyList<string> ErrorCodes, string? Scope)> SampleKnownIssues =
+        new(StringComparer.OrdinalIgnoreCase)
     {
         // Ref struct emission: see KnownIssues.RefStruct.
-        ["UserRefStruct"] = KnownIssues.RefStruct,
+        ["UserRefStruct"] = (KnownIssues.RefStruct, @"<Program>\.add$"),
 
         // ADR-0089 / issue #755: static-virtual interface dispatch emits
         // the canonical `constrained. !!T  call <iface>::<method>` pattern
         // that pre-C#-11 ilverify rules don't understand. Identical errors
         // are produced by csc-emitted IL for the same C# 11 pattern.
-        ["StaticVirtualInterfaces"] = KnownIssues.StaticVirtualInterface,
+        ["StaticVirtualInterfaces"] = (
+            KnownIssues.StaticVirtualInterface,
+            @"<Program>\.(Apply|IdentityOf)$"),
     };
 
     private static (string Command, IReadOnlyList<string> LeadingArgs) LocateTool()

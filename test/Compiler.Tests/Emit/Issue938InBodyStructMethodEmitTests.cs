@@ -235,7 +235,7 @@ public class Issue938InBodyStructMethodEmitTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.RefStruct);
+        IlVerifier.Verify(outPath);
 
         var bytes = File.ReadAllBytes(outPath);
         return (Assembly.Load(bytes), diagnostics);

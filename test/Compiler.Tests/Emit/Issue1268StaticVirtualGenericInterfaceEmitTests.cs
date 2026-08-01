@@ -193,7 +193,10 @@ public class Issue1268StaticVirtualGenericInterfaceEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface,
+                ignoredErrorScope: @"<Program>\.Use$");
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

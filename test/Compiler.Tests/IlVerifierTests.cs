@@ -183,6 +183,7 @@ public class IlVerifierTests
                     ignoredErrorCodes: new[] { "UnmanagedPointer", "StackByRef" },
                     ignoredErrorScope: @"<Program>\.Ignored$"));
             Assert.Contains("::Visible(", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("::Ignored(", exception.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -221,6 +222,7 @@ public class IlVerifierTests
     public void RunProcess_LargeStdoutAndStderr_DrainsBothPipes()
     {
         // A regression that blocks in either drain before WaitForExit hangs this test.
+        // Starting a drain after the wait instead reaches the 10 s timeout and fails boundedly.
         // xUnit's Fact timeout is unavailable because this assembly disables test
         // parallelization, and RunProcess's timeout cannot cover a deadlock placed
         // before its wait. Treat such a hang as the regression, not a flake.
