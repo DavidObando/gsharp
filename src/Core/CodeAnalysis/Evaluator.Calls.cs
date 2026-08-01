@@ -55,35 +55,14 @@ public sealed partial class Evaluator
         }
         else
         {
+            var args = new object[node.Arguments.Length];
+            var refKinds = node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray();
+            var userRefSlots = BuildRefSlots(node.Arguments, refKinds, args);
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
-
-            // ADR-0060 item #7: identify ref-kind parameters so we can
-            // write the post-body value back into the caller's lvalue.
-            List<(ParameterSymbol Parameter, BoundExpression Operand)> userRefSlots = null;
 
             for (int i = 0; i < node.Arguments.Length; i++)
             {
-                var parameter = node.Function.Parameters[i];
-                var arg = node.Arguments[i];
-
-                if (parameter.RefKind != RefKind.None && arg is BoundAddressOfExpression addrOf)
-                {
-                    // Seed the parameter slot with the caller's current value
-                    // (for `out` this is a placeholder the callee is expected
-                    // to overwrite). Capture the operand for write-back unless
-                    // the kind is `in` (read-only).
-                    locals[parameter] = EvaluateExpression(addrOf.Operand);
-                    if (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
-                    {
-                        userRefSlots ??= [];
-                        userRefSlots.Add((parameter, addrOf.Operand));
-                    }
-                }
-                else
-                {
-                    var value = EvaluateExpression(arg);
-                    locals[parameter] = value;
-                }
+                locals[node.Function.Parameters[i]] = args[i];
             }
 
             var statement = program.Functions[node.Function];
@@ -105,8 +84,9 @@ public sealed partial class Evaluator
             // the caller's lvalue after restoring the caller's frame.
             if (userRefSlots != null)
             {
-                foreach (var (parameter, operand) in userRefSlots)
+                foreach (var (index, operand) in userRefSlots)
                 {
+                    var parameter = node.Function.Parameters[index];
                     var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
                     WriteBackToOperand(operand, finalValue);
                 }

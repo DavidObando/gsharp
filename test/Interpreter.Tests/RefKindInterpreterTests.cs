@@ -49,6 +49,37 @@ print(string(v))
     }
 
     [Fact]
+    public void ClrMethod_InlineOutVar_ProducesValue()
+    {
+        var output = RunSubmission("""
+            import System
+
+            int32.TryParse("77", out var parsed)
+            Console.WriteLine(parsed)
+            """);
+
+        Assert.Equal($"77{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void UserFunction_InlineOutVar_ProducesValue()
+    {
+        var output = RunSubmission("""
+            import System
+
+            func tryProduce(out result int32) bool {
+                result = 77
+                return true
+            }
+
+            tryProduce(out var produced)
+            Console.WriteLine(produced)
+            """);
+
+        Assert.Equal($"77{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void InParameter_BodyReadsCallerValue()
     {
         var output = RunSubmission(@"
