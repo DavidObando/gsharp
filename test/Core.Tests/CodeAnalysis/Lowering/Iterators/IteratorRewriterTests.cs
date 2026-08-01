@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Iterators;
@@ -101,6 +102,29 @@ public class IteratorRewriterTests
         // Assert: local should be in hoisted locals
         var plan = Assert.Single(result.Plans);
         Assert.Contains(plan.HoistedLocals, v => v.Name == "temp");
+    }
+
+    [Fact]
+    public void Rewrite_HoistsSelectReceiveBinding()
+    {
+        var seqType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
+        var function = new FunctionSymbol("withSelect", ImmutableArray<ParameterSymbol>.Empty, seqType, package: Package);
+        var selectVariable = new LocalVariableSymbol("value", false, TypeSymbol.Int32);
+        var yield = new BoundYieldStatement(null, new BoundVariableExpression(null, selectVariable));
+        var select = new BoundSelectStatement(
+            null,
+            ImmutableArray.Create(new BoundSelectCase(
+                SelectCaseKind.ReceiveBind,
+                new BoundLiteralExpression(null, null),
+                value: null,
+                selectVariable,
+                Block(yield))));
+        var program = MakeProgram(function, Block(select));
+
+        var result = IteratorRewriter.Rewrite(program);
+
+        var plan = Assert.Single(result.Plans);
+        Assert.Contains(selectVariable, plan.HoistedLocals);
     }
 
     [Fact]

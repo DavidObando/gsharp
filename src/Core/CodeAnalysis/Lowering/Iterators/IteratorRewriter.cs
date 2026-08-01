@@ -213,6 +213,21 @@ public static class IteratorRewriter
             base.VisitVariableDeclaration(node);
         }
 
+        protected override void VisitSelectStatement(BoundSelectStatement node)
+        {
+            foreach (var arm in node.Cases)
+            {
+                if (arm.Variable != null
+                    && !TypeSymbol.IsByRefLike(arm.Variable.Type)
+                    && !Locals.Contains(arm.Variable))
+                {
+                    Locals.Add(arm.Variable);
+                }
+            }
+
+            base.VisitSelectStatement(node);
+        }
+
         protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
         {
             if (node.Operand is BoundVariableExpression variable
