@@ -37,9 +37,9 @@ public class Issue3004PointerBoundaryInterpreterTests
 
     public static TheoryData<string, int> ManagedByRefCases => new()
     {
-        { "RefReturnProbe().Property", 40 },
-        { "RefReturnProbe()[1]", 41 },
-        { "RefReturnProbe().GetValue(2)", 42 },
+        { "ManagedByRefAutoDereferenceFixture().Property", 40 },
+        { "ManagedByRefAutoDereferenceFixture()[1]", 41 },
+        { "ManagedByRefAutoDereferenceFixture().GetValue(2)", 42 },
     };
 
     [Theory]
@@ -83,7 +83,7 @@ public class Issue3004PointerBoundaryInterpreterTests
     public void ManagedByRefAutoDereference_RemainsSupported(string expression, int expected)
     {
         var source = $"""
-            import GSharp.Interpreter.Tests.ProbeRef
+            import GSharp.Interpreter.Tests.Issue3004
 
             {expression}
             """;
