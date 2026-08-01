@@ -167,7 +167,10 @@ public class Issue1522StackAllocArgEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: LocallocIlVerifyIgnored);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: LocallocIlVerifyIgnored,
+                ignoredErrorScope: @"<Program>\.Use$");
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

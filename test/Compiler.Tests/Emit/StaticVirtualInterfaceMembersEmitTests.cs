@@ -246,7 +246,7 @@ public class StaticVirtualInterfaceMembersEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Compute$");
         Assert.Equal("7\n", output);
     }
 
@@ -279,7 +279,7 @@ public class StaticVirtualInterfaceMembersEmitTests
             }
             """;
 
-        var output = CompileAndRun(source);
+        var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
         Assert.Equal("default-hello\n", output);
     }
 
@@ -367,11 +367,11 @@ public class StaticVirtualInterfaceMembersEmitTests
             compileExit == 0,
             $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+        IlVerifier.Verify(outPath);
         return outPath;
     }
 
-    private static string CompileAndRun(string source)
+    private static string CompileAndRun(string source, string ignoredErrorScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_svim_exe_").FullName;
         try
@@ -409,7 +409,12 @@ public class StaticVirtualInterfaceMembersEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: ignoredErrorScope is null
+                    ? null
+                    : IlVerifier.KnownIssues.StaticVirtualInterface,
+                ignoredErrorScope: ignoredErrorScope);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))
@@ -492,7 +497,7 @@ public class StaticVirtualInterfaceMembersEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(gDllPath, ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(gDllPath);
 
             // Step 2: scaffold a C# console consumer.
             var csDir = Path.Combine(tempDir, "consumer");

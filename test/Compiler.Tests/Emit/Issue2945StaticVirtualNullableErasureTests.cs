@@ -189,9 +189,7 @@ public class Issue2945StaticVirtualNullableErasureTests
             _ = Assembly.Load(File.ReadAllBytes(libraryPath)).GetTypes();
             var consumerPath = CompileCSharpConsumer(consumer, libraryPath, directory);
             Assert.Equal(expected + "\n", RunChild(consumerPath, directory));
-            IlVerifier.Verify(
-                libraryPath,
-                ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+            IlVerifier.Verify(libraryPath);
         }
         finally
         {
@@ -232,7 +230,8 @@ public class Issue2945StaticVirtualNullableErasureTests
             Assert.Equal("ok\n", RunChild(outputPath, directory));
             IlVerifier.Verify(
                 outputPath,
-                ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface);
+                ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface,
+                ignoredErrorScope: @"<Program>\.Touch$");
         }
         finally
         {

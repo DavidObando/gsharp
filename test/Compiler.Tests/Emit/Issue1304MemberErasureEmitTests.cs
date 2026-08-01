@@ -21,8 +21,6 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue1304MemberErasureEmitTests
 {
-    private static readonly string[] InitOnlyStructLiteral = { "InitOnly" };
-
     [Fact]
     public void StructElementEnumerator_ReadCurrentMember_Sums()
     {
@@ -50,7 +48,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(SumV(GetE(l)))
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("21\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -77,7 +75,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(c.V)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("42\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -143,7 +141,7 @@ public class Issue1304MemberErasureEmitTests
         Assert.Equal("6\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1304_").FullName;
         try
@@ -179,7 +177,7 @@ public class Issue1304MemberErasureEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

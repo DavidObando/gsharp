@@ -19,21 +19,13 @@ namespace GSharp.Compiler.Tests.Emit;
 /// through that address recreates the exact #1917 ilverify defect
 /// (<c>StackUnexpected: [found address of 'object'][expected ... 'Money']</c>).
 /// Migrating to <see cref="object"/>-narrowing-aware <c>TryLoadStructVariableAddress</c>
-/// fixes it. This is genuinely-unsafe pointer code (ADR-0122), so the residual
-/// managed-pointer-to-unmanaged-pointer conversion errors are pre-existing,
-/// accepted ilverify limitations (see <see cref="IlVerifier.KnownIssues"/> and
-/// Issue1034StructPointerEmitTests) — the test asserts the SPECIFIC #1917-style
-/// "address of 'object'" mismatch is gone, plus correct runtime behavior.
+/// fixes it. The test checks the remaining pointer errors do not contain that
+/// signature, scopes their suppression to <c>run</c>, and verifies runtime behavior.
 /// </summary>
 public class Issue1988NarrowedStructAddressOfEmitTests
 {
-    private static readonly string[] UnsafePointerIgnoredErrorCodes =
-    {
-        "UnmanagedPointer",
-        "StackUnexpected",
-        "StackByRef",
-        "ExpectedPtr",
-    };
+    private static readonly string[] PointerIlVerifyIgnored =
+        { "StackUnexpected", "UnmanagedPointer" };
 
     [Fact]
     public void AddressOf_NarrowedStructLocal_RunsAndDoesNotMistypeAsObjectAddress()
@@ -58,34 +50,11 @@ public class Issue1988NarrowedStructAddressOfEmitTests
             run()
             """;
 
-        var (output, assemblyPath) = CompileAndRun(source);
+        var output = CompileAndRun(source);
         Assert.Equal("100\n", output);
-
-        // Verify ilverify no longer reports the #1917-style "address of
-        // 'object'" stack-shape mismatch (only the inherent, pre-existing
-        // unsafe-pointer-conversion errors remain).
-        var stdout = RunIlVerifyRaw(assemblyPath);
-        Assert.DoesNotContain("address of 'object'", stdout, StringComparison.Ordinal);
     }
 
-    private static string RunIlVerifyRaw(string assemblyPath)
-    {
-        // Re-run ilverify directly (bypassing the throw-on-error helper) so we
-        // can inspect the exact error text for the absence of the #1917
-        // signature, while IlVerifier.Verify (below) still gates on the
-        // known/accepted unsafe-pointer error set.
-        try
-        {
-            IlVerifier.Verify(assemblyPath, ignoredErrorCodes: UnsafePointerIgnoredErrorCodes);
-            return string.Empty;
-        }
-        catch (Xunit.Sdk.XunitException ex)
-        {
-            return ex.Message;
-        }
-    }
-
-    private static (string Output, string AssemblyPath) CompileAndRun(string source)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1988_").FullName;
         try
@@ -122,6 +91,19 @@ public class Issue1988NarrowedStructAddressOfEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            try
+            {
+                IlVerifier.Verify(outPath);
+            }
+            catch (Xunit.Sdk.XunitException ex)
+            {
+                Assert.DoesNotContain("address of 'object'", ex.Message, StringComparison.Ordinal);
+            }
+
+            IlVerifier.Verify(
+                outPath,
+                ignoredErrorCodes: PointerIlVerifyIgnored,
+                ignoredErrorScope: @"<Program>\.run$");
 
             var psi = new ProcessStartInfo("dotnet")
             {
@@ -144,7 +126,7 @@ public class Issue1988NarrowedStructAddressOfEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return (stdout.Replace("\r\n", "\n"), outPath);
+            return stdout.Replace("\r\n", "\n");
         }
         finally
         {

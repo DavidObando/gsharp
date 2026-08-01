@@ -170,7 +170,10 @@ public class UserStructMethodEmitTests
             public var result = make().Show()
             """;
 
-        var assembly = CompileToAssembly(source, target: "exe");
+        var assembly = CompileToAssembly(
+            source,
+            target: "exe",
+            ignoredErrorScope: @"<Program>\.make$");
         var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
         var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
@@ -392,7 +395,10 @@ public class UserStructMethodEmitTests
         Assert.Equal(7, (int)resultField!.GetValue(null)!);
     }
 
-    private static Assembly CompileToAssembly(string source, string target)
+    private static Assembly CompileToAssembly(
+        string source,
+        string target,
+        string ignoredErrorScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_user_method_emit_").FullName;
         var srcPath = Path.Combine(tempDir, "test.gs");
@@ -425,7 +431,10 @@ public class UserStructMethodEmitTests
         Assert.True(
             compileExit == 0,
             $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
-        IlVerifier.Verify(outPath, ignoredErrorCodes: IlVerifier.KnownIssues.RefStruct);
+        IlVerifier.Verify(
+            outPath,
+            ignoredErrorCodes: ignoredErrorScope is null ? null : IlVerifier.KnownIssues.RefStruct,
+            ignoredErrorScope: ignoredErrorScope);
 
         var bytes = File.ReadAllBytes(outPath);
         return Assembly.Load(bytes);

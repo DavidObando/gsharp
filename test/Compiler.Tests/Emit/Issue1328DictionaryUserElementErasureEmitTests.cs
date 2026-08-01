@@ -174,7 +174,7 @@ public class Issue1328DictionaryUserElementErasureEmitTests
         Assert.Equal("14\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1328_").FullName;
         try
@@ -210,7 +210,7 @@ public class Issue1328DictionaryUserElementErasureEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

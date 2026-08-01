@@ -187,11 +187,15 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
         // the IL correctly, confirmed by the successful run below.
         var output = CompileAndRun(
             source,
-            ignoredIlVerifyErrorCodes: new[] { "LdftnNonFinalVirtual" });
+            ignoredIlVerifyErrorCodes: new[] { "LdftnNonFinalVirtual" },
+            ignoredErrorScope: @"IConverter1716\.GetDoubler$");
         Assert.Equal("42\n", output);
     }
 
-    private static string CompileAndRun(string source, IEnumerable<string> ignoredIlVerifyErrorCodes = null)
+    private static string CompileAndRun(
+        string source,
+        IEnumerable<string> ignoredIlVerifyErrorCodes = null,
+        string ignoredErrorScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_1716mg_exe_").FullName;
         try
@@ -229,7 +233,10 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
-            IlVerifier.Verify(dllPath, ignoredErrorCodes: ignoredIlVerifyErrorCodes);
+            IlVerifier.Verify(
+                dllPath,
+                ignoredErrorCodes: ignoredIlVerifyErrorCodes,
+                ignoredErrorScope: ignoredErrorScope);
 
             var rtConfig = Path.ChangeExtension(dllPath, ".runtimeconfig.json");
             if (!File.Exists(rtConfig))

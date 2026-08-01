@@ -198,7 +198,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
         Assert.DoesNotContain("GS9998", stderr);
     }
 
-    private static (int ExitCode, string Stderr) Compile(string source, string[] ignoredIlErrorCodes = null)
+    private static (int ExitCode, string Stderr) Compile(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2323_").FullName;
         try
@@ -240,7 +240,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
         }
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue2323_").FullName;
         try
@@ -278,7 +278,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

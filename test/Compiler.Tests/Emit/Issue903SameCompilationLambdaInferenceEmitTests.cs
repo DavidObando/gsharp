@@ -287,7 +287,10 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             // LINQ at all). The gate still catches any NEW IL regression — most
             // importantly a value-type StackObjRef/StackUnexpected from a faulty
             // type-erased LINQ emit.
-            IlVerifier.Verify(outPath, ignoredErrorCodes: new[] { "InitOnly" });
+            IlVerifier.Verify(
+                outPath,
+                ignoredErrorCodes: new[] { "InitOnly" },
+                ignoredErrorScope: @"<Program>\.<Main>\$$");
 
             var runtimeConfigPath = Path.ChangeExtension(outPath, "runtimeconfig.json");
             File.WriteAllText(runtimeConfigPath, """

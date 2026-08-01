@@ -22,15 +22,6 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue1301FromEndIndexUserElementEmitTests
 {
-    // A value struct with an `init`-only auto-property is constructed via a
-    // struct literal whose property setters emit `stfld` to the backing
-    // readonly field outside the .ctor, which `dotnet-ilverify` flags as
-    // `InitOnly`. This is a pre-existing G# value-struct-literal emit
-    // characteristic, orthogonal to the issue #1301 binding fix; the runtime
-    // assertions below prove correct execution, so these cases verify with
-    // `InitOnly` treated as non-fatal.
-    private static readonly string[] InitOnlyStructLiteral = { "InitOnly" };
-
     [Fact]
     public void StructElementList_FromEndIndex_ReadsMember()
     {
@@ -50,7 +41,7 @@ public class Issue1301FromEndIndexUserElementEmitTests
             Console.WriteLine(l[^3].EndOffset)
             """;
 
-        Assert.Equal("30\n20\n10\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("30\n20\n10\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -72,7 +63,7 @@ public class Issue1301FromEndIndexUserElementEmitTests
             Console.WriteLine(last.EndOffset)
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source, InitOnlyStructLiteral));
+        Assert.Equal("9\n", CompileAndRun(source));
     }
 
     [Fact]
@@ -142,7 +133,7 @@ public class Issue1301FromEndIndexUserElementEmitTests
         Assert.Equal("30\n20\n10\n", CompileAndRun(source));
     }
 
-    private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
+    private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1301_").FullName;
         try
@@ -178,7 +169,7 @@ public class Issue1301FromEndIndexUserElementEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(outPath);
 
             var psi = new ProcessStartInfo("dotnet")
             {

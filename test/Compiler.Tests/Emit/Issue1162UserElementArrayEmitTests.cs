@@ -262,7 +262,12 @@ public class Issue1162UserElementArrayEmitTests
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
-            IlVerifier.Verify(outPath, ignoredErrorCodes: ignoredIlErrorCodes);
+            IlVerifier.Verify(
+                outPath,
+                ignoredErrorCodes: ignoredIlErrorCodes,
+                ignoredErrorScope: ignoredIlErrorCodes?.Length > 0
+                    ? @"<Program>\.<Main>\$$"
+                    : null);
 
             var psi = new ProcessStartInfo("dotnet")
             {

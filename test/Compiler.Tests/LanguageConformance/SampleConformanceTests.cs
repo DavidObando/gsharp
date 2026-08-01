@@ -163,10 +163,12 @@ public class SampleConformanceTests
                 compileExit == 0,
                 $"gsc failed for {sampleName}:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
             var ilVerifyAdditionalRefs = extensionsAssemblyPath != null ? new[] { extensionsAssemblyPath } : null;
+            var knownIlIssues = IlVerifier.GetKnownIssuesForSample(baseName);
             IlVerifier.Verify(
                 outPath,
                 additionalReferences: ilVerifyAdditionalRefs,
-                ignoredErrorCodes: IlVerifier.GetKnownIssuesForSample(baseName));
+                ignoredErrorCodes: knownIlIssues.ErrorCodes,
+                ignoredErrorScope: knownIlIssues.Scope);
             Assert.True(File.Exists(outPath), $"expected emitted assembly at {outPath}");
 
             var psi = new ProcessStartInfo("dotnet")

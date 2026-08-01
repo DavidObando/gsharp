@@ -21,17 +21,6 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2883FixedEscapingBranchEmitTests
 {
-    private static readonly string[] FixedIlVerifyIgnored =
-    {
-        "Unverifiable",
-        "UnmanagedPointer",
-        "StackUnexpected",
-        "StackByRef",
-        "ExpectedPtr",
-        "StackUnexpectedArrayType",
-        "ExpectedNumericType",
-    };
-
     [Fact]
     public void BreakOutOfFixed_WithoutReturn_ReportsGs0100AndEmitsNothing()
     {
@@ -199,10 +188,7 @@ public class Issue2883FixedEscapingBranchEmitTests
         try
         {
             File.WriteAllBytes(assemblyPath, peStream.ToArray());
-            IlVerifier.Verify(
-                assemblyPath,
-                additionalReferences: null,
-                ignoredErrorCodes: fixedBody ? FixedIlVerifyIgnored : null);
+            IlVerifier.Verify(assemblyPath);
         }
         finally
         {
