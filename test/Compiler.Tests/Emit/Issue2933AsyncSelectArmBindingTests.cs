@@ -291,6 +291,49 @@ public class Issue2933AsyncSelectArmBindingTests
         Assert.Equal(new[] { 10, 10, 10 }, values);
     }
 
+    [Fact]
+    public void SynchronousIteratorReceiveBindingRetainsSelectedArmValueAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.SyncIterator
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let first = make(chan int32, 1)
+                let selected = make(chan int32, 1)
+                let third = make(chan int32, 1)
+                selected <- 7
+                select {
+                    case let value = <-first {
+                        yield -100
+                        yield value + 1000
+                    }
+                    case let value = <-selected {
+                        yield 200
+                        yield value
+                    }
+                    case let value = <-third {
+                        yield -300
+                        yield value + 3000
+                    }
+                }
+            }
+
+            for value in Values() {
+                if value != 200 {
+                    Console.WriteLine(value)
+                }
+            }
+            """;
+
+        Assert.Equal(
+            "7\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(SynchronousIteratorReceiveBindingRetainsSelectedArmValueAtRuntime)));
+    }
+
     [Theory]
     [MemberData(nameof(SelectShapes))]
     public void RequestedSelectShapesLoadAndRun(string name, string expectedOutput, string source)
