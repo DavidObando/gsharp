@@ -157,6 +157,12 @@ public sealed class SessionEngine
     public bool CaptureConsole { get; set; }
 
     /// <summary>
+    /// When <see langword="true"/>, invokes an explicit program entry point. Script mode enables
+    /// this; interactive submissions leave it disabled so declaring <c>Main</c> has no side effect.
+    /// </summary>
+    public bool RunEntryPoint { get; set; }
+
+    /// <summary>
     /// Optional provider that supplies a line of standard input when evaluated code reads from
     /// <see cref="Console.In"/> (e.g. <c>Console.ReadLine()</c>). Returning <see langword="null"/>
     /// signals end-of-input. When unset, <see cref="Console.In"/> is left untouched.
@@ -211,7 +217,7 @@ public sealed class SessionEngine
             {
                 var tree = SyntaxTree.Parse(SourceText.From(text, fileName));
                 var compilation = previous == null ? new Compilation(tree) : previous.ContinueWith(tree);
-                var result = compilation.Evaluate(variables);
+                var result = compilation.Evaluate(variables, evaluateEntryPoint: RunEntryPoint);
 
                 var hasError = result.Diagnostics.Any(d => d.IsError);
 
