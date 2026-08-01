@@ -478,7 +478,8 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitMakeChannelExpression(BoundMakeChannelExpression node)
     {
-        var elementClr = ResolveChannelElementClrType(node.ChannelType.ElementType);
+        var elementType = node.ChannelType.ElementType;
+        var elementClr = ResolveChannelElementClrType(elementType);
         if (node.Capacity == null)
         {
             var openCreate = typeof(System.Threading.Channels.Channel)
@@ -487,7 +488,7 @@ internal sealed partial class MethodBodyEmitter
                     && m.IsGenericMethodDefinition
                     && m.GetParameters().Length == 0);
             var create = openCreate.MakeGenericMethod(elementClr);
-            this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(create));
+            this.il.Call(this.GetChannelGenericMethodEntityHandle(create, elementType));
             return;
         }
 
@@ -504,7 +505,7 @@ internal sealed partial class MethodBodyEmitter
                 && m.GetParameters().Length == 1
                 && m.GetParameters()[0].ParameterType.IsSameAs(typeof(System.Threading.Channels.BoundedChannelOptions)));
         var bounded = openBounded.MakeGenericMethod(elementClr);
-        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(bounded));
+        this.il.Call(this.GetChannelGenericMethodEntityHandle(bounded, elementType));
     }
 
     // Issue #2283: entry point used from expression-position emit
@@ -559,23 +560,23 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getReader));
+        this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
 
         this.EmitCancellationTokenNone();
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(readAsync));
+        this.il.Token(this.GetChannelMethodEntityHandle(readAsync, chType.ElementType));
 
         this.il.StoreLocal(vtSlot);
         this.il.LoadLocalAddress(vtSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(asTaskGeneric));
+        this.il.Token(this.GetChannelMethodEntityHandle(asTaskGeneric, chType.ElementType));
 
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(taskGetAwaiter));
+        this.il.Token(this.GetChannelMethodEntityHandle(taskGetAwaiter, chType.ElementType));
         this.il.StoreLocal(taSlot);
         this.il.LoadLocalAddress(taSlot);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(taskGetResult));
+        this.il.Token(this.GetChannelMethodEntityHandle(taskGetResult, chType.ElementType));
         this.il.StoreLocal(resultSlot);
         this.il.Branch(ILOpCode.Leave, endLabel);
         this.il.MarkLabel(tryEnd);
@@ -603,10 +604,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(getWriter));
+        this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
         this.il.OpCode(ILOpCode.Ldnull);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(complete));
+        this.il.Token(this.GetChannelMethodEntityHandle(complete, chType.ElementType));
     }
 
     private void EmitCancellationTokenNone()

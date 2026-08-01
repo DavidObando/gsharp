@@ -1390,11 +1390,46 @@ internal sealed partial class MethodBodyEmitter
     // .AsTask().GetAwaiter().GetResult() to match the synchronous
     // evaluator surface.
     //
-    // Element types lacking a ClrType (e.g. user-defined class
-    // values) are erased to object, mirroring the interpreter's
-    // `ElementType.ClrType ?? typeof(object)` fallback.
-    private static Type ResolveChannelElementClrType(TypeSymbol elementType)
+    // Reflection still needs a closed carrier type to find channel members.
+    // Metadata emission separately retains symbolic element types that the
+    // carrier cannot represent.
+    internal static Type ResolveChannelElementClrType(TypeSymbol elementType)
+        => NullableTypeSymbol.GetEffectiveClrType(elementType) ?? typeof(object);
+
+    internal static bool ChannelElementNeedsSymbolicType(TypeSymbol elementType)
+        => elementType?.ClrType == null || TypeSymbol.RequiresSymbolicProjection(elementType);
+
+    private static TypeSymbol ResolveChannelContainerSymbol(
+        Type closedCarrier,
+        Type openDefinition,
+        TypeSymbol elementType)
+        => ChannelElementNeedsSymbolicType(elementType)
+            ? ImportedTypeSymbol.GetConstructed(
+                closedCarrier,
+                openDefinition,
+                // Channel<T>.Reader/Writer are declared on Channel<T, T>.
+                ImmutableArray.CreateRange(
+                    Enumerable.Repeat(elementType, openDefinition.GetGenericArguments().Length)))
+            : null;
+
+    private static ImmutableArray<TypeSymbol> ResolveChannelMethodTypeArguments(TypeSymbol elementType)
+        => ChannelElementNeedsSymbolicType(elementType)
+            ? ImmutableArray.Create(elementType)
+            : default;
+
+    private EntityHandle GetChannelMethodEntityHandle(
+        MethodInfo method,
+        TypeSymbol elementType)
     {
-        return elementType.ClrType ?? typeof(object);
+        var closedCarrier = method.DeclaringType;
+        var openDefinition = closedCarrier.GetGenericTypeDefinition();
+        return this.outer.memberRefs.GetMethodEntityHandle(
+            method,
+            ResolveChannelContainerSymbol(closedCarrier, openDefinition, elementType));
     }
+
+    private EntityHandle GetChannelGenericMethodEntityHandle(MethodInfo method, TypeSymbol elementType)
+        => this.outer.memberRefs.GetMethodEntityHandle(
+            method,
+            ResolveChannelMethodTypeArguments(elementType));
 }

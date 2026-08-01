@@ -523,17 +523,30 @@ internal sealed class SlotPlanner
             }
 
             var chType = (ChannelTypeSymbol)node.Channel.Type;
-            var elementClr = chType.ElementType.ClrType ?? typeof(object);
-            var vtClr = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
-            var taClr = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
 
             var vt = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(vtClr));
+            localTypes.Add(ConstructChannelOperationType(
+                typeof(System.Threading.Tasks.ValueTask<>),
+                chType.ElementType));
             var ta = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(taClr));
+            localTypes.Add(ConstructChannelOperationType(
+                typeof(System.Runtime.CompilerServices.TaskAwaiter<>),
+                chType.ElementType));
             var result = localTypes.Count;
-            localTypes.Add(chType.ElementType.ClrType != null ? chType.ElementType : TypeSymbol.FromClrType(typeof(object)));
+            localTypes.Add(chType.ElementType);
             channelOpSlots[node] = (vt, ta, result, -1);
+        }
+
+        private static TypeSymbol ConstructChannelOperationType(Type openDefinition, TypeSymbol elementType)
+        {
+            var closedCarrier = openDefinition.MakeGenericType(
+                MethodBodyEmitter.ResolveChannelElementClrType(elementType));
+            return MethodBodyEmitter.ChannelElementNeedsSymbolicType(elementType)
+                ? ImportedTypeSymbol.GetConstructed(
+                    closedCarrier,
+                    openDefinition,
+                    ImmutableArray.Create(elementType))
+                : TypeSymbol.FromClrType(closedCarrier);
         }
 
         private static void AllocateSelectSlots(
@@ -587,7 +600,7 @@ internal sealed class SlotPlanner
                 else
                 {
                     outSlots[i] = localTypes.Count;
-                    localTypes.Add(chType.ElementType.ClrType != null ? chType.ElementType : TypeSymbol.FromClrType(typeof(object)));
+                    localTypes.Add(chType.ElementType);
                 }
             }
 

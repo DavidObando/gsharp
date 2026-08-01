@@ -1257,19 +1257,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitZeroInit(int slot, TypeSymbol gsharpType, Type clrType)
     {
-        if (clrType.IsValueType)
-        {
-            this.il.LoadLocalAddress(slot);
-            this.il.OpCode(ILOpCode.Initobj);
-            var initType = gsharpType.ClrType == null
-                ? TypeSymbol.FromClrType(clrType)
-                : gsharpType;
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(initType));
-        }
-        else
-        {
-            this.il.OpCode(ILOpCode.Ldnull);
-            this.il.StoreLocal(slot);
-        }
+        this.il.LoadLocalAddress(slot);
+        this.il.OpCode(ILOpCode.Initobj);
+        var initType = ChannelElementNeedsSymbolicType(gsharpType)
+            ? gsharpType
+            : TypeSymbol.FromClrType(clrType);
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(initType));
     }
 }
