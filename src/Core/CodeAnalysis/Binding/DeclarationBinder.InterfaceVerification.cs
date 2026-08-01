@@ -1807,12 +1807,12 @@ internal sealed partial class DeclarationBinder
                 reported.Add(slotKey);
                 var interfaceName = declaringType == null
                     ? "interface"
-                    : SymbolDisplay.ToTypeDisplayString(ImportedTypeSymbol.Get(declaringType));
+                    : SymbolDisplay.ToTypeDisplayString(declaringType);
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
                     interfaceName,
-                    MemberLookup.FormatClrSlotSignature(slot.Method));
+                    FormatClrMethodSignature(slot.Method));
             }
         }
     }
@@ -1957,7 +1957,7 @@ internal sealed partial class DeclarationBinder
         var names = new string[ps.Length];
         for (var i = 0; i < ps.Length; i++)
         {
-            names[i] = ps[i].ParameterType.Name;
+            names[i] = SymbolDisplay.ToTypeDisplayString(ps[i].ParameterType);
         }
 
         return $"{method.Name}({string.Join(", ", names)})";

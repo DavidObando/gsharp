@@ -193,7 +193,9 @@ public class Issue2875DataClassSettableInterfaceTests
 
             interface IGBox[T] : IBase[T] {
                 prop V T { get; init; }
+                prop OnlyGet T { get; }
                 func Echo(v T) T;
+                func Take(v IBase[T]) void;
             }
             """;
         const string source = """
@@ -225,11 +227,19 @@ public class Issue2875DataClassSettableInterfaceTests
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "Class 'Box' does not implement interface method 'GLib2.IGBox[int32].Echo(Int32)'.",
+                "Class 'Box' does not implement interface method 'GLib2.IGBox[int32].OnlyGet'.",
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "Class 'Box' does not implement interface method 'GLib2.IBase[int32].BaseEcho(Int32)'.",
+                "Class 'Box' does not implement interface method 'GLib2.IGBox[int32].Echo(int32)'.",
+                output,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Class 'Box' does not implement interface method 'GLib2.IGBox[int32].Take(GLib2.IBase[int32])'.",
+                output,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Class 'Box' does not implement interface method 'GLib2.IBase[int32].BaseEcho(int32)'.",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GLib2.IGBox`1[[", output, StringComparison.Ordinal);
@@ -239,6 +249,50 @@ public class Issue2875DataClassSettableInterfaceTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void SymbolicImportedGenericInterface_DiagnosticUsesSymbolicTypeArgument()
+    {
+        const string source = """
+            package Symbolic
+            import System
+
+            class Shape : IEquatable[Shape] {
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Contains(
+            "Class 'Shape' does not implement interface method 'System.IEquatable[Shape].Equals(T)'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("System.IEquatable`1[[", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedConstructedGenericConstraint_DiagnosticUsesGSharpTypeSyntax()
+    {
+        const string source = """
+            package Constraint
+            import System.Collections.Generic
+
+            func F[T List[int32]](value T) {
+            }
+
+            func Use() {
+                F[string]("x")
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Contains(
+            "Type argument 'string' for type parameter 'T' does not satisfy the 'System.Collections.Generic.List[int32]' constraint.",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Collections.Generic.List`1[[", output, StringComparison.Ordinal);
     }
 
     [Fact]

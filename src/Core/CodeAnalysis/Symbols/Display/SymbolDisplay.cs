@@ -73,6 +73,16 @@ public static class SymbolDisplay
     }
 
     /// <summary>
+    /// Renders an imported CLR <paramref name="type"/> without a declaration descriptor.
+    /// </summary>
+    /// <param name="type">The reflected CLR type.</param>
+    /// <returns>The source-compatible G# type name.</returns>
+    public static string ToTypeDisplayString(Type type)
+    {
+        return FormatClrTypeName(type, qualifyNames: true);
+    }
+
+    /// <summary>
     /// Renders <paramref name="symbol"/> to classified display parts under <paramref name="format"/>.
     /// </summary>
     /// <param name="symbol">The symbol to render.</param>

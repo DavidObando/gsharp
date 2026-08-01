@@ -12,6 +12,7 @@ using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
@@ -5734,17 +5735,17 @@ public sealed class Binder
         var flags = new System.Collections.Generic.List<string>();
         if (tp.InterfaceConstraint != null)
         {
-            flags.Add(tp.InterfaceConstraint.Name);
+            flags.Add(SymbolDisplay.ToTypeDisplayString(tp.InterfaceConstraint));
         }
 
         if (tp.ClrInterfaceConstraint != null)
         {
-            flags.Add(tp.ClrInterfaceConstraint.Name);
+            flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClrInterfaceConstraint));
         }
 
         if (tp.ClassConstraint != null)
         {
-            flags.Add(tp.ClassConstraint.Name);
+            flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClassConstraint));
         }
 
         if (tp.Constraint == TypeParameterConstraint.Comparable)
