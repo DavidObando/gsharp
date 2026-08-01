@@ -2552,7 +2552,19 @@ internal sealed partial class ExpressionBinder
                 return ifaceObjectCall;
             }
 
-            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+            if (receiver?.Type is NullableTypeSymbol)
+            {
+                var effectiveReceiverSyntax = receiverSyntax ?? receiver.Syntax;
+                var receiverName = effectiveReceiverSyntax == null
+                    ? "receiver"
+                    : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+                Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
+            }
+            else
+            {
+                Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+            }
+
             return new BoundErrorExpression(null);
         }
 
