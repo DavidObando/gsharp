@@ -591,7 +591,8 @@ public sealed partial class Evaluator
             return value;
         }
         else if (value is Delegate sourceDelegate
-            && node.Type?.ClrType is Type delegateType
+            && (node.Type?.ClrType
+                ?? (node.Type as DelegateTypeSymbol)?.EquivalentFunctionType.ClrType) is Type delegateType
             && typeof(Delegate).IsAssignableFrom(delegateType))
         {
             return delegateType.IsInstanceOfType(sourceDelegate)
