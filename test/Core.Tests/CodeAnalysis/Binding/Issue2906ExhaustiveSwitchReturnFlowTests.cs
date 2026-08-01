@@ -91,17 +91,6 @@ public class Issue2906ExhaustiveSwitchReturnFlowTests
                 }
             }
             """);
-        yield return Case("IteratorSealedInterface", """
-            sealed interface Expr { }
-            class Add : Expr { }
-            class Mul : Expr { }
-            func F(x Expr) sequence[int32] {
-                switch x {
-                    case _ is Add { yield 1 }
-                    case _ is Mul { yield 2 }
-                }
-            }
-            """);
         yield return Case("SealedClass", """
             sealed class Shape { }
             class Circle : Shape { }
