@@ -1118,7 +1118,7 @@ public sealed partial class Evaluator
     /// <summary>Auto-dereferences managed by-ref values; unmanaged pointers require compiled execution.</summary>
     private object EvaluateDereferenceExpression(BoundDereferenceExpression node)
     {
-        if (node.Operand.Type is PointerTypeSymbol)
+        if (TypeSymbol.IsUnmanagedPointer(node.Operand.Type))
         {
             throw EvaluatorException.CreateDiagnostic(DiagnosticDescriptors.InterpreterPointerOperationsNotSupported, node);
         }

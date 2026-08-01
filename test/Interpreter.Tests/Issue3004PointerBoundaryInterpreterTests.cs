@@ -43,6 +43,17 @@ public class Issue3004PointerBoundaryInterpreterTests
     };
 
     [Theory]
+    [InlineData("""
+        import System
+
+        unsafe {
+            var a int32 = 5
+            var b int32 = 5
+            var pa *int32 = &a
+            var pb *int32 = &b
+            Console.WriteLine(pa == pb)
+        }
+        """)]
     [MemberData(nameof(UnsupportedPointerCases))]
     public void UnmanagedPointerOperation_ReportsGs0513(string source)
     {
