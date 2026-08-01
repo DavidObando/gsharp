@@ -79,8 +79,8 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
 
     [Theory]
     [InlineData(1, 11)]
-    [InlineData(2, 21)]
-    [InlineData(3, 120)]
+    [InlineData(2, 61)]
+    [InlineData(3, 200)]
     public void EmittedMultipleConditionalExits_DispatchSelectedTarget_AndRunFinallyOnce(
         int selectedTarget,
         int expectedExitCode)
@@ -262,9 +262,13 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
             new BoundLabelStatement(null, firstExit),
             new BoundReturnStatement(null, Read(result)),
             new BoundLabelStatement(null, secondExit),
-            new BoundReturnStatement(null, Read(result)),
+            new BoundReturnStatement(
+                null,
+                Binary(Read(result), SyntaxKind.PlusToken, Literal(40))),
             new BoundLabelStatement(null, returnLabel),
-            new BoundReturnStatement(null, Read(result)),
+            new BoundReturnStatement(
+                null,
+                Binary(Read(result), SyntaxKind.PlusToken, Literal(80))),
             new BoundLabelStatement(null, finallyExit),
             new BoundReturnStatement(null, Literal(-1)));
     }
