@@ -3383,7 +3383,7 @@ internal sealed partial class ExpressionBinder
         }
 
         if (structSym != null
-            && TryBindUserStructDelegateMemberInvocation(
+            && TryBindUserDelegateMemberInvocation(
                 receiver: null,
                 structSym,
                 methodName,

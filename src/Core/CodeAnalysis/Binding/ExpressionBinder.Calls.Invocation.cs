@@ -2384,16 +2384,15 @@ internal sealed partial class ExpressionBinder
                 {
                     return overloads.BindUserInstanceCall(receiver, defaultIfaceMethod, arguments, ce, argumentNames);
                 }
+            }
 
-                // Issue #527: fall back to a delegate/function-typed member on
-                // the user struct/class. This is the same delegate-as-callable
-                // dispatch used for the imported-CLR path below; here the
-                // receiver's ClrType is null (the user type has not yet been
-                // emitted) so we have to handle the symbol-only shape too.
-                if (TryBindUserStructDelegateMemberInvocation(receiver, userClass, methodName, arguments, ce, isStatic: false, out var userDelegateFieldCall))
-                {
-                    return userDelegateFieldCall;
-                }
+            // Issues #527 and #2925: source struct/class and interface
+            // delegate members are callable before their CLR types exist.
+            if (receiver != null
+                && receiver.Type is StructSymbol or InterfaceSymbol
+                && TryBindUserDelegateMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateFieldCall))
+            {
+                return userDelegateFieldCall;
             }
 
             // Phase 3.B.6 / ADR-0019: extension function fallback for
@@ -2527,15 +2526,14 @@ internal sealed partial class ExpressionBinder
             {
                 return overloads.BindUserInstanceCall(receiver, defaultIfaceMethodPriority, arguments, ce, argumentNames);
             }
+        }
 
-            // Issue #527: a G#-defined struct/class field or property whose type is a
-            // function (or named delegate) is invokable through the same
-            // call syntax as a bare function-typed variable. Lower to a load
-            // of the member value followed by an indirect call.
-            if (TryBindUserStructDelegateMemberInvocation(receiver, userClassPriority, methodName, arguments, ce, isStatic: false, out var userDelegateCall))
-            {
-                return userDelegateCall;
-            }
+        // Issues #527 and #2925: a G#-defined struct/class or interface
+        // delegate member is invokable through bare call syntax.
+        if (receiver.Type is StructSymbol or InterfaceSymbol
+            && TryBindUserDelegateMemberInvocation(receiver, receiver.Type, methodName, arguments, ce, isStatic: false, out var userDelegateCall))
+        {
+            return userDelegateCall;
         }
 
         // Issue #517: a value-type `T?` lowers to `System.Nullable<T>` at the
