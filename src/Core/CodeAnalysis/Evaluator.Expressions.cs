@@ -785,12 +785,13 @@ public sealed partial class Evaluator
         }
 
         var body = node.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(node.Body);
-        return MaterializeClosure(new ClosureValue(
-            node.Function,
-            body,
-            node.FunctionType,
-            captured,
-            CaptureRuntimeTypeArguments()),
+        return MaterializeClosure(
+            new ClosureValue(
+                node.Function,
+                body,
+                node.FunctionType,
+                captured,
+                CaptureRuntimeTypeArguments()),
             GetLambdaMethodName(node));
     }
 
@@ -810,12 +811,13 @@ public sealed partial class Evaluator
             captured[node.Function.ThisParameter] = EvaluateExpression(node.Receiver);
         }
 
-        return MaterializeClosure(new ClosureValue(
-            node.Function,
-            body,
-            node.FunctionType,
-            captured,
-            CaptureRuntimeTypeArguments(node.Receiver?.Type)),
+        return MaterializeClosure(
+            new ClosureValue(
+                node.Function,
+                body,
+                node.FunctionType,
+                captured,
+                CaptureRuntimeTypeArguments(node.Receiver?.Type)),
             node.Function.Name);
     }
 

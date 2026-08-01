@@ -30,6 +30,22 @@ public class Issue2992SymbolicClrTypeInterpreterTests
     }
 
     [Fact]
+    public void StaticPropertyReadUsesClosedContainer()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func ComparerName[T]() string {
+                return Comparer[T].Default.GetType().Name
+            }
+
+            Console.WriteLine(ComparerName[int32]())
+            """;
+
+        Assert.Equal("GenericComparer`1\n", RunSubmission(source));
+    }
+
+    [Fact]
     public void ConstructorUsesClosedClrType()
     {
         var source = """

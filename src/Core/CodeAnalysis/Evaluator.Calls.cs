@@ -1017,7 +1017,7 @@ public sealed partial class Evaluator
         receiver = UnwrapClrReceiver(receiver);
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
-        var method = ResolveMethodForReceiver(node.Method, receiver, ResolveRuntimeClrType(node.Receiver.Type));
+        var method = ResolveMethodForReceiver(node.Method, receiver);
 
         // concurrency: see TryGetInterpreterMapLock — routes `range m`'s
         // `GetEnumerator()`/`MoveNext()`, `m.ContainsKey(k)`, `m.Remove(k)`,
