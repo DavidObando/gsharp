@@ -1175,6 +1175,16 @@ Interpreter values use boxed storage, which cannot hold stack-only CLR values
 or preserve their interior references. Compile the program with `gsc /out:<file>`
 to use these types.
 
+## Interpreter deinitializer boundary (GS0510)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0510 | Warning | A class declares a CLR GC finalizer with `deinit`, which does not run under interpreted execution. |
+
+The interpreter has no emitted class with a CLR `Finalize` override and does
+not invent deterministic scope-exit cleanup. Compile with `gsc` when program
+behavior depends on GC finalization.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |

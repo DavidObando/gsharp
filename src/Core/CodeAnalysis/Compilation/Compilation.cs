@@ -317,14 +317,27 @@ public class Compilation
         var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
         var program = BoundProgram;
-
         var allErrors = diagnostics
             .Concat(program.Diagnostics)
             .Where(d => d.IsError)
             .ToImmutableArray();
 
+        var deinitDiagnostics = new DiagnosticBag();
+        foreach (var function in program.Functions.Keys.Where(_ => !allErrors.Any()))
+        {
+            var deinitializer = (function.ReceiverType as StructSymbol)?.Deinitializer;
+            if (ReferenceEquals(deinitializer?.Function, function)
+                && SyntaxTrees.Contains(deinitializer.Declaration.SyntaxTree))
+            {
+                deinitDiagnostics.ReportInterpreterDeinitializerNotSupported(
+                    deinitializer.Declaration.DeinitKeyword.Location,
+                    deinitializer.DeclaringType.Name);
+            }
+        }
+
         var allWarnings = diagnostics
             .Concat(program.Diagnostics)
+            .Concat(deinitDiagnostics)
             .Where(d => !d.IsError)
             .ToImmutableArray();
 

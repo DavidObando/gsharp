@@ -1,0 +1,142 @@
+// <copyright file="Issue2988DeinitInterpreterTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.IO;
+using System.Linq;
+using GSharp.Core.CodeAnalysis;
+using GSharp.Repl.Engine;
+using Xunit;
+
+namespace GSharp.Interpreter.Tests;
+
+/// <summary>
+/// Interpreter boundary coverage for CLR GC finalizers declared with <c>deinit</c>.
+/// </summary>
+public class Issue2988DeinitInterpreterTests
+{
+    [Fact]
+    public void DeinitializersWarnOncePerDeclaringClassWithoutRunning()
+    {
+        var source = """
+            import System
+
+            class First {
+                deinit {
+                    Console.WriteLine("deinit-11")
+                }
+            }
+
+            class Second {
+                deinit {
+                    Console.WriteLine("deinit-22")
+                }
+            }
+
+            var first = First()
+            var second = Second()
+            Console.WriteLine("body-33")
+            GC.KeepAlive(first)
+            GC.KeepAlive(second)
+            """;
+
+        var engine = new SessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(source);
+
+        Assert.False(cell.HasError);
+        Assert.Equal("body-33\n", cell.Output);
+        var warnings = cell.Diagnostics
+            .Where(diagnostic => diagnostic.Id == "GS0517")
+            .OrderBy(diagnostic => diagnostic.Message)
+            .ToArray();
+        Assert.Collection(
+            warnings,
+            warning => AssertWarning(warning, "First"),
+            warning => AssertWarning(warning, "Second"));
+
+        var next = engine.Evaluate("""Console.WriteLine("next-44")""");
+        Assert.Equal("next-44\n", next.Output);
+        Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0517");
+    }
+
+    [Fact]
+    public void EscapingInstanceIsNotFinalizedAtScopeExitOrWhileReachable()
+    {
+        var source = """
+            import System
+
+            class Res(Tag string) {
+                deinit {
+                    Console.WriteLine("deinit-11: " + Tag)
+                }
+            }
+
+            func Make() Res {
+                var r = Res("kept")
+                Console.WriteLine("made-22")
+                return r
+            }
+
+            var held = Make()
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
+            Console.WriteLine("after-collect-33")
+            Console.WriteLine(held.Tag)
+            """;
+
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+
+        Assert.False(cell.HasError);
+        Assert.Equal("made-22\nafter-collect-33\nkept\n", cell.Output);
+        var warning = Assert.Single(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0517");
+        AssertWarning(warning, "Res");
+    }
+
+    [Fact]
+    public void ScriptRunnerUsesRichRendererForBoundaryWarning()
+    {
+        var sourcePath = Path.Combine(AppContext.BaseDirectory, "issue2988-deinit.gs");
+        File.WriteAllText(
+            sourcePath,
+            """
+            class Resource {
+                deinit {
+                }
+            }
+
+            Console.WriteLine("body-33")
+            """);
+
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        using var output = new StringWriter { NewLine = "\n" };
+        using var error = new StringWriter { NewLine = "\n" };
+        Console.SetOut(output);
+        Console.SetError(error);
+        try
+        {
+            var exitCode = GSharp.Repl.Program.Main([sourcePath]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal("body-33\n", output.ToString());
+            Assert.Contains("warning GS0517", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("deinit", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+            File.Delete(sourcePath);
+        }
+    }
+
+    private static void AssertWarning(Diagnostic warning, string className)
+    {
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+        Assert.Contains($"class '{className}'", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("will not run under the interpreter", warning.Message, StringComparison.Ordinal);
+        Assert.NotNull(warning.Location.Text);
+        Assert.Equal("deinit", warning.Location.Text.ToString(warning.Location.Span));
+    }
+}
