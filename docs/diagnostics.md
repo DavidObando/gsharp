@@ -312,10 +312,9 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 [ADR-0153](adr/0153-interpreter-compiled-only-storage-boundary.md) defines
 storage-dependent unsafe constructs as compiled-only. The clean boundary sites
 for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers currently
-surface through `GS9999` with a self-contained message naming the construct and
-the required CIL emit path. This is an interim diagnostic classification: only
-those exact boundary messages are intentional; any other evaluator `GS9999`
-still indicates a defect.
+surface through `GS0513` with a self-contained message naming the construct and
+the required CIL emit path. Evaluator `GS9999` diagnostics still indicate a
+defect.
 
 ## Documentation diagnostics (GS0227–GS0231)
 

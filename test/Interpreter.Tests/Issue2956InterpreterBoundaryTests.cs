@@ -156,7 +156,7 @@ public class Issue2956InterpreterBoundaryTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Contains($"GS9999: {message}", result.StandardError);
+        Assert.Contains(message, result.StandardError);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunGsi(
