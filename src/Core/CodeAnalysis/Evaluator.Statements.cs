@@ -697,8 +697,9 @@ public sealed partial class Evaluator
     /// EvaluatorException to attach node context (for GS9999 reporting when
     /// nothing catches it). That wrapping must not leak into typed catch
     /// matching or handler-variable binding, so unwrap repeatedly down to the
-    /// innermost real exception. TargetInvocationException (thrown by
-    /// reflection-based CLR calls) gets the same treatment.
+    /// real exception. Reflection-generated TargetInvocationException wrappers
+    /// get the same treatment, while a user-thrown TargetInvocationException
+    /// remains visible to catch matching and handler-variable binding.
     /// </summary>
     private static Exception UnwrapRuntimeException(Exception ex)
     {
@@ -710,7 +711,8 @@ public sealed partial class Evaluator
                 continue;
             }
 
-            if (ex is TargetInvocationException { InnerException: { } tieInner })
+            if (ex is TargetInvocationException { InnerException: { } tieInner } tie
+                && IsReflectionInvocationWrapper(tie))
             {
                 ex = tieInner;
                 continue;
@@ -719,6 +721,10 @@ public sealed partial class Evaluator
             return ex;
         }
     }
+
+    private static bool IsReflectionInvocationWrapper(TargetInvocationException ex)
+        => ex.TargetSite?.DeclaringType?.Assembly is not { } assembly
+            || assembly == typeof(TargetInvocationException).Assembly;
 
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
