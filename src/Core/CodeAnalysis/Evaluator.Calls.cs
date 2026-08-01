@@ -73,7 +73,9 @@ public sealed partial class Evaluator
                     : args[i];
             }
 
-            var statement = program.Functions[node.Function];
+            var statement = program.Functions.TryGetValue(node.Function, out var functionBody)
+                ? functionBody
+                : localFunctionBodies[node.Function];
             var isIterator = IsIteratorFunction(node.Function, statement);
             object result;
             using (PushFrame(locals))
