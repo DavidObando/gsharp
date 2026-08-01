@@ -65,4 +65,29 @@ public class EvaluatorException : Exception
     /// Gets the bound node associated with the exception.
     /// </summary>
     public BoundNode Node { get; }
+
+    /// <summary>
+    /// Gets the stable diagnostic identifier.
+    /// </summary>
+    internal string DiagnosticId { get; private set; } = "GS9999";
+
+    /// <summary>
+    /// Gets the diagnostic severity.
+    /// </summary>
+    internal DiagnosticSeverity Severity { get; private set; } = DiagnosticSeverity.Error;
+
+    /// <summary>
+    /// Creates an evaluator exception for a deliberate diagnostic.
+    /// </summary>
+    /// <param name="descriptor">The diagnostic descriptor.</param>
+    /// <param name="node">The bound node associated with the exception.</param>
+    /// <returns>The evaluator exception.</returns>
+    internal static EvaluatorException CreateDiagnostic(DiagnosticDescriptor descriptor, BoundNode node)
+    {
+        return new EvaluatorException(descriptor.MessageFormat, node)
+        {
+            DiagnosticId = descriptor.Id,
+            Severity = descriptor.Severity,
+        };
+    }
 }
