@@ -585,12 +585,16 @@ internal sealed class TypeDefEmitter
         FieldDefinitionHandle firstField,
         int methodListRow)
     {
-        // ADR-0087 §3 R1: a generic user type's TypeDef name is mangled with
-        // backtick-arity per ECMA-335 II.10.3.1 (`Box` becomes `Box`1`) and one
-        // GenericParam row is emitted per type parameter immediately after
-        // AddTypeDefinition. Type-erased non-generic structs keep the unmangled
-        // name and have no GenericParam rows.
-        var typeDefName = MangleGenericName(structSym.Name, structSym.TypeParameters);
+        // ADR-0087 §3 R1: the suffix counts parameters declared by this type,
+        // while nested TypeDefs still carry GenericParam rows copied from their
+        // enclosing types. Synthesized types have no declaration, so all of
+        // their TypeParameters are their own.
+        var ownArity = structSym.Declaration == null
+            ? structSym.TypeParameters.Length
+            : structSym.Declaration.TypeParameterList?.Parameters.Count ?? 0;
+        var typeDefName = ownArity == 0
+            ? structSym.Name
+            : structSym.Name + "`" + ownArity.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var handle2 = this.emitCtx.Metadata.AddTypeDefinition(
             attributes: typeAttrs,
             @namespace: structNamespace,
