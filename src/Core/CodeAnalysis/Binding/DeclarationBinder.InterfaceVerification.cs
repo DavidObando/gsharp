@@ -720,7 +720,7 @@ internal sealed partial class DeclarationBinder
         return StructSymbol.SubstituteTypeParameters(interfaceType, typeParameterMap);
     }
 
-    private static TypeSymbol GetInterfacePropertyExpectedType(
+    internal static TypeSymbol GetInterfacePropertyExpectedType(
         TypeSymbol interfaceType,
         Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {

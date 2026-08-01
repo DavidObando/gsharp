@@ -3373,6 +3373,37 @@ internal sealed partial class ExpressionBinder
 
         switch (rightPart)
         {
+            case AccessorExpressionSyntax nested:
+                // Issue #2962: the parser folds `T.V.Member` as
+                // `T.(V.Member)`. Bind the constrained static property first,
+                // then continue the remaining chain against its value.
+                var head = BindTypeParameterStaticAccessorStep(tpSym, leftName, nested.LeftPart);
+                if (head is BoundErrorExpression)
+                {
+                    return head;
+                }
+
+                if (nested.IsNullConditional)
+                {
+                    return BindNullConditionalAccessExpressionCore(head, nested.RightPart);
+                }
+
+                return BindAccessorStep(head, null, nested.RightPart);
+
+            case IndexExpressionSyntax ix:
+                var indexTarget = BindTypeParameterStaticAccessorStep(tpSym, leftName, ix.Target);
+                if (indexTarget is BoundErrorExpression)
+                {
+                    return indexTarget;
+                }
+
+                if (ix.IsNullConditional)
+                {
+                    return BindNullConditionalIndexFromBoundTarget(indexTarget, ix);
+                }
+
+                return BindIndexAgainstTarget(indexTarget, ix.Index, ix.Target.Location);
+
             case CallExpressionSyntax callSyntax:
                 {
                     var methodName = callSyntax.Identifier.Text;
@@ -3463,7 +3494,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundErrorExpression(null);
                     }
 
-                    var propType = DeclarationBinder.GetInterfacePropertySlotType(
+                    var propType = DeclarationBinder.GetInterfacePropertyExpectedType(
                         slotProp.Type,
                         DeclarationBinder.BuildInterfaceTypeParameterMap(slotIface));
 
