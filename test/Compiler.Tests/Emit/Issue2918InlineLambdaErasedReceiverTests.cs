@@ -183,6 +183,57 @@ public class Issue2918InlineLambdaErasedReceiverTests
     }
 
     [Fact]
+    public void MismatchedInlineLambdaArityThroughErasedSlot_IsRejected()
+    {
+        const string source = """
+            package LambdaArityErasure
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[Src]]()
+                callbacks.Add((left Src, right Src) -> Console.WriteLine(left.N + right.N))
+            }
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains(
+            "GS0144: Function 'lambda' requires 1 arguments but was given 2.",
+            diagnostics,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MatchingInlineLambdaArityThroughErasedSlot_VerifyLoadAndRun()
+    {
+        const string source = """
+            package LambdaArityMatch
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[Src]]()
+                callbacks.Add((item Src) -> Console.WriteLine(item.N))
+                callbacks[0](Src(7))
+            }
+            """;
+
+        Assert.Equal(
+            "7\n",
+            CompileVerifyLoadAndRun(source, "LambdaArityMatch.Src"));
+    }
+
+    [Fact]
     public void ImportedGenericConstructor_TargetsInlineLambda_VerifyLoadAndRun()
     {
         const string source = """
@@ -734,22 +785,10 @@ public class Issue2918InlineLambdaErasedReceiverTests
         startInfo.ArgumentList.Add(runtimeConfigPath);
         startInfo.ArgumentList.Add(assemblyPath);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start dotnet exec.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-            throw new XunitException("dotnet exec timed out.");
-        }
-
-        var stdout = stdoutTask.GetAwaiter().GetResult();
-        var stderr = stderrTask.GetAwaiter().GetResult();
+        var (exitCode, stdout, stderr) = IlVerifier.RunProcess(startInfo, assemblyPath, 30_000);
         Assert.True(
-            process.ExitCode == 0,
-            $"dotnet exec exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            exitCode == 0,
+            $"dotnet exec exited {exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
         return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 

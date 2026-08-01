@@ -626,6 +626,15 @@ internal sealed class LambdaBinder
 
         var isAsync = syntax.IsAsync;
         var arityMatchesTarget = targetFunctionType != null && targetFunctionType.Arity == syntax.Parameters.Count;
+        if (targetFunctionType != null && !arityMatchesTarget)
+        {
+            Diagnostics.ReportWrongArgumentCount(
+                syntax.Location,
+                "lambda",
+                targetFunctionType.Arity,
+                syntax.Parameters.Count);
+        }
+
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
         var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
         var seen = new HashSet<string>();
