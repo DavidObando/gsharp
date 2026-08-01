@@ -103,13 +103,9 @@ jobs:
         run: dotnet restore GSharp.sln
 
       - name: Install netcoredbg
-        run: |
-          URL=$(curl -sSL https://api.github.com/repos/Samsung/netcoredbg/releases/latest \
-            | grep -oP '"browser_download_url":\s*"\K[^"]*linux-amd64\.tar\.gz')
-          curl -sSL "$URL" -o /tmp/netcoredbg.tar.gz
-          mkdir -p "$HOME/.tools/netcoredbg"
-          tar -xzf /tmp/netcoredbg.tar.gz -C "$HOME/.tools/netcoredbg" --strip-components=1
-          echo "$HOME/.tools/netcoredbg" >> "$GITHUB_PATH"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./build/install-netcoredbg.sh
 
       - name: Run end-to-end tests
         run: ./build/run-e2e-tests.sh
