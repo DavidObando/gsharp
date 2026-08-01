@@ -602,16 +602,24 @@ public sealed class Binder
             // body to the TypeParameterSymbol. Issue #312: a method may carry
             // both the enclosing type's type parameters (when it is a member of
             // a generic class) and its own method-level type parameters; seed
-            // the enclosing type's first, then the method's own so the latter
-            // shadow on name collision.
+            // the full enclosing type chain first, then the method's own so
+            // each inner scope shadows outer names on collision.
             var enclosingGenericOwner = (function.ReceiverType ?? function.StaticOwnerType) as StructSymbol;
-            var enclosingTypeParams = enclosingGenericOwner?.Definition?.TypeParameters
+            var outerTypeParams = enclosingGenericOwner == null
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : StructSymbol.CollectEnclosingTypeParameters(enclosingGenericOwner);
+            var ownerTypeParams = enclosingGenericOwner?.Definition?.TypeParameters
                 ?? enclosingGenericOwner?.TypeParameters
                 ?? ImmutableArray<TypeParameterSymbol>.Empty;
-            if (!enclosingTypeParams.IsDefaultOrEmpty || function.IsGeneric)
+            if (!outerTypeParams.IsDefaultOrEmpty || !ownerTypeParams.IsDefaultOrEmpty || function.IsGeneric)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                foreach (var tp in enclosingTypeParams)
+                foreach (var tp in outerTypeParams)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+
+                foreach (var tp in ownerTypeParams)
                 {
                     binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }
@@ -3179,6 +3187,13 @@ public sealed class Binder
             // positions, type aliases, etc.).
             ReportObsoleteUseIfApplicable(syntax.Identifier.Location, element, element.Name);
 
+            if (element is EnumSymbol nestedEnum)
+            {
+                element = EnumSymbol.ConstructNestedFromTypeParameterScope(
+                    nestedEnum,
+                    binderCtx.CurrentTypeParameters);
+            }
+
             // Phase 4.3c / ADR-0020: handle generic type construction `Foo[T1, T2]` in
             // type position (currently interfaces; structs follow up later).
             if (syntax.HasTypeArguments)
@@ -3472,9 +3487,9 @@ public sealed class Binder
         // construction's arguments and the nested type's own arguments so member
         // lookup substitutes both levels and the emitter encodes
         // `Outer`1+Middle`2<int32, string>`.
+        var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
         if (deepest is StructSymbol deepestStruct)
         {
-            var enclosingArgs = CollectConstructedEnclosingArguments(constructedSegments, segmentTexts.Length - 1);
             if (!enclosingArgs.IsDefaultOrEmpty)
             {
                 var ownArgs = deepestStruct.TypeArguments;
@@ -3482,6 +3497,10 @@ public sealed class Binder
                     ? StructSymbol.ConstructNested(deepestStruct.Definition ?? deepestStruct, enclosingArgs, scope.References.MapClrTypeToReferences)
                     : StructSymbol.ConstructNestedGeneric(deepestStruct.Definition ?? deepestStruct, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
             }
+        }
+        else if (deepest is EnumSymbol deepestEnum && !enclosingArgs.IsDefaultOrEmpty)
+        {
+            deepest = EnumSymbol.ConstructNested(deepestEnum.Definition ?? deepestEnum, enclosingArgs);
         }
 
         return deepest;
@@ -5010,6 +5029,15 @@ public sealed class Binder
             if (!newEnclosing.IsDefault)
             {
                 return StructSymbol.ConstructNested(nestedRef.Definition ?? nestedRef, newEnclosing, mapClrType);
+            }
+        }
+
+        if (type is EnumSymbol nestedEnum)
+        {
+            var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(nestedEnum, t => SubstituteType(t, substitution, mapClrType));
+            if (!newEnclosing.IsDefault)
+            {
+                return EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, newEnclosing);
             }
         }
 

@@ -422,7 +422,7 @@ public static class SemanticLookup
 
     public static bool CanRename(Symbol symbol)
     {
-        return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol
+        return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol and not TypeParameterSymbol
             && !ReferenceEquals(symbol, TypeSymbol.Bool)
             && !ReferenceEquals(symbol, TypeSymbol.Int32)
             && !ReferenceEquals(symbol, TypeSymbol.String)
@@ -610,6 +610,7 @@ public static class SemanticLookup
             {
                 declarations[function.Declaration.Identifier] = function;
                 MapParameters(function.Declaration, function.Parameters, declarations, localDeclarations);
+                MapTypeClauseReference(function.Declaration.Type, function.Type, declarations);
                 if (function.ExplicitReceiverParameter != null && function.Declaration.Receiver != null)
                 {
                     declarations[function.Declaration.Receiver.Identifier] = function.ExplicitReceiverParameter;
@@ -638,6 +639,7 @@ public static class SemanticLookup
                 for (var i = 0; i < aggregate.Declaration.Fields.Length && i < aggregate.Fields.Length; i++)
                 {
                     declarations[aggregate.Declaration.Fields[i].Identifier] = aggregate.Fields[i];
+                    MapTypeClauseReference(aggregate.Declaration.Fields[i].Type, aggregate.Fields[i].Type, declarations);
                 }
 
                 var allPropertyIdentifiers = aggregate.Declaration.Properties.Select(p => p.Identifier);
@@ -685,6 +687,7 @@ public static class SemanticLookup
                     if (method.Declaration != null)
                     {
                         MapParameters(method.Declaration, method.Parameters, declarations, localDeclarations);
+                        MapTypeClauseReference(method.Declaration.Type, method.Type, declarations);
                         if (method.ThisParameter != null)
                         {
                             GetLocals(localDeclarations, method.Declaration)[method.ThisParameter.Name] = method.ThisParameter;
@@ -839,7 +842,48 @@ public static class SemanticLookup
         {
             var symbol = parameters[symbolIndex + i];
             declarations[syntaxParameters[i].Identifier] = symbol;
+            MapTypeClauseReference(syntaxParameters[i].Type, symbol.Type, declarations);
             GetLocals(localDeclarations, scope)[symbol.Name] = symbol;
+        }
+    }
+
+    private static void MapTypeClauseReference(
+        TypeClauseSyntax typeClause,
+        TypeSymbol type,
+        Dictionary<SyntaxToken, Symbol> declarations)
+    {
+        if (typeClause == null || type == null)
+        {
+            return;
+        }
+
+        var wrappedTypes = type is ImportedTypeSymbol
+            ? Array.Empty<TypeSymbol>()
+            : TypeSymbol.GetWrappedTypes(type).ToArray();
+        if (wrappedTypes.Length > 0)
+        {
+            var wrappedClauses = typeClause.GetChildren().OfType<TypeClauseSyntax>().ToArray();
+            if (typeClause.Identifier != null
+                || (wrappedTypes.Length == 1 && wrappedClauses.Length != 1))
+            {
+                MapTypeClauseReference(typeClause, wrappedTypes[0], declarations);
+                return;
+            }
+
+            for (var i = 0; i < Math.Min(wrappedTypes.Length, wrappedClauses.Length); i++)
+            {
+                MapTypeClauseReference(wrappedClauses[i], wrappedTypes[i], declarations);
+            }
+
+            return;
+        }
+
+        var identifier = !typeClause.QualifierIdentifierTokens.IsDefaultOrEmpty
+            ? typeClause.QualifierIdentifierTokens[^1]
+            : typeClause.Identifier;
+        if (identifier != null)
+        {
+            declarations[identifier] = type;
         }
     }
 
@@ -1566,7 +1610,9 @@ public static class SemanticLookup
                 }
             }
 
-            return index.TryGetValue(target, out var tokens) ? tokens : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
+            return index.TryGetValue(NormalizeForReferences(target), out var tokens)
+                ? tokens
+                : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
         }
 
         private Dictionary<Symbol, List<SyntaxToken>> BuildReferencesIndex(CancellationToken ct = default)
@@ -1593,7 +1639,7 @@ public static class SemanticLookup
                         continue;
                     }
 
-                    var symbol = this.Resolve(token);
+                    var symbol = NormalizeForReferences(this.Resolve(token));
                     if (symbol == null)
                     {
                         continue;
@@ -1628,6 +1674,14 @@ public static class SemanticLookup
 
             return index;
         }
+
+        private static Symbol NormalizeForReferences(Symbol symbol) => symbol switch
+        {
+            StructSymbol s => s.Definition ?? s,
+            EnumSymbol e => e.Definition ?? e,
+            InterfaceSymbol i => i.Definition ?? i,
+            _ => symbol,
+        };
 
         private static (string FileName, int SpanStart, int SpanEnd)? SpanKey(SyntaxToken token)
         {

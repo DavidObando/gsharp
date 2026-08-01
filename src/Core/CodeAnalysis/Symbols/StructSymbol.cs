@@ -2420,6 +2420,17 @@ public sealed class StructSymbol : TypeSymbol
             }
         }
 
+        if (type is EnumSymbol nestedEnum)
+        {
+            var newEnclosing = EnumSymbol.SubstituteEnclosingArguments(
+                nestedEnum,
+                SubstituteNested);
+            if (!newEnclosing.IsDefault)
+            {
+                return EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, newEnclosing);
+            }
+        }
+
         if (type is InterfaceSymbol iface && !iface.TypeArguments.IsDefaultOrEmpty)
         {
             var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(iface.TypeArguments.Length);

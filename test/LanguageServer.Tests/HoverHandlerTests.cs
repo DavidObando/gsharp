@@ -26,6 +26,87 @@ public class HoverHandlerTests
     }
 
     [Fact]
+    public void ComputeHover_DeclarationHeadersUseSourceGenericSyntaxAndConstruction()
+    {
+        const string source = "package P\nclass Box[T] { var Value T }\nfunc Use(value Box[int32]) {}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var definitionHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Box"));
+        var constructionHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Box", 1));
+
+        Assert.Contains("class P.Box[T] { var Value T }", definitionHover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("class P.Box[int32] { var Value int32 }", constructionHover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.DoesNotContain("<T>", definitionHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_DistinguishesNestedEnumConstructions()
+    {
+        const string source = "package P\nstruct Outer[T] { enum Color { Red } }\nfunc I(c Outer[int32].Color) {}\nfunc S(c Outer[string].Color) {}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var intHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Color", 1));
+        var stringHover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Color", 2));
+
+        Assert.Contains("enum P.Outer[int32].Color { Red }", intHover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("enum P.Outer[string].Color { Red }", stringHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_PreservesConstructedTypesAcrossDeclarationTypeClauses()
+    {
+        const string source = """
+            package P
+            class Box[T] {}
+            class Holder {
+                var Field Box[string]
+                func Method() Box[bool] { return Box[bool]() }
+            }
+            func Global() Box[float64] { return Box[float64]() }
+            """;
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var fieldHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Box", 1));
+        var methodHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Box", 2));
+        var globalHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "Box", 4));
+
+        Assert.Contains("class P.Box[string]", fieldHover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("class P.Box[bool]", methodHover.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.Contains("class P.Box[float64]", globalHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_PreservesConstructedTypesInsideCompositeTypeClauses()
+    {
+        const string source = """
+            package P
+            class Box[T] {}
+            func Composite(
+                m map[string, Box[int32]],
+                f (Box[bool]) -> Box[string],
+                t (Box[float64], Box[uint8])) {}
+            """;
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var expected = new[] { "int32", "bool", "string", "float64", "uint8" };
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var hover = HoverComputer.ComputeHover(
+                content,
+                LanguageServerTestHelpers.PositionOf(source, "Box", i + 1));
+            Assert.Contains($"class P.Box[{expected[i]}]", hover.Contents.ToString(), System.StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ComputeHover_HonorsCancellation()
     {
         // Issue #1662: ComputeHover accepted a CancellationToken but never observed it. On a

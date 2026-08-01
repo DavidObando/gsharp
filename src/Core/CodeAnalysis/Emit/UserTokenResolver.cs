@@ -88,6 +88,7 @@ internal sealed class UserTokenResolver
     // (ilverify get_GenericParameters IndexOutOfRange / runtime
     // BadImageFormatException). Both channels are part of every key.
     private readonly Dictionary<(StructSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userStructTypeSpecCache = new();
+    private readonly Dictionary<(EnumSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userEnumTypeSpecCache = new();
     private readonly Dictionary<(StructSymbol Containing, FieldSymbol DefField, object ClassRemap, object MethodRemap), EntityHandle> userStructFieldRefCache = new();
     private readonly Dictionary<(StructSymbol Containing, EntityHandle OpenMember, object ClassRemap, object MethodRemap), EntityHandle> userStructMethodRefCache = new();
     private readonly Dictionary<(InterfaceSymbol Sym, object ClassRemap, object MethodRemap), EntityHandle> userInterfaceTypeSpecCache = new();
@@ -821,6 +822,9 @@ internal sealed class UserTokenResolver
     private (InterfaceSymbol Sym, object ClassRemap, object MethodRemap) GetUserInterfaceRemapKey(InterfaceSymbol ifaceSym)
         => (ifaceSym, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
 
+    private (EnumSymbol Sym, object ClassRemap, object MethodRemap) GetUserEnumRemapKey(EnumSymbol enumSym)
+        => (enumSym, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
+
     /// <summary>
     /// Issue #2793: user-delegate variant of <see cref="GetUserStructRemapKey"/>.
     /// A user-declared generic named delegate's <c>TypeSpec</c>, <c>.ctor</c>
@@ -1001,6 +1005,52 @@ internal sealed class UserTokenResolver
         }
 
         return bld.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Returns a TypeSpec for a nested enum reified over generic enclosing types.
+    /// </summary>
+    internal EntityHandle GetUserEnumTypeSpec(EnumSymbol enumSym)
+    {
+        var cacheKey = this.GetUserEnumRemapKey(enumSym);
+        if (this.userEnumTypeSpecCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var def = enumSym.Definition ?? enumSym;
+        if (!this.cache.EnumTypeDefs.TryGetValue(def, out var defHandle))
+        {
+            throw new InvalidOperationException(
+                $"User enum '{def.Name}' has no emitted TypeDef when constructing TypeSpec.");
+        }
+
+        var typeArgs = ResolveUserEnumTypeSpecArguments(enumSym, def);
+        var sigBlob = new BlobBuilder();
+        var encoder = new BlobEncoder(sigBlob).TypeSpecificationSignature();
+        var gi = encoder.GenericInstantiation(defHandle, typeArgs.Length, isValueType: true);
+        foreach (var arg in typeArgs)
+        {
+            this.signatures.EncodeTypeSymbol(gi.AddArgument(), arg);
+        }
+
+        var spec = (EntityHandle)this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        this.userEnumTypeSpecCache[cacheKey] = spec;
+        return spec;
+    }
+
+    /// <summary>
+    /// Resolves a nested enum's enclosing construction.
+    /// </summary>
+    internal ImmutableArray<TypeSymbol> ResolveUserEnumTypeSpecArguments(EnumSymbol enumSym, EnumSymbol def)
+    {
+        if (!enumSym.EnclosingTypeArguments.IsDefaultOrEmpty)
+        {
+            return enumSym.EnclosingTypeArguments;
+        }
+
+        throw new InvalidOperationException(
+            $"Open nested enum '{def.ContainingType}.{def.Name}' escaped its generic context; enclosing type arguments must be resolved before emission.");
     }
 
     /// <summary>

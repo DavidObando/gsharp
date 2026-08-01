@@ -818,6 +818,7 @@ internal sealed class TypeDefEmitter
             fieldList: firstFieldHandle,
             methodList: MetadataTokens.MethodDefinitionHandle(methodListRow));
         this.cache.EnumTypeDefs[enumSym] = enumTypeDef;
+        EmitGenericParamRows(this.emitCtx, enumTypeDef, enumSym.TypeParameters);
 
         // Field 1: instance int32 'value__' with SpecialName | RTSpecialName.
         var valueFieldSigBlob = new BlobBuilder();
@@ -836,11 +837,17 @@ internal sealed class TypeDefEmitter
         // is the enum's own typedef (the standard CLR convention for enum
         // literals). The Constant row is added below after all field rows
         // have been emitted so they remain in increasing parent-token order.
+        var memberType = enumSym.TypeParameters.IsDefaultOrEmpty
+            ? enumSym
+            : EnumSymbol.ConstructNested(
+                enumSym,
+                ImmutableArray.CreateRange(enumSym.TypeParameters, static parameter => (TypeSymbol)parameter));
+
         var memberFieldHandles = new List<FieldDefinitionHandle>(enumSym.Members.Length);
         foreach (var member in enumSym.Members)
         {
             var memberSigBlob = new BlobBuilder();
-            new BlobEncoder(memberSigBlob).FieldSignature().Type(enumTypeDef, isValueType: true);
+            this.encodeTypeSymbol(new BlobEncoder(memberSigBlob).FieldSignature(), memberType);
             var memberFieldHandle = this.emitCtx.Metadata.AddFieldDefinition(
                 attributes: FieldAttributes.Public | FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault,
                 name: this.emitCtx.Metadata.GetOrAddString(member.Name),

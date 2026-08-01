@@ -456,18 +456,27 @@ internal sealed class MetadataTokenCache
 
     /// <summary>
     /// Issue #671: structural cache key for ctor MemberRef rows whose parent
-    /// TypeSpec carries G# user-defined symbolic type arguments. Counterpart
-    /// to <see cref="MethodSpecSymbolKey"/>.
+    /// TypeSpec carries G# user-defined symbolic type arguments. Includes both
+    /// active generic-remap scopes because the same symbols can encode to
+    /// different VAR/MVAR ordinals. Counterpart to <see cref="MethodSpecSymbolKey"/>.
     /// </summary>
     internal readonly struct CtorRefSymbolKey : IEquatable<CtorRefSymbolKey>
     {
         private readonly ConstructorInfo ctor;
         private readonly ImmutableArray<TypeSymbol> typeArgs;
+        private readonly object classRemap;
+        private readonly object methodRemap;
 
-        public CtorRefSymbolKey(ConstructorInfo ctor, ImmutableArray<TypeSymbol> typeArgs)
+        public CtorRefSymbolKey(
+            ConstructorInfo ctor,
+            ImmutableArray<TypeSymbol> typeArgs,
+            object classRemap,
+            object methodRemap)
         {
             this.ctor = ctor;
             this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
+            this.classRemap = classRemap;
+            this.methodRemap = methodRemap;
         }
 
         public bool Equals(CtorRefSymbolKey other)
@@ -477,7 +486,9 @@ internal sealed class MetadataTokenCache
                 return false;
             }
 
-            if (this.typeArgs.Length != other.typeArgs.Length)
+            if (!ReferenceEquals(this.classRemap, other.classRemap)
+                || !ReferenceEquals(this.methodRemap, other.methodRemap)
+                || this.typeArgs.Length != other.typeArgs.Length)
             {
                 return false;
             }
@@ -498,6 +509,8 @@ internal sealed class MetadataTokenCache
         public override int GetHashCode()
         {
             var hash = RuntimeHelpers.GetHashCode(this.ctor);
+            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.classRemap));
+            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.methodRemap));
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
                 hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));

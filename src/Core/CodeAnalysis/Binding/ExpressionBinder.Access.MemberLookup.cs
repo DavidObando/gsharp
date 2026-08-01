@@ -783,7 +783,8 @@ internal sealed partial class ExpressionBinder
 
             if (scope.References.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType))
             {
-                nestedClassSymbol = new ImportedClassSymbol(nestedType, nameExpr, references: scope.References);
+                var nested = new ImportedClassSymbol(nestedType, nameExpr, references: scope.References);
+                nestedClassSymbol = CloseImportedNestedType(classSymbol.ClassType, nested, nameExpr);
                 return true;
             }
 

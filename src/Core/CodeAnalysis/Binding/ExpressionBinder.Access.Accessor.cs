@@ -414,7 +414,7 @@ internal sealed partial class ExpressionBinder
                 // symbol directly.
                 if (aliasedType is EnumSymbol foundAliasEnum)
                 {
-                    enumSymbol = foundAliasEnum;
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundAliasEnum);
                 }
                 else if (aliasedType is StructSymbol foundAliasStruct)
                 {
@@ -446,7 +446,7 @@ internal sealed partial class ExpressionBinder
                 // already used by Binder.LookupType (type-clause position).
                 if (typeAlias is EnumSymbol foundEnum)
                 {
-                    enumSymbol = foundEnum;
+                    enumSymbol = CloseNestedEnumOverCurrentTypeParameters(foundEnum);
                 }
                 else if (typeAlias is StructSymbol foundStruct)
                 {
@@ -712,7 +712,8 @@ internal sealed partial class ExpressionBinder
 
         try
         {
-            return new ImportedClassSymbol(nestedType.MakeGenericType(outerArguments), syntax, references: scope.References);
+            var closedType = nestedType.MakeGenericType(outerArguments);
+            return new ImportedClassSymbol(closedType, syntax, references: scope.References);
         }
         catch (ArgumentException)
         {
@@ -732,6 +733,11 @@ internal sealed partial class ExpressionBinder
         InterfaceSymbol i => i.ContainingType,
         _ => null,
     };
+
+    private EnumSymbol CloseNestedEnumOverCurrentTypeParameters(EnumSymbol enumSymbol)
+        => EnumSymbol.ConstructNestedFromTypeParameterScope(
+            enumSymbol,
+            binderCtx.CurrentTypeParameters);
 
     /// <summary>
     /// Issue #2203: returns the dotted package name a user-defined aggregate
@@ -1911,9 +1917,15 @@ internal sealed partial class ExpressionBinder
                 // (threading the flattened enclosing arguments) and bind the
                 // tail against it. Falls through to the value/static-member path
                 // when the left portion is not a nested type.
-                if (TryResolveNestedTypeChainUnderReceiver(structSym, nested.LeftPart, out var innerReceiver))
+                if (TryResolveNestedTypeChainUnderReceiver(
+                    structSym,
+                    nested.LeftPart,
+                    out var innerStruct,
+                    out var innerEnum))
                 {
-                    return BindUserTypeStaticAccessorStep(innerReceiver, nested.RightPart);
+                    return innerEnum != null
+                        ? BindEnumAccessorStep(innerEnum, nested.RightPart)
+                        : BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart);
                 }
 
                 if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)
@@ -2046,11 +2058,17 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="receiver">The constructed generic receiver the chain is nested under.</param>
     /// <param name="typeExpr">The nested-type-naming expression.</param>
-    /// <param name="constructed">The resolved constructed nested type on success.</param>
+    /// <param name="constructedStruct">The resolved constructed nested struct on success.</param>
+    /// <param name="constructedEnum">The resolved constructed nested enum on success.</param>
     /// <returns>Whether the expression named a nested type of the receiver.</returns>
-    private bool TryResolveNestedTypeChainUnderReceiver(StructSymbol receiver, ExpressionSyntax typeExpr, out StructSymbol constructed)
+    private bool TryResolveNestedTypeChainUnderReceiver(
+        StructSymbol receiver,
+        ExpressionSyntax typeExpr,
+        out StructSymbol constructedStruct,
+        out EnumSymbol constructedEnum)
     {
-        constructed = null;
+        constructedStruct = null;
+        constructedEnum = null;
         var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
         if (!TryFlattenUserTypeExpressionSegments(typeExpr, segments) || segments.Count == 0)
         {
@@ -2093,6 +2111,14 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            if (nested is EnumSymbol nestedEnum)
+            {
+                constructedEnum = !enclosingArgs.IsDefaultOrEmpty
+                    ? EnumSymbol.ConstructNested(nestedEnum.Definition ?? nestedEnum, enclosingArgs)
+                    : nestedEnum.Definition ?? nestedEnum;
+                return true;
+            }
+
             if (nested is not StructSymbol nestedStruct)
             {
                 return false;
@@ -2102,19 +2128,19 @@ internal sealed partial class ExpressionBinder
             var ownArgs = segments[i].Args;
             if (!enclosingArgs.IsDefaultOrEmpty && !ownArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
+                constructedStruct = StructSymbol.ConstructNestedGeneric(def, enclosingArgs, ownArgs, scope.References.MapClrTypeToReferences);
             }
             else if (!enclosingArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.ConstructNested(def, enclosingArgs, scope.References.MapClrTypeToReferences);
+                constructedStruct = StructSymbol.ConstructNested(def, enclosingArgs, scope.References.MapClrTypeToReferences);
             }
             else if (!ownArgs.IsDefaultOrEmpty)
             {
-                constructed = StructSymbol.Construct(def, ownArgs, scope.References.MapClrTypeToReferences);
+                constructedStruct = StructSymbol.Construct(def, ownArgs, scope.References.MapClrTypeToReferences);
             }
             else
             {
-                constructed = def;
+                constructedStruct = def;
             }
 
             return true;

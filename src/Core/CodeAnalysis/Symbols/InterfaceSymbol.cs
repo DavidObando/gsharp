@@ -837,6 +837,16 @@ public sealed class InterfaceSymbol : TypeSymbol
                 : iface;
         }
 
+        if (type is EnumSymbol enumType)
+        {
+            var enclosingArgs = EnumSymbol.SubstituteEnclosingArguments(
+                enumType,
+                argument => SubstituteType(argument, subst, mapClrType));
+            return enclosingArgs.IsDefaultOrEmpty
+                ? enumType
+                : EnumSymbol.ConstructNested(enumType.Definition ?? enumType, enclosingArgs);
+        }
+
         // Issue #2340 follow-up: a member type that is a constructed
         // struct/class over the interface's own type parameter (e.g. a
         // generic interface method `func Make() Box[T]`) carries the
