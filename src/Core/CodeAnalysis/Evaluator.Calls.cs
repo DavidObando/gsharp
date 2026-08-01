@@ -917,7 +917,7 @@ public sealed partial class Evaluator
         }
 
         var method = ResolveMemberForRuntimeType(node.Function.Method, ResolveRuntimeClrType(node.StaticContainerType));
-        var result = method.Invoke(null, args);
+        var result = InvokeReflective(method, null, args, node);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
@@ -1031,13 +1031,13 @@ public sealed partial class Evaluator
                 var invokeReceiver = IsMapViewMember(method.Name)
                     ? CloneMapSnapshot((System.Collections.IDictionary)receiver)
                     : receiver;
-                var lockedResult = method.Invoke(invokeReceiver, args);
+                var lockedResult = InvokeReflective(method, invokeReceiver, args, node);
                 WriteBackRefSlots(refSlots, args);
                 return lockedResult;
             }
         }
 
-        var result = method.Invoke(receiver, args);
+        var result = InvokeReflective(method, receiver, args, node);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
