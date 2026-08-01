@@ -977,6 +977,15 @@ arrays, and generic constructions. Declared value-type nullability is never
 erased: `int32` cannot implement a get-only `int32?` property because the CLR
 types are `System.Int32` and `System.Nullable<System.Int32>`.
 
+## Unconstrained nullable iterator call (GS0505)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained. |
+
+Add a `struct`, `class`, or base-class constraint to the named type parameter.
+Ordinary user-written overload ambiguities continue to report GS0266.
+
 ## Unconstrained nullable sequence element (GS0508)
 
 | ID | Severity | Description |

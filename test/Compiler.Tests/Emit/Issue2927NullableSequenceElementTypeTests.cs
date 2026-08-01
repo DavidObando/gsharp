@@ -592,11 +592,18 @@ public class Issue2927NullableSequenceElementTypeTests
             """;
         const string ExplicitSource = """
             package Issue2927ExplicitDiagnostic
-            func opt[T](v T) sequence[T?] {
+            func opt[T](v int32) sequence[T?] {
+                yield nil
+            }
+            func relay[U]() { let values = opt[U](1) }
+            """;
+        const string AsyncSource = """
+            package Issue2927AsyncDiagnostic
+            async func opt[T](v T) async sequence[T?] {
                 yield v
                 yield nil
             }
-            func relay[U](u U) { let values = opt[U](u) }
+            func relay[U](u U) { let values = opt(u) }
             """;
         const string NullableSource = """
             package Issue2927NullableArgumentDiagnostic
@@ -610,20 +617,104 @@ public class Issue2927NullableSequenceElementTypeTests
 
         AssertSingleDiagnostic(
             InvokeCompiler(InferredSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_inferred"),
-            "GS0266",
-            "Disambiguate with explicit types or named arguments.");
+            "GS0505",
+            "type parameter 'U' is not constrained");
         AssertSingleDiagnostic(
             InvokeCompiler(NamedSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_named"),
-            "GS0266",
-            "Disambiguate with explicit types or named arguments.");
+            "GS0505",
+            "type parameter 'U' is not constrained");
         AssertSingleDiagnostic(
             InvokeCompiler(ExplicitSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_explicit"),
-            "GS0266",
-            "Disambiguate with explicit types or named arguments.");
+            "GS0505",
+            "type parameter 'U' is not constrained");
+        AssertSingleDiagnostic(
+            InvokeCompiler(AsyncSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_async"),
+            "GS0505",
+            "type parameter 'U' is not constrained");
         AssertSingleDiagnostic(
             InvokeCompiler(NullableSource, nameof(UnconstrainedGenericCallsCharacterizeSpecializedIteratorDiagnostics) + "_nullable"),
             "GS0152",
             "does not satisfy the 'struct' constraint.");
+    }
+
+    [Fact]
+    public void UnconstrainedInstanceNullableIteratorCallReportsGS0505()
+    {
+        const string Source = """
+            package Issue2958InstanceDiagnostic
+            class Box {
+                func opt[T](v T) sequence[T?] {
+                    yield v
+                    yield nil
+                }
+            }
+            func relay[U](box Box, u U) { let values = box.opt(u) }
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(Source, nameof(UnconstrainedInstanceNullableIteratorCallReportsGS0505)),
+            "GS0505",
+            "type parameter 'U' is not constrained");
+    }
+
+    [Fact]
+    public void UserWrittenOverloadAmbiguityStillReportsGS0266()
+    {
+        const string Source = """
+            package Issue2958UserAmbiguityGuard
+            func pick(value int32, left int32 = 0) int32 -> 1
+            func pick(value int32, right string = "") int32 -> 2
+            let result = pick(1)
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(Source, nameof(UserWrittenOverloadAmbiguityStillReportsGS0266)),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+    }
+
+    [Fact]
+    public void MixedNullableIteratorCandidateSetStillReportsGS0266()
+    {
+        const string Source = """
+            package Issue2958MixedAmbiguityGuard
+            import System
+            func opt[T](v T) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func opt[T class](v T, fallback int32 = 0) sequence[T?] {
+                throw Exception()
+            }
+            func relay[U](u U) { let values = opt(u) }
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(Source, nameof(MixedNullableIteratorCandidateSetStillReportsGS0266)),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
+    }
+
+    [Fact]
+    public void MultipleNullableIteratorDeclarationsStillReportGS0266()
+    {
+        const string Source = """
+            package Issue2958MultipleIteratorAmbiguityGuard
+            func opt[T](v T, left int32 = 0) sequence[T?] {
+                yield v
+                yield nil
+            }
+            func opt[T](v T, right string = "") sequence[T?] {
+                yield v
+                yield nil
+            }
+            func relay[U](u U) { let values = opt(u) }
+            """;
+
+        AssertSingleDiagnostic(
+            InvokeCompiler(Source, nameof(MultipleNullableIteratorDeclarationsStillReportGS0266)),
+            "GS0266",
+            "Disambiguate with explicit types or named arguments.");
     }
 
     private static void AssertEmittedProgram(string source, string expected, string name)

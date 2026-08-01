@@ -582,6 +582,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AmbiguousOverloadResolution, name);
 
     /// <summary>
+    /// Reports that an unconstrained type parameter prevents choosing between
+    /// compiler-generated reference-type and value-type nullable iterator variants.
+    /// </summary>
+    /// <param name="location">The call-site location.</param>
+    /// <param name="name">The iterator function name.</param>
+    /// <param name="typeParameterName">The unconstrained caller type parameter.</param>
+    public void ReportUnconstrainedNullableIteratorCall(TextLocation location, string name, string typeParameterName)
+    => Report(location, DiagnosticDescriptors.UnconstrainedNullableIteratorCall, name, typeParameterName);
+
+    /// <summary>
     /// ADR-0063 §6: reports a call to a name that resolves to an overload set, but
     /// no overload is applicable to the given argument list (after applying defaults
     /// and named-argument reordering).
