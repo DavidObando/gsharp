@@ -1494,7 +1494,14 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            if (!TryBuildSymbolicDelegateTarget(parameters[paramIndex].ParameterType, openGenericDefinition, symbolicTypeArgs, out var candidate)
+            if (!TryBuildSymbolicDelegateTarget(
+                    parameters[paramIndex].ParameterType,
+                    openGenericDefinition,
+                    symbolicTypeArgs,
+                    out var mappedDelegate,
+                    out var candidate)
+                || (parameters[paramIndex].ParameterType.IsGenericParameter
+                    && !IsCanonicalFunctionDelegate(mappedDelegate))
                 || candidate == null)
             {
                 continue;

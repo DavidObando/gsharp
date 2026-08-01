@@ -666,11 +666,18 @@ internal sealed partial class ExpressionBinder
             var openParamType = openParameters[i].ParameterType;
             var symbolicParamType = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, symbolicArgs);
 
+            // Nominal identity remains on the explicit symbolicDelegateParam
+            // conversion below; only the mapped Invoke shape is needed here.
             if (LambdaBinder.TryGetFunctionLiteral(argument, out var functionLiteral)
                 && symbolicParamType is ImportedTypeSymbol symbolicDelegateParam
                 && symbolicDelegateParam.OpenDefinition != null
                 && symbolicDelegateParam.HasTypeParameterArgument
-                && TryBuildSymbolicDelegateTarget(openParamType, openDef, symbolicArgs, out var symbolicDelegateTarget))
+                && TryBuildSymbolicDelegateTarget(
+                    openParamType,
+                    openDef,
+                    symbolicArgs,
+                    out _,
+                    out var symbolicDelegateTarget))
             {
                 // The substituted delegate target matches the literal's declared
                 // (TResult-typed) shape, so the adapter returns the literal
@@ -781,41 +788,49 @@ internal sealed partial class ExpressionBinder
         Type openParameterType,
         Type openDefinition,
         ImmutableArray<TypeSymbol> symbolicArgs,
+        out TypeSymbol mapped,
         out FunctionTypeSymbol target)
     {
+        mapped = null;
         target = null;
         if (openParameterType == null)
         {
             return false;
         }
 
-        // Issue #2365: an `Expression<TDelegate>` parameter is not itself a
-        // delegate (it exposes no `Invoke`), so unwrap it to the wrapped open
-        // delegate type first, mirroring the identical unwrap in the
-        // method-parameter sibling <see cref="TryBuildSymbolicDelegateTargetForMethodParam"/>.
-        if (MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out var unwrappedParameterType))
-        {
-            openParameterType = unwrappedParameterType;
-        }
-
-        var invoke = openParameterType?.GetMethodSafe("Invoke");
-        if (invoke == null)
+        // Issue #2918: substitute the complete parameter before asking whether
+        // it is a lambda target. The open parameter may itself be `T`, while
+        // the receiver or method closes `T` to `Action[Src]`.
+        mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+            openParameterType,
+            openDefinition,
+            symbolicArgs);
+        if (!MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(mapped, out var candidate))
         {
             return false;
         }
 
-        var invokeParameters = invoke.GetParameters();
-        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
-        foreach (var parameter in invokeParameters)
+        target = candidate;
+        return true;
+    }
+
+    private static bool IsCanonicalFunctionDelegate(TypeSymbol type)
+    {
+        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
         {
-            parameterTypes.Add(MemberLookup.MapOpenClrParameterTypeToSymbolic(parameter.ParameterType, openDefinition, symbolicArgs));
+            type = delegateType;
         }
 
-        var returnType = invoke.ReturnType.IsSameAs(typeof(void))
-            ? TypeSymbol.Void
-            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, openDefinition, symbolicArgs);
-        target = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
-        return true;
+        if (type is not ImportedTypeSymbol imported)
+        {
+            return true;
+        }
+
+        var openDefinition = imported.OpenDefinition ?? imported.ClrType;
+        var fullName = openDefinition?.FullName;
+        return fullName == "System.Action"
+            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
+            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
     }
 
     /// <summary>
@@ -1472,88 +1487,127 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
-                MethodInfo invoke;
-                ParameterInfo[] invokeParameters;
-                try
+                var openParameterType = openParameters[paramIndex].ParameterType;
+                FunctionTypeSymbol functionType;
+                if (openParameterType.IsGenericParameter)
                 {
-                    var delegateType = openParameters[paramIndex].ParameterType;
-                    if (MemberLookup.TryGetExpressionTreeDelegateType(delegateType, out var unwrappedDelegateType))
+                    if (!TryBuildSymbolicDelegateTarget(
+                            openParameterType,
+                            receiverOpenDefinition,
+                            receiverTypeArguments,
+                            out var mappedDelegate,
+                            out functionType))
                     {
-                        delegateType = unwrappedDelegateType;
-                    }
-
-                    invoke = delegateType?.GetMethodSafe("Invoke");
-                    invokeParameters = invoke?.GetParameters();
-                }
-                catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
-                {
-                    candidateUsable = false;
-                    break;
-                }
-
-                if (invoke == null || invokeParameters == null || invokeParameters.Length != arityByIndex[idx])
-                {
-                    candidateUsable = false;
-                    break;
-                }
-
-                // Issue #903: only trust this candidate's delegate parameter
-                // shape when every method type parameter reachable from it was
-                // actually resolved by unifying the receiver/arguments. When a
-                // candidate's "this" parameter does not match the receiver
-                // shape (e.g. a `Single` overload over `IQueryable<T>` against a
-                // `List` receiver), the relevant slot stays unresolved and
-                // MapOpenClrTypeToSymbolic would otherwise surface a bogus open
-                // parameter (an ImportedTypeSymbol named "T") that neither
-                // ContainsTypeParameter nor ContainsSameCompilationUserType
-                // flags — which would then disagree with the correct candidate
-                // and abort the whole inference. Skip such candidates instead.
-                var unresolvedSlot = false;
-                foreach (var invokeParameter in invokeParameters)
-                {
-                    if (!AllMethodTypeParametersResolved(invokeParameter.ParameterType, openMethod, inferred))
-                    {
-                        unresolvedSlot = true;
-                        break;
-                    }
-                }
-
-                if (unresolvedSlot)
-                {
-                    candidateUsable = false;
-                    break;
-                }
-
-                var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
-                var slotUsable = true;
-                foreach (var invokeParameter in invokeParameters)
-                {
-                    var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
-                        invokeParameter.ParameterType,
-                        receiverOpenDefinition,
-                        receiverTypeArguments,
-                        openMethod,
-                        methodTypeArgs);
-                    if (mapped == null || mapped == TypeSymbol.Error)
-                    {
-                        slotUsable = false;
+                        candidateUsable = false;
                         break;
                     }
 
-                    parameterTypes.Add(mapped);
-                    if (TypeSymbol.RequiresSymbolicProjection(mapped))
+                    if (!IsCanonicalFunctionDelegate(mappedDelegate))
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+                }
+                else
+                {
+                    MethodInfo invoke;
+                    ParameterInfo[] invokeParameters;
+                    try
+                    {
+                        var delegateType = openParameterType;
+                        if (MemberLookup.TryGetExpressionTreeDelegateType(delegateType, out var unwrappedDelegateType))
+                        {
+                            delegateType = unwrappedDelegateType;
+                        }
+
+                        invoke = delegateType?.GetMethodSafe("Invoke");
+                        invokeParameters = invoke?.GetParameters();
+                    }
+                    catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
+                    if (invoke == null || invokeParameters == null || invokeParameters.Length != arityByIndex[idx])
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
+                    // Issue #903: only trust this candidate's delegate parameter
+                    // shape when every method type parameter reachable from it was
+                    // actually resolved by unifying the receiver/arguments. When a
+                    // candidate's "this" parameter does not match the receiver
+                    // shape (e.g. a `Single` overload over `IQueryable<T>` against a
+                    // `List` receiver), the relevant slot stays unresolved and
+                    // MapOpenClrTypeToSymbolic would otherwise surface a bogus open
+                    // parameter (an ImportedTypeSymbol named "T") that neither
+                    // ContainsTypeParameter nor ContainsSameCompilationUserType
+                    // flags — which would then disagree with the correct candidate
+                    // and abort the whole inference. Skip such candidates instead.
+                    var unresolvedSlot = false;
+                    foreach (var invokeParameter in invokeParameters)
+                    {
+                        if (!AllMethodTypeParametersResolved(invokeParameter.ParameterType, openMethod, inferred))
+                        {
+                            unresolvedSlot = true;
+                            break;
+                        }
+                    }
+
+                    if (unresolvedSlot)
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
+                    var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
+                    var slotUsable = true;
+                    foreach (var invokeParameter in invokeParameters)
+                    {
+                        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
+                            invokeParameter.ParameterType,
+                            receiverOpenDefinition,
+                            receiverTypeArguments,
+                            openMethod,
+                            methodTypeArgs);
+                        if (mapped == null || mapped == TypeSymbol.Error)
+                        {
+                            slotUsable = false;
+                            break;
+                        }
+
+                        parameterTypes.Add(mapped);
+                    }
+
+                    if (!slotUsable)
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
+                    var returnClrType = invoke.ReturnType;
+                    var mappedReturnType = returnClrType != null && returnClrType.IsSameAs(typeof(void))
+                        ? TypeSymbol.Void
+                        : MemberLookup.MapOpenClrTypeToSymbolic(
+                            returnClrType,
+                            receiverOpenDefinition,
+                            receiverTypeArguments,
+                            openMethod,
+                            methodTypeArgs);
+                    functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType);
+                }
+
+                foreach (var parameterType in functionType.ParameterTypes)
+                {
+                    if (TypeSymbol.RequiresSymbolicProjection(parameterType))
                     {
                         candidateHasSymbolicType = true;
                     }
                 }
 
-                if (!slotUsable)
-                {
-                    candidateUsable = false;
-                    break;
-                }
-
-                slotTargets[idx] = parameterTypes.ToImmutable();
+                slotTargets[idx] = functionType.ParameterTypes;
 
                 // Issue #2345: recover the delegate's return shape too, when it
                 // is fully closed by this unification (most commonly `void`,
@@ -1562,15 +1616,7 @@ internal sealed partial class ExpressionBinder
                 // containing an unresolved method type parameter) fall back to
                 // the pre-existing placeholder + inferReturnTypeFromBody
                 // behavior for that slot.
-                var returnClrType = invoke.ReturnType;
-                var mappedReturn = returnClrType != null && returnClrType.IsSameAs(typeof(void))
-                    ? TypeSymbol.Void
-                    : MemberLookup.MapOpenClrTypeToSymbolic(
-                        returnClrType,
-                        receiverOpenDefinition,
-                        receiverTypeArguments,
-                        openMethod,
-                        methodTypeArgs);
+                var mappedReturn = functionType.ReturnType;
                 if (mappedReturn != null && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(mappedReturn))
                 {
                     slotReturnTypes[idx] = mappedReturn;
