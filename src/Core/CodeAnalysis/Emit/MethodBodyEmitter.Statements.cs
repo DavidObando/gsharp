@@ -97,11 +97,10 @@ internal sealed partial class MethodBodyEmitter
 
     // Array-pin form: pin the array reference (`T[] pinned`) and derive
     // `&a[0]` via `ldelema`, guarding the null / zero-length array (→ null
-    // pointer), exactly as the C# compiler does.
+    // pointer).
     private void EmitFixedArrayPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
         var elementType = ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType;
-
         var nullLabel = this.il.DefineLabel();
         var notEmptyLabel = this.il.DefineLabel();
         var afterLabel = this.il.DefineLabel();
@@ -129,45 +128,50 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(elementType));
-        this.il.OpCode(ILOpCode.Conv_u);
+        this.EmitManagedPointerAsUnmanagedPointer(elementType);
         this.il.StoreLocal(pointerSlot);
 
         this.il.MarkLabel(afterLabel);
     }
 
     // String-pin form: pin the `string` reference (`string pinned`) and derive
-    // the char-data pointer via `RuntimeHelpers.OffsetToStringData`, guarding
-    // null (→ null pointer). This classic lowering avoids the `modreq`-bearing
-    // `string.GetPinnableReference()` ref-return that the member-ref encoder
-    // cannot reproduce.
+    // the char-data pointer through `GetPinnableReference`, guarding null
+    // (→ null pointer).
     private void EmitFixedStringPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
-        var skipLabel = this.il.DefineLabel();
+        var nullLabel = this.il.DefineLabel();
+        var afterLabel = this.il.DefineLabel();
 
         this.EmitExpression(node.PinnedSource); // string reference
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(pinnedSlot);          // pinned = s
-        this.il.OpCode(ILOpCode.Conv_i);         // (nint)s — address of the object
-        this.il.OpCode(ILOpCode.Dup);
-        this.il.Branch(ILOpCode.Brfalse, skipLabel); // null -> leave 0 as the pointer
+        this.il.Branch(ILOpCode.Brfalse, nullLabel);
 
-        var offsetGetter = typeof(System.Runtime.CompilerServices.RuntimeHelpers)
-            .GetProperty("OffsetToStringData")!
-            .GetGetMethod()!;
-        this.il.Call(this.outer.memberRefs.GetMethodReference(offsetGetter));
-        this.il.OpCode(ILOpCode.Add);            // address + OffsetToStringData = &s[0]
+        this.il.LoadLocal(pinnedSlot);
+        var getPinnableReference = typeof(string).GetMethod(
+            "GetPinnableReference",
+            BindingFlags.Public | BindingFlags.Instance,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+        this.il.Call(this.outer.memberRefs.GetMethodReference(getPinnableReference));
+        this.EmitManagedPointerAsUnmanagedPointer(TypeSymbol.Char);
+        this.il.StoreLocal(pointerSlot);
+        this.il.Branch(ILOpCode.Br, afterLabel);
 
-        this.il.MarkLabel(skipLabel);
+        this.il.MarkLabel(nullLabel);
+        this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Conv_u);
-        this.il.StoreLocal(pointerSlot);         // p = (char*)result
+        this.il.StoreLocal(pointerSlot);
+        this.il.MarkLabel(afterLabel);
     }
 
     // Span-like pin form (ADR-0125 / issue #1043): pin the `T&` returned by a
     // public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` /
     // `System.ReadOnlySpan[T]`) into a `T& pinned` local, then derive `*T` via
-    // `conv.u`. Mirrors C# `fixed (T* p = span)`. `GetPinnableReference()` already
-    // returns the data pointer for an empty span (a ref to where element 0 would
-    // be), so no null/empty guard is required — matching C#'s codegen.
+    // `Unsafe.AsPointer<T>`. `GetPinnableReference()` already returns the data
+    // pointer for an empty span (a ref to where element 0 would be), so no
+    // null/empty guard is required.
     private void EmitFixedPinnableReferencePin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
         var sourceSlot = this.locals[node.SourceVariable];
@@ -203,8 +207,22 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getPinnableReference, node.PinnedSource.Type)); // -> T&
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
         this.il.LoadLocal(pinnedSlot);
-        this.il.OpCode(ILOpCode.Conv_u);
+        this.EmitManagedPointerAsUnmanagedPointer(
+            ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType);
         this.il.StoreLocal(pointerSlot);         // p = (T*)ref
+    }
+
+    private void EmitManagedPointerAsUnmanagedPointer(TypeSymbol pointeeType)
+    {
+        var openAsPointer = typeof(System.Runtime.CompilerServices.Unsafe)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(method => method.Name == "AsPointer"
+                && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == 1);
+        var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
+        this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
+            closedAsPointer,
+            ImmutableArray.Create(pointeeType)));
     }
 
     private void EmitTryStatement(BoundTryStatement node)

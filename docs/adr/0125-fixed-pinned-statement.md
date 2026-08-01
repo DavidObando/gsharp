@@ -112,7 +112,8 @@ brfalse NULL
 ldloc pinned; ldlen; conv.i4; brtrue NOTEMPTY
 NULL:     ldc.i4.0; conv.u; stloc ptr       // empty/null ⇒ null pointer
           br AFTER
-NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>; conv.u; stloc ptr
+NOTEMPTY: ldloc pinned; ldc.i4.0; ldelema <elem>
+          call void* Unsafe.AsPointer<elem>(ref elem); stloc ptr
 AFTER:    <body>
           leave DONE
 FINALLY:  ldnull; stloc pinned              // release on every exit
@@ -123,20 +124,21 @@ DONE:
 **String** (`string pinned`):
 
 ```
-EmitExpr(source); dup; stloc pinned; conv.i
-dup; brfalse SKIP
-call get_OffsetToStringData; add            // skip the string header
-SKIP: conv.u; stloc ptr
+EmitExpr(source); dup; stloc pinned; brfalse NULL
+ldloc pinned; call char& string.GetPinnableReference()
+call void* Unsafe.AsPointer<char>(ref char); stloc ptr
+br AFTER
+NULL: ldc.i4.0; conv.u; stloc ptr
+AFTER:
 try { <body> } finally {
     ldnull; stloc pinned                     // release on every exit
 }
 ```
 
-`RuntimeHelpers.OffsetToStringData` is `[Obsolete]`, so the property getter is
-resolved reflectively (string literal, not `nameof`) to avoid CS0618. The
-classic `OffsetToStringData` lowering is used deliberately instead of
-`string.GetPinnableReference()` to avoid the `modreq(InAttribute)` ref-return
-signature noted above.
+`string.GetPinnableReference()` returns `ref readonly char`; the MemberRef
+retains its `modreq(InAttribute)` return signature. `Unsafe.AsPointer<T>`
+converts that managed pointer to the numeric native pointer stored in the
+user-visible `*T` local.
 
 **Span-like / `GetPinnableReference`** (`T& pinned`, issue #1043):
 
@@ -144,7 +146,7 @@ signature noted above.
 EmitExpr(span); stloc src                    // spill the source for addressing
 ldloca src; call instance T& GetPinnableReference()
 stloc pinned                                 // T& pinned = ref
-ldloc pinned; conv.u; stloc ptr
+ldloc pinned; call void* Unsafe.AsPointer<T>(ref T); stloc ptr
 try { <body> } finally {
     ldc.i4.0; conv.u; stloc pinned            // release on every exit
 }
@@ -162,6 +164,11 @@ emitted MemberRef carries the real BCL signature, including
 return-signature encoder reproduces required custom modifiers on by-ref returns
 (the same mechanism used for `ref readonly` indexers in ADR-0056), so the call
 binds at runtime instead of throwing `MissingMethodException`.
+
+The `Unsafe.AsPointer<T>` call is deliberate for every managed-pointer source.
+Emitting `conv.u` directly after `ldelema` or a ref-return leaves a managed
+pointer at an instruction that requires a numeric stack value, producing
+ilverify's `ExpectedNumericType` error even though RyuJIT accepts the method.
 
 ### 5. New node kinds, exhaustiveness, coverage matrix
 
