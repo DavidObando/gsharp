@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Compiler;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
@@ -38,6 +39,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
     [InlineData("before-use", "GS0159")]
     [InlineData("member-call", "GS0159")]
     [InlineData("implicit-field", "GS0159")]
+    [InlineData("closure", "GS0159")]
     public void AssignmentReachingBackEdge_InvalidatesInheritedNarrowing(
         string shape,
         string expectedDiagnostic)
@@ -46,6 +48,20 @@ public class Issue2943LoopBackEdgeNarrowingTests
         var errors = compilation.BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
 
         Assert.Contains(errors, diagnostic => diagnostic.Id == expectedDiagnostic);
+    }
+
+    [Theory]
+    [InlineData("function-literal")]
+    [InlineData("arrow-lambda")]
+    [InlineData("inline-argument")]
+    public void ClosureWrite_InvalidatesNarrowingOutsideLoop(string shape)
+    {
+        var errors = Compile(BuildClosureWriteSource(shape))
+            .BoundProgram.Diagnostics
+            .Where(diagnostic => diagnostic.IsError)
+            .ToArray();
+
+        Assert.Contains(errors, diagnostic => diagnostic.Id == "GS0159");
     }
 
     [Theory]
@@ -118,6 +134,42 @@ public class Issue2943LoopBackEdgeNarrowingTests
     }
 
     [Fact]
+    public void SpeculativeRebind_RestoresSyntheticLambdaOrdinal()
+    {
+        const string Source = """
+            import System
+
+            class C {
+                func M() { }
+            }
+
+            func Run() {
+                var c C? = C()
+                if c != nil {
+                    for var i = 0; i < 2; i++ {
+                        let print = func() { Console.WriteLine(i) }
+                        print()
+                        if c != nil {
+                            c.M()
+                        }
+                        c = nil
+                    }
+                }
+            }
+            """;
+
+        var program = Compile(Source).BoundProgram;
+        var collector = new FunctionLiteralNameCollector();
+        foreach (var body in program.Functions.Values)
+        {
+            collector.VisitStatement(body);
+        }
+
+        Assert.Contains("<lambda1>", collector.Names);
+        Assert.DoesNotContain("<lambda2>", collector.Names);
+    }
+
+    [Fact]
     public void SpeculativeRebind_DoesNotDuplicateGotoHandlerDiagnostics()
     {
         const string Source = """
@@ -128,12 +180,15 @@ public class Issue2943LoopBackEdgeNarrowingTests
             }
 
             func Run() {
-                goto handler
                 var c C? = C()
                 if c != nil {
                     for var i = 0; i < 2; i++ {
+                        if i == 0 {
+                            goto handler
+                        }
                         c.M()
                         c = nil
+                        c.M()
                     }
                 }
                 try {
@@ -149,6 +204,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
         var errors = Compile(Source).BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
 
         Assert.Single(errors, diagnostic => diagnostic.Id == "GS0498");
+        Assert.Equal(2, errors.Count(diagnostic => diagnostic.Id == "GS0159"));
     }
 
     private static GsCompilation Compile(string source)
@@ -294,6 +350,13 @@ public class Issue2943LoopBackEdgeNarrowingTests
                     c.M()
                 }
                 """,
+            "closure" => """
+                for var i = 0; i < 2; i++ {
+                    c.M()
+                    let clear = func() { c = nil }
+                    clear()
+                }
+                """,
             "while" => """
                 var i = 0
                 while i < 2 {
@@ -340,6 +403,45 @@ public class Issue2943LoopBackEdgeNarrowingTests
                 var c C? = C()
                 if c != nil {
                     {{loop}}
+                }
+            }
+            """;
+    }
+
+    private static string BuildClosureWriteSource(string shape)
+    {
+        var closure = shape switch
+        {
+            "function-literal" => """
+                let clear = func() { c = nil }
+                clear()
+                """,
+            "arrow-lambda" => """
+                let clear Action = () -> c = nil
+                clear()
+                """,
+            "inline-argument" => """
+                Apply(func() { c = nil })
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+
+        return $$"""
+            import System
+
+            class C {
+                func M() { }
+            }
+
+            func Apply(action Action) {
+                action()
+            }
+
+            func Run() {
+                var c C? = C()
+                if c != nil {
+                    {{closure}}
+                    c.M()
                 }
             }
             """;
@@ -573,6 +675,28 @@ public class Issue2943LoopBackEdgeNarrowingTests
             catch
             {
             }
+        }
+    }
+
+    private sealed class FunctionLiteralNameCollector : BoundTreeWalker
+    {
+        /// <summary>Gets function-literal symbol names found in visited bodies.</summary>
+        public System.Collections.Generic.List<string> Names { get; } = [];
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                Names.Add(literal.Function.Name);
+                if (literal.Body != null)
+                {
+                    VisitStatement(literal.Body);
+                }
+
+                return;
+            }
+
+            base.VisitExpression(node);
         }
     }
 }

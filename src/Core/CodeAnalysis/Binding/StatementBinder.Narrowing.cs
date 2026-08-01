@@ -893,6 +893,16 @@ internal sealed partial class StatementBinder
                     && assignedProperties.Contains((null, staticProperty.Property)));
         }
 
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundFunctionLiteralExpression literal && literal.Body != null)
+            {
+                VisitStatement(literal.Body);
+            }
+
+            base.VisitExpression(node);
+        }
+
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
         {
             if (node.Variable != null)

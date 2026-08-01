@@ -168,6 +168,7 @@ internal sealed partial class StatementBinder
         var pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray();
         var definedUserLabels = binderCtx.DefinedUserLabels.ToArray();
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
+        var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
         // Issue #2943: first bind supplies exact assignment symbols and lowered
         // control flow. If a write can reach the back-edge, restore speculative
@@ -206,6 +207,7 @@ internal sealed partial class StatementBinder
         RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels);
         userGotoHandlerRegions.Clear();
         userGotoHandlerRegions.AddRange(userGotoHandlerSnapshot);
+        binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
 
         InvalidateInheritedNarrowings(
             mutations,
