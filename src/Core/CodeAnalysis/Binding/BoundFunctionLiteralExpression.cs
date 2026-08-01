@@ -45,5 +45,11 @@ public sealed class BoundFunctionLiteralExpression : BoundExpression
 
     public override BoundNodeKind Kind => BoundNodeKind.FunctionLiteralExpression;
 
+    /// <summary>
+    /// Gets or sets the evaluator's lazily lowered body. Concurrent first use
+    /// may compute equivalent bodies; <c>Lower</c> allocates a fresh
+    /// <c>Lowerer</c> per call and holds no static state, so either cached value
+    /// is safe.
+    /// </summary>
     internal BoundBlockStatement LoweredBody { get; set; }
 }

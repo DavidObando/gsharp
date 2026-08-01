@@ -102,6 +102,8 @@ public class Issue750ConstraintOverloadInterpreterTests
     [Fact]
     public void FlatMap_NullableReturningLambdaWithIf_RunsInInterpreter()
     {
+        // Issue #2995: the nullable-returning FlatMap lambda contains the
+        // control flow that previously reached the evaluator unlowered.
         var source = """
             import System
             import Gsharp.Extensions.Optional
