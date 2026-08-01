@@ -90,6 +90,19 @@ public class Issue2965ChannelElementSlotTests
                 return (<-ch).Value
             }
 
+            async func asyncSelectPair() int32 {
+                let ch = make(chan Pair, 1)
+                ch <- Pair(56)
+                var result = 0
+                select {
+                    case let value = <-ch {
+                        await Task.Delay(1)
+                        result = value.Value
+                    }
+                }
+                return result
+            }
+
             let plainReceive = make(chan Pair, 1)
             plainReceive <- Pair(41)
             Console.WriteLine((<-plainReceive).Value)
@@ -177,12 +190,13 @@ public class Issue2965ChannelElementSlotTests
 
             Console.WriteLine(echo(Pair(53)).Value)
             Console.WriteLine(asyncPair().Result)
+            Console.WriteLine(asyncSelectPair().Result)
             """;
 
         AssertRuns(
             Source,
             nameof(ChannelElementMatrix_LoadsVerifiesAndRuns),
-            "41\n42\n55\n43\n44\n45\n46\n47\n54\n48\n49\n2020\n0\n0\n51\n52\n53\n50\n");
+            "41\n42\n55\n43\n44\n45\n46\n47\n54\n48\n49\n2020\n0\n0\n51\n52\n53\n50\n56\n");
     }
 
     private static void AssertRuns(string source, string name, string expected)
