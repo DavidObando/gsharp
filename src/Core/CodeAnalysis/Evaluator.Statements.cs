@@ -48,7 +48,8 @@ public sealed partial class Evaluator
                 continue;
             }
 
-            if (ex is TargetInvocationException { InnerException: { } tieInner })
+            if (ex is TargetInvocationException { InnerException: { } tieInner } tie
+                && IsReflectionInvocationWrapper(tie))
             {
                 ex = tieInner;
                 continue;
@@ -56,7 +57,8 @@ public sealed partial class Evaluator
 
             if (ex is AggregateException aggregate
                 && aggregate.InnerExceptions.Count == 1
-                && aggregate.InnerException is TargetInvocationException aggregateInner)
+                && aggregate.InnerException is TargetInvocationException aggregateInner
+                && IsReflectionInvocationWrapper(aggregateInner))
             {
                 ex = aggregateInner;
                 continue;
@@ -65,6 +67,12 @@ public sealed partial class Evaluator
             return ex;
         }
     }
+
+    // Reflection-generated wrappers are thrown from CoreLib; a user-thrown
+    // TargetInvocationException retains the user's/evaluator's target site.
+    private static bool IsReflectionInvocationWrapper(TargetInvocationException ex)
+        => ex.TargetSite?.DeclaringType?.Assembly is not { } assembly
+            || assembly == typeof(TargetInvocationException).Assembly;
 
     private object EvaluateStatement(BoundBlockStatement body)
     {

@@ -153,17 +153,17 @@ public class Issue2938DelegateExceptionDiagnosticTests
     }
 
     [Fact]
-    public void NestedTargetInvocationExceptions_UnwrapRecursively()
+    public void NestedReflectionTargetInvocationExceptions_UnwrapRecursively()
     {
         const string Source = """
             import GSharp.Interpreter.Tests
 
-            let handler () -> int32 = () -> Issue2938ExceptionProbe.ThrowDoubleWrapped()
+            let handler () -> int32 = () -> Issue2938ExceptionProbe.InvokeNullReferenceReflectively()
             let pair = (handler, 0)
             pair.Item1()
             """;
 
-        AssertDiagnostic(Source, "double wrapped boom", "pair.Item1.Invoke()");
+        AssertDiagnostic(Source, "null boom", "pair.Item1.Invoke()");
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
     }
 
     [Fact]
-    public void UserThrownTargetInvocationException_IsIntentionallyUnwrapped()
+    public void UserThrownTargetInvocationException_KeepsOuterMessage()
     {
         const string Source = """
             import System
@@ -198,7 +198,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
         var diagnostic = Assert.Single(Evaluate(Source).Diagnostics);
 
         Assert.Equal("GS9999", diagnostic.Id);
-        Assert.Equal("author inner", diagnostic.Message);
+        Assert.Equal("author outer", diagnostic.Message);
     }
 
     [Fact]
@@ -300,13 +300,13 @@ public static class Issue2938ExceptionProbe
         => throw new NullReferenceException("null boom");
 
     /// <summary>
-    /// Throws two nested target-invocation wrappers.
+    /// Invokes a throwing method through reflection to create nested runtime wrappers.
     /// </summary>
     /// <returns>This method never returns.</returns>
-    public static int ThrowDoubleWrapped()
-        => throw new TargetInvocationException(
-            new TargetInvocationException(
-                new InvalidOperationException("double wrapped boom")));
+    public static int InvokeNullReferenceReflectively()
+        => (int)typeof(Issue2938ExceptionProbe)
+            .GetMethod(nameof(ThrowNullReference))
+            .Invoke(null, null);
 
     /// <summary>
     /// Creates an ordinary exception that itself has an inner exception.
@@ -324,8 +324,7 @@ public static class Issue2938ExceptionProbe
     public static ValueTask<int> CreateSingleAggregateValueTaskAsync()
         => new(Task.FromException<int>(
             new AggregateException(
-                new TargetInvocationException(
-                    new DivideByZeroException("aggregate await boom")))));
+                CreateReflectionTargetInvocationException())));
 
     /// <summary>
     /// Creates an awaitable whose result throws a multi-inner aggregate wrapper.
@@ -334,7 +333,27 @@ public static class Issue2938ExceptionProbe
     public static ValueTask<int> CreateMultipleAggregateValueTaskAsync()
         => new(Task.FromException<int>(
             new AggregateException(
-                new TargetInvocationException(
-                    new DivideByZeroException("aggregate await boom")),
+                CreateReflectionTargetInvocationException(),
                 new InvalidOperationException("second aggregate boom"))));
+
+    private static TargetInvocationException CreateReflectionTargetInvocationException()
+    {
+        try
+        {
+            typeof(Issue2938ExceptionProbe)
+                .GetMethod(
+                    nameof(ThrowAggregateAwaitBoom),
+                    BindingFlags.NonPublic | BindingFlags.Static)
+                .Invoke(null, null);
+        }
+        catch (TargetInvocationException ex)
+        {
+            return ex;
+        }
+
+        throw new InvalidOperationException("Reflection probe did not throw.");
+    }
+
+    private static int ThrowAggregateAwaitBoom()
+        => throw new DivideByZeroException("aggregate await boom");
 }
