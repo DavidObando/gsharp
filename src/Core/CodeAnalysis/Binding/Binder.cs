@@ -602,16 +602,24 @@ public sealed class Binder
             // body to the TypeParameterSymbol. Issue #312: a method may carry
             // both the enclosing type's type parameters (when it is a member of
             // a generic class) and its own method-level type parameters; seed
-            // the enclosing type's first, then the method's own so the latter
-            // shadow on name collision.
+            // the full enclosing type chain first, then the method's own so
+            // each inner scope shadows outer names on collision.
             var enclosingGenericOwner = (function.ReceiverType ?? function.StaticOwnerType) as StructSymbol;
-            var enclosingTypeParams = enclosingGenericOwner?.Definition?.TypeParameters
+            var outerTypeParams = enclosingGenericOwner == null
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : StructSymbol.CollectEnclosingTypeParameters(enclosingGenericOwner);
+            var ownerTypeParams = enclosingGenericOwner?.Definition?.TypeParameters
                 ?? enclosingGenericOwner?.TypeParameters
                 ?? ImmutableArray<TypeParameterSymbol>.Empty;
-            if (!enclosingTypeParams.IsDefaultOrEmpty || function.IsGeneric)
+            if (!outerTypeParams.IsDefaultOrEmpty || !ownerTypeParams.IsDefaultOrEmpty || function.IsGeneric)
             {
                 binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
-                foreach (var tp in enclosingTypeParams)
+                foreach (var tp in outerTypeParams)
+                {
+                    binderCtx.CurrentTypeParameters[tp.Name] = tp;
+                }
+
+                foreach (var tp in ownerTypeParams)
                 {
                     binderCtx.CurrentTypeParameters[tp.Name] = tp;
                 }

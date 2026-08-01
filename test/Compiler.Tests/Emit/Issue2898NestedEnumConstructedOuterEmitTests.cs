@@ -302,6 +302,66 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
     }
 
     [Fact]
+    public void AlreadyClosedNestedEnumSliceLiteral_RemainsClosed()
+    {
+        const string source = """
+            package P
+
+            struct Outer[T] {
+                public enum Color { Red = 1, Green = 2, Blue = 3 }
+                public func R() int32 {
+                    var colors = []Outer[int32].Color{Outer[int32].Color.Blue}
+                    return int32(colors[0])
+                }
+            }
+            """;
+
+        var assembly = CompileAndLoad(source);
+        var outer = assembly.GetTypes().Single(t => t.Name == "Outer`1").MakeGenericType(typeof(string));
+        Assert.Equal(3, GetMethod(outer, "R").Invoke(Activator.CreateInstance(outer), null));
+    }
+
+    [Fact]
+    public void NestedEnumTwoGenericLevelsDeep_LocalExpressionClosesAllEnclosingParameters()
+    {
+        const string source = """
+            package P
+
+            struct Gen[T] {
+                public struct MidG[U] {
+                    public enum Tone { A = 1, B = 2 }
+                    public func R() int32 {
+                        var tone = Tone.B
+                        return int32(tone)
+                    }
+                }
+            }
+            """;
+
+        Assert.Equal(2, InvokeNestedMidMethod(source));
+    }
+
+    [Fact]
+    public void NestedEnumTwoGenericLevelsDeep_SliceLiteralClosesAllEnclosingParameters()
+    {
+        const string source = """
+            package P
+
+            struct Gen[T] {
+                public struct MidG[U] {
+                    public enum Tone { A = 1, B = 2 }
+                    public func R() int32 {
+                        var tones = []Tone{Tone.B}
+                        return int32(tones[0])
+                    }
+                }
+            }
+            """;
+
+        Assert.Equal(2, InvokeNestedMidMethod(source));
+    }
+
+    [Fact]
     public void StaticInterfacePropertyNestedEnum_PropagatesReferenceNullabilityErasure()
     {
         const string source = """
@@ -341,6 +401,13 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         var assembly = CompileAndLoad(source);
         var outer = assembly.GetTypes().Single(t => t.Name == "Outer`1").MakeGenericType(typeof(int));
         return Assert.IsAssignableFrom<Array>(GetMethod(outer, methodName).Invoke(Activator.CreateInstance(outer), null));
+    }
+
+    private static int InvokeNestedMidMethod(string source)
+    {
+        var assembly = CompileAndLoad(source);
+        var mid = assembly.GetTypes().Single(t => t.Name == "MidG`1").MakeGenericType(typeof(int), typeof(string));
+        return Assert.IsType<int>(GetMethod(mid, "R").Invoke(Activator.CreateInstance(mid), null));
     }
 
     private static Assembly CompileAndLoad(string source, string[] ignoredErrorCodes = null)
