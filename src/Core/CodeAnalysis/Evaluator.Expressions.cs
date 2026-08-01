@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -29,6 +30,7 @@ public sealed partial class Evaluator
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, Func<Func<object[], object>, Delegate>> InterpreterDelegateFactories = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Delegate, ClosureValue> InterpreterClosures = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<StructSymbol, Type> ClrBackingTypes = new();
 
     private object EvaluateExpression(BoundExpression node)
     {
@@ -651,21 +653,31 @@ public sealed partial class Evaluator
 
     private object EvaluateStructLiteralExpression(BoundStructLiteralExpression node)
     {
-        var sv = new StructValue(node.StructType);
+        var constructedClass = node.StructType.IsClass && node.StructType.ClrType == null;
+        var sv = constructedClass
+            ? (StructValue)EvaluateConstructorCallExpression(
+                new BoundConstructorCallExpression(
+                    node.Syntax,
+                    node.StructType,
+                    ImmutableArray<BoundExpression>.Empty))
+            : new StructValue(node.StructType);
 
-        // Default-initialize all fields (walking inheritance), then apply explicit initializers.
-        for (var t = node.StructType; t != null; t = t.BaseClass)
+        if (!constructedClass)
         {
-            foreach (var f in t.Fields)
+            // Default-initialize all fields (walking inheritance), then apply explicit initializers.
+            for (var t = node.StructType; t != null; t = t.BaseClass)
             {
-                if (!sv.Fields.ContainsKey(f.Name))
+                foreach (var f in t.Fields)
                 {
-                    sv.Fields[f.Name] = ClrDefaultValue(f.Type);
+                    if (!sv.Fields.ContainsKey(f.Name))
+                    {
+                        sv.Fields[f.Name] = ClrDefaultValue(f.Type);
+                    }
                 }
             }
-        }
 
-        ApplyClassFieldInitializers(sv, node.StructType);
+            ApplyClassFieldInitializers(sv, node.StructType);
+        }
 
         foreach (var init in node.Initializers)
         {
@@ -1066,7 +1078,7 @@ public sealed partial class Evaluator
                     }
                 }
 
-                // Issue #319: instantiate the CLR base instance (when the class
+                // Issue #319: instantiate the CLR backing object (when the class
                 // ultimately derives from a CLR type) so inherited CLR instance
                 // state — such as Exception.Message — is set per the emit path.
                 AllocateClrBacking(sv, node.StructType, baseInit);
@@ -1101,10 +1113,12 @@ public sealed partial class Evaluator
     }
 
     /// <summary>
-    /// Issue #319: instantiate the imported CLR base for a GSharp class instance
+    /// Issue #319: instantiate a CLR backing object for a GSharp class instance
     /// when the class ultimately derives from a CLR type, so inherited CLR
     /// instance state (e.g. <see cref="System.Exception.Message"/>) is observable
-    /// under the interpreter. The chosen base constructor mirrors the emit path:
+    /// under the interpreter. The backing object's runtime type preserves the
+    /// GSharp class identity for inherited virtual dispatch. The chosen base
+    /// constructor mirrors the emit path:
     /// the resolved <see cref="BaseConstructorInitializer.ClrConstructor"/> when
     /// the class declared <c>: Base(args)</c>, otherwise the imported base's
     /// accessible parameterless constructor. The base-ctor argument expressions
@@ -1115,7 +1129,7 @@ public sealed partial class Evaluator
         // If an explicit `: base(args)` targets a CLR constructor, prefer that.
         if (activeInit is { IsClrBase: true } clrInit && clrInit.ClrConstructor != null)
         {
-            sv.ClrBacking = InvokeClrCtor(clrInit.ClrConstructor, clrInit.Arguments, clrInit.ArgumentRefKinds);
+            sv.ClrBacking = InvokeClrCtor(structType, clrInit.ClrConstructor, clrInit.Arguments, clrInit.ArgumentRefKinds);
             return;
         }
 
@@ -1143,7 +1157,7 @@ public sealed partial class Evaluator
                 var parameterless = ResolveParameterlessCtor(clrBase);
                 if (parameterless != null)
                 {
-                    sv.ClrBacking = parameterless.Invoke(Array.Empty<object>());
+                    sv.ClrBacking = InvokeClrBackingConstructor(structType, parameterless, Array.Empty<object>());
                 }
 
                 return;
@@ -1152,13 +1166,64 @@ public sealed partial class Evaluator
     }
 
     /// <summary>Issue #319: invoke a CLR base constructor with the bound G# argument expressions.</summary>
-    private object InvokeClrCtor(ConstructorInfo ctor, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds)
+    private object InvokeClrCtor(StructSymbol structType, ConstructorInfo ctor, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds)
     {
         var args = new object[arguments.Length];
         var refSlots = BuildRefSlots(arguments, argumentRefKinds, args);
-        var instance = ctor.Invoke(args);
+        var instance = InvokeClrBackingConstructor(structType, ctor, args);
         WriteBackRefSlots(refSlots, args);
         return instance;
+    }
+
+    private static object InvokeClrBackingConstructor(StructSymbol structType, ConstructorInfo baseConstructor, object[] arguments)
+    {
+        var parameterTypes = baseConstructor.GetParameters().Select(parameter => parameter.ParameterType).ToArray();
+        var backingType = ClrBackingTypes.GetValue(
+            structType,
+            _ => CreateClrBackingType(structType, baseConstructor.DeclaringType));
+        var constructor = backingType.GetConstructor(parameterTypes)
+            ?? throw new InvalidOperationException($"CLR backing type '{backingType}' has no matching constructor.");
+        return constructor.Invoke(arguments);
+    }
+
+    private static Type CreateClrBackingType(StructSymbol structType, Type clrBase)
+    {
+        // A raw clrBase instance loses the GSharp derived type identity during
+        // virtual dispatch. This minimal runtime subclass only forwards the
+        // accessible constructors; GSharp-declared members remain interpreter-owned.
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName($"GSharp.Interpreter.{Guid.NewGuid():N}"),
+            AssemblyBuilderAccess.RunAndCollect);
+        var module = assembly.DefineDynamicModule("Main");
+        var fullName = string.IsNullOrEmpty(structType.PackageName)
+            ? structType.Name
+            : $"{structType.PackageName}.{structType.Name}";
+        var type = module.DefineType(fullName, TypeAttributes.Public | TypeAttributes.Class, clrBase);
+
+        foreach (var baseConstructor in clrBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (!baseConstructor.IsPublic && !baseConstructor.IsFamily && !baseConstructor.IsFamilyOrAssembly)
+            {
+                continue;
+            }
+
+            var parameterTypes = baseConstructor.GetParameters().Select(parameter => parameter.ParameterType).ToArray();
+            var constructor = type.DefineConstructor(
+                MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                CallingConventions.Standard,
+                parameterTypes);
+            var il = constructor.GetILGenerator();
+            il.Emit(OpCodes.Ldarg_0);
+            for (var i = 0; i < parameterTypes.Length; i++)
+            {
+                il.Emit(OpCodes.Ldarg, i + 1);
+            }
+
+            il.Emit(OpCodes.Call, baseConstructor);
+            il.Emit(OpCodes.Ret);
+        }
+
+        return type.CreateType();
     }
 
     /// <summary>Issue #319: resolves the imported CLR base's accessible parameterless constructor (matches the emit path's <c>GetImportedBaseDefaultCtorReference</c>).</summary>
@@ -1193,7 +1258,7 @@ public sealed partial class Evaluator
     /// <summary>
     /// Issue #319: unwraps a GSharp class value to its CLR backing instance when
     /// the value carries one. Reflection-based reads/writes/calls against members
-    /// declared on an imported CLR base must target the real CLR object, not the
+    /// declared on an imported CLR base must target the CLR backing object, not the
     /// interpreter's <see cref="StructValue"/> field dictionary.
     /// </summary>
     private static object UnwrapClrReceiver(object value)

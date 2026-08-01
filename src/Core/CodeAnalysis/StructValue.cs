@@ -51,8 +51,9 @@ public sealed class StructValue
     /// Gets or sets the CLR backing instance for a GSharp class that inherits an
     /// imported CLR base type (issue #319). When non-null, the interpreter routes
     /// reflection-based access to inherited CLR instance state (properties, fields,
-    /// methods) through this real CLR object so the base constructor's side-effects
-    /// (e.g. <see cref="System.Exception.Message"/>) are observable. Always null
+    /// methods) through this CLR object so the base constructor's side-effects
+    /// (e.g. <see cref="System.Exception.Message"/>) and the GSharp derived type
+    /// identity are observable. Always null
     /// for value-type structs and for class instances whose ultimate base is
     /// <c>object</c> or another GSharp class.
     /// </summary>

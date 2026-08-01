@@ -249,8 +249,8 @@ internal sealed partial class ExpressionBinder
     /// is bound into a synthetic local; each element lowers to an
     /// <c>Add(...)</c> call (bare / <c>key: value</c> entries) or an indexer set
     /// (<c>[key] = value</c> entries); the block yields the local. The lowering
-    /// uses only existing bound nodes, so emit and the interpreter both work
-    /// without a new bound-node kind.
+    /// uses only existing bound nodes; each backend must still preserve the
+    /// constructor-before-initializers ordering represented by those nodes.
     /// </summary>
     private BoundExpression BindCollectionInitializerExpression(CollectionInitializerExpressionSyntax syntax)
     {
