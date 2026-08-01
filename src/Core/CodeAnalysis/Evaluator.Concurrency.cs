@@ -58,7 +58,10 @@ public sealed partial class Evaluator
             return EvaluateExpression(defaultArm.Result);
         }
 
-        throw new EvaluatorException("Unmatched switch expression value.", node);
+        throw new EvaluatorException(
+            "Unmatched switch expression value.",
+            new InvalidOperationException("Unmatched switch expression value."),
+            node);
     }
 
     private void EvaluatePatternSwitchStatement(BoundPatternSwitchStatement node)

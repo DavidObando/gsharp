@@ -15,6 +15,30 @@ namespace GSharp.Interpreter.Tests;
 /// </summary>
 public class Issue2941FlagsEnumExhaustivenessTests
 {
+    private const string CatchingUnmatchedSource = """
+        import System
+
+        @Flags
+        enum Access { None = 0, Read = 1, Write = 2 }
+
+        func F(x Access) int32 {
+            return switch x {
+                case Access.None: 0
+                case Access.Read: 1
+                case Access.Write: 2
+            }
+        }
+
+        try {
+            Console.WriteLine(F(Access.Read | Access.Write))
+        } catch (e InvalidOperationException) {
+            Console.WriteLine("caught-ioe")
+        } catch (e Exception) {
+            Console.WriteLine("caught-generic")
+        }
+        Console.WriteLine("after")
+        """;
+
     private const string UnmatchedSource = """
         @Flags
         enum Access { None = 0, Read = 1, Write = 2 }
@@ -124,5 +148,17 @@ public class Issue2941FlagsEnumExhaustivenessTests
         Assert.True(result.HasError);
         Assert.Equal("GS9999", diagnostic.Id);
         Assert.Equal("Unmatched switch expression value.", diagnostic.Message);
+    }
+
+    [Fact]
+    public void UnmatchedFlagsValue_PreservesInvalidOperationExceptionType()
+    {
+        var result = new SessionEngine { CaptureConsole = true }.Evaluate(CatchingUnmatchedSource);
+
+        Assert.False(result.HasError);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            "caught-ioe\nafter\n",
+            result.Output.Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 }
