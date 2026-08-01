@@ -370,6 +370,51 @@ public class Issue2891TryRegionFlowTests
     /// <summary>Gets try-region shapes that must not report GS0100.</summary>
     public static IEnumerable<object[]> CompleteCases()
     {
+        yield return Case("FinallyLoopAfterWhileTrue", """
+            import System
+            func F(exit bool) int32 {
+                try {
+                    while true {
+                        if exit {
+                            return 1
+                        }
+                    }
+                } finally {
+                    for var i = 0; i < 1; i++ {
+                        try {
+                            var cleaned = i
+                        } catch (ex Exception) {
+                        }
+                    }
+                }
+            }
+            """);
+        yield return Case("WhileTrueInsideTryFinally", """
+            import System
+            func F(exit bool) int32 {
+                try {
+                    try {
+                        var initialized = true
+                    } catch (ex Exception) {
+                    }
+                    while true {
+                        if exit {
+                            return 1
+                        }
+                        if !exit {
+                            continue
+                        }
+                    }
+                } finally {
+                    for var i = 0; i < 1; i++ {
+                        try {
+                            var cleaned = i
+                        } catch (ex Exception) {
+                        }
+                    }
+                }
+            }
+            """);
         yield return Case("TryContinue", """
             func F() int32 {
                 for {

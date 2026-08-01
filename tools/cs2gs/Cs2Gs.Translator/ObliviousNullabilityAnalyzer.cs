@@ -248,6 +248,30 @@ internal static class ObliviousNullabilityAnalyzer
             new HashSet<TupleElementQuery>(TupleElementQueryComparer.Instance));
     }
 
+    public static HashSet<INamedTypeSymbol> CollectEfEntityTypes(Compilation compilation)
+    {
+        var entities = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (SyntaxTree tree in compilation.SyntaxTrees)
+        {
+            SemanticModel model = compilation.GetSemanticModel(tree);
+            foreach (PropertyDeclarationSyntax property in tree.GetRoot().DescendantNodes().OfType<PropertyDeclarationSyntax>())
+            {
+                var dbSet = model.GetDeclaredSymbol(property)?.Type as INamedTypeSymbol;
+                if (dbSet?.Name != "DbSet"
+                    || dbSet.Arity != 1
+                    || dbSet.ContainingNamespace?.ToDisplayString() != "Microsoft.EntityFrameworkCore"
+                    || dbSet.TypeArguments[0] is not INamedTypeSymbol entity)
+                {
+                    continue;
+                }
+
+                entities.Add(entity.OriginalDefinition);
+            }
+        }
+
+        return entities;
+    }
+
     private static bool IsTaintedCore(
         CSharpCompilation compilation,
         ISymbol symbol,
@@ -547,6 +571,11 @@ internal static class ObliviousNullabilityAnalyzer
                 tupleEdges);
         }
 
+        // Issue #3060: EF entity properties are promoted by policy rather than
+        // syntax evidence, so seed them before contract edges synchronize
+        // interface and implementation nullability.
+        SeedEfEntityPropertyTaint(compilation, tainted);
+
         // Issue #2285: an interface member and every member that implements it
         // (across the whole compilation) must reach the SAME tainted-ness, so
         // cs2gs never promotes one endpoint (e.g. a record's primary-ctor
@@ -605,6 +634,22 @@ internal static class ObliviousNullabilityAnalyzer
             tupleScalarEdges,
             scalarTupleEdges,
             delegateReturnEdges);
+    }
+
+    private static void SeedEfEntityPropertyTaint(
+        Compilation compilation,
+        HashSet<ISymbol> tainted)
+    {
+        foreach (INamedTypeSymbol entity in CollectEfEntityTypes(compilation))
+        {
+            foreach (IPropertySymbol property in entity.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (IsEligibleScalarTarget(property))
+                {
+                    tainted.Add(Canonical(property));
+                }
+            }
+        }
     }
 
     // Seeds direct null evidence for a value declaration symbol (field /
