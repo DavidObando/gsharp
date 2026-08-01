@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -80,6 +81,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 diagnostics.ReportOutParameterNotAssigned(function.Declaration?.Location ?? default(TextLocation), op.Name);
             }
         }
+
+        new FunctionLiteralFinder(diagnostics).VisitStatement(body);
     }
 
     /// <summary>
@@ -689,6 +692,33 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 }
 
                 break;
+            case BoundImportedCallExpression call:
+                for (var i = 0; i < call.Arguments.Length; i++)
+                {
+                    var arg = call.Arguments[i];
+                    var refKind = i < call.ArgumentRefKinds.Length ? call.ArgumentRefKinds[i] : RefKind.None;
+
+                    if (refKind != RefKind.None
+                        && arg is BoundAddressOfExpression addr
+                        && addr.Operand is BoundVariableExpression bve)
+                    {
+                        if (refKind == RefKind.Ref && !assigned.Contains(bve.Variable))
+                        {
+                            diagnostics?.ReportVariableNotAssignedBeforeRef(arg.Syntax?.Location ?? call.Syntax?.Location ?? default(TextLocation), bve.Variable.Name);
+                        }
+
+                        if (refKind == RefKind.Ref || refKind == RefKind.Out)
+                        {
+                            assigned.Add(bve.Variable);
+                        }
+                    }
+                    else
+                    {
+                        ProcessExpression(arg, assigned, diagnostics, pointerAliases);
+                    }
+                }
+
+                break;
             case BoundAssignmentExpression assign:
                 ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases);
                 assigned.Add(assign.Variable);
@@ -721,6 +751,28 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 break;
             default:
                 break;
+        }
+    }
+
+    private sealed class FunctionLiteralFinder : BoundTreeWalker
+    {
+        private readonly DiagnosticBag diagnostics;
+
+        public FunctionLiteralFinder(DiagnosticBag diagnostics)
+        {
+            this.diagnostics = diagnostics;
+        }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                var lowered = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                Analyze(lowered.PreEmitAnalysisBody ?? lowered, literal.Function, diagnostics);
+                return;
+            }
+
+            base.VisitExpression(node);
         }
     }
 }
