@@ -44,4 +44,6 @@ public sealed class BoundFunctionLiteralExpression : BoundExpression
     public override TypeSymbol Type => FunctionType;
 
     public override BoundNodeKind Kind => BoundNodeKind.FunctionLiteralExpression;
+
+    internal BoundBlockStatement LoweredBody { get; set; }
 }

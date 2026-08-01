@@ -99,6 +99,27 @@ public class Issue750ConstraintOverloadInterpreterTests
         Assert.Equal("beta\n33\n42\n", Evaluate(source));
     }
 
+    [Fact]
+    public void FlatMap_NullableReturningLambdaWithIf_RunsInInterpreter()
+    {
+        var source = """
+            import System
+            import Gsharp.Extensions.Optional
+
+            let name string? = "ada"
+            let first = name.FlatMap(func(s string) string? {
+                if s.Length > 0 {
+                    return s.Substring(0, 1)
+                }
+                return nil
+            })
+
+            Console.WriteLine(first ?? "<none>")
+            """;
+
+        Assert.Equal("a\n", Evaluate(source));
+    }
+
     private static string Evaluate(string source)
     {
         // The Compilation.Default reference resolver enumerates
