@@ -44,4 +44,18 @@ mkdir -p "$temp_dir" "$install_dir"
 curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 180 \
   "$url" -o "$archive"
 tar -xzf "$archive" -C "$install_dir" --strip-components=1
+
+binary=$install_dir/netcoredbg
+if [[ ! -x $binary ]]; then
+  echo "::error::netcoredbg archive extracted but $binary is missing or not executable. Extracted layout:" >&2
+  ls -laR "$install_dir" >&2
+  exit 1
+fi
+
+if ! version=$("$binary" --version 2>&1); then
+  echo "::error::netcoredbg was extracted to $binary but failed to run: $version" >&2
+  exit 1
+fi
+
+echo "Installed $version"
 echo "$install_dir" >> "$GITHUB_PATH"

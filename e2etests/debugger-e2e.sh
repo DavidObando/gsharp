@@ -6,8 +6,9 @@
 # verifies it hits, lists locals (exercising LocalScope/LocalVariable from
 # Phase 5), and steps through GSharp source.
 #
-# The script SKIPS cleanly (exit 0) when netcoredbg is unavailable so that
-# CI lanes that do not provision it stay green. Local devs can install
+# The script SKIPS cleanly (exit 0) for local developers when netcoredbg is
+# unavailable, but treats absence as fatal in CI so debugger coverage cannot
+# silently disappear. Local devs can install
 # netcoredbg by following https://github.com/Samsung/netcoredbg/releases
 # or via the helper at the top of this file.
 set -euo pipefail
@@ -37,7 +38,12 @@ skip() {
 
 NETCOREDBG="$(find_netcoredbg || true)"
 if [[ -z "$NETCOREDBG" ]]; then
-    skip "netcoredbg not installed (install from https://github.com/Samsung/netcoredbg/releases and place on PATH or in $TOOLS_DIR/netcoredbg/)"
+    message="netcoredbg not installed (install from https://github.com/Samsung/netcoredbg/releases and place on PATH or in $TOOLS_DIR/netcoredbg/)"
+    if [[ "${CI:-}" == "true" ]]; then
+        echo "::error::$message" >&2
+        exit 1
+    fi
+    skip "$message"
 fi
 
 # netcoredbg ships an osx-amd64 build but no osx-arm64 build, so on
