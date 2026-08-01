@@ -255,27 +255,54 @@ public sealed partial class Evaluator
 
     private void EvaluateVariableDeclaration(BoundVariableDeclaration node)
     {
-        // Issue #491 (ADR-0060 follow-up): a ref-aliasing local binds the symbol
+        // Issue #3022 (ADR-0060 follow-up): a ref-aliasing local binds the symbol
         // to an existing lvalue rather than copying its value. The initializer
-        // is a BoundAddressOfExpression whose operand is the aliased lvalue;
-        // store a RefAlias sentinel in the locals dictionary so subsequent
-        // reads re-evaluate the operand and writes route back to it.
+        // is a BoundAddressOfExpression whose operand is frozen to the storage
+        // location selected when the declaration runs.
         if (node.Variable is LocalVariableSymbol refLocal
             && refLocal.RefKind != RefKind.None
             && node.Initializer is BoundAddressOfExpression refAddr)
         {
-            var alias = new RefAlias(refAddr.Operand);
+            var alias = new RefAlias(FreezeRefOperand(refAddr.Operand));
             var locals = this.Locals.Peek();
             locals[node.Variable] = alias;
 
             // Mirror the read-through semantics for `lastValue` (used by REPL).
-            LastValue = EvaluateExpression(refAddr.Operand);
+            LastValue = EvaluateExpression(alias.Operand);
             return;
         }
 
         var value = EvaluateExpression(node.Initializer);
         LastValue = value;
         Assign(node.Variable, value);
+    }
+
+    private BoundExpression FreezeRefOperand(BoundExpression operand)
+    {
+        switch (operand)
+        {
+            case BoundFieldAccessExpression field when field.Receiver != null && !field.Field.IsConst:
+                return new BoundFieldAccessExpression(
+                    null,
+                    new BoundLiteralExpression(null, EvaluateExpression(field.Receiver), field.Receiver.Type),
+                    field.StructType,
+                    field.Field,
+                    field.NarrowedType);
+
+            case BoundIndexExpression index:
+                return new BoundIndexExpression(
+                    null,
+                    new BoundLiteralExpression(null, EvaluateExpression(index.Target), index.Target.Type),
+                    new BoundLiteralExpression(null, EvaluateExpression(index.Index), index.Index.Type),
+                    index.Type);
+
+            case BoundBlockExpression block:
+                EvaluateBlockExpressionStatements(block);
+                return FreezeRefOperand(block.Expression);
+
+            default:
+                return operand;
+        }
     }
 
     private void EvaluateGoStatement(BoundGoStatement node)
