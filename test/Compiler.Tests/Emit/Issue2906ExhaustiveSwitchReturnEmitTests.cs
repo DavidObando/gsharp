@@ -287,7 +287,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
     }
 
     [Fact]
-    public void ExhaustiveEnum_UnnamedValueWithFixedReturn_UsesFixedEpilogueDefault()
+    public void ExhaustiveEnum_UnnamedValueWithFixedReturn_ThrowsDefensively()
     {
         const string Source = """
             package Issue2906.EmitUnnamedFixed
@@ -305,7 +305,14 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
                     case DateTimeKind.Local { return 3 }
                 }
             }
-            public var result = F(DateTimeKind(99), []int32{7})
+            public var result = 0
+            try {
+                F(DateTimeKind(99), []int32{7})
+            } catch (ex InvalidOperationException) {
+                result = ex.Message == "Compiler-generated guard reached: non-void function fell through without returning a value."
+                    ? 7
+                    : -1
+            }
             """;
 
         var assembly = CompileVerifyLoadAndRun(
@@ -313,10 +320,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             Source,
             ignoredVerificationErrors: new[] { "UnmanagedPointer", "StackByRef" },
             ignoredVerificationScope: @"<Program>\.F$");
-        // Known limitation (#2953): the fixed-return epilogue must be emitted first,
-        // so fixed-containing non-void functions bypass the fall-through guard and
-        // silently return the default slot instead of throwing.
-        Assert.Equal(0, GetField(assembly, "result"));
+        Assert.Equal(7, GetField(assembly, "result"));
     }
 
     private static object[] Case(string name, int expected, string body)
