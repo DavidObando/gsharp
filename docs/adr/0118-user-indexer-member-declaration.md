@@ -4,7 +4,7 @@
 - **Date**: 2026-06-22
 - **Phase**: v0.2 — language surface
 - **Related**: ADR-0051 (Property declarations — `prop Name T { get; set }`), ADR-0020 (Generic type-parameter brackets — Go-style `[T]`), ADR-0087 (Constructed generic user-type method references), ADR-0115 (C#→G# migration tool), issue #507 (member index assignment)
-- **Issue**: [#944](https://github.com/DavidObando/gsharp/issues/944)
+- **Issues**: [#944](https://github.com/DavidObando/gsharp/issues/944), [#2915](https://github.com/DavidObando/gsharp/issues/2915), [#2954](https://github.com/DavidObando/gsharp/issues/2954), [#2960](https://github.com/DavidObando/gsharp/issues/2960)
 
 ## Context
 
@@ -137,6 +137,37 @@ accessors and call sites resolve through the existing constructed
 generic user-type machinery (ADR-0087: method references parented at the
 constructed `TypeSpec`, signatures encoded with `!0`).
 
+#### Interface contracts
+
+An indexer may implement a G# interface indexer either implicitly or
+explicitly. Implicit matching uses the index-parameter types, value type,
+and required accessors, with generic substitutions applied for a
+constructed interface:
+
+```gsharp
+interface IRepo[T] {
+    prop this[key string] T { get; }
+}
+
+class Store : IRepo[int32] {
+    prop this[key string] int32 -> 1
+}
+```
+
+This applies uniformly to plain and constructed interfaces and to class
+and value-type implementations. Value-type property accessors that satisfy
+an interface contract receive the same virtual slot promotion as methods
+and events. The interpreter resolves interface calls through property
+accessors as well as ordinary methods.
+
+Before issue #2915, plain interfaces happened to use name lookup, which
+excluded indexers, while constructed interfaces used signature lookup,
+which accepted them. This ADR had not defined interface-indexer
+implementation semantics; the plain rejection was an implementation
+artifact, not a language decision. Rejecting both forms was considered,
+but would have removed working constructed-interface behavior and hidden
+the small emitter and interpreter defects that prevented uniform support.
+
 ### 3. Access binding — `obj[i]` / `obj[i] = v` on a user type
 
 When the target of an index expression is a user-defined type
@@ -214,6 +245,13 @@ emit + interpreter), with emit-and-run regression tests:
 - **get/set** indexer on a non-generic class: write via `obj[i] = v`,
   read back via `obj[i]`.
 - **non-generic get-only** indexer.
+- implicit and explicit implementation of plain and constructed-generic
+  interface indexer contracts by classes and structs (issues #2915 and
+  #2954), including interface-typed dispatch in emitted and interpreted
+  programs.
+- value-type property accessors receive the interface-slot attributes
+  required for loadable metadata, including sequence-valued properties
+  (issue #2960).
 - index access binding for both read and write to the declared indexer,
   including inside the type's own methods.
 - the old crashing shape now compiles and runs — **no GS9998**.

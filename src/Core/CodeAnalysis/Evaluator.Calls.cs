@@ -187,7 +187,7 @@ public sealed partial class Evaluator
     {
         if (type is Symbols.SequenceTypeSymbol seq)
         {
-            return seq.ElementType.ClrType ?? typeof(object);
+            return NullableLifting.GetEffectiveClrType(seq.ElementType) ?? typeof(object);
         }
 
         var clr = type?.ClrType;
@@ -252,6 +252,63 @@ public sealed partial class Evaluator
                 if (t.TryGetMethod(method.Name, out var candidate))
                 {
                     implMethod = candidate;
+                    break;
+                }
+
+                FunctionSymbol implicitAccessor = null;
+                foreach (var property in t.Properties)
+                {
+                    var getterMatches = property.GetterSymbol?.Name == method.Name;
+                    var accessor = getterMatches
+                        ? property.GetterSymbol
+                        : property.SetterSymbol?.Name == method.Name ? property.SetterSymbol : null;
+                    if (accessor == null)
+                    {
+                        continue;
+                    }
+
+                    var explicitAccessor = getterMatches
+                        ? property.ExplicitInterfaceMember?.GetterSymbol
+                        : property.ExplicitInterfaceMember?.SetterSymbol;
+                    if (ReferenceEquals(explicitAccessor, method)
+                        || (property.ExplicitInterfaceClauseTarget != null
+                            && DeclarationBinder.TypeSignaturesEquivalent(
+                                property.ExplicitInterfaceClauseTarget,
+                                method.ReceiverType)))
+                    {
+                        implMethod = accessor;
+                        break;
+                    }
+
+                    if (!property.HasExplicitInterfaceClause)
+                    {
+                        implicitAccessor ??= accessor;
+                    }
+                }
+
+                implMethod ??= implicitAccessor;
+                if (implMethod == null && ifaceSv.ClrBacking != null)
+                {
+                    var importedAccessor = ifaceSv.ClrBacking.GetType()
+                        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                        .FirstOrDefault(candidate =>
+                            candidate.IsSpecialName
+                            && candidate.Name == method.Name
+                            && candidate.GetParameters().Length == node.Arguments.Length);
+                    if (importedAccessor != null)
+                    {
+                        var importedArguments = new object[node.Arguments.Length];
+                        for (var i = 0; i < node.Arguments.Length; i++)
+                        {
+                            importedArguments[i] = EvaluateExpression(node.Arguments[i]);
+                        }
+
+                        return importedAccessor.Invoke(ifaceSv.ClrBacking, importedArguments);
+                    }
+                }
+
+                if (implMethod != null)
+                {
                     break;
                 }
             }
