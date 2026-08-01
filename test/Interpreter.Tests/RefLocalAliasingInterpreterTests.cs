@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -82,6 +83,130 @@ func tweak() {
 tweak()
 ");
         Assert.Contains("7", output);
+    }
+
+    [Fact]
+    public void LetRef_ArrayIndexRead_CapturesOriginalElement()
+    {
+        var output = RunSubmission(@"
+func probe() {
+    var arr = []int32{10, 20, 30}
+    var i int32 = 0
+    let ref r = arr[i]
+    i = 2
+    print(string(r))
+}
+probe()
+");
+        Assert.Equal($"10{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_ArrayIndexWrite_CapturesOriginalElement()
+    {
+        var output = RunSubmission(@"
+func probe() {
+    var arr = []int32{10, 20, 30}
+    var i int32 = 0
+    let ref r = arr[i]
+    i = 2
+    r = 99
+    print(string(arr[0]) + "","" + string(arr[1]) + "","" + string(arr[2]))
+}
+probe()
+");
+        Assert.Equal($"99,20,30{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_ArrayIndexWithoutIndexMutation_StillReadsAndWritesElement()
+    {
+        var output = RunSubmission(@"
+func probe() {
+    var arr = []int32{10, 20, 30}
+    var i int32 = 0
+    let ref r = arr[i]
+    r = 99
+    print(string(r) + "","" + string(arr[0]) + "","" + string(arr[1]) + "","" + string(arr[2]))
+}
+probe()
+");
+        Assert.Equal($"99,99,20,30{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_ClassField_CapturesReceiverBeforeReassignment()
+    {
+        var output = RunSubmission(@"
+class Box {
+    var Value int32
+}
+
+func probe() {
+    var first = Box{Value: 10}
+    var current = first
+    let ref r = current.Value
+    current = Box{Value: 20}
+    r = 99
+    print(string(r) + ""|"" + string(first.Value) + ""|"" + string(current.Value))
+}
+probe()
+");
+        Assert.Equal($"99|99|20{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_BlockExpression_EvaluatesPrefixOnceAndCapturesElement()
+    {
+        var output = RunSubmission(@"
+func probe() {
+    var original = []int32{10, 20, 30}
+    var current = original
+    let ref r = current[^1]
+    current = []int32{40, 50, 60}
+    r = 99
+    print(string(r) + ""|"" + string(original[0]) + "","" + string(original[1]) + "","" + string(original[2]) + ""|"" + string(current[0]) + "","" + string(current[1]) + "","" + string(current[2]))
+}
+probe()
+");
+        Assert.Equal($"99|10,20,99|40,50,60{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_GlobalVariable_RemainsAliasedToGlobalSlot()
+    {
+        var output = RunSubmission(@"
+var value int32 = 10
+
+func probe() {
+    let ref r = value
+    r = 55
+    print(string(r) + ""|"" + string(value))
+}
+probe()
+");
+        Assert.StartsWith($"55|55{Environment.NewLine}", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LetRef_UnmanagedPointerDereference_ReportsGs0513()
+    {
+        const string Source = """
+            func probe() {
+                unsafe {
+                    var p *int32 = nil
+                    let ref r = *p
+                    print(string(r))
+                }
+            }
+            probe()
+            """;
+
+        var cell = new SessionEngine().Evaluate(Source);
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.True(cell.HasError);
+        Assert.Equal("GS0513", diagnostic.Id);
     }
 
     private static string RunSubmission(string text)

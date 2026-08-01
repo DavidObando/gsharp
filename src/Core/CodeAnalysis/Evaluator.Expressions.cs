@@ -594,6 +594,12 @@ public sealed partial class Evaluator
 
     private object EvaluateBlockExpression(BoundBlockExpression node)
     {
+        EvaluateBlockExpressionStatements(node);
+        return EvaluateExpression(node.Expression);
+    }
+
+    private void EvaluateBlockExpressionStatements(BoundBlockExpression node)
+    {
         foreach (var statement in node.Statements)
         {
             if (statement is BoundVariableDeclaration declaration)
@@ -630,8 +636,6 @@ public sealed partial class Evaluator
 
             throw new EvaluatorException($"Unexpected block-expression statement {statement.Kind}", statement);
         }
-
-        return EvaluateExpression(node.Expression);
     }
 
     /// <summary>
