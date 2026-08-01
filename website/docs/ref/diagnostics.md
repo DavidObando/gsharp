@@ -299,6 +299,14 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 | GS9998 | Error | An unexpected `NotSupportedException` or `InvalidOperationException` was raised during IL emission. The message text contains the original exception message. |
 | GS9999 | Error | An unexpected exception was caught by the evaluator. The message text contains the original exception message. |
 
+#### Interpreter compiled-only boundaries
+
+Storage-dependent unsafe constructs are compiled-only. The clean boundary
+sites for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers
+currently surface through `GS0513` with a self-contained message naming the
+construct and the required CIL emit path. Evaluator `GS9999` diagnostics still
+indicate a defect.
+
 ## Documentation diagnostics (GS0227–GS0231)
 
 | Code | Severity | Message |
