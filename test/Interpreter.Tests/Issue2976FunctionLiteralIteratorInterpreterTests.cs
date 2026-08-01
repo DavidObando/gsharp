@@ -62,6 +62,20 @@ public sealed class Issue2976FunctionLiteralIteratorInterpreterTests
             }
             """,
             "9\n");
+
+        yield return Case(
+            """
+            func values() sequence[int32] {
+                yield 7
+                yield 8
+            }
+
+            var getValues () -> sequence[int32] = values
+            for value in getValues() {
+                Console.WriteLine(value)
+            }
+            """,
+            "7\n8\n");
     }
 
     [Theory]

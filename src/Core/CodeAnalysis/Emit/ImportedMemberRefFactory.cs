@@ -279,6 +279,7 @@ internal sealed class ImportedMemberRefFactory
             // active remap (class or method) maps to the synthesized class's
             // own VAR(idx) slot.
             if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && tpSym.IsMethodTypeParameter
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
             {
                 encoder.GenericTypeParameter(smClassOrd);

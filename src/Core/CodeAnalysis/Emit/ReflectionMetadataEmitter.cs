@@ -1208,20 +1208,22 @@ internal sealed class ReflectionMetadataEmitter
 
         this.closures.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
 
-        // Generic iterator literals need their lambda-method type parameters
-        // before state-machine synthesis so the state machine mirrors them.
+        // Lower non-capturing literals once so iterator plans and emitted bodies
+        // share the same synthesized local symbols.
         foreach (var literal in lambdaLiterals)
         {
             if (literal.CapturedVariables.Length == 0
                 && !this.closures.ClosureInfos.ContainsKey(literal))
             {
+                var body = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                this.lambdaBodies[literal.Function] = body;
                 this.userTokens.TryPromoteNonCapturingGenericLambda(
                     literal,
-                    (BoundBlockStatement)Lowerer.Lower(literal.Body));
+                    body);
             }
         }
 
-        this.RetargetCapturedIteratorPlans(lambdaLiterals);
+        this.RetargetIteratorPlans(lambdaLiterals);
         this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
@@ -1230,7 +1232,7 @@ internal sealed class ReflectionMetadataEmitter
         return lambdaLiterals;
     }
 
-    private void RetargetCapturedIteratorPlans(List<BoundFunctionLiteralExpression> lambdaLiterals)
+    private void RetargetIteratorPlans(List<BoundFunctionLiteralExpression> lambdaLiterals)
     {
         if (this.stateMachines.IteratorPlans.IsDefaultOrEmpty)
         {
@@ -1240,9 +1242,10 @@ internal sealed class ReflectionMetadataEmitter
         var plans = this.stateMachines.IteratorPlans.ToBuilder();
         foreach (var literal in lambdaLiterals)
         {
-            if (!this.closures.ClosureInfos.TryGetValue(literal, out var closure))
+            var function = literal.Function;
+            if (this.closures.ClosureInfos.TryGetValue(literal, out var closure))
             {
-                continue;
+                function = closure.InvokeMethod;
             }
 
             for (var i = 0; i < plans.Count; i++)
@@ -1252,8 +1255,8 @@ internal sealed class ReflectionMetadataEmitter
                     continue;
                 }
 
-                var body = this.lambdaBodies[closure.InvokeMethod];
-                if (IteratorRewriter.TryBuildPlan(closure.InvokeMethod, body, out var plan))
+                var body = this.lambdaBodies[function];
+                if (IteratorRewriter.TryBuildPlan(function, body, out var plan))
                 {
                     plans[i] = plan;
                 }
@@ -2920,9 +2923,6 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     continue;
                 }
-
-                var loweredLambdaBody = (BoundBlockStatement)Lowerer.Lower(literal.Body);
-                this.lambdaBodies[literal.Function] = loweredLambdaBody;
 
                 hostBucket.Add(literal.Function);
             }

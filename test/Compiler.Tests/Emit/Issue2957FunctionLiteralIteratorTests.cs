@@ -69,7 +69,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
             "4\n4\n5\n");
 
         yield return Case(
-            "GenericElementType",
+            "GenericStateMachineSignatureRemap",
             """
             package Generic
             import System
@@ -83,6 +83,81 @@ public sealed class Issue2957FunctionLiteralIteratorTests
             }
             """,
             "ok\n");
+
+        yield return Case(
+            "LoweredForInEnumerator",
+            """
+            package ForIn
+            import System
+
+            let values = func() sequence[int32] {
+                for value in []int32{4, 5} {
+                    yield value
+                }
+            }
+
+            for value in values() {
+                Console.WriteLine(value)
+            }
+            """,
+            "4\n5\n");
+
+        yield return Case(
+            "LoweredForInEnumeratorWithCapture",
+            """
+            package ForInCapture
+            import System
+
+            func make(offset int32) () -> sequence[int32] {
+                return func() sequence[int32] {
+                    for value in []int32{4, 5} {
+                        yield offset + value
+                    }
+                }
+            }
+
+            for value in make(100)() {
+                Console.WriteLine(value)
+            }
+            """,
+            "104\n105\n");
+
+        yield return Case(
+            "LoweredForEllipsisCounter",
+            """
+            package ForEllipsis
+            import System
+
+            let values = func() sequence[int32] {
+                for value in 0 ... 2 {
+                    yield value
+                }
+            }
+
+            for value in values() {
+                Console.WriteLine(value)
+            }
+            """,
+            "0\n1\n");
+
+        yield return Case(
+            "GenericStateMachineElementTokenRemap",
+            """
+            package GenericToken
+            import System
+
+            func make[T any]() (T) -> sequence[T] {
+                return func(value T) sequence[T] {
+                    let copy = []T{value}
+                    yield copy[0]
+                }
+            }
+
+            for value in make[int32]()(42) {
+                Console.WriteLine(value)
+            }
+            """,
+            "42\n");
 
         yield return Case(
             "ImmediatelyInvoked",
