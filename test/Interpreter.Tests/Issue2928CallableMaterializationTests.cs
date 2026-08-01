@@ -170,19 +170,19 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
-    public void Callable_DelegateFactoryIsReusedPerType()
+    public void Callable_DelegateFactoryIsDistinctPerSite()
     {
         const string Source = """
-            let first (int32) -> int32 = (value int32) -> value + 1
-            let second (int32) -> int32 = (value int32) -> value + 2
+            let first () -> int32 = () -> 11
+            let second () -> int32 = () -> 22
             (first, second)
             """;
 
-        var pair = Assert.IsType<ValueTuple<Func<int, int>, Func<int, int>>>(Evaluate(Source));
+        var pair = Assert.IsType<ValueTuple<Func<int>, Func<int>>>(Evaluate(Source));
 
-        Assert.Equal(pair.Item1.Method, pair.Item2.Method);
-        Assert.Equal(2, pair.Item1(1));
-        Assert.Equal(3, pair.Item2(1));
+        Assert.NotEqual(pair.Item1.Method, pair.Item2.Method);
+        Assert.Equal(11, pair.Item1());
+        Assert.Equal(22, pair.Item2());
     }
 
     [Fact]

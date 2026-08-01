@@ -28,6 +28,7 @@ public sealed partial class Evaluator
 #pragma warning restore CA1001
 {
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, Func<Func<object[], object>, Delegate>> InterpreterDelegateFactories = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FunctionSymbol, ConcurrentDictionary<Type, Func<Func<object[], object>, Delegate>>> InterpreterDelegateFactoriesBySite = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Delegate, ClosureValue> InterpreterClosures = new();
 
     private object EvaluateExpression(BoundExpression node)
@@ -780,7 +781,9 @@ public sealed partial class Evaluator
         }
 
         var body = node.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(node.Body);
-        return MaterializeClosure(new ClosureValue(node.Function, body, node.FunctionType, captured));
+        return MaterializeClosure(
+            new ClosureValue(node.Function, body, node.FunctionType, captured),
+            GetLambdaMethodName(node));
     }
 
     private object EvaluateMethodGroupExpression(BoundMethodGroupExpression node)
@@ -799,7 +802,9 @@ public sealed partial class Evaluator
             captured[node.Function.ThisParameter] = EvaluateExpression(node.Receiver);
         }
 
-        return MaterializeClosure(new ClosureValue(node.Function, body, node.FunctionType, captured));
+        return MaterializeClosure(
+            new ClosureValue(node.Function, body, node.FunctionType, captured),
+            node.Function.Name);
     }
 
     private object EvaluateClrMethodGroupExpression(BoundClrMethodGroupExpression node)
@@ -847,22 +852,51 @@ public sealed partial class Evaluator
         return InvokeClosure((ClosureValue)targetValue, arguments);
     }
 
-    private object MaterializeClosure(ClosureValue closure)
+    private object MaterializeClosure(ClosureValue closure, string methodName)
     {
         if (closure.FunctionType.ClrType is not Type delegateType)
         {
             return closure;
         }
 
-        var result = CreateInterpreterDelegate(delegateType, args => InvokeMaterializedClosure(closure, args));
+        var result = CreateInterpreterDelegate(
+            delegateType,
+            closure.Function,
+            methodName,
+            args => InvokeMaterializedClosure(closure, args));
         InterpreterClosures.Add(result, closure);
         return result;
     }
+
+    private static string GetLambdaMethodName(BoundFunctionLiteralExpression node)
+    {
+        if (node.CapturedVariables.Length != 0
+            || (!node.Function.IsGeneric
+                && node.Function.LexicalEnclosingType is StructSymbol enclosingType
+                && enclosingType.TypeParameters.IsDefaultOrEmpty))
+        {
+            return "Invoke";
+        }
+
+        return node.Function.Name;
+    }
+
+    private static Delegate CreateInterpreterDelegate(
+        Type delegateType,
+        FunctionSymbol function,
+        string methodName,
+        Func<object[], object> invoke)
+        => InterpreterDelegateFactoriesBySite
+            .GetValue(function, _ => new ConcurrentDictionary<Type, Func<Func<object[], object>, Delegate>>())
+            .GetOrAdd(delegateType, type => BuildInterpreterDelegateFactory(type, methodName))(invoke);
 
     private static Delegate CreateInterpreterDelegate(Type delegateType, Func<object[], object> invoke)
         => InterpreterDelegateFactories.GetValue(delegateType, BuildInterpreterDelegateFactory)(invoke);
 
     private static Func<Func<object[], object>, Delegate> BuildInterpreterDelegateFactory(Type delegateType)
+        => BuildInterpreterDelegateFactory(delegateType, null);
+
+    private static Func<Func<object[], object>, Delegate> BuildInterpreterDelegateFactory(Type delegateType, string methodName)
     {
         var invokeMethod = delegateType.GetMethod(nameof(Action.Invoke));
         var invokeParameter = System.Linq.Expressions.Expression.Parameter(typeof(Func<object[], object>), "invoke");
@@ -878,7 +912,9 @@ public sealed partial class Evaluator
         System.Linq.Expressions.Expression body = invokeMethod.ReturnType.IsSameAs(typeof(void))
             ? System.Linq.Expressions.Expression.Block(invocation, System.Linq.Expressions.Expression.Empty())
             : System.Linq.Expressions.Expression.Convert(invocation, invokeMethod.ReturnType);
-        var inner = System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters);
+        var inner = methodName == null
+            ? System.Linq.Expressions.Expression.Lambda(delegateType, body, parameters)
+            : System.Linq.Expressions.Expression.Lambda(delegateType, body, methodName, parameters);
         return System.Linq.Expressions.Expression.Lambda<Func<Func<object[], object>, Delegate>>(
             inner,
             invokeParameter).Compile();
