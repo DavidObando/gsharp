@@ -10,21 +10,14 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Interpreter coverage for ADR-0095 / issue #761 — P/Invoke
-/// function-pointer marshalling. The interpreter has no managed-IL emit
-/// pipeline, so it cannot actually transition to native code; instead it
-/// walks the bound tree and runs P/Invoke declarations through the same
-/// empty-body path that the binder reserves for <c>@DllImport</c> /
-/// <c>@LibraryImport</c>. The crucial guarantees in the interpreter are
-/// (a) the new function-pointer / delegate-callback shapes parse, bind,
-/// and submit without crashing the REPL, and (b) the binder diagnostics
-/// (GS0353–GS0356) surface through the REPL when the user mis-uses the
-/// shape. End-to-end native callbacks live in
-/// <c>Issue761PInvokeFunctionPointerEmitTests</c>.
+/// function-pointer marshalling. Valid P/Invoke declarations report the
+/// intentional GS0514 interpreter boundary. Binder diagnostics
+/// (GS0353–GS0356) still surface first for invalid declarations.
 /// </summary>
 public class Issue761PInvokeFunctionPointerInterpreterTests
 {
     [Fact]
-    public void DllImport_RawFunctionPointer_Parameter_DoesNotCrashInterpreter()
+    public void DllImport_RawFunctionPointer_Parameter_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -36,15 +29,12 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("GS0353", output);
-        Assert.DoesNotContain("GS0354", output);
-        Assert.DoesNotContain("GS0355", output);
-        Assert.DoesNotContain("GS0356", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void DllImport_DelegateWithUnmanagedFunctionPointer_DoesNotCrashInterpreter()
+    public void DllImport_DelegateWithUnmanagedFunctionPointer_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -59,8 +49,8 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("GS0353", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
@@ -101,7 +91,7 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
     }
 
     [Fact]
-    public void DllImport_FunctionPointer_ReturnType_DoesNotCrashInterpreter()
+    public void DllImport_FunctionPointer_ReturnType_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -113,7 +103,8 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]

@@ -4,7 +4,7 @@
 - **Date**: 2026-06-12
 - **Phase**: Native interop bootstrap; unblocks ADR-0047 §6 (`[DllImport]` v1.0 deferral)
 - **Supersedes (partially)**: ADR-0047 §6 deferral of `[DllImport]` (GS0211 blanket rejection)
-- **Related**: ADR-0047 (Kotlin-style annotations), ADR-0027 (bespoke `System.Reflection.Metadata` emitter), issue #727, parent #706.
+- **Related**: ADR-0047 (Kotlin-style annotations), ADR-0027 (bespoke `System.Reflection.Metadata` emitter), ADR-0152 (interpreter native-call boundary), issue #727, parent #706.
 
 ## Context
 
@@ -13,6 +13,12 @@ G# until now rejected `@DllImport` outright with diagnostic GS0211 ("Attribute '
 Issue #727 (under parent #706) requires that G# emit real CLR P/Invoke metadata so unmanaged functions can be called directly from G# source, matching C#'s `[DllImport]` semantics. The implementation must produce a `MethodAttributes.PinvokeImpl` method with an `ImplMap` row pointing at a `ModuleRef`, marshal the supported primitives correctly, and verify clean under `ilverify`.
 
 ## Decision
+
+### Interpreter boundary
+
+This decision specifies emitted CLR behavior. Per ADR-0152, `gsi` reports
+GS0514 (Error) at a P/Invoke declaration and does not load a native library.
+Programs that require native calls must use `gsc`.
 
 ### 1. Syntax — `@DllImport("libname") func Name(...) ReturnType;`
 

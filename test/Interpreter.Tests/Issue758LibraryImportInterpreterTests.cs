@@ -11,28 +11,15 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// ADR-0092 / issue #758: interpreter coverage for the
 /// <c>@LibraryImport</c> source-generator-shaped P/Invoke attribute.
-/// The G# interpreter has no managed-IL emit pipeline, so it cannot
-/// actually transition to native code; instead, it walks the bound
-/// tree and runs <c>@LibraryImport</c> functions through the same
-/// empty-body path that the binder reserves for any P/Invoke. The
-/// program must still parse, bind, and run without diagnostics or
-/// crashes. Once the function returns its default value, the rest of
-/// the program continues normally. Programs that need to actually
-/// invoke native code must use the compiler (<c>gsc</c>) and the
-/// emitted CLR P/Invoke metadata; that path is covered end-to-end by
-/// <c>Issue758LibraryImportEmitTests</c>.
+/// The interpreter has no native-call transition, so valid declarations
+/// report the intentional GS0514 boundary and direct users to <c>gsc</c>.
+/// Binder diagnostics for invalid declarations still take precedence.
 /// </summary>
 public class Issue758LibraryImportInterpreterTests
 {
     [Fact]
-    public void LibraryImport_WithoutStringArgs_DefaultReturn_DoesNotCrashInterpreter()
+    public void LibraryImport_WithoutStringArgs_ReportsGS0514()
     {
-        // The interpreter has no native-call infrastructure, so the
-        // @LibraryImport function is treated as if it had an empty body
-        // (the same path the binder reserves for @DllImport in the
-        // interpreter). The function returns the default value for its
-        // return type. The crucial guarantee is that the bound program
-        // is well-formed and the interpreter does not throw.
         var source = """
             import System.Runtime.InteropServices
 
@@ -44,12 +31,12 @@ public class Issue758LibraryImportInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void LibraryImport_WithStringArg_DefaultReturn_DoesNotCrashInterpreter()
+    public void LibraryImport_WithStringArg_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -62,8 +49,8 @@ public class Issue758LibraryImportInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]

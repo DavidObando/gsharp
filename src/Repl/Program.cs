@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using GSharp.Core.IO;
 using GSharp.Repl.Engine;
 
 namespace GSharp.Repl;
@@ -54,10 +55,10 @@ public static class Program
         }
 
         var engine = new SessionEngine();
-        var cell = engine.Evaluate(File.ReadAllText(arg));
-        foreach (var d in cell.Diagnostics)
+        var cell = engine.Evaluate(File.ReadAllText(arg), arg);
+        if (cell.Diagnostics.Length > 0)
         {
-            Console.Error.WriteLine($"{d.Id}: {d.Message}");
+            Console.Error.WriteDiagnostics(cell.Diagnostics);
         }
 
         if (!cell.HasError && cell.Value is not null)
