@@ -71,6 +71,7 @@ internal sealed class LambdaBinder
     private readonly Func<BlockStatementSyntax, BoundStatement> bindBlockStatement;
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
     private readonly Func<TypeClauseSyntax, bool, TypeSymbol> bindReturnTypeClause;
+    private readonly Func<TypeSymbol, bool> isIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<TypeSymbol, Type> resolveClrTypeForGenericArg;
     private readonly Func<FunctionSymbol> getCurrentFunction;
@@ -101,6 +102,9 @@ internal sealed class LambdaBinder
     /// declared return-type clause, with the <c>isAsync</c> flag so
     /// the still-on-Binder helper can apply the async-specific
     /// validation it already performs.</param>
+    /// <param name="isIteratorReturnType">Callback that returns
+    /// <c>true</c> when the supplied return type is an iterator shape
+    /// and therefore does not require an ordinary value return.</param>
     /// <param name="isAsyncIteratorReturnType">Callback that returns
     /// <c>true</c> when the supplied return type is an async-iterator
     /// shape (ADR-0041) and therefore does NOT participate in the
@@ -143,6 +147,7 @@ internal sealed class LambdaBinder
         Func<BlockStatementSyntax, BoundStatement> bindBlockStatement,
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
         Func<TypeClauseSyntax, bool, TypeSymbol> bindReturnTypeClause,
+        Func<TypeSymbol, bool> isIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
         Func<FunctionSymbol> getCurrentFunction,
@@ -156,6 +161,7 @@ internal sealed class LambdaBinder
         this.bindBlockStatement = bindBlockStatement ?? throw new ArgumentNullException(nameof(bindBlockStatement));
         this.bindTypeClause = bindTypeClause ?? throw new ArgumentNullException(nameof(bindTypeClause));
         this.bindReturnTypeClause = bindReturnTypeClause ?? throw new ArgumentNullException(nameof(bindReturnTypeClause));
+        this.isIteratorReturnType = isIteratorReturnType ?? throw new ArgumentNullException(nameof(isIteratorReturnType));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
         this.resolveClrTypeForGenericArg = resolveClrTypeForGenericArg ?? throw new ArgumentNullException(nameof(resolveClrTypeForGenericArg));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
@@ -385,6 +391,7 @@ internal sealed class LambdaBinder
         // existing statement-body handling (no implicit return) so the #889
         // Action-style void-delegate path is preserved.
         body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, returnType);
+        CheckAllPathsReturn((BoundBlockStatement)body, returnType, syntax.Body.Location);
 
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
 
@@ -878,6 +885,7 @@ internal sealed class LambdaBinder
         }
 
         var bodyBlock = new BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable());
+        CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location);
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
         var captured = CollectCapturedVariables(bodyBlock, synthetic.Parameters);
 
@@ -1289,6 +1297,17 @@ internal sealed class LambdaBinder
         }
 
         return element;
+    }
+
+    private void CheckAllPathsReturn(BoundBlockStatement body, TypeSymbol returnType, TextLocation location)
+    {
+        if (returnType != TypeSymbol.Void
+            && returnType != TypeSymbol.Error
+            && !isIteratorReturnType(returnType)
+            && !ControlFlowGraph.AllPathsReturn(Lowerer.Lower(body)))
+        {
+            Diagnostics.ReportAllPathsMustReturn(location);
+        }
     }
 
     /// <summary>Binds and attaches user annotations on a lambda parameter.</summary>
