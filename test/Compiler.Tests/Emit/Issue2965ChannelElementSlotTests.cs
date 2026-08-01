@@ -101,6 +101,12 @@ public class Issue2965ChannelElementSlotTests
                 case let value = <-selectReceive { Console.WriteLine(value.Value) }
             }
 
+            let discardReceive = make(chan Pair, 1)
+            discardReceive <- Pair(55)
+            select {
+                case <-discardReceive { Console.WriteLine(55) }
+            }
+
             let selectSend = make(chan Pair, 1)
             select {
                 case selectSend <- Pair(43) {
@@ -176,7 +182,7 @@ public class Issue2965ChannelElementSlotTests
         AssertRuns(
             Source,
             nameof(ChannelElementMatrix_LoadsVerifiesAndRuns),
-            "41\n42\n43\n44\n45\n46\n47\n54\n48\n49\n2020\n0\n0\n51\n52\n53\n50\n");
+            "41\n42\n55\n43\n44\n45\n46\n47\n54\n48\n49\n2020\n0\n0\n51\n52\n53\n50\n");
     }
 
     private static void AssertRuns(string source, string name, string expected)
