@@ -142,56 +142,53 @@ public class DiagnosticIdUniquenessTests
     }
 
     [Fact]
-    public void Every_Descriptor_Is_Documented_With_Matching_Severity()
+    public void Every_Diagnostic_Is_Documented_In_Both_References_With_Matching_Severity()
     {
-        var documentation = File.ReadAllText(Path.Combine(FindRepoRoot(), "docs", "diagnostics.md"));
-        var documentedSeverityGroups = Regex.Matches(
-                documentation,
-                @"^\|\s*(GS\d{4})\s*\|\s*(?:\*\*)?(Error|Warning|Info)",
-                RegexOptions.Multiline)
-            .Cast<Match>()
-            .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal)
-            .ToArray();
-        var conflictingSeverities = documentedSeverityGroups
-            .Select(group => (
-                Id: group.Key,
-                Severities: group.Select(match => match.Groups[2].Value).Distinct(StringComparer.Ordinal).ToArray()))
-            .Where(item => item.Severities.Length > 1)
-            .Select(item => $"{item.Id}: {string.Join(", ", item.Severities)}")
-            .ToArray();
-
-        Assert.True(
-            conflictingSeverities.Length == 0,
-            "Diagnostics documented with conflicting severities:\n" +
-            string.Join("\n", conflictingSeverities));
-
-        var documentedSeverities = documentedSeverityGroups
+        var expectedSeverities = GetDescriptorFields()
+            .Select(field => (CoreDiagnosticDescriptor)field.GetValue(null))
             .ToDictionary(
-                group => group.Key,
-                group => group.First().Groups[2].Value,
+                descriptor => descriptor.Id,
+                descriptor => descriptor.Severity.ToString(),
                 StringComparer.Ordinal);
 
-        var descriptors = GetDescriptorFields()
-            .Select(field => (
-                Field: field,
-                Descriptor: (CoreDiagnosticDescriptor)field.GetValue(null)))
-            .ToArray();
-        var missingDescriptors = descriptors
-            .Where(item => !documentedSeverities.ContainsKey(item.Descriptor.Id))
-            .OrderBy(item => item.Descriptor.Id, StringComparer.Ordinal)
-            .Select(item => $"{item.Descriptor.Id} (DiagnosticDescriptors.{item.Field.Name})")
-            .ToArray();
-
-        Assert.True(
-            missingDescriptors.Length == 0,
-            "Undocumented diagnostic descriptors:\n" + string.Join("\n", missingDescriptors));
-
-        foreach (var item in descriptors)
+        // These diagnostics intentionally live outside DiagnosticDescriptors.
+        // Add an entry only for a directly emitted, retired, or reserved ID.
+        var documentedNonDescriptorSeverities = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            Assert.Equal(
-                item.Descriptor.Severity.ToString(),
-                documentedSeverities[item.Descriptor.Id]);
+            // Emitted directly by AsyncEmitPrecheck.
+            ["GS0190"] = "Error",
+
+            // Retired after generic explicit constructors became supported.
+            ["GS0217"] = "Retired",
+
+            // Retired when non-loop labels became valid goto targets.
+            ["GS0294"] = "Retired",
+
+            // Reserved after auto-properties became valid in data aggregates.
+            ["GS0419"] = "Reserved",
+
+            // Emitted directly by the compiler's reference-closure check.
+            ["GS9100"] = "Warning",
+
+            // Emitted directly for unexpected emit failures.
+            ["GS9998"] = "Error",
+
+            // Emitted directly for fatal compiler and evaluator failures.
+            ["GS9999"] = "Error",
+        };
+
+        foreach (var item in documentedNonDescriptorSeverities)
+        {
+            expectedSeverities.Add(item.Key, item.Value);
         }
+
+        var repoRoot = FindRepoRoot();
+        AssertDocumentationMatches(
+            Path.Combine(repoRoot, "docs", "diagnostics.md"),
+            expectedSeverities);
+        AssertDocumentationMatches(
+            Path.Combine(repoRoot, "website", "docs", "ref", "diagnostics.md"),
+            expectedSeverities);
     }
 
     private static FieldInfo[] GetDescriptorFields() =>
@@ -199,6 +196,72 @@ public class DiagnosticIdUniquenessTests
             .GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(field => field.FieldType == typeof(CoreDiagnosticDescriptor))
             .ToArray();
+
+    private static void AssertDocumentationMatches(
+        string path,
+        IReadOnlyDictionary<string, string> expectedSeverities)
+    {
+        var documentedSeverityGroups = Regex.Matches(
+                File.ReadAllText(path),
+                @"^\|\s*(GS\d{4})\s*\|\s*([^|]+?)\s*\|",
+                RegexOptions.Multiline)
+            .Cast<Match>()
+            .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal)
+            .ToArray();
+        var conflictingSeverities = documentedSeverityGroups
+            .Select(group => (
+                Id: group.Key,
+                Severities: group
+                    .Select(NormalizeDocumentedSeverity)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()))
+            .Where(item => item.Severities.Length > 1)
+            .Select(item => $"{item.Id}: {string.Join(", ", item.Severities)}")
+            .ToArray();
+
+        Assert.True(
+            conflictingSeverities.Length == 0,
+            $"{path} documents diagnostics with conflicting severities:\n" +
+            string.Join("\n", conflictingSeverities));
+
+        var documentedSeverities = documentedSeverityGroups
+            .ToDictionary(
+                group => group.Key,
+                group => NormalizeDocumentedSeverity(group.First()),
+                StringComparer.Ordinal);
+        var missing = expectedSeverities.Keys
+            .Except(documentedSeverities.Keys, StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        var unexpected = documentedSeverities.Keys
+            .Except(expectedSeverities.Keys, StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        var mismatched = expectedSeverities.Keys
+            .Intersect(documentedSeverities.Keys, StringComparer.Ordinal)
+            .Where(id => expectedSeverities[id] != documentedSeverities[id])
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Select(id => $"{id}: expected {expectedSeverities[id]}, found {documentedSeverities[id]}")
+            .ToArray();
+
+        Assert.True(
+            missing.Length == 0 && unexpected.Length == 0 && mismatched.Length == 0,
+            $"{path} is out of sync with compiler diagnostics:\n" +
+            $"Missing: {string.Join(", ", missing)}\n" +
+            $"Unexpected: {string.Join(", ", unexpected)}\n" +
+            $"Severity mismatches:\n{string.Join("\n", mismatched)}");
+    }
+
+    private static string NormalizeDocumentedSeverity(Match match)
+    {
+        var severity = match.Groups[2].Value.Trim().TrimStart('*', '_');
+        var severityMatch = Regex.Match(
+            severity,
+            @"^(Error|Warning|Info|Retired|Reserved)\b");
+        return severityMatch.Success
+            ? severityMatch.Groups[1].Value
+            : severity.Trim('*', '_');
+    }
 
     private static void RecordLiteralCallSite(
         ArgumentListSyntax argumentList,

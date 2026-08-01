@@ -910,6 +910,7 @@ nesting depth.
 | GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call. |
 | GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters. |
 | GS0293 | Error | A labeled `break` or `continue` names no enclosing loop. |
+| GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets (ADR-0139); this diagnostic is no longer emitted. |
 | GS0295 | Warning | A loop label shadows an enclosing loop label of the same name. |
 | GS0296 | Error | The right-hand side of an `if let` or `guard let` binding is not nullable. |
 | GS0297 | Error | A `guard let` else block can fall through instead of unconditionally exiting with `return`, `throw`, `break`, or `continue`. |
