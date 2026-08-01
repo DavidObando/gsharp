@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
@@ -1624,6 +1625,8 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            var interfaceName = SymbolDisplay.ToTypeDisplayString(ifaceSym);
+
             // Issue #949: a CLR generic interface closed over a user-defined G#
             // type (e.g. the self-referential `class Shape : IEquatable[Shape]`)
             // is represented with a type-erased ClrType (`IEquatable<object>`)
@@ -1632,7 +1635,12 @@ internal sealed partial class DeclarationBinder
             // contract demands `Equals(Shape)` rather than `Equals(object)`.
             if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var symbolicArgs))
             {
-                VerifySymbolicClrGenericInterface(syntax, structSymbol, clrIface, openDefinition, symbolicArgs);
+                VerifySymbolicClrGenericInterface(
+                    syntax,
+                    structSymbol,
+                    openDefinition,
+                    symbolicArgs,
+                    interfaceName);
                 continue;
             }
 
@@ -1662,7 +1670,7 @@ internal sealed partial class DeclarationBinder
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    clrIface.FullName ?? clrIface.Name,
+                    interfaceName,
                     FormatClrMethodSignature(clrMethod));
             }
 
@@ -1706,7 +1714,7 @@ internal sealed partial class DeclarationBinder
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
                         structSymbol.Name,
-                        clrIface.FullName ?? clrIface.Name,
+                        interfaceName,
                         clrProp.Name);
                     continue;
                 }
@@ -1716,7 +1724,7 @@ internal sealed partial class DeclarationBinder
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
                         structSymbol.Name,
-                        clrIface.FullName ?? clrIface.Name,
+                        interfaceName,
                         clrProp.Name + " (getter)");
                 }
 
@@ -1725,7 +1733,7 @@ internal sealed partial class DeclarationBinder
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
                         structSymbol.Name,
-                        clrIface.FullName ?? clrIface.Name,
+                        interfaceName,
                         clrProp.Name + " (setter)");
                 }
                 else if (requiresSetter)
@@ -1733,7 +1741,7 @@ internal sealed partial class DeclarationBinder
                     ReportClrInterfacePropertySetterKindMismatchIfNeeded(
                         syntax,
                         structSymbol,
-                        clrIface.FullName ?? clrIface.Name,
+                        interfaceName,
                         clrProp.Name,
                         clrProp.SetMethod,
                         implProp);
@@ -1797,10 +1805,13 @@ internal sealed partial class DeclarationBinder
                 }
 
                 reported.Add(slotKey);
+                var interfaceName = declaringType == null
+                    ? "interface"
+                    : SymbolDisplay.ToTypeDisplayString(ImportedTypeSymbol.Get(declaringType));
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    declaringType?.FullName ?? declaringType?.Name ?? "interface",
+                    interfaceName,
                     MemberLookup.FormatClrSlotSignature(slot.Method));
             }
         }
@@ -1846,9 +1857,9 @@ internal sealed partial class DeclarationBinder
     private void VerifySymbolicClrGenericInterface(
         StructDeclarationSyntax syntax,
         StructSymbol structSymbol,
-        System.Type clrIface,
         System.Type openDefinition,
-        ImmutableArray<TypeSymbol> symbolicArgs)
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        string interfaceName)
     {
         foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
         {
@@ -1865,7 +1876,7 @@ internal sealed partial class DeclarationBinder
             Diagnostics.ReportInterfaceMethodNotImplemented(
                 syntax.Identifier.Location,
                 structSymbol.Name,
-                clrIface.FullName ?? clrIface.Name,
+                interfaceName,
                 FormatClrMethodSignature(openMethod));
         }
 
@@ -1877,7 +1888,7 @@ internal sealed partial class DeclarationBinder
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    clrIface.FullName ?? clrIface.Name,
+                    interfaceName,
                     openProp.Name);
                 continue;
             }
@@ -1887,7 +1898,7 @@ internal sealed partial class DeclarationBinder
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    clrIface.FullName ?? clrIface.Name,
+                    interfaceName,
                     openProp.Name + " (getter)");
             }
 
@@ -1896,7 +1907,7 @@ internal sealed partial class DeclarationBinder
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol.Name,
-                    clrIface.FullName ?? clrIface.Name,
+                    interfaceName,
                     openProp.Name + " (setter)");
             }
             else if (openProp.SetMethod != null)
@@ -1904,7 +1915,7 @@ internal sealed partial class DeclarationBinder
                 ReportClrInterfacePropertySetterKindMismatchIfNeeded(
                     syntax,
                     structSymbol,
-                    clrIface.FullName ?? clrIface.Name,
+                    interfaceName,
                     openProp.Name,
                     openProp.SetMethod,
                     implProp);
