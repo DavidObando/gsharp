@@ -1073,10 +1073,12 @@ internal sealed partial class ExpressionBinder
                 var literal = lambdas.BindLambdaExpression(
                     ctorLambdaSyntax,
                     symbolicTarget.FunctionType);
-                boundArguments.Add(conversions.BindConversion(
-                    syntax.Arguments[i].Location,
-                    literal,
-                    symbolicTarget.DelegateType));
+                boundArguments.Add(ShouldConvertToNominalDelegate(symbolicTarget.DelegateType)
+                    ? conversions.BindConversion(
+                        syntax.Arguments[i].Location,
+                        literal,
+                        symbolicTarget.DelegateType)
+                    : literal);
                 symbolicCtorDelegateArgs.Add(i);
                 continue;
             }
@@ -1526,7 +1528,7 @@ internal sealed partial class ExpressionBinder
             {
                 target = (mappedDelegate, candidate);
             }
-            else if (!Equals(target.DelegateType, mappedDelegate)
+            else if (!SameDelegateIdentity(target.DelegateType, mappedDelegate)
                 || (!ReferenceEquals(target.FunctionType, candidate)
                     && !target.FunctionType.Equals(candidate)))
             {

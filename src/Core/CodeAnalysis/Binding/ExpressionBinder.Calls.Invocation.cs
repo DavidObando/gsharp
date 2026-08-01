@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -814,6 +815,93 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
+    private static bool IsCanonicalFunctionDelegate(TypeSymbol type)
+    {
+        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
+        {
+            type = delegateType;
+        }
+
+        if (type is ImportedTypeSymbol imported)
+        {
+            var definition = imported.OpenDefinition ?? imported.ClrType;
+            if (definition != null
+                && AssemblyName.ReferenceMatchesDefinition(
+                    definition.Assembly.GetName(),
+                    typeof(Action).Assembly.GetName()))
+            {
+                var coreLibrary = definition.Assembly;
+                var arity = definition.IsGenericTypeDefinition
+                    ? definition.GetGenericArguments().Length
+                    : 0;
+                if (definition == coreLibrary.GetType("System.Action")
+                    || (arity > 0
+                        && (definition == coreLibrary.GetType($"System.Action`{arity}")
+                            || definition == coreLibrary.GetType($"System.Func`{arity}"))))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ShouldConvertToNominalDelegate(TypeSymbol type)
+    {
+        if (IsCanonicalFunctionDelegate(type))
+        {
+            return false;
+        }
+
+        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
+        {
+            type = delegateType;
+        }
+
+        return !TypeSymbol.ContainsTypeParameter(type)
+            && type?.ClrType?.ContainsGenericParameters != true;
+    }
+
+    private static bool SameDelegateIdentity(TypeSymbol left, TypeSymbol right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is not ImportedTypeSymbol leftImported
+            || right is not ImportedTypeSymbol rightImported)
+        {
+            return Equals(left, right);
+        }
+
+        var leftDefinition = leftImported.OpenDefinition ?? leftImported.ClrType;
+        var rightDefinition = rightImported.OpenDefinition ?? rightImported.ClrType;
+        if (!TypeIdentityComparer.Instance.Equals(leftDefinition, rightDefinition)
+            || leftImported.TypeArguments.Length != rightImported.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        if (IsCanonicalFunctionDelegate(left) && IsCanonicalFunctionDelegate(right))
+        {
+            return true;
+        }
+
+        for (var i = 0; i < leftImported.TypeArguments.Length; i++)
+        {
+            if (!SameDelegateIdentity(
+                    leftImported.TypeArguments[i],
+                    rightImported.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Issue #1512 / #2365: builds a symbolic <see cref="FunctionTypeSymbol"/> for
     /// a lambda argument bound to a CLR/imported method whose delegate (or
@@ -1033,10 +1121,12 @@ internal sealed partial class ExpressionBinder
                             lambdaSyntax,
                             target.FunctionType,
                             inferReturnTypeFromBody: !exactReturnIndices.Contains(idx));
-                        boundArgs[idx] = conversions.BindConversion(
-                            ce.Arguments[idx].Location,
-                            literal,
-                            target.DelegateType);
+                        boundArgs[idx] = ShouldConvertToNominalDelegate(target.DelegateType)
+                            ? conversions.BindConversion(
+                                ce.Arguments[idx].Location,
+                                literal,
+                                target.DelegateType)
+                            : literal;
                     }
                 }
 
@@ -1705,7 +1795,7 @@ internal sealed partial class ExpressionBinder
         foreach (var kv in a)
         {
             if (!b.TryGetValue(kv.Key, out var other)
-                || !Equals(kv.Value.DelegateType, other.DelegateType)
+                || !SameDelegateIdentity(kv.Value.DelegateType, other.DelegateType)
                 || other.ParameterTypes.Length != kv.Value.ParameterTypes.Length)
             {
                 return false;
