@@ -1205,13 +1205,67 @@ internal sealed class ReflectionMetadataEmitter
         var hostPackageGuess = this.emitCtx.Program.EntryPoint?.Package
             ?? this.emitCtx.Program.EntryPointPackage
             ?? (this.emitCtx.Program.Packages.IsDefaultOrEmpty ? null : this.emitCtx.Program.Packages[0]);
+
         this.closures.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+
+        // Lower non-capturing literals once so iterator plans and emitted bodies
+        // share the same synthesized local symbols.
+        foreach (var literal in lambdaLiterals)
+        {
+            if (literal.CapturedVariables.Length == 0
+                && !this.closures.ClosureInfos.ContainsKey(literal))
+            {
+                var body = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                this.lambdaBodies[literal.Function] = body;
+                this.userTokens.TryPromoteNonCapturingGenericLambda(
+                    literal,
+                    body);
+            }
+        }
+
+        this.RetargetIteratorPlans(lambdaLiterals);
         this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess);
         this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
         this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
 
         return lambdaLiterals;
+    }
+
+    private void RetargetIteratorPlans(List<BoundFunctionLiteralExpression> lambdaLiterals)
+    {
+        if (this.stateMachines.IteratorPlans.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var plans = this.stateMachines.IteratorPlans.ToBuilder();
+        foreach (var literal in lambdaLiterals)
+        {
+            var function = literal.Function;
+            if (this.closures.ClosureInfos.TryGetValue(literal, out var closure))
+            {
+                function = closure.InvokeMethod;
+            }
+
+            for (var i = 0; i < plans.Count; i++)
+            {
+                if (!ReferenceEquals(plans[i].Function, literal.Function))
+                {
+                    continue;
+                }
+
+                var body = this.lambdaBodies[function];
+                if (IteratorRewriter.TryBuildPlan(function, body, out var plan))
+                {
+                    plans[i] = plan;
+                }
+
+                break;
+            }
+        }
+
+        this.stateMachines.IteratorPlans = plans.ToImmutable();
     }
 
     private void RegisterGeneratedGenericRemaps()
@@ -1224,6 +1278,17 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var kvp in this.stateMachines.IteratorStateMachineInfos)
         {
             var remap = kvp.Value.BuildRemap();
+            if (this.remaps.TryGetLambdaMethodRemap(kvp.Value.Plan.Function, out var lambdaRemap))
+            {
+                remap ??= new Dictionary<TypeParameterSymbol, int>();
+                var offset = kvp.Value.SourceTypeParameters.Length
+                    - kvp.Value.Plan.Function.TypeParameters.Length;
+                foreach (var pair in lambdaRemap)
+                {
+                    remap[pair.Key] = offset + pair.Value;
+                }
+            }
+
             if (remap != null)
             {
                 this.remaps.RegisterClassRemap(kvp.Key, remap);
@@ -2858,19 +2923,6 @@ internal sealed class ReflectionMetadataEmitter
                 {
                     continue;
                 }
-
-                var loweredLambdaBody = (BoundBlockStatement)Lowerer.Lower(literal.Body);
-                this.lambdaBodies[literal.Function] = loweredLambdaBody;
-
-                // Issue #2118: a non-capturing lambda hosted as a top-level
-                // <Program> static method must be promoted to a GENERIC method
-                // declaring its own type parameters (cloned, with constraints,
-                // from the enclosing type parameters its signature/body
-                // references) — otherwise its body's `!!0`/`!0` references a
-                // type parameter the method never declares, producing
-                // unverifiable IL (DelegateCtor at the delegate site and
-                // StackUnexpected on any `constrained.` call in the body).
-                this.userTokens.TryPromoteNonCapturingGenericLambda(literal, loweredLambdaBody);
 
                 hostBucket.Add(literal.Function);
             }

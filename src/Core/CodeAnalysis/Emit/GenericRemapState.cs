@@ -233,6 +233,11 @@ internal sealed class GenericRemapState
         this.lambdaMethodTypeParamRemapsByFunction[function] = remap;
     }
 
+    internal bool TryGetLambdaMethodRemap(
+        FunctionSymbol function,
+        out Dictionary<TypeParameterSymbol, int> remap)
+        => this.lambdaMethodTypeParamRemapsByFunction.TryGetValue(function, out remap);
+
     internal readonly struct SmRemapScope : IDisposable
     {
         private readonly GenericRemapState owner;

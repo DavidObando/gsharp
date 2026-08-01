@@ -139,6 +139,83 @@ public class IteratorRewriterTests
     }
 
     [Fact]
+    public void Rewrite_FunctionLiteralYield_CreatesIteratorPlan()
+    {
+        var sequenceType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
+        var literalFunction = new FunctionSymbol(
+            "literal",
+            ImmutableArray<ParameterSymbol>.Empty,
+            sequenceType,
+            package: Package);
+        var functionType = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, sequenceType);
+        var yield = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
+        var literal = new BoundFunctionLiteralExpression(
+            null,
+            literalFunction,
+            functionType,
+            Block(yield),
+            ImmutableArray<VariableSymbol>.Empty);
+        var variable = new LocalVariableSymbol("values", isReadOnly: true, functionType);
+        var rootFunction = new FunctionSymbol(
+            "root",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            package: Package);
+
+        var result = IteratorRewriter.Rewrite(MakeProgram(
+            rootFunction,
+            Block(new BoundVariableDeclaration(null, variable, literal))));
+
+        var plan = Assert.Single(result.Plans);
+        Assert.Same(literalFunction, plan.Function);
+        Assert.Equal(1, plan.YieldStates[yield]);
+    }
+
+    [Fact]
+    public void Rewrite_NestedFunctionLiteralYield_CreatesDeepIteratorPlan()
+    {
+        var sequenceType = SequenceTypeSymbol.Get(TypeSymbol.Int32);
+        var innerFunction = new FunctionSymbol(
+            "inner",
+            ImmutableArray<ParameterSymbol>.Empty,
+            sequenceType,
+            package: Package);
+        var innerType = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, sequenceType);
+        var yield = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));
+        var innerLiteral = new BoundFunctionLiteralExpression(
+            null,
+            innerFunction,
+            innerType,
+            Block(yield),
+            ImmutableArray<VariableSymbol>.Empty);
+
+        var outerFunction = new FunctionSymbol(
+            "outer",
+            ImmutableArray<ParameterSymbol>.Empty,
+            innerType,
+            package: Package);
+        var outerType = FunctionTypeSymbol.Get(ImmutableArray<TypeSymbol>.Empty, innerType);
+        var outerLiteral = new BoundFunctionLiteralExpression(
+            null,
+            outerFunction,
+            outerType,
+            Block(new BoundReturnStatement(null, innerLiteral)),
+            ImmutableArray<VariableSymbol>.Empty);
+        var variable = new LocalVariableSymbol("factory", isReadOnly: true, outerType);
+        var rootFunction = new FunctionSymbol(
+            "root",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            package: Package);
+
+        var result = IteratorRewriter.Rewrite(MakeProgram(
+            rootFunction,
+            Block(new BoundVariableDeclaration(null, variable, outerLiteral))));
+
+        Assert.Same(innerFunction, Assert.Single(result.Plans).Function);
+    }
+
+    [Fact]
     public void Detection_TraversesBranchesAndTryFinally_ButNotNestedFunctions()
     {
         var yield = new BoundYieldStatement(null, new BoundLiteralExpression(null, 1));

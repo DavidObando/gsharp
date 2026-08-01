@@ -36,34 +36,47 @@ public static class IteratorRewriter
         }
 
         var plans = ImmutableArray.CreateBuilder<IteratorStateMachinePlan>();
+        var nestedCollector = new NestedIteratorCollector(plans);
 
         foreach (var pair in program.Functions.OrderBy(p => p.Key.Name, StringComparer.Ordinal))
         {
             var function = pair.Key;
             var body = pair.Value;
 
-            if (!IteratorDetection.ContainsYield(body))
-            {
-                continue;
-            }
-
-            // Skip async iterators — they go through the async iterator rewriter path.
-            if (AsyncIteratorDetection.IsAsyncIteratorFunction(function, body))
-            {
-                continue;
-            }
-
-            var elementType = GetIteratorElementType(function.Type);
-            if (elementType == null)
-            {
-                continue;
-            }
-
-            var plan = BuildPlan(function, body, elementType);
-            plans.Add(plan);
+            AddPlan(function, body, plans);
+            nestedCollector.RewriteStatement(body);
         }
 
         return new IteratorRewriteResult(program, plans.ToImmutable());
+    }
+
+    internal static bool TryBuildPlan(
+        FunctionSymbol function,
+        BoundBlockStatement body,
+        out IteratorStateMachinePlan plan)
+    {
+        var elementType = GetIteratorElementType(function.Type);
+        if (!IteratorDetection.ContainsYield(body)
+            || AsyncIteratorDetection.IsAsyncIteratorFunction(function, body)
+            || elementType == null)
+        {
+            plan = null;
+            return false;
+        }
+
+        plan = BuildPlan(function, body, elementType);
+        return true;
+    }
+
+    private static void AddPlan(
+        FunctionSymbol function,
+        BoundBlockStatement body,
+        ImmutableArray<IteratorStateMachinePlan>.Builder plans)
+    {
+        if (TryBuildPlan(function, body, out var plan))
+        {
+            plans.Add(plan);
+        }
     }
 
     private static TypeSymbol GetIteratorElementType(TypeSymbol type)
@@ -138,6 +151,22 @@ public static class IteratorRewriter
         var collector = new LocalCollector();
         collector.Visit(body);
         return collector.Locals.ToImmutableArray();
+    }
+
+    private sealed class NestedIteratorCollector : NestedFunctionBodyRewriter
+    {
+        private readonly ImmutableArray<IteratorStateMachinePlan>.Builder plans;
+
+        public NestedIteratorCollector(ImmutableArray<IteratorStateMachinePlan>.Builder plans)
+        {
+            this.plans = plans;
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            AddPlan(node.Function, node.Body, this.plans);
+            return base.RewriteFunctionLiteralExpression(node);
+        }
     }
 
     private sealed class YieldStateCollector : BoundTreeWalker

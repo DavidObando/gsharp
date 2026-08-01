@@ -878,12 +878,7 @@ public sealed partial class Evaluator
     }
 
     private object InvokeMaterializedClosure(ClosureValue closure, object[] arguments)
-    {
-        var result = InvokeClosure(closure, arguments);
-        return closure.Function.IsAsync
-            ? WrapAsyncResult(closure.Function.Type, result)
-            : result;
-    }
+        => InvokeClosure(closure, arguments);
 
     private object InvokeClosure(ClosureValue closure, object[] arguments)
     {
@@ -900,7 +895,7 @@ public sealed partial class Evaluator
 
         using (PushFrame(frame))
         {
-            return EvaluateFunctionBody(closure.Body);
+            return EvaluateUserMethodBody(closure.Function, closure.Body);
         }
     }
 

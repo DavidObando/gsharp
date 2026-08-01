@@ -274,11 +274,13 @@ internal sealed class ImportedMemberRefFactory
 
             // Issue #810: inside an iterator state-machine method body,
             // outer-method TPs are remapped to the SM class's own TPs.
-            // Issue #1477: a synthesized closure / capture-box class is also
-            // generic over enclosing TYPE parameters, so any TP present in the
-            // active remap (class or method) maps to the synthesized class's
-            // own VAR(idx) slot.
-            if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
+            if (this.remaps.ActiveIteratorStateMachineRemap != null
+                && tpSym.IsMethodTypeParameter
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
+            {
+                encoder.GenericTypeParameter(smClassOrd);
+            }
+            else if (this.remaps.ActiveLambdaMethodTypeParamRemap != null
                 && this.remaps.ActiveLambdaMethodTypeParamRemap.TryGetValue(tpSym, out var lambdaMethodOrd))
             {
                 // Issue #2118: reference to an enclosing type parameter inside a
@@ -287,9 +289,11 @@ internal sealed class ImportedMemberRefFactory
                 encoder.GenericMethodTypeParameter(lambdaMethodOrd);
             }
             else if (this.remaps.ActiveIteratorStateMachineRemap != null
-                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd))
+                && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tpSym, out var smClassOrd2))
             {
-                encoder.GenericTypeParameter(smClassOrd);
+                // Issue #1477: synthesized closure, capture-box, and nested-type
+                // remaps still map class type parameters to their own VAR slots.
+                encoder.GenericTypeParameter(smClassOrd2);
             }
             else if (tpSym.IsMethodTypeParameter)
             {
