@@ -1117,7 +1117,22 @@ internal sealed partial class OverloadResolver
                 }
                 else if (overloadAmbiguous)
                 {
-                    Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, syntax.Identifier.Text);
+                    if (TryGetUnconstrainedNullableIteratorTypeParameter(
+                        overloadSet,
+                        boundArguments,
+                        syntax.Arguments.Count,
+                        explicitOverloadTypeArguments,
+                        out var unconstrainedTypeParameter))
+                    {
+                        Diagnostics.ReportUnconstrainedNullableIteratorCall(
+                            syntax.Identifier.Location,
+                            syntax.Identifier.Text,
+                            unconstrainedTypeParameter.Name);
+                    }
+                    else
+                    {
+                        Diagnostics.ReportAmbiguousOverloadResolution(syntax.Identifier.Location, syntax.Identifier.Text);
+                    }
                 }
                 else
                 {

@@ -38,6 +38,7 @@ internal sealed partial class OverloadResolver
         // selection so generic candidates are filtered for applicability against
         // either the explicit type arguments or, in their absence, type inference.
         var explicitTypeArgCount = ce.TypeArgumentList?.Arguments.Count ?? 0;
+        var boundTypeArguments = default(ImmutableArray<TypeSymbol>);
         if (explicitTypeArgCount > 0)
         {
             var explicitTypeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(explicitTypeArgCount);
@@ -52,7 +53,7 @@ internal sealed partial class OverloadResolver
                 explicitTypeArguments.Add(typeArgument);
             }
 
-            var boundTypeArguments = explicitTypeArguments.MoveToImmutable();
+            boundTypeArguments = explicitTypeArguments.MoveToImmutable();
             var constraintMatches = overloads
                 .Where(candidate => candidate.TypeParameters.Length == boundTypeArguments.Length)
                 .Where(candidate => candidate.TypeParameters
@@ -80,7 +81,22 @@ internal sealed partial class OverloadResolver
         }
         else if (ambiguous)
         {
-            Diagnostics.ReportAmbiguousOverloadResolution(ce.Identifier.Location, methodName);
+            if (TryGetUnconstrainedNullableIteratorTypeParameter(
+                overloads,
+                arguments.ToBuilder(),
+                arguments.Length,
+                boundTypeArguments,
+                out var unconstrainedTypeParameter))
+            {
+                Diagnostics.ReportUnconstrainedNullableIteratorCall(
+                    ce.Identifier.Location,
+                    methodName,
+                    unconstrainedTypeParameter.Name);
+            }
+            else
+            {
+                Diagnostics.ReportAmbiguousOverloadResolution(ce.Identifier.Location, methodName);
+            }
         }
         else
         {
@@ -1315,6 +1331,69 @@ internal sealed partial class OverloadResolver
         var ok = TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out substitution);
         cache[candidate] = (ok, substitution);
         return ok;
+    }
+
+    private bool TryGetUnconstrainedNullableIteratorTypeParameter(
+        ImmutableArray<FunctionSymbol> candidates,
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        int argumentCount,
+        ImmutableArray<TypeSymbol> explicitTypeArguments,
+        out TypeParameterSymbol typeParameter)
+    {
+        typeParameter = null;
+        if (candidates.Length < 2)
+        {
+            return false;
+        }
+
+        var declaration = candidates[0].Declaration;
+        var hasReferenceVariant = false;
+        var hasValueVariant = false;
+        foreach (var candidate in candidates)
+        {
+            if (!ReferenceEquals(candidate.Declaration, declaration))
+            {
+                return false;
+            }
+
+            var specializedTarget = candidate.Type switch
+            {
+                SequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
+                AsyncSequenceTypeSymbol { ElementType: NullableTypeSymbol { UnderlyingType: TypeParameterSymbol target } } => target,
+                _ => null,
+            };
+            if (specializedTarget == null)
+            {
+                return false;
+            }
+
+            TypeSymbol callerType;
+            if (!explicitTypeArguments.IsDefaultOrEmpty)
+            {
+                if (specializedTarget.Ordinal >= explicitTypeArguments.Length)
+                {
+                    return false;
+                }
+
+                callerType = explicitTypeArguments[specializedTarget.Ordinal];
+            }
+            else if (!TryInferCandidateSubstitution(candidate, boundArguments, argumentCount, out var substitution)
+                || !substitution.TryGetValue(specializedTarget, out callerType))
+            {
+                return false;
+            }
+
+            if (callerType is not TypeParameterSymbol callerTypeParameter)
+            {
+                return false;
+            }
+
+            typeParameter = callerTypeParameter;
+            hasReferenceVariant |= candidate.NullableSequenceSpecialization == NullableSequenceSpecializationKind.ReferenceType;
+            hasValueVariant |= candidate.NullableSequenceSpecialization == NullableSequenceSpecializationKind.ValueType;
+        }
+
+        return hasReferenceVariant && hasValueVariant;
     }
 
     /// <summary>
