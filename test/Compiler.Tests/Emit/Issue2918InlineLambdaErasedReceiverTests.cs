@@ -27,8 +27,6 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2918InlineLambdaErasedReceiverTests
 {
-    private const int KillGraceMilliseconds = 5_000;
-
     private const string Contracts = """
         using System;
 
@@ -787,35 +785,10 @@ public class Issue2918InlineLambdaErasedReceiverTests
         startInfo.ArgumentList.Add(runtimeConfigPath);
         startInfo.ArgumentList.Add(assemblyPath);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start dotnet exec.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        _ = stdoutTask.ContinueWith(
-            task => _ = task.Exception,
-            TaskContinuationOptions.OnlyOnFaulted);
-        _ = stderrTask.ContinueWith(
-            task => _ = task.Exception,
-            TaskContinuationOptions.OnlyOnFaulted);
-
-        static string Drain(Task<string> task) =>
-            task.Wait(KillGraceMilliseconds)
-                ? task.Result
-                : "<unavailable: pipe still open after kill>";
-
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit(KillGraceMilliseconds);
-            throw new XunitException(
-                $"dotnet exec timed out.\nstdout:\n{Drain(stdoutTask)}\nstderr:\n{Drain(stderrTask)}");
-        }
-
-        var stdout = Drain(stdoutTask);
-        var stderr = Drain(stderrTask);
+        var (exitCode, stdout, stderr) = IlVerifier.RunProcess(startInfo, assemblyPath, 30_000);
         Assert.True(
-            process.ExitCode == 0,
-            $"dotnet exec exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            exitCode == 0,
+            $"dotnet exec exited {exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
         return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
