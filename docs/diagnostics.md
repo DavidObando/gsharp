@@ -1125,6 +1125,7 @@ different method.
 | ID | Severity | Description |
 |----|----------|-------------|
 | GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+| GS0513 | Error | Unmanaged pointer operations require compiled execution because the interpreter has no storage-location model. |
 
 `sequence[T?]` needs one stable CLR element representation. Iterator return
 types are specialized into `class` and `struct` variants automatically.

@@ -1104,17 +1104,25 @@ public sealed partial class Evaluator
         }
     }
 
-    /// <summary>ADR-0039: Evaluates &amp;expr — in the interpreter, returns the current value (the write-back is handled at call sites).</summary>
+    /// <summary>Evaluates managed by-ref address-of; unmanaged pointers require compiled execution.</summary>
     private object EvaluateAddressOfExpression(BoundAddressOfExpression node)
     {
-        // In the interpreter, &x just evaluates to the value of x.
-        // Write-back is handled by the ref-slot mechanism at call sites.
+        if (node.IsUnmanaged)
+        {
+            throw EvaluatorException.CreateDiagnostic(DiagnosticDescriptors.InterpreterPointerOperationsNotSupported, node);
+        }
+
         return EvaluateExpression(node.Operand);
     }
 
-    /// <summary>ADR-0039: Evaluates *p — in the interpreter, this is identity since we don't have real pointers.</summary>
+    /// <summary>Auto-dereferences managed by-ref values; unmanaged pointers require compiled execution.</summary>
     private object EvaluateDereferenceExpression(BoundDereferenceExpression node)
     {
+        if (TypeSymbol.IsUnmanagedPointer(node.Operand.Type))
+        {
+            throw EvaluatorException.CreateDiagnostic(DiagnosticDescriptors.InterpreterPointerOperationsNotSupported, node);
+        }
+
         return EvaluateExpression(node.Operand);
     }
 

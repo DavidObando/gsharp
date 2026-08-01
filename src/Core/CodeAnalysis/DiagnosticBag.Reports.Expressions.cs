@@ -973,4 +973,11 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string typeParameterName)
     => Report(location, DiagnosticDescriptors.ConstructedTypeParameterRequiresNewConstraint, typeParameterName, typeParameterName, typeParameterName);
+
+    /// <summary>
+    /// Reports that unmanaged pointer operations require compiled execution.
+    /// </summary>
+    /// <param name="location">The pointer operation location.</param>
+    public void ReportInterpreterPointerOperationsNotSupported(TextLocation location)
+    => Report(location, DiagnosticDescriptors.InterpreterPointerOperationsNotSupported);
 }

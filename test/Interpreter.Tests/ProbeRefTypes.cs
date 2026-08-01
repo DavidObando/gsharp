@@ -51,3 +51,23 @@ public interface IReadWrite
     /// <summary>Gets or sets the value.</summary>
     string Value { get; set; }
 }
+
+/// <summary>
+/// CLR ref-return members used to pin managed-byref auto-dereference.
+/// </summary>
+public sealed class RefReturnProbe
+{
+    private readonly int[] values = [40, 41, 42];
+
+    /// <summary>Gets the first value by reference.</summary>
+    public ref int Property => ref values[0];
+
+    /// <summary>Gets a value by reference through an indexer.</summary>
+    /// <param name="index">The value index.</param>
+    public ref int this[int index] => ref values[index];
+
+    /// <summary>Gets a value by reference through an instance call.</summary>
+    /// <param name="index">The value index.</param>
+    /// <returns>A reference to the selected value.</returns>
+    public ref int GetValue(int index) => ref values[index];
+}
