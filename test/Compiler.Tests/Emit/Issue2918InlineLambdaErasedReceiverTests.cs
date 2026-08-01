@@ -78,6 +78,26 @@ public class Issue2918InlineLambdaErasedReceiverTests
             public string Kind { get; }
         }
 
+        public sealed class MethodDelegateOverloads<T>
+        {
+            public string Add(Predicate<T> callback) =>
+                "pred";
+
+            public string Add(Func<T, bool> callback) =>
+                "func";
+        }
+
+        public sealed class ConstructorDelegateOverloads<T>
+        {
+            public ConstructorDelegateOverloads(Predicate<T> callback) =>
+                Kind = "pred";
+
+            public ConstructorDelegateOverloads(Func<T, bool> callback) =>
+                Kind = "func";
+
+            public string Kind { get; }
+        }
+
         public sealed class DelegateBox<T>
         {
             public DelegateBox(T value) => Value = value;
@@ -346,6 +366,56 @@ public class Issue2918InlineLambdaErasedReceiverTests
         Assert.Equal(
             "symbolic\nclosed\n",
             CompileVerifyLoadAndRun(source, "Issue2918ConstructorOverloads.Src"));
+    }
+
+    [Fact]
+    public void NominalDelegateDisagreement_KeepsMethodOverloadAmbiguous()
+    {
+        const string source = """
+            package Issue2948MethodNominalDisagreement
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let methods = MethodDelegateOverloads[Src]()
+                Console.WriteLine(methods.Add((item) -> true))
+            }
+            """;
+
+        _ = CompileExpectingFailureOrReportingRuntimeOutput(source);
+    }
+
+    [Fact]
+    public void NominalDelegateDisagreement_PreservesConstructorOverloadResolution()
+    {
+        const string source = """
+            package Issue2948ConstructorNominalDisagreement
+            import System
+            import Issue2918Contracts
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let constructed = ConstructorDelegateOverloads[Src](
+                    (item) -> true)
+                Console.WriteLine(constructed.Kind)
+            }
+            """;
+
+        Assert.Equal(
+            "func\n",
+            CompileVerifyLoadAndRun(
+                source,
+                expectedSourceTypeName: null,
+                allowDirectObjectParameter: true));
     }
 
     [Fact]
@@ -854,7 +924,10 @@ public class Issue2918InlineLambdaErasedReceiverTests
                     method.ReturnType + "("
                     + string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType))
                     + ")"));
-            Assert.Contains(expectedSourceTypeName, signatures, StringComparison.Ordinal);
+            if (!string.IsNullOrEmpty(expectedSourceTypeName))
+            {
+                Assert.Contains(expectedSourceTypeName, signatures, StringComparison.Ordinal);
+            }
             Assert.DoesNotContain(
                 lambdas,
                 method =>
@@ -945,6 +1018,46 @@ public class Issue2918InlineLambdaErasedReceiverTests
             ]);
 
             Assert.NotEqual(0, exitCode);
+            return output;
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    private static string CompileExpectingFailureOrReportingRuntimeOutput(string source)
+    {
+        var directory = CreateDirectory("Issue2948_Ambiguous_");
+        try
+        {
+            var contractsPath = Path.Combine(directory, "Issue2918Contracts.dll");
+            CompileCSharp(Contracts, contractsPath, "Issue2918Contracts");
+
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+            var (exitCode, output) = RunCompiler(
+            [
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                "/r:" + contractsPath,
+                sourcePath,
+            ]);
+
+            if (exitCode == 0)
+            {
+                IlVerifier.Verify(assemblyPath, additionalReferences: new[] { contractsPath });
+                Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(contractsPath)).GetTypes());
+                Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+                var runtimeOutput = Run(assemblyPath, directory);
+                throw new XunitException(
+                    "Expected ambiguous delegate overloads to be rejected, "
+                    + $"but the program ran with output:\n{runtimeOutput}");
+            }
+
             return output;
         }
         finally
