@@ -109,6 +109,28 @@ public class Issue2984MainEntryPointInterpreterTests
         Assert.Equal("0\n", output);
     }
 
+    [Fact]
+    public void NonArgsMainParameterIsNotSeededWithStringArray()
+    {
+        const string Source = """
+            import System
+
+            func Main(x int32) {
+                Console.WriteLine(x)
+            }
+            """;
+
+        var (result, output) = Evaluate(Source);
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.IsError && diagnostic.Message.Contains("x int32"));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("System.String[]"));
+        Assert.Equal(string.Empty, output);
+    }
+
     private static (EvaluationResult Result, string Output) Evaluate(string source)
     {
         using var output = new StringWriter();
