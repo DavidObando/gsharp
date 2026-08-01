@@ -142,6 +142,31 @@ public class Issue2992SymbolicClrTypeInterpreterTests
     }
 
     [Fact]
+    public void StaticClassTypeParameterUsesClosedContainer()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                shared {
+                    func CountOf(items List[T]) int32 {
+                        return items.Count
+                    }
+                }
+            }
+
+            var numbers = List[int32]()
+            numbers.Add(1)
+            numbers.Add(2)
+            numbers.Add(3)
+            numbers.Add(4)
+            Console.WriteLine(Holder[int32].CountOf(numbers))
+            """;
+
+        Assert.Equal("4\n", RunSubmission(source));
+    }
+
+    [Fact]
     public void DeferredClosureRetainsTypeArguments()
     {
         var source = """

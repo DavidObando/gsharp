@@ -83,6 +83,7 @@ public sealed partial class Evaluator
             var isIterator = IsIteratorFunction(node.Function, statement);
             object result;
             RegisterRuntimeTypeArguments(locals, node.Function.TypeParameters, node.MethodTypeArguments);
+            RegisterRuntimeTypeArguments(locals, node.StaticGenericOwnerType);
             using (PushFrame(locals))
             {
                 if (isIterator)
