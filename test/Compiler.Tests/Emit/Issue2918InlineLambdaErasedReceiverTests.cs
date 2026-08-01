@@ -183,6 +183,57 @@ public class Issue2918InlineLambdaErasedReceiverTests
     }
 
     [Fact]
+    public void MismatchedInlineLambdaArityThroughErasedSlot_IsRejected()
+    {
+        const string source = """
+            package LambdaArityErasure
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[Src]]()
+                callbacks.Add((left Src, right Src) -> Console.WriteLine(left.N + right.N))
+            }
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains(
+            "GS0144: Function 'lambda' requires 1 arguments but was given 2.",
+            diagnostics,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MatchingInlineLambdaArityThroughErasedSlot_VerifyLoadAndRun()
+    {
+        const string source = """
+            package LambdaArityMatch
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[Src]]()
+                callbacks.Add((item Src) -> Console.WriteLine(item.N))
+                callbacks[0](Src(7))
+            }
+            """;
+
+        Assert.Equal(
+            "7\n",
+            CompileVerifyLoadAndRun(source, "LambdaArityMatch.Src"));
+    }
+
+    [Fact]
     public void ImportedGenericConstructor_TargetsInlineLambda_VerifyLoadAndRun()
     {
         const string source = """
