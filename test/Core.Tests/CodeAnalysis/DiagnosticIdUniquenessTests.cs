@@ -142,37 +142,61 @@ public class DiagnosticIdUniquenessTests
     }
 
     [Fact]
-    public void Every_Documented_DiagnosticBag_Severity_Matches_Its_Descriptor()
+    public void Every_Descriptor_Is_Documented_With_Matching_Severity()
     {
         var documentation = File.ReadAllText(Path.Combine(FindRepoRoot(), "docs", "diagnostics.md"));
-        var documentedSeverities = Regex.Matches(
+        var documentedSeverityGroups = Regex.Matches(
                 documentation,
                 @"^\|\s*(GS\d{4})\s*\|\s*(?:\*\*)?(Error|Warning|Info)",
                 RegexOptions.Multiline)
             .Cast<Match>()
             .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal)
+            .ToArray();
+        var conflictingSeverities = documentedSeverityGroups
+            .Select(group => (
+                Id: group.Key,
+                Severities: group.Select(match => match.Groups[2].Value).Distinct(StringComparer.Ordinal).ToArray()))
+            .Where(item => item.Severities.Length > 1)
+            .Select(item => $"{item.Id}: {string.Join(", ", item.Severities)}")
+            .ToArray();
+
+        Assert.True(
+            conflictingSeverities.Length == 0,
+            "Diagnostics documented with conflicting severities:\n" +
+            string.Join("\n", conflictingSeverities));
+
+        var documentedSeverities = documentedSeverityGroups
             .ToDictionary(
                 group => group.Key,
-                group => group.Select(match => match.Groups[2].Value).Distinct().Single(),
+                group => group.First().Groups[2].Value,
                 StringComparer.Ordinal);
 
-        var validatedCount = 0;
-        foreach (var field in GetDescriptorFields())
-        {
-            var descriptor = (CoreDiagnosticDescriptor)field.GetValue(null);
-            if (documentedSeverities.TryGetValue(descriptor.Id, out var documentedSeverity))
-            {
-                Assert.Equal(descriptor.Severity.ToString(), documentedSeverity);
-                validatedCount++;
-            }
-        }
+        var descriptors = GetDescriptorFields()
+            .Select(field => (
+                Field: field,
+                Descriptor: (CoreDiagnosticDescriptor)field.GetValue(null)))
+            .ToArray();
+        var missingDescriptors = descriptors
+            .Where(item => !documentedSeverities.ContainsKey(item.Descriptor.Id))
+            .OrderBy(item => item.Descriptor.Id, StringComparer.Ordinal)
+            .Select(item => $"{item.Descriptor.Id} (DiagnosticDescriptors.{item.Field.Name})")
+            .ToArray();
 
-        Assert.True(validatedCount > 0, "No documented descriptor severities were validated.");
+        Assert.True(
+            missingDescriptors.Length == 0,
+            "Undocumented diagnostic descriptors:\n" + string.Join("\n", missingDescriptors));
+
+        foreach (var item in descriptors)
+        {
+            Assert.Equal(
+                item.Descriptor.Severity.ToString(),
+                documentedSeverities[item.Descriptor.Id]);
+        }
     }
 
     private static FieldInfo[] GetDescriptorFields() =>
         typeof(DiagnosticDescriptors)
-            .GetFields(BindingFlags.Static | BindingFlags.NonPublic)
+            .GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(field => field.FieldType == typeof(CoreDiagnosticDescriptor))
             .ToArray();
 
