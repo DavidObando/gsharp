@@ -61,11 +61,21 @@ public static class Program
             Console.Error.WriteDiagnostics(cell.Diagnostics);
         }
 
-        if (!cell.HasError && cell.Value is not null)
+        if (cell.HasError)
+        {
+            return 1;
+        }
+
+        if (cell.Value is int exitCode)
+        {
+            return exitCode;
+        }
+
+        if (cell.Value is not null)
         {
             Console.WriteLine(cell.Value);
         }
 
-        return cell.HasError ? 1 : 0;
+        return 0;
     }
 }
