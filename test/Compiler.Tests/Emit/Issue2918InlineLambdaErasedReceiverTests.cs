@@ -69,6 +69,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
             public string Kind { get; }
         }
 
+        public delegate bool CustomPredicate<T>(T value);
+
         public sealed class PredHolder<T>
         {
             public PredHolder(Predicate<T> callback) => Kind = "pred";
@@ -84,6 +86,35 @@ public class Issue2918InlineLambdaErasedReceiverTests
 
             public string RuntimeTypeName =>
                 Value!.GetType().GetGenericTypeDefinition().FullName!;
+        }
+        """;
+
+    private const string AssemblyCollisionContracts = """
+        using System.Collections.Generic;
+
+        namespace System
+        {
+            public delegate TResult Func<T, TResult>(T left, T right);
+        }
+
+        namespace Issue2948Collision
+        {
+            public static class Factory
+            {
+                public static List<global::System.Func<T, int>> Create<T>() =>
+                    new();
+
+                public static string DelegateAssemblyName<T>(
+                    List<global::System.Func<T, int>> values) =>
+                    values[0].GetType()
+                        .Assembly.GetName().Name!;
+
+                public static int InvokeFirst<T>(
+                    List<global::System.Func<T, int>> values,
+                    T left,
+                    T right) =>
+                    values[0](left, right);
+            }
         }
         """;
 
@@ -318,58 +349,60 @@ public class Issue2918InlineLambdaErasedReceiverTests
     }
 
     [Fact]
-    public void ImportedPredicateThroughErasedListSlot_IsRejected()
+    public void ImportedNamedDelegatesThroughErasedListSlots_VerifyLoadAndRun()
     {
         const string source = """
-            package Issue2918PredicateSlot
+            package Issue2948NamedDelegateLists
             import System
             import System.Collections.Generic
+            import Issue2918Contracts
 
             class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            class Args : EventArgs {
                 let N int32
                 init(n int32) { N = n }
             }
 
             func Main() {
                 let predicates = List[Predicate[Src]]()
-                predicates.Add((item Src) -> item.N > 2)
-            }
-            """;
+                predicates.Add((item) -> item.N > 2)
+                Console.WriteLine(predicates[0](Src(3)))
 
-        var diagnostics = CompileExpectingFailure(source);
-        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ImportedComparisonThroughErasedListSlot_IsRejected()
-    {
-        const string source = """
-            package Issue2918ComparisonSlot
-            import System
-            import System.Collections.Generic
-
-            class Src {
-                let N int32
-                init(n int32) { N = n }
-            }
-
-            func Main() {
                 let comparisons = List[Comparison[Src]]()
                 comparisons.Add((left Src, right Src) -> left.N - right.N)
+                Console.WriteLine(comparisons[0](Src(5), Src(2)))
+
+                let converters = List[Converter[Src, int32]]()
+                converters.Add((item Src) -> item.N + 10)
+                Console.WriteLine(converters[0](Src(4)))
+
+                let events = List[EventHandler[Args]]()
+                events.Add((sender object?, args Args) -> Console.WriteLine(args.N))
+                events[0](nil, Args(4))
+
+                let custom = List[CustomPredicate[Src]]()
+                custom.Add((item Src) -> item.N == 6)
+                Console.WriteLine(custom[0](Src(6)))
             }
             """;
 
-        var diagnostics = CompileExpectingFailure(source);
-        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+        Assert.Equal(
+            "True\n3\n14\n4\nTrue\n",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue2948NamedDelegateLists.Src",
+                allowDirectObjectParameter: true));
     }
 
     [Fact]
-    public void ImportedPredicateThroughErasedConstructorSlot_IsRejected()
+    public void ImportedNamedDelegatesThroughErasedConstructorSlots_VerifyLoadAndRun()
     {
         const string source = """
-            package Issue2918PredicateConstructor
+            package Issue2948NamedDelegateConstructors
             import System
             import Issue2918Contracts
 
@@ -379,16 +412,98 @@ public class Issue2918InlineLambdaErasedReceiverTests
             }
 
             func Main() {
-                let box = DelegateBox[Predicate[Src]](
-                    (item Src) -> item.N > 2)
-                Console.WriteLine(box.RuntimeTypeName)
-                Console.WriteLine(box.Value(Src(3)))
+                let predicate = DelegateBox[Predicate[Src]](
+                    (item) -> item.N > 2)
+                Console.WriteLine(predicate.RuntimeTypeName)
+                Console.WriteLine(predicate.Value!!(Src(3)))
+
+                let comparison = DelegateBox[Comparison[Src]](
+                    (left Src, right Src) -> left.N - right.N)
+                Console.WriteLine(comparison.RuntimeTypeName)
+                Console.WriteLine(comparison.Value!!(Src(5), Src(2)))
+
+                let converter = DelegateBox[Converter[Src, int32]](
+                    (item Src) -> item.N + 10)
+                Console.WriteLine(converter.RuntimeTypeName)
+                Console.WriteLine(converter.Value!!(Src(4)))
+
+                let custom = DelegateBox[CustomPredicate[Src]](
+                    (item Src) -> item.N == 6)
+                Console.WriteLine(custom.RuntimeTypeName)
+                Console.WriteLine(custom.Value!!(Src(6)))
+            }
+            """;
+
+        Assert.Equal(
+            """
+            System.Predicate`1
+            True
+            System.Comparison`1
+            3
+            System.Converter`2
+            14
+            Issue2918Contracts.CustomPredicate`1
+            True
+
+            """.Replace("\r\n", "\n", StringComparison.Ordinal),
+            CompileVerifyLoadAndRun(source, "Issue2948NamedDelegateConstructors.Src"));
+    }
+
+    [Fact]
+    public void MismatchedLambdaArityThroughErasedDelegateSlot_IsRejected()
+    {
+        const string source = """
+            package Issue2937LambdaArity
+            import System
+            import System.Collections.Generic
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = List[System.Action[Src]]()
+                callbacks.Add(
+                    (left Src, right Src) ->
+                        Console.WriteLine(left.N + right.N))
             }
             """;
 
         var diagnostics = CompileExpectingFailure(source);
         Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
         Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SameFullNameDelegateFromUserAssembly_RetainsAssemblyIdentity()
+    {
+        const string source = """
+            package Issue2948AssemblyIdentity
+            import System
+            import Issue2948Collision
+
+            class Src {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let callbacks = Factory.Create[Src]()
+                callbacks.Add((left Src, right Src) -> left.N + right.N)
+                Console.WriteLine(Factory.DelegateAssemblyName(callbacks))
+                Console.WriteLine(
+                    Factory.InvokeFirst(callbacks, Src(20), Src(22)))
+            }
+            """;
+
+        Assert.Equal(
+            "Issue2948CollisionContracts\n42\n",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue2948AssemblyIdentity.Src",
+                contractsSource: AssemblyCollisionContracts,
+                contractsAssemblyName: "Issue2948CollisionContracts"));
     }
 
     [Fact]
@@ -656,13 +771,16 @@ public class Issue2918InlineLambdaErasedReceiverTests
     private static string CompileVerifyLoadAndRun(
         string source,
         string expectedSourceTypeName,
-        bool verifyIl = true)
+        bool verifyIl = true,
+        string contractsSource = Contracts,
+        string contractsAssemblyName = "Issue2918Contracts",
+        bool allowDirectObjectParameter = false)
     {
         var directory = CreateDirectory("Issue2918_");
         try
         {
-            var contractsPath = Path.Combine(directory, "Issue2918Contracts.dll");
-            CompileCSharp(Contracts, contractsPath, "Issue2918Contracts");
+            var contractsPath = Path.Combine(directory, contractsAssemblyName + ".dll");
+            CompileCSharp(contractsSource, contractsPath, contractsAssemblyName);
             IlVerifier.Verify(contractsPath);
 
             var sourcePath = Path.Combine(directory, "test.gs");
@@ -686,7 +804,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
             AssertLoadsWithReifiedLambdaSignatures(
                 assemblyPath,
                 contractsPath,
-                expectedSourceTypeName);
+                expectedSourceTypeName,
+                allowDirectObjectParameter);
             return Run(assemblyPath, directory);
         }
         finally
@@ -698,8 +817,12 @@ public class Issue2918InlineLambdaErasedReceiverTests
     private static void AssertLoadsWithReifiedLambdaSignatures(
         string assemblyPath,
         string contractsPath,
-        string expectedSourceTypeName)
+        string expectedSourceTypeName,
+        bool allowDirectObjectParameter = false)
     {
+        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(contractsPath)).GetTypes());
+        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+
         var loadContext = new AssemblyLoadContext(
             "Issue2918_" + Guid.NewGuid().ToString("N"),
             isCollectible: true);
@@ -737,7 +860,9 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 method =>
                     ContainsObjectGenericArgument(method.ReturnType)
                     || method.GetParameters().Any(parameter =>
-                        ContainsObjectGenericArgument(parameter.ParameterType)));
+                        ContainsObjectGenericArgument(parameter.ParameterType)
+                        && !(allowDirectObjectParameter
+                            && parameter.ParameterType == typeof(object))));
         }
         finally
         {

@@ -814,25 +814,6 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private static bool IsCanonicalFunctionDelegate(TypeSymbol type)
-    {
-        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
-        {
-            type = delegateType;
-        }
-
-        if (type is not ImportedTypeSymbol imported)
-        {
-            return true;
-        }
-
-        var openDefinition = imported.OpenDefinition ?? imported.ClrType;
-        var fullName = openDefinition?.FullName;
-        return fullName == "System.Action"
-            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
-            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
-    }
-
     /// <summary>
     /// Issue #1512 / #2365: builds a symbolic <see cref="FunctionTypeSymbol"/> for
     /// a lambda argument bound to a CLR/imported method whose delegate (or
@@ -1048,7 +1029,14 @@ internal sealed partial class ExpressionBinder
                         // void-discard / ordinary target-typed return-type
                         // inference applies instead of inferring the return
                         // type purely from the lambda body.
-                        boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target, inferReturnTypeFromBody: !exactReturnIndices.Contains(idx));
+                        var literal = lambdas.BindLambdaExpression(
+                            lambdaSyntax,
+                            target.FunctionType,
+                            inferReturnTypeFromBody: !exactReturnIndices.Contains(idx));
+                        boundArgs[idx] = conversions.BindConversion(
+                            ce.Arguments[idx].Location,
+                            literal,
+                            target.DelegateType);
                     }
                 }
 
@@ -1339,11 +1327,11 @@ internal sealed partial class ExpressionBinder
     /// each deferred lambda's delegate <em>parameter</em> types through those
     /// inferred symbolic arguments (reusing
     /// <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>).
-    /// A per-slot <see cref="FunctionTypeSymbol"/> carrying those parameter
-    /// types is produced. Non-generic methods on constructed generic receivers
-    /// are recovered from the open declaring type too, including delegates
-    /// whose only symbolic slot is their return type. Candidates must agree on
-    /// the recovered shape.
+    /// A per-slot target carrying both the exact mapped delegate identity and
+    /// its <see cref="FunctionTypeSymbol"/> shape is produced. Non-generic
+    /// methods on constructed generic receivers are recovered from the open
+    /// declaring type too, including delegates whose only symbolic slot is
+    /// their return type. Candidates must agree on both identity and shape.
     ///
     /// Issue #2345: also recovers the delegate's <em>return</em> shape when it
     /// is fully closed by the same unification (including the common case of a
@@ -1367,7 +1355,7 @@ internal sealed partial class ExpressionBinder
         List<int> deferredIndices,
         BoundExpression[] boundArgs,
         HashSet<int> deferred,
-        out Dictionary<int, FunctionTypeSymbol> targets,
+        out Dictionary<int, (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType)> targets,
         out HashSet<int> exactReturnIndices)
     {
         exactReturnIndices = new HashSet<int>();
@@ -1422,7 +1410,7 @@ internal sealed partial class ExpressionBinder
             arityByIndex[idx] = lambda.Parameters.Count;
         }
 
-        Dictionary<int, ImmutableArray<TypeSymbol>> agreed = null;
+        Dictionary<int, (TypeSymbol DelegateType, ImmutableArray<TypeSymbol> ParameterTypes)> agreed = null;
         Dictionary<int, TypeSymbol> agreedReturnTypes = null;
         var anySymbolicType = false;
 
@@ -1473,7 +1461,7 @@ internal sealed partial class ExpressionBinder
                     : MemberLookup.InferSymbolicMethodTypeArguments(openMethod, symbolicArgVector);
             var methodTypeArgs = ImmutableArray.Create(inferred);
 
-            var slotTargets = new Dictionary<int, ImmutableArray<TypeSymbol>>();
+            var slotTargets = new Dictionary<int, (TypeSymbol DelegateType, ImmutableArray<TypeSymbol> ParameterTypes)>();
             var slotReturnTypes = new Dictionary<int, TypeSymbol>();
             var candidateUsable = true;
             var candidateHasSymbolicType = false;
@@ -1488,6 +1476,7 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var openParameterType = openParameters[paramIndex].ParameterType;
+                TypeSymbol mappedDelegate;
                 FunctionTypeSymbol functionType;
                 if (openParameterType.IsGenericParameter)
                 {
@@ -1495,14 +1484,8 @@ internal sealed partial class ExpressionBinder
                             openParameterType,
                             receiverOpenDefinition,
                             receiverTypeArguments,
-                            out var mappedDelegate,
+                            out mappedDelegate,
                             out functionType))
-                    {
-                        candidateUsable = false;
-                        break;
-                    }
-
-                    if (!IsCanonicalFunctionDelegate(mappedDelegate))
                     {
                         candidateUsable = false;
                         break;
@@ -1587,6 +1570,18 @@ internal sealed partial class ExpressionBinder
                         break;
                     }
 
+                    mappedDelegate = MemberLookup.MapOpenClrTypeToSymbolic(
+                        openParameterType,
+                        receiverOpenDefinition,
+                        receiverTypeArguments,
+                        openMethod,
+                        methodTypeArgs);
+                    if (mappedDelegate == null || mappedDelegate == TypeSymbol.Error)
+                    {
+                        candidateUsable = false;
+                        break;
+                    }
+
                     var returnClrType = invoke.ReturnType;
                     var mappedReturnType = returnClrType != null && returnClrType.IsSameAs(typeof(void))
                         ? TypeSymbol.Void
@@ -1607,7 +1602,7 @@ internal sealed partial class ExpressionBinder
                     }
                 }
 
-                slotTargets[idx] = functionType.ParameterTypes;
+                slotTargets[idx] = (mappedDelegate, functionType.ParameterTypes);
 
                 // Issue #2345: recover the delegate's return shape too, when it
                 // is fully closed by this unification (most commonly `void`,
@@ -1637,7 +1632,7 @@ internal sealed partial class ExpressionBinder
                 agreed = slotTargets;
                 agreedReturnTypes = slotReturnTypes;
             }
-            else if (!SymbolicLambdaParameterTypesAgree(agreed, slotTargets))
+            else if (!SymbolicLambdaTargetsAgree(agreed, slotTargets))
             {
                 return false;
             }
@@ -1668,7 +1663,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var built = new Dictionary<int, FunctionTypeSymbol>();
+        var built = new Dictionary<int, (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType)>();
         foreach (var kv in agreed)
         {
             if (agreedReturnTypes != null && agreedReturnTypes.TryGetValue(kv.Key, out var exactReturn))
@@ -1679,14 +1674,18 @@ internal sealed partial class ExpressionBinder
                 // inferReturnTypeFromBody, letting InferLambdaReturnType's
                 // void-discard rule (issue #889) and ordinary target-typed
                 // inference apply.
-                built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, exactReturn);
+                built[kv.Key] = (
+                    kv.Value.DelegateType,
+                    FunctionTypeSymbol.Get(kv.Value.ParameterTypes, exactReturn));
                 exactReturnIndices.Add(kv.Key);
             }
             else
             {
                 // The return slot is a placeholder; callers bind with
                 // inferReturnTypeFromBody so the lambda infers its own return type.
-                built[kv.Key] = FunctionTypeSymbol.Get(kv.Value, TypeSymbol.Object);
+                built[kv.Key] = (
+                    kv.Value.DelegateType,
+                    FunctionTypeSymbol.Get(kv.Value.ParameterTypes, TypeSymbol.Object));
             }
         }
 
@@ -1694,7 +1693,9 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private static bool SymbolicLambdaParameterTypesAgree(Dictionary<int, ImmutableArray<TypeSymbol>> a, Dictionary<int, ImmutableArray<TypeSymbol>> b)
+    private static bool SymbolicLambdaTargetsAgree(
+        Dictionary<int, (TypeSymbol DelegateType, ImmutableArray<TypeSymbol> ParameterTypes)> a,
+        Dictionary<int, (TypeSymbol DelegateType, ImmutableArray<TypeSymbol> ParameterTypes)> b)
     {
         if (a.Count != b.Count)
         {
@@ -1703,14 +1704,16 @@ internal sealed partial class ExpressionBinder
 
         foreach (var kv in a)
         {
-            if (!b.TryGetValue(kv.Key, out var other) || other.Length != kv.Value.Length)
+            if (!b.TryGetValue(kv.Key, out var other)
+                || !Equals(kv.Value.DelegateType, other.DelegateType)
+                || other.ParameterTypes.Length != kv.Value.ParameterTypes.Length)
             {
                 return false;
             }
 
-            for (var i = 0; i < kv.Value.Length; i++)
+            for (var i = 0; i < kv.Value.ParameterTypes.Length; i++)
             {
-                if (!Equals(kv.Value[i], other[i]))
+                if (!Equals(kv.Value.ParameterTypes[i], other.ParameterTypes[i]))
                 {
                     return false;
                 }
