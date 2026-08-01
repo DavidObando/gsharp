@@ -166,6 +166,49 @@ public class Issue2962ConstrainedStaticPropertyChainTests
         }
     }
 
+    [Fact]
+    public void NullablePropertyRead_RejectsAssignmentToNonNullableSlot()
+    {
+        const string Source = """
+            package Issue2962.NullableAssignment
+
+            sealed interface I[T] {
+                shared { prop V T? { get; } }
+            }
+
+            struct C : I[string] {
+                shared { prop V string -> "value" }
+            }
+
+            func Read[T I[string]](w T) string {
+                let value string = T.V
+                return value
+            }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var sourcePath = Path.Combine(directory, "Issue2962NullableAssignment.gs");
+            var outputPath = Path.Combine(directory, "Issue2962NullableAssignment.dll");
+            File.WriteAllText(sourcePath, Source);
+
+            var (exitCode, output) = Compile(
+                "/out:" + outputPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                sourcePath);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("error GS0156: Cannot convert type 'string?' to 'string'.", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CompileSource(string source, string directory, string outputName, string target)
     {
         var sourcePath = Path.Combine(directory, Path.GetFileNameWithoutExtension(outputName) + ".gs");

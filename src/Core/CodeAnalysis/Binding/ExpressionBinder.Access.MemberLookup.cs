@@ -3507,6 +3507,8 @@ internal sealed partial class ExpressionBinder
                 }
 
             default:
+                Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                    rightPart.Location, tpSym.Name, "?");
                 return new BoundErrorExpression(null);
         }
     }
