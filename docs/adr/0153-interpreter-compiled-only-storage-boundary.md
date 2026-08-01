@@ -1,9 +1,9 @@
-# ADR-0152: Interpreter compiled-only storage boundary
+# ADR-0153: Interpreter compiled-only storage boundary
 
 - **Status**: Accepted
 - **Date**: 2026-08-01
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), and [#2939](https://github.com/DavidObando/gsharp/issues/2939)
+- **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), [#3022](https://github.com/DavidObando/gsharp/issues/3022), and [#2939](https://github.com/DavidObando/gsharp/issues/2939)
 
 ## Context
 
@@ -26,19 +26,22 @@ with a self-contained message explaining that pinning requires the CIL
 pinned-local emit path. `stackalloc`, `sizeof` over unmanaged storage, method
 function pointers, and function-pointer invocation use the same pattern.
 
-Script-mode `gsi` prints only a diagnostic ID and message. It does not render a
-source location or caret. Boundary messages therefore must name the construct,
-state that the interpreter does not support it, and explain which compiled
-runtime facility it requires. They cannot rely on surrounding diagnostic
-rendering for meaning.
+Script-mode diagnostic rendering is not part of this boundary contract and may
+include a source location and caret. Boundary messages must still name the
+construct, state that the interpreter does not support it, and explain which
+compiled runtime facility it requires. They cannot rely on surrounding
+diagnostic rendering for meaning.
 
 ## Decision
 
-Constructs that require real address identity, unmanaged pointer operations,
-pinning, stack allocation, or function-pointer execution are **compiled-only**.
-`gsi` must report a self-contained boundary diagnostic instead of attempting a
-value-only approximation. Users who need these constructs must compile with
-`gsc`.
+Constructs whose interpreter behavior requires real address identity —
+including pinning, stack allocation, unmanaged-pointer storage or dereference,
+and function-pointer execution — are **compiled-only**. `gsi` must report a
+self-contained boundary diagnostic instead of attempting a value-only
+approximation. Users who need these constructs must compile with `gsc`.
+
+This ADR governs only the evaluator's storage-model boundary. It does not
+redefine unsafe/native language validity or CIL emission.
 
 The `unsafe` context itself remains supported. It is a permission boundary, not
 a storage operation; an `unsafe` block containing only otherwise-supported
@@ -54,9 +57,10 @@ The current implementation status is:
 | `sizeof` requiring the CIL unmanaged-storage path | Self-contained boundary diagnostic | Meets contract |
 | `&Method` function pointer | Self-contained boundary diagnostic | Meets contract |
 | Function-pointer invocation | Self-contained boundary diagnostic | Meets contract |
-| `*p = value` | Generic “Unexpected node” evaluator failure | Must become a boundary |
-| `*(p + 1)` | Raw reflection/conversion failure | Must become a boundary |
-| Free-standing `&x` followed by `*p` | Silently returns a copied, stale value | Must become a boundary; tracked by #3004 |
+| Ref local alias (`let ref r = arr[i]`) | Re-evaluates the initializer at read time; silently wrong | Must become a boundary; tracked by #3022 |
+| `*p = value` | Boundary enforcement is owned by #3028; without it, falls through to a generic “Unexpected node” failure | Must be a boundary |
+| `*(p + 1)` | Boundary enforcement is owned by #3028; without it, leaks a raw reflection/conversion failure | Must be a boundary |
+| Free-standing `&x` followed by `*p` | Boundary enforcement is owned by #3028; without it, silently returns a copied, stale value | Must be a boundary; underlying aliasing tracked by #3004 |
 | Pointer arithmetic or comparison over copied values | May return coincidentally plausible results | Must become a boundary |
 
 Until the evaluator has a dedicated boundary diagnostic code, the clean
@@ -70,10 +74,11 @@ listed boundary fires; any other `GS9999` remains a failure.
 
 - `gsi` does not promise compiled/interpreted parity for storage-dependent
   unsafe constructs.
-- Existing ref/out call-site write-back remains supported because it does not
-  expose a reusable pointer value.
-- Boundary tests pin complete script-mode output and non-zero exit status, so a
-  message remains useful without a rendered source location.
+- Existing ref/out argument write-back at call sites remains supported; this
+  does not provide stable ref-local aliasing.
+- Boundary tests pin non-zero exit status, empty standard output, and the
+  self-contained diagnostic message while tolerating surrounding renderer
+  context.
 - Issue #3004 owns the highest-severity contract violation: free-standing
   address-of and dereference currently return a wrong answer instead of failing.
 - A future dedicated diagnostic code can replace the interim `GS9999`

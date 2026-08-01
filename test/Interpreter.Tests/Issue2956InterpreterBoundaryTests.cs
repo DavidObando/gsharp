@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2956 / ADR-0152: script-mode <c>gsi</c> reports self-contained
+/// Issue #2956 / ADR-0153: script-mode <c>gsi</c> reports self-contained
 /// diagnostics for constructs that require the compiled storage model.
 /// </summary>
 [Collection("ConsoleIo")]
@@ -156,7 +156,7 @@ public class Issue2956InterpreterBoundaryTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Equal($"GS9999: {message}\n", result.StandardError);
+        Assert.Contains($"GS9999: {message}", result.StandardError);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunGsi(

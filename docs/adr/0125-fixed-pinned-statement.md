@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), ADR-0152 (interpreter compiled-only storage boundary), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900)
+- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), ADR-0153 (interpreter compiled-only storage boundary), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900)
 
 ## Context
 
@@ -194,7 +194,7 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
   a nested lambda remains legal because that lambda has its own function body;
   normal fixed-pointer escape rules still prevent capturing the pointer.
 - `fixed` is compiled-only under
-  [ADR-0152](0152-interpreter-compiled-only-storage-boundary.md). `gsi` reports
+  [ADR-0153](0153-interpreter-compiled-only-storage-boundary.md). `gsi` reports
   that pinning requires the CIL pinned-local emit path; it does not attempt to
   emulate pinning without a storage and address model.
 - Deferred: fixed-size buffers.

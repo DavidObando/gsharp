@@ -309,7 +309,7 @@ These diagnostics indicate an internal compiler problem. If you encounter them, 
 
 #### Interpreter compiled-only boundaries
 
-[ADR-0152](adr/0152-interpreter-compiled-only-storage-boundary.md) defines
+[ADR-0153](adr/0153-interpreter-compiled-only-storage-boundary.md) defines
 storage-dependent unsafe constructs as compiled-only. The clean boundary sites
 for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers currently
 surface through `GS9999` with a self-contained message naming the construct and
