@@ -8,25 +8,25 @@ package GSharp.Example.TryParseOutVar
 
 import System
 
-func tryProduce(out result int32) bool {
-    result = 42
+func tryProduce(value int32, out result int32) bool {
+    result = value
     return true
 }
 
 // 1. Legacy back-compat: pass a pre-declared variable by address.
 var slot = 0
-var ok = tryProduce(&slot)
+var ok = tryProduce(11, &slot)
 Console.WriteLine(slot)
 Console.WriteLine(ok)
 
 // 2. Inline `out var` declaration: introduces a fresh writable local.
-tryProduce(out var fromVar)
+tryProduce(22, out var fromVar)
 Console.WriteLine(fromVar)
 
 // 3. Inline `out let` declaration: introduces a fresh read-only local.
-tryProduce(out let fromLet)
+tryProduce(33, out let fromLet)
 Console.WriteLine(fromLet)
 
 // 4. Discard: the produced value is dropped.
-tryProduce(out _)
+tryProduce(44, out _)
 Console.WriteLine("done")

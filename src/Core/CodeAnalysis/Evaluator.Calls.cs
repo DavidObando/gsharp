@@ -55,14 +55,22 @@ public sealed partial class Evaluator
         }
         else
         {
-            var args = new object[node.Arguments.Length];
-            var refKinds = node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray();
-            var userRefSlots = BuildRefSlots(node.Arguments, refKinds, args);
+            var args = node.Function.Parameters.Any(p => p.RefKind != RefKind.None)
+                ? new object[node.Arguments.Length]
+                : null;
+            var userRefSlots = args == null
+                ? null
+                : BuildRefSlots(
+                    node.Arguments,
+                    node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray(),
+                    args);
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
 
             for (int i = 0; i < node.Arguments.Length; i++)
             {
-                locals[node.Function.Parameters[i]] = args[i];
+                locals[node.Function.Parameters[i]] = args == null
+                    ? EvaluateExpression(node.Arguments[i])
+                    : args[i];
             }
 
             var statement = program.Functions[node.Function];
@@ -1121,13 +1129,10 @@ public sealed partial class Evaluator
 
             if (rk != RefKind.None && arg is BoundAddressOfExpression addrOf)
             {
-                // ADR-0039 / issue #1599: `out` never reads the incoming value,
-                // and for an inline `out var n` declaration the synthesized local
-                // is not yet present in the interpreter's locals map (it is only
-                // created by the write-back below). Evaluating the operand here
-                // would throw a KeyNotFoundException, so pass the pointee type's
-                // default for `out` and only read the current value for `ref`.
-                args[i] = rk == RefKind.Out
+                // Inline out declarations have no runtime slot until write-back.
+                // Existing lvalues retain their incoming value because G# user
+                // functions may read an out parameter before assigning it.
+                args[i] = rk == RefKind.Out && !IsBoundLvalue(addrOf.Operand)
                     ? DefaultValue(addrOf.Operand.Type)
                     : EvaluateExpression(addrOf.Operand);
                 if (rk == RefKind.Ref || rk == RefKind.Out)
@@ -1143,6 +1148,17 @@ public sealed partial class Evaluator
         }
 
         return refSlots;
+    }
+
+    private bool IsBoundLvalue(BoundExpression operand)
+    {
+        if (operand is not BoundVariableExpression variable)
+        {
+            return true;
+        }
+
+        return Locals.Peek().ContainsKey(variable.Variable)
+            || TryGetGlobal(variable.Variable, out _);
     }
 
     /// <summary>ADR-0039: Writes back modified ref/out argument values after a CLR method invocation.</summary>
