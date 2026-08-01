@@ -25,18 +25,18 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
             import System.Collections.Generic
 
             struct Outer[T] {
-                enum Color { Red }
-                func MakeColor() Color { return Color.Red }
+                enum Color { Red = 11, Green = 22, Blue = 33 }
+                func MakeColor() Color { return Color.Green }
             }
 
             func I(c Outer[int32].Color) Outer[int32].Color { return c }
             func S(c Outer[string].Color) Outer[string].Color { return c }
             func NI(c Outer[int32].Color?) Outer[int32].Color? { return c }
             func NS(c Outer[string].Color?) Outer[string].Color? { return c }
-            func RI() Outer[int32].Color { return Outer[int32].Color.Red }
-            func RS() Outer[string].Color { return Outer[string].Color.Red }
+            func RI() Outer[int32].Color { return Outer[int32].Color.Green }
+            func RS() Outer[string].Color { return Outer[string].Color.Blue }
             func BI() object { return Outer[int32].Color.Red }
-            func BS() object { return Outer[string].Color.Red }
+            func BS() object { return Outer[string].Color.Green }
             func Capture[T](c Outer[T].Color) () -> Outer[T].Color -> () -> c
             func Remap[A, B](c Outer[B].Color) int32 {
                 var outer = List[Outer[B].Color]()
@@ -49,6 +49,11 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
                     return int32(inner[0]) + int32(innerRed)
                 }
                 return int32(outerRed) + f(outer[0])
+            }
+            func Iterate[A, B](c Outer[B].Color) sequence[int32] {
+                var values = List[Outer[B].Color]()
+                values.Add(c)
+                yield int32(values[0])
             }
             struct Holder {
                 var IntRed Outer[int32].Color
@@ -87,8 +92,8 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         Assert.NotNull(intRed);
         Assert.NotNull(stringRed);
         Assert.Equal(intRed.MetadataToken, stringRed.MetadataToken);
-        Assert.Equal(0, intRed.GetRawConstantValue());
-        Assert.Equal(0, stringRed.GetRawConstantValue());
+        Assert.Equal(11, intRed.GetRawConstantValue());
+        Assert.Equal(11, stringRed.GetRawConstantValue());
         Assert.Equal(intEnum, intRed.FieldType);
         Assert.Equal(stringEnum, stringRed.FieldType);
 
@@ -99,13 +104,14 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
         var outerDefinition = allTypes.Single(t => t.Name == "Outer`1");
         var intOuter = outerDefinition.MakeGenericType(typeof(int));
         Assert.Equal(intEnum, GetMethod(intOuter, "MakeColor").ReturnType);
+        Assert.Equal(22, Convert.ToInt32(GetMethod(intOuter, "MakeColor").Invoke(Activator.CreateInstance(intOuter), null)));
 
         var intValue = GetMethod(program, "RI").Invoke(null, null);
         var stringValue = GetMethod(program, "RS").Invoke(null, null);
         Assert.Equal(intEnum, intValue.GetType());
         Assert.Equal(stringEnum, stringValue.GetType());
-        Assert.Equal(0, Convert.ToInt32(intValue));
-        Assert.Equal(0, Convert.ToInt32(stringValue));
+        Assert.Equal(22, Convert.ToInt32(intValue));
+        Assert.Equal(33, Convert.ToInt32(stringValue));
         Assert.Equal(intEnum, GetMethod(program, "BI").Invoke(null, null).GetType());
         Assert.Equal(stringEnum, GetMethod(program, "BS").Invoke(null, null).GetType());
 
@@ -116,7 +122,12 @@ public class Issue2898NestedEnumConstructedOuterEmitTests
 
         var remap = GetMethod(program, "Remap").MakeGenericMethod(typeof(int), typeof(string));
         Assert.Equal(stringEnum, Assert.Single(remap.GetParameters()).ParameterType);
-        Assert.Equal(0, remap.Invoke(null, new[] { stringValue }));
+        Assert.Equal(55, remap.Invoke(null, new[] { stringValue }));
+
+        var iterate = GetMethod(program, "Iterate").MakeGenericMethod(typeof(int), typeof(string));
+        Assert.Equal(stringEnum, Assert.Single(iterate.GetParameters()).ParameterType);
+        var sequence = Assert.IsAssignableFrom<IEnumerable>(iterate.Invoke(null, new[] { stringValue }));
+        Assert.Equal(new[] { 33 }, sequence.Cast<object>().Select(Convert.ToInt32));
     }
 
     [Fact]
