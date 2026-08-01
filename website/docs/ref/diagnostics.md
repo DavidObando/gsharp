@@ -123,7 +123,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |
 | GS0164 | Error | Deconstruction requires a tuple or `data struct` initializer. | Deconstruction attempted on a plain `struct`. |
 | GS0165 | Error | Multiple top-level files. | More than one source file contains top-level statements. |
-| GS0166 | Error | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present. |
+| GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present. |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
 | GS0168 | Error | `fallthrough` is not supported. | `fallthrough` keyword used in a `switch` case body. |
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
@@ -198,7 +198,7 @@ User class constructor flow — explicit `init(...)` constructors, primary const
 | GS0214 | Error | Class `{base}` has no accessible constructor that takes `{N}` argument(s). | `init() : base(1, 2)` when the base only declares `init()`. |
 | GS0215 | Error | Class `{name}` cannot declare both a primary constructor and an explicit `init` constructor. | `class Customer(id int32) { init(name string) { } }`. |
 | GS0216 | Error | Class `{name}` declares multiple `init` constructors; only a single explicit constructor is supported. | Two `init(...)` declarations in the same class body. |
-| GS0217 | Error | Generic class `{name}` with an explicit `init` constructor cannot be constructed; generic explicit constructors are not supported. | `class Box[T] { init(x T) { } }` then `Box[int32](42)`. |
+| GS0217 | _Retired_ | Previously: generic class with an explicit `init` constructor cannot be constructed. Generic classes with explicit `init(...)` constructors are now supported (issue #1214); this diagnostic is no longer emitted. | — |
 
 ### Delegate conversion diagnostics (GS0218)
 
@@ -538,7 +538,7 @@ label` targeting an enclosing loop by name.
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0293 | Error | No enclosing loop is labeled `<label>` (in `break <label>` / `continue <label>`). |
-| GS0294 | Error | Label `<label>` can only be applied to a loop statement (`for` / `while` / `do-while`). |
+| GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets (ADR-0139); this diagnostic is no longer emitted. |
 | GS0295 | Warning | Label `<label>` shadows an enclosing loop label of the same name; the inner label wins for nested `break` / `continue`. |
 
 Cause/fix:
@@ -1004,7 +1004,7 @@ ECMA-335 II.15.4.2.4 and III.2.1).
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).` |
 | GS0333 | Error | `Type parameter '<T>' has no constraint that declares a static-virtual member '<Name>' (ADR-0089).` |
-| GS0396 | — | **Retired.** Default-bodied static-virtual interface properties (`prop Name T { get { … } }`) are now supported, so this diagnostic is no longer raised. |
+| GS0396 | Error | **Retired.** Default-bodied static-virtual interface properties (`prop Name T { get { … } }`) are now supported, so this diagnostic is no longer raised. |
 | GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` Not raised for a fully default-bodied static property (the interface supplies the body). |
 
 Static-virtual interface members emit the standard CLR shape:
@@ -1733,6 +1733,7 @@ different method.
 | ID | Severity | Description |
 |----|----------|-------------|
 | GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
+| GS0513 | Error | Unmanaged pointer operations require compiled execution because the interpreter has no storage-location model. |
 
 `sequence[T?]` needs one stable CLR element representation. Iterator return
 types are specialized into `class` and `struct` variants automatically.
@@ -1746,3 +1747,88 @@ that call: until [#2958](https://github.com/DavidObando/gsharp/issues/2958),
 it reports GS0266, and a nullable value-type argument may instead report
 GS0152. G# rejects source overloads differentiated only by constraints with
 GS0264, even though iterator specialization synthesizes equivalent variants.
+
+## Additional current and reserved diagnostics
+
+These entries complete the current compiler catalogue. Older topic sections
+above retain their longer explanations and examples.
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0268 | Error | Type does not contain a nested type of the requested name. |
+| GS0269 | Error | Unrecognised escape sequence `\X` in string literal. |
+| GS0270 | Error | The `as` operator targets a non-nullable value type; use a reference type or nullable value type instead. |
+| GS0271 | Error | `await using let` outside an async function. |
+| GS0272 | Error | Type is not async-disposable. |
+| GS0274 | Error | `nil` is supplied to a non-nullable parameter of an attribute constructor. |
+| GS0275 | Warning | `.GetAwaiter().GetResult()` is called directly on a `ValueTask` or `ValueTask[T]`; convert it to `Task` with `.AsTask()` first. |
+| GS0278 | Error | A convenience initializer does not delegate to another initializer with `init(args)` before any other statement. |
+| GS0279 | Error | A convenience initializer declares `: base(args)` instead of delegating to another initializer with `init(args)`. |
+| GS0280 | Error | An `init(args)` constructor self-delegation appears outside a class constructor body. |
+| GS0281 | Error | A designated initializer delegates to a sibling `init(args)` overload instead of chaining to its base class. |
+| GS0282 | Error | A convenience initializer delegates to itself. |
+| GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call. |
+| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters. |
+| GS0367 | Error | A `yield` appears inside a `try` block that has a `catch` clause. |
+| GS0369 | Error | A collection initializer targets a type with no accessible `Add` method or settable indexer. |
+| GS0370 | Error | An indexer declaration has no index parameters. |
+| GS0371 | Error | An indexer declaration has no `get` or `set` accessor body. |
+| GS0372 | Error | An init-only property is assigned outside a constructor, object initializer, or `init` accessor for the same instance. |
+| GS0373 | Error | A property declares both `set` and `init` accessors. |
+| GS0374 | Error | A static property declares an `init` accessor. |
+| GS0378 | Error | Class `{name}` cannot inherit from itself (e.g. `class A : A` or the generic `class A[T] : A[T]`). Naming the enclosing type merely as a type argument of a base/interface type — `class Shape : IEquatable[Shape]` — is legal. |
+| GS0381 | Error | A class participates in a direct or transitive inheritance cycle. |
+| GS0382 | Error | Struct `{structName}` cannot declare base type `{baseTypeName}`; a struct may only implement interfaces. |
+| GS0392 | Error | A range expression slices a type that has no supported array, slice, string, span-like, or `System.Range` indexer shape. |
+| GS0410 | Error | A from-end index marker `^` is only valid inside index brackets (e.g. `arr[^1]` or `arr[a..^b]`) or after `..` in a standalone range upper bound (`a..^b`); a standalone range cannot start with `^`. Use an indexer, or parenthesise a one's-complement bound (`(^a)..b`). |
+| GS0414 | Error | An unqualified reference to a `shared` member is ambiguous between two or more imported types (the G# form of C# `using static`, ADR-0134). Qualify it with the owning type name. |
+| GS0415 | Error | The operand of `sizeof(T)` must be an unmanaged type — a blittable primitive, an enum, a value struct whose fields are all unmanaged, a pointer, or a generic type parameter constrained `unmanaged`. |
+| GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern. |
+| GS0417 | Error | The source nests expressions, types, statements, patterns, or string-interpolation holes more deeply than the compiler's recursion limit. Simplify or flatten the nesting. |
+| GS0418 | Error | A `using` or `await using` statement uses tuple or named deconstruction instead of one variable declaration. |
+| GS0419 | Reserved | Former auto-property-in-`data struct` diagnostic; auto-properties are now supported in data aggregates. |
+| GS0420 | Error | The argument to `nameof` must be a name reference: an identifier, member access, or type. |
+| GS0421 | Error | Member is marked `open` but the enclosing class is not open. |
+| GS0422 | Error | A ref-kind parameter (`ref`/`out`/`in`) cannot appear on an `async`, `sequence`, or `async sequence` function. |
+| GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. |
+| GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. |
+| GS0460 | Error | The operand of a `defer` statement is a call with one or more `ref`, `out`, or `in` arguments. |
+| GS0461 | Error | A `lock` statement's operand is not a reference type. |
+| GS0462 | Error | A generic local function is not declared as a `let`-bound function literal. |
+| GS0463 | Error | A generic local function captures a variable from its enclosing scope. |
+| GS0465 | Error | `@assembly:InternalsVisibleTo(...)` does not contain exactly one string literal naming the friend assembly. |
+| GS0466 | Error | A named argument is used on an attribute type declared in the same compilation; use a constructor argument instead. |
+| GS0467 | Error | An enum member's explicit `= expr` value isn't a constant int32 expression. |
+| GS0468 | Error | A local function references a type parameter belonging to an enclosing method or class that its emitted method cannot close over. |
+| GS0469 | Error | A `goto` names no label in the enclosing function. |
+| GS0470 | Error | Two `goto` labels in the same function have the same name. |
+| GS0471 | Error | An explicit-arity open-generic `typeof` name resolves to different CLR types from multiple imported namespaces. |
+| GS0472 | Error | Code outside the declaring top-level type accesses one of its private members. |
+| GS0473 | Error | An expression-tree lambda contains a language construct that cannot be represented in an expression tree. |
+| GS0474 | Error | A lambda targets `Expression[T]` where `T` is not a delegate type. |
+| GS0475 | Error | One declaration in a partial-type group omits `partial`. |
+| GS0476 | Error | Partial declarations disagree on whether the type is a class, struct, or interface. |
+| GS0477 | Error | Partial declarations specify conflicting accessibility modifiers. |
+| GS0478 | Error | Partial declarations specify conflicting `open` or `sealed` modifiers. |
+| GS0479 | Error | A `data`, `inline`, or `ref` modifier appears on only some declarations of a partial type. |
+| GS0480 | Error | Partial declarations have different type-parameter names, arity, order, or constraints. |
+| GS0481 | Error | Partial declarations have conflicting base clauses or more than one base-constructor argument list. |
+| GS0482 | Error | More than one partial declaration supplies a primary constructor. |
+| GS0483 | Error | A partial type contains more than one `deinit`. |
+| GS0484 | Error | `partial` is applied to an aggregate kind other than class, struct, or interface. |
+| GS0485 | Error | An anonymous object declares an `init` or `deinit` member. |
+| GS0486 | Error | A field in an anonymous object with a base type, method, or event omits its explicit type. |
+| GS0487 | Error | A data class or struct declares `ToString` with a shape other than public, instance, non-generic, synchronous, parameterless, and returning `string`. |
+| GS0490 | Error | A requested structural projection is unsafe or incomplete; the diagnostic explains the incompatible member or shape. |
+| GS0492 | Error | An explicit-interface qualifier clause (`func (X) M(...)` / `prop (X) P T` / `event (X) E T`) references a type that is not an interface. |
+| GS0493 | Error | An explicit-interface qualifier clause references an interface the containing type does not implement. |
+| GS0494 | Error | An explicit-interface qualifier clause's interface is implemented, but no member on it matches the declared name, signature, or accessor shape. |
+| GS0495 | Error | Two members of the same containing type both carry an explicit-interface qualifier clause that resolves to the same interface member. |
+| GS0496 | Error | A bare source type name is ambiguous between same-named types declared by multiple imported packages. |
+| GS0497 | Error | A function literal is an async iterator; declare a named async iterator and reference it instead. |
+| GS0498 | Error | A `goto` enters a `catch` or `finally` handler from outside that handler. |
+| GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage. |
+| GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value. |
+| GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous. |
+| GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained. |
+| GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. |
