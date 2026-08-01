@@ -49,6 +49,91 @@ print(string(v))
     }
 
     [Fact]
+    public void OutParameter_UserFunctionCanReadCallerValueBeforeAssignment()
+    {
+        var output = RunSubmission("""
+            import System
+
+            func addOne(out result int32) {
+                result = result + 1
+            }
+
+            var value = 41
+            addOne(&value)
+            Console.WriteLine(value)
+            """);
+
+        Assert.Equal($"42{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void ClrMethod_InlineOutVar_ProducesValue()
+    {
+        var output = RunSubmission("""
+            import System
+
+            int32.TryParse("77", out var parsed)
+            Console.WriteLine(parsed)
+            """);
+
+        Assert.Equal($"77{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void UserFunction_InlineOutVar_ProducesValue()
+    {
+        var output = RunSubmission("""
+            import System
+
+            func tryProduce(out result int32) bool {
+                result = 22
+                return true
+            }
+
+            tryProduce(out var produced)
+            Console.WriteLine(produced)
+            """);
+
+        Assert.Equal($"22{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void UserFunction_InlineOutLet_ProducesValue()
+    {
+        var output = RunSubmission("""
+            import System
+
+            func tryProduce(out result int32) bool {
+                result = 33
+                return true
+            }
+
+            tryProduce(out let produced)
+            Console.WriteLine(produced)
+            """);
+
+        Assert.Equal($"33{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void UserFunction_OutDiscard_ExecutesCallee()
+    {
+        var output = RunSubmission("""
+            import System
+
+            func produce(out result int32) int32 {
+                result = 44
+                return result
+            }
+
+            let observed = produce(out _)
+            Console.WriteLine(observed)
+            """);
+
+        Assert.Equal($"44{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void InParameter_BodyReadsCallerValue()
     {
         var output = RunSubmission(@"

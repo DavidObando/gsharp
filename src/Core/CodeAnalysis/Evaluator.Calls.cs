@@ -55,35 +55,22 @@ public sealed partial class Evaluator
         }
         else
         {
+            var args = node.Function.Parameters.Any(p => p.RefKind != RefKind.None)
+                ? new object[node.Arguments.Length]
+                : null;
+            var userRefSlots = args == null
+                ? null
+                : BuildRefSlots(
+                    node.Arguments,
+                    node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray(),
+                    args);
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
-
-            // ADR-0060 item #7: identify ref-kind parameters so we can
-            // write the post-body value back into the caller's lvalue.
-            List<(ParameterSymbol Parameter, BoundExpression Operand)> userRefSlots = null;
 
             for (int i = 0; i < node.Arguments.Length; i++)
             {
-                var parameter = node.Function.Parameters[i];
-                var arg = node.Arguments[i];
-
-                if (parameter.RefKind != RefKind.None && arg is BoundAddressOfExpression addrOf)
-                {
-                    // Seed the parameter slot with the caller's current value
-                    // (for `out` this is a placeholder the callee is expected
-                    // to overwrite). Capture the operand for write-back unless
-                    // the kind is `in` (read-only).
-                    locals[parameter] = EvaluateExpression(addrOf.Operand);
-                    if (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
-                    {
-                        userRefSlots ??= [];
-                        userRefSlots.Add((parameter, addrOf.Operand));
-                    }
-                }
-                else
-                {
-                    var value = EvaluateExpression(arg);
-                    locals[parameter] = value;
-                }
+                locals[node.Function.Parameters[i]] = args == null
+                    ? EvaluateExpression(node.Arguments[i])
+                    : args[i];
             }
 
             var statement = program.Functions[node.Function];
@@ -105,8 +92,9 @@ public sealed partial class Evaluator
             // the caller's lvalue after restoring the caller's frame.
             if (userRefSlots != null)
             {
-                foreach (var (parameter, operand) in userRefSlots)
+                foreach (var (index, operand) in userRefSlots)
                 {
+                    var parameter = node.Function.Parameters[index];
                     var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
                     WriteBackToOperand(operand, finalValue);
                 }
@@ -1141,13 +1129,10 @@ public sealed partial class Evaluator
 
             if (rk != RefKind.None && arg is BoundAddressOfExpression addrOf)
             {
-                // ADR-0039 / issue #1599: `out` never reads the incoming value,
-                // and for an inline `out var n` declaration the synthesized local
-                // is not yet present in the interpreter's locals map (it is only
-                // created by the write-back below). Evaluating the operand here
-                // would throw a KeyNotFoundException, so pass the pointee type's
-                // default for `out` and only read the current value for `ref`.
-                args[i] = rk == RefKind.Out
+                // Inline out declarations have no runtime slot until write-back.
+                // Existing lvalues retain their incoming value because G# user
+                // functions may read an out parameter before assigning it.
+                args[i] = rk == RefKind.Out && !IsBoundLvalue(addrOf.Operand)
                     ? DefaultValue(addrOf.Operand.Type)
                     : EvaluateExpression(addrOf.Operand);
                 if (rk == RefKind.Ref || rk == RefKind.Out)
@@ -1163,6 +1148,17 @@ public sealed partial class Evaluator
         }
 
         return refSlots;
+    }
+
+    private bool IsBoundLvalue(BoundExpression operand)
+    {
+        if (operand is not BoundVariableExpression variable)
+        {
+            return true;
+        }
+
+        return Locals.Peek().ContainsKey(variable.Variable)
+            || TryGetGlobal(variable.Variable, out _);
     }
 
     /// <summary>ADR-0039: Writes back modified ref/out argument values after a CLR method invocation.</summary>
