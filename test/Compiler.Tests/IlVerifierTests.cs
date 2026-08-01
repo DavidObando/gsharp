@@ -220,7 +220,7 @@ public class IlVerifierTests
     [Fact]
     public void RunProcess_LargeStdoutAndStderr_DrainsBothPipes()
     {
-        // A regression that starts either drain after WaitForExit hangs this test.
+        // A regression that blocks in either drain before WaitForExit hangs this test.
         // xUnit's Fact timeout is unavailable because this assembly disables test
         // parallelization, and RunProcess's timeout cannot cover a deadlock placed
         // before its wait. Treat such a hang as the regression, not a flake.
