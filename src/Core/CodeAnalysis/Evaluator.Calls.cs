@@ -63,7 +63,8 @@ public sealed partial class Evaluator
                 : BuildRefSlots(
                     node.Arguments,
                     node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray(),
-                    args);
+                    args,
+                    null);
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
 
             for (int i = 0; i < node.Arguments.Length; i++)
@@ -892,7 +893,7 @@ public sealed partial class Evaluator
     private object EvaluateImportedCallExpression(BoundImportedCallExpression node)
     {
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Function.Method);
 
         // Issue #1599: a generic BCL method closed over a same-compilation user
         // value type (e.g. `Enum.TryParse[Color]`) was closed over a value-type
@@ -1007,8 +1008,7 @@ public sealed partial class Evaluator
 
         receiver = UnwrapClrReceiver(receiver);
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
-
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
         var method = ResolveMethodForReceiver(node.Method, receiver);
 
         // concurrency: see TryGetInterpreterMapLock — routes `range m`'s
@@ -1178,9 +1178,11 @@ public sealed partial class Evaluator
     private List<(int Index, BoundExpression Operand)> BuildRefSlots(
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> refKinds,
-        object[] args)
+        object[] args,
+        MethodBase method)
     {
         List<(int Index, BoundExpression Operand)> refSlots = null;
+        var parameters = method?.GetParameters();
 
         for (int i = 0; i < arguments.Length; i++)
         {
@@ -1204,6 +1206,23 @@ public sealed partial class Evaluator
             else
             {
                 args[i] = EvaluateExpression(arg);
+            }
+
+            if (parameters != null && args[i] is ClosureValue closure)
+            {
+                var parameterType = parameters[i].ParameterType;
+                if (parameterType.IsByRef)
+                {
+                    parameterType = parameterType.GetElementType();
+                }
+
+                if (parameterType?.GetMethod(nameof(Action.Invoke)) != null
+                    && typeof(Delegate).IsAssignableFrom(parameterType))
+                {
+                    args[i] = CreateInterpreterDelegate(
+                        parameterType,
+                        invokeArgs => InvokeMaterializedClosure(closure, invokeArgs));
+                }
             }
         }
 

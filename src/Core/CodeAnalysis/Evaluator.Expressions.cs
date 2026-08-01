@@ -1210,7 +1210,7 @@ public sealed partial class Evaluator
     private object InvokeClrCtor(ConstructorInfo ctor, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds)
     {
         var args = new object[arguments.Length];
-        var refSlots = BuildRefSlots(arguments, argumentRefKinds, args);
+        var refSlots = BuildRefSlots(arguments, argumentRefKinds, args, ctor);
         var instance = ctor.Invoke(args);
         WriteBackRefSlots(refSlots, args);
         return instance;
@@ -1259,7 +1259,7 @@ public sealed partial class Evaluator
     private object EvaluateClrConstructorCallExpression(BoundClrConstructorCallExpression node)
     {
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Constructor);
 
         var result = node.Constructor.Invoke(args);
         WriteBackRefSlots(refSlots, args);
@@ -1269,7 +1269,7 @@ public sealed partial class Evaluator
     private object EvaluateClrStaticCallExpression(BoundClrStaticCallExpression node)
     {
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
 
         var result = node.Method.Invoke(null, args);
         WriteBackRefSlots(refSlots, args);
