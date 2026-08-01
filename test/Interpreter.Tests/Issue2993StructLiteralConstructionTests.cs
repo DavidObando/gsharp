@@ -86,6 +86,23 @@ public class Issue2993StructLiteralConstructionTests
         Assert.Equal("True\n", Evaluate(Source));
     }
 
+    [Fact]
+    public void ClassLiteral_WithPrimaryConstructor_AllocatesImportedBaseBacking()
+    {
+        const string Source = """
+            import System
+            import System.IO
+
+            class Buffer(Label string) : MemoryStream {
+            }
+
+            var b = Buffer{ Label: "primary" }
+            Console.WriteLine(b.CanRead)
+            """;
+
+        Assert.Equal("True\n", Evaluate(Source));
+    }
+
     private static string Evaluate(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(source));
