@@ -28,6 +28,8 @@ namespace GSharp.Core.CodeAnalysis;
 public sealed partial class Evaluator
 #pragma warning restore CA1001
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ConcurrentDictionary<VariableSymbol, object>, Dictionary<TypeParameterSymbol, TypeSymbol>> RuntimeTypeArguments = new();
+
     private object EvaluateCallExpression(BoundCallExpression node)
     {
         // ADR-0047 §6 / issue #176: a [Conditional("SYMBOL")] call whose
@@ -79,6 +81,7 @@ public sealed partial class Evaluator
                 : localFunctionBodies[node.Function];
             var isIterator = IsIteratorFunction(node.Function, statement);
             object result;
+            RegisterRuntimeTypeArguments(locals, node.Function.TypeParameters, node.MethodTypeArguments);
             using (PushFrame(locals))
             {
                 if (isIterator)
@@ -365,6 +368,7 @@ public sealed partial class Evaluator
             frame[parameter] = value;
         }
 
+        RegisterRuntimeTypeArguments(frame, method.TypeParameters, node.MethodTypeArguments);
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
@@ -909,7 +913,8 @@ public sealed partial class Evaluator
             return emulatedResult;
         }
 
-        var result = node.Function.Method.Invoke(null, args);
+        var method = ResolveMemberForRuntimeType(node.Function.Method, ResolveRuntimeClrType(node.StaticContainerType));
+        var result = method.Invoke(null, args);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
@@ -1009,7 +1014,7 @@ public sealed partial class Evaluator
         receiver = UnwrapClrReceiver(receiver);
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
-        var method = ResolveMethodForReceiver(node.Method, receiver);
+        var method = ResolveMethodForReceiver(node.Method, receiver, ResolveRuntimeClrType(node.Receiver.Type));
 
         // concurrency: see TryGetInterpreterMapLock — routes `range m`'s
         // `GetEnumerator()`/`MoveNext()`, `m.ContainsKey(k)`, `m.Remove(k)`,
@@ -1047,13 +1052,14 @@ public sealed partial class Evaluator
     // The lookup also walks inherited interfaces (e.g. `MoveNext` lives on
     // the non-generic `IEnumerator` even when the receiver is reached via
     // `IEnumerator<T>`).
-    private static System.Reflection.MethodInfo ResolveMethodForReceiver(System.Reflection.MethodInfo method, object receiver)
+    private static System.Reflection.MethodInfo ResolveMethodForReceiver(System.Reflection.MethodInfo method, object receiver, Type symbolicReceiverType)
     {
         if (receiver == null || method == null)
         {
             return method;
         }
 
+        method = ResolveMemberForRuntimeType(method, symbolicReceiverType);
         var declaring = method.DeclaringType;
         if (declaring == null || declaring.IsAssignableFrom(receiver.GetType()))
         {
@@ -1112,6 +1118,92 @@ public sealed partial class Evaluator
             types: paramTypes,
             modifiers: null);
         return direct ?? method;
+    }
+
+    private void RegisterRuntimeTypeArguments(
+        ConcurrentDictionary<VariableSymbol, object> frame,
+        ImmutableArray<TypeParameterSymbol> parameters,
+        ImmutableArray<TypeSymbol> arguments)
+    {
+        if (parameters.IsDefaultOrEmpty || parameters.Length != arguments.Length)
+        {
+            return;
+        }
+
+        var substitutions = new Dictionary<TypeParameterSymbol, TypeSymbol>(parameters.Length);
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            substitutions.Add(parameters[i], ResolveRuntimeTypeSymbol(arguments[i]));
+        }
+
+        RuntimeTypeArguments.Add(frame, substitutions);
+    }
+
+    private Type ResolveRuntimeClrType(TypeSymbol type)
+    {
+        var resolved = ResolveRuntimeTypeSymbol(type);
+        return resolved is ImportedTypeSymbol imported
+            ? imported.ReifyClosedClrType()
+            : resolved?.ClrType;
+    }
+
+    private TypeSymbol ResolveRuntimeTypeSymbol(TypeSymbol type)
+    {
+        if (type is TypeParameterSymbol parameter)
+        {
+            foreach (var frame in Locals)
+            {
+                if (RuntimeTypeArguments.TryGetValue(frame, out var substitutions)
+                    && substitutions.TryGetValue(parameter, out var argument))
+                {
+                    return ReferenceEquals(argument, parameter) ? argument : ResolveRuntimeTypeSymbol(argument);
+                }
+            }
+
+            return type;
+        }
+
+        if (type is NullableTypeSymbol nullable)
+        {
+            var underlying = ResolveRuntimeTypeSymbol(nullable.UnderlyingType);
+            return ReferenceEquals(underlying, nullable.UnderlyingType)
+                ? type
+                : NullableTypeSymbol.Get(underlying);
+        }
+
+        if (type is not ImportedTypeSymbol imported
+            || imported.OpenDefinition == null
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return type;
+        }
+
+        var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(imported.TypeArguments.Length);
+        var changed = false;
+        foreach (var argument in imported.TypeArguments)
+        {
+            var resolved = ResolveRuntimeTypeSymbol(argument);
+            changed |= !ReferenceEquals(resolved, argument);
+            arguments.Add(resolved);
+        }
+
+        return changed
+            ? ImportedTypeSymbol.GetConstructed(imported.ClrType, imported.OpenDefinition, arguments.MoveToImmutable())
+            : type;
+    }
+
+    private static T ResolveMemberForRuntimeType<T>(T member, Type runtimeType)
+        where T : System.Reflection.MemberInfo
+    {
+        var declaring = member?.DeclaringType;
+        if (declaring?.IsGenericType != true
+            || runtimeType?.IsGenericType != true
+            || declaring.GetGenericTypeDefinition() != runtimeType.GetGenericTypeDefinition())
+        {
+            return member;
+        }
+
+        return runtimeType.GetMemberWithSameMetadataDefinitionAs(member) as T ?? member;
     }
 
     // Issue #517: `GetValueOrDefault()` and `GetValueOrDefault(T)` against the
