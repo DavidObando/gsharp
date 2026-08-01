@@ -263,12 +263,12 @@ internal sealed class StateMachineEmitter
         public IteratorStateMachineInfo(
             IteratorStateMachinePlan plan,
             StructSymbol classSym,
-            ImmutableArray<TypeParameterSymbol> outerMethodTypeParameters,
+            ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
             ImmutableArray<TypeParameterSymbol> classTypeParameters)
         {
             this.Plan = plan;
             this.ClassSym = classSym;
-            this.OuterMethodTypeParameters = outerMethodTypeParameters;
+            this.SourceTypeParameters = sourceTypeParameters;
             this.ClassTypeParameters = classTypeParameters;
         }
 
@@ -277,44 +277,38 @@ internal sealed class StateMachineEmitter
         public StructSymbol ClassSym { get; }
 
         /// <summary>
-        /// Gets the OUTER method's type parameters (those declared on
-        /// <see cref="IteratorStateMachinePlan.Function"/>) that the
-        /// state-machine class is reified over (issue #810). Empty for
-        /// non-generic iterators.
+        /// Gets the original receiver and method type parameters that the
+        /// state-machine class is reified over, in state-machine slot order.
         /// </summary>
-        public ImmutableArray<TypeParameterSymbol> OuterMethodTypeParameters { get; }
+        public ImmutableArray<TypeParameterSymbol> SourceTypeParameters { get; }
 
         /// <summary>
         /// Gets the state-machine class's own type parameters (issue #810),
         /// constructed as ordinal-aligned mirrors of
-        /// <see cref="OuterMethodTypeParameters"/> with
+        /// <see cref="SourceTypeParameters"/> with
         /// <see cref="TypeParameterSymbol.IsMethodTypeParameter"/> set to
         /// <see langword="false"/>. Empty for non-generic iterators.
         /// </summary>
         public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
 
         /// <summary>
-        /// Issue #810 + #1465: returns the emit-time remap from each
-        /// outer-method type parameter to its corresponding class-type-parameter
-        /// ordinal on the synthesized state machine, or <see langword="null"/>
-        /// when this iterator method has no method-level type parameters. The
-        /// state machine's leading type parameters mirror the enclosing generic
-        /// type's parameters, so a method type parameter maps to the slot
-        /// offset by the enclosing class type-parameter count. Used by
+        /// Issue #810 + #1465 + #2951: returns the emit-time remap from each
+        /// original receiver/method type parameter to its corresponding
+        /// class-type-parameter ordinal on the synthesized state machine, or
+        /// <see langword="null"/> when none are in scope. Used by
         /// <see cref="GenericRemapState.ActiveIteratorStateMachineRemap"/>.
         /// </summary>
         public Dictionary<TypeParameterSymbol, int> BuildRemap()
         {
-            if (this.OuterMethodTypeParameters.IsDefaultOrEmpty)
+            if (this.SourceTypeParameters.IsDefaultOrEmpty)
             {
                 return null;
             }
 
-            var offset = this.ClassTypeParameters.Length - this.OuterMethodTypeParameters.Length;
-            var map = new Dictionary<TypeParameterSymbol, int>(this.OuterMethodTypeParameters.Length);
-            for (var i = 0; i < this.OuterMethodTypeParameters.Length; i++)
+            var map = new Dictionary<TypeParameterSymbol, int>(this.SourceTypeParameters.Length);
+            for (var i = 0; i < this.SourceTypeParameters.Length; i++)
             {
-                map[this.OuterMethodTypeParameters[i]] = offset + i;
+                map[this.SourceTypeParameters[i]] = i;
             }
 
             return map;
@@ -323,46 +317,42 @@ internal sealed class StateMachineEmitter
 
     /// <summary>
     /// Issue #1489: minimal carrier for an async-iterator SM's generic
-    /// reification — the outer (kickoff) method's type parameters and the
+    /// reification — the source function's in-scope type parameters and the
     /// state-machine class's own ordinal-aligned type parameters. Used to
-    /// build the outer-method-TP → class-TP-ordinal remap (mirroring
+    /// build the source-TP → class-TP-ordinal remap (mirroring
     /// <see cref="IteratorStateMachineInfo.BuildRemap"/>) without a sync
     /// iterator plan.
     /// </summary>
     public sealed class IteratorStateMachineGenericInfo
     {
         public IteratorStateMachineGenericInfo(
-            ImmutableArray<TypeParameterSymbol> outerMethodTypeParameters,
+            ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
             ImmutableArray<TypeParameterSymbol> classTypeParameters)
         {
-            this.OuterMethodTypeParameters = outerMethodTypeParameters;
+            this.SourceTypeParameters = sourceTypeParameters;
             this.ClassTypeParameters = classTypeParameters;
         }
 
-        public ImmutableArray<TypeParameterSymbol> OuterMethodTypeParameters { get; }
+        public ImmutableArray<TypeParameterSymbol> SourceTypeParameters { get; }
 
         public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
 
         /// <summary>
-        /// Returns the emit-time remap from each outer-method type parameter to
-        /// its class-type-parameter ordinal on the synthesized state machine,
-        /// or <see langword="null"/> when the method has no type parameters.
-        /// The leading class type parameters mirror the enclosing generic
-        /// type's parameters, so a method type parameter maps to the slot
-        /// offset by the enclosing class type-parameter count.
+        /// Returns the emit-time remap from each original receiver/method type
+        /// parameter to its class-type-parameter ordinal on the synthesized
+        /// state machine, or <see langword="null"/> when none are in scope.
         /// </summary>
         public Dictionary<TypeParameterSymbol, int> BuildRemap()
         {
-            if (this.OuterMethodTypeParameters.IsDefaultOrEmpty)
+            if (this.SourceTypeParameters.IsDefaultOrEmpty)
             {
                 return null;
             }
 
-            var offset = this.ClassTypeParameters.Length - this.OuterMethodTypeParameters.Length;
-            var map = new Dictionary<TypeParameterSymbol, int>(this.OuterMethodTypeParameters.Length);
-            for (var i = 0; i < this.OuterMethodTypeParameters.Length; i++)
+            var map = new Dictionary<TypeParameterSymbol, int>(this.SourceTypeParameters.Length);
+            for (var i = 0; i < this.SourceTypeParameters.Length; i++)
             {
-                map[this.OuterMethodTypeParameters[i]] = offset + i;
+                map[this.SourceTypeParameters[i]] = i;
             }
 
             return map;
@@ -435,6 +425,29 @@ internal sealed class StateMachineEmitter
         public StandaloneSignatureHandle LocalsSignature { get; }
     }
 
+    private static ImmutableArray<TypeParameterSymbol> GetIteratorTypeParametersInScope(FunctionSymbol function)
+    {
+        var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
+        var containingType = function.ReceiverType as StructSymbol
+            ?? function.StaticOwnerType as StructSymbol;
+        if (containingType != null)
+        {
+            var definition = containingType.Definition ?? containingType;
+            builder.AddRange(StructSymbol.CollectEnclosingTypeParameters(definition));
+            if (!definition.TypeParameters.IsDefaultOrEmpty)
+            {
+                builder.AddRange(definition.TypeParameters);
+            }
+        }
+
+        if (!function.TypeParameters.IsDefaultOrEmpty)
+        {
+            builder.AddRange(function.TypeParameters);
+        }
+
+        return builder.ToImmutable();
+    }
+
     #region Iterator state-machine synthesis
 
     public void SynthesizeIteratorStateMachines(PackageSymbol hostPackage)
@@ -465,22 +478,11 @@ internal sealed class StateMachineEmitter
             // activeIteratorStateMachineRemap encode-time hook. The class TPs
             // themselves are not used directly in any bound expression — the
             // substitution lives at the encoder.
-            var enclosingClassTPs = plan.Function.ReceiverType is StructSymbol iterRecv
-                ? (iterRecv.Definition ?? iterRecv).TypeParameters
-                : ImmutableArray<TypeParameterSymbol>.Empty;
-            if (enclosingClassTPs.IsDefault)
-            {
-                enclosingClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
-            }
-
-            var outerMethodTPs = plan.Function.TypeParameters.IsDefaultOrEmpty
-                ? ImmutableArray<TypeParameterSymbol>.Empty
-                : plan.Function.TypeParameters;
-
-            // Combined in-scope type parameters: enclosing class first, then
-            // method. Drives the SM's own generic parameters and the
+            // Combined in-scope type parameters: flattened enclosing receiver
+            // types first, then the receiver's own parameters, then method
+            // parameters. Drives the SM's own generic parameters and the
             // self-instantiation type arguments used by the kickoff.
-            var scopeTPs = enclosingClassTPs.AddRange(outerMethodTPs);
+            var scopeTPs = GetIteratorTypeParametersInScope(plan.Function);
             ImmutableArray<TypeParameterSymbol> classTPs;
             if (scopeTPs.IsDefaultOrEmpty)
             {
@@ -638,8 +640,8 @@ internal sealed class StateMachineEmitter
             // CreateIteratorStateMachineLiteral helper and let the encoder
             // routing decide. The kickoff body lives inside the user's
             // generic method whose type parameters are still active
-            // (`MVar(0)`), so we explicitly construct the SM type over the
-            // outer method's TPs.
+            // (`MVar(0)`), so we explicitly construct the SM type over every
+            // type parameter in scope.
             var kickoffSmType = classTPs.IsDefaultOrEmpty
                 ? smClass
                 // Issue #2037: project imported constructed-generic hoisted
@@ -660,7 +662,7 @@ internal sealed class StateMachineEmitter
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(kickoffSmType, stateField, parameterFields, plan.Function.Parameters, p => new BoundVariableExpression(null, p),
                     thisProxyField, plan.Function.ThisParameter != null ? new BoundVariableExpression(null, plan.Function.ThisParameter) : null)))));
-            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, outerMethodTPs, classTPs);
+            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, scopeTPs, classTPs);
 
             // Issue #2907: closure materialization inside the SYNC MoveNext body is
             // emitter-owned and bypasses IteratorMoveNextBodyBuilder's variable->field
@@ -728,19 +730,7 @@ internal sealed class StateMachineEmitter
             // signature is translated to the matching class-TP slot via the
             // activeIteratorStateMachineRemap encode-time hook (registered in
             // RME from AsyncIteratorStateMachineGenericInfos).
-            var enclosingClassTPs = plan.Function.ReceiverType is StructSymbol aiRecv
-                ? (aiRecv.Definition ?? aiRecv).TypeParameters
-                : ImmutableArray<TypeParameterSymbol>.Empty;
-            if (enclosingClassTPs.IsDefault)
-            {
-                enclosingClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
-            }
-
-            var outerMethodTPs = plan.Function.TypeParameters.IsDefaultOrEmpty
-                ? ImmutableArray<TypeParameterSymbol>.Empty
-                : plan.Function.TypeParameters;
-
-            var scopeTPs = enclosingClassTPs.AddRange(outerMethodTPs);
+            var scopeTPs = GetIteratorTypeParametersInScope(plan.Function);
             ImmutableArray<TypeParameterSymbol> classTPs;
             if (scopeTPs.IsDefaultOrEmpty)
             {
@@ -857,7 +847,7 @@ internal sealed class StateMachineEmitter
             {
                 smClass.SetTypeParameters(classTPs);
                 this.AsyncIteratorStateMachineGenericInfos[smClass] =
-                    new IteratorStateMachineGenericInfo(outerMethodTPs, classTPs);
+                    new IteratorStateMachineGenericInfo(scopeTPs, classTPs);
             }
 
             // Methods: MoveNext, get_Current, MoveNextAsync, DisposeAsync, GetAsyncEnumerator

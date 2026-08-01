@@ -1313,6 +1313,9 @@ internal sealed class UserTokenResolver
         string methodName,
         BlobBuilder signature)
     {
+        // A caller may encode the signature under containingType's registered
+        // remap, then restore the ambient remap used here. containingType
+        // determines that signature remap and is already part of the key.
         var key = (containingType, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
         {
@@ -1398,6 +1401,18 @@ internal sealed class UserTokenResolver
         return sigBlob;
     }
 
+    private BlobBuilder EncodeOpenStructMethodSignature(
+        StructSymbol containingType,
+        FunctionSymbol openMethod)
+    {
+        // Nested generic definitions re-ordinalize enclosing and own type
+        // parameters into one CLR VAR vector. Match the MethodDef encoding.
+        using (this.remaps.PushSmRemap(containingType.Definition ?? containingType))
+        {
+            return this.EncodeOpenMethodSignature(openMethod);
+        }
+    }
+
     /// <summary>
     /// ADR-0087 §3 R3: resolves the right token for a call to a user
     /// instance method. For a non-generic containing type returns the
@@ -1443,7 +1458,11 @@ internal sealed class UserTokenResolver
             return openDef;
         }
 
-        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+        return this.GetUserStructMethodRef(
+            containingType,
+            openDef,
+            method.Name,
+            this.EncodeOpenStructMethodSignature(containingType, method));
     }
 
     /// <summary>
@@ -1515,7 +1534,11 @@ internal sealed class UserTokenResolver
             return openDef;
         }
 
-        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+        return this.GetUserStructMethodRef(
+            containingType,
+            openDef,
+            method.Name,
+            this.EncodeOpenStructMethodSignature(containingType, method));
     }
 
     /// <summary>Resolves a generic static accessor whose MethodDef is tracked outside the method caches.</summary>
@@ -1530,7 +1553,11 @@ internal sealed class UserTokenResolver
             return openDef;
         }
 
-        return this.GetUserStructMethodRef(containingType, openDef, method.Name, this.EncodeOpenMethodSignature(method));
+        return this.GetUserStructMethodRef(
+            containingType,
+            openDef,
+            method.Name,
+            this.EncodeOpenStructMethodSignature(containingType, method));
     }
 
     /// <summary>
