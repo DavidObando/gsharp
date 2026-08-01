@@ -71,6 +71,14 @@ public sealed partial class Evaluator
                     EvaluateVariableDeclaration((BoundVariableDeclaration)s);
                     index++;
                     break;
+                case BoundNodeKind.LocalFunctionDeclaration:
+                    var declaration = (BoundLocalFunctionDeclaration)s;
+                    var literal = declaration.Literal;
+                    localFunctionBodies.TryAdd(
+                        literal.Function,
+                        literal.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(literal.Body));
+                    index++;
+                    break;
                 case BoundNodeKind.ExpressionStatement:
                     EvaluateExpressionStatement((BoundExpressionStatement)s);
                     index++;

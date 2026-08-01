@@ -59,6 +59,7 @@ public sealed partial class Evaluator
     private readonly object globalsLock = new object();
 
     private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = [];
+    private readonly ConcurrentDictionary<FunctionSymbol, BoundBlockStatement> localFunctionBodies = [];
     private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = [];
 
     // ADR-0089 / issue #1030: interface static-field storage. Keyed by the
