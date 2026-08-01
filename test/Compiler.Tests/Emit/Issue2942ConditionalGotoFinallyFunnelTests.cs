@@ -79,8 +79,8 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
 
     [Theory]
     [InlineData(1, 11)]
-    [InlineData(2, 61)]
-    [InlineData(3, 200)]
+    [InlineData(2, 121)]
+    [InlineData(3, 320)]
     public void EmittedMultipleConditionalExits_DispatchSelectedTarget_AndRunFinallyOnce(
         int selectedTarget,
         int expectedExitCode)
@@ -264,11 +264,11 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
             new BoundLabelStatement(null, secondExit),
             new BoundReturnStatement(
                 null,
-                Binary(Read(result), SyntaxKind.PlusToken, Literal(40))),
+                Binary(Read(result), SyntaxKind.PlusToken, Literal(100))),
             new BoundLabelStatement(null, returnLabel),
             new BoundReturnStatement(
                 null,
-                Binary(Read(result), SyntaxKind.PlusToken, Literal(80))),
+                Binary(Read(result), SyntaxKind.PlusToken, Literal(200))),
             new BoundLabelStatement(null, finallyExit),
             new BoundReturnStatement(null, Literal(-1)));
     }
@@ -378,7 +378,10 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(exited, $"child execution timed out\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.Equal(expectedExitCode, process.ExitCode);
+            var expectedProcessExitCode = OperatingSystem.IsWindows()
+                ? expectedExitCode
+                : expectedExitCode & 0xff;
+            Assert.Equal(expectedProcessExitCode, process.ExitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
