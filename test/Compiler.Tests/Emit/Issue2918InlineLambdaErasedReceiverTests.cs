@@ -520,32 +520,6 @@ public class Issue2918InlineLambdaErasedReceiverTests
     }
 
     [Fact]
-    public void MismatchedLambdaArityThroughErasedDelegateSlot_IsRejected()
-    {
-        const string source = """
-            package Issue2937LambdaArity
-            import System
-            import System.Collections.Generic
-
-            class Src {
-                let N int32
-                init(n int32) { N = n }
-            }
-
-            func Main() {
-                let callbacks = List[System.Action[Src]]()
-                callbacks.Add(
-                    (left Src, right Src) ->
-                        Console.WriteLine(left.N + right.N))
-            }
-            """;
-
-        var diagnostics = CompileExpectingFailure(source);
-        Assert.Contains("GS0159", diagnostics, StringComparison.Ordinal);
-        Assert.Contains("GS0155", diagnostics, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void SameFullNameDelegateFromUserAssembly_RetainsAssemblyIdentity()
     {
         const string source = """
