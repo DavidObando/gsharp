@@ -44,6 +44,7 @@ internal static class IlVerifier
 {
     private const string SkipEnvVar = "GSHARP_SKIP_ILVERIFY";
     private const int VerifyTimeoutMilliseconds = 30_000;
+    private const int ToolProbeTimeoutMilliseconds = 30_000;
     private const int KillGraceMilliseconds = 10_000;
     private const string UnavailableOutput = "<unavailable: output pipe held by a surviving descendant>";
 
@@ -71,10 +72,14 @@ internal static class IlVerifier
     /// already-tracked issues. Each entry should be the bracketed identifier
     /// from ilverify output (for example, <c>"CallVirtOnValueType"</c>); the
     /// helper translates it into the matching regex.</param>
+    /// <param name="ignoredErrorScope">Optional ilverify member-name regex
+    /// limiting <paramref name="ignoredErrorCodes"/> to matching methods. The
+    /// rest of the assembly is verified separately without suppressions.</param>
     public static void Verify(
         string assemblyPath,
         IEnumerable<string>? additionalReferences = null,
-        IEnumerable<string>? ignoredErrorCodes = null)
+        IEnumerable<string>? ignoredErrorCodes = null,
+        string? ignoredErrorScope = null)
     {
         if (Environment.GetEnvironmentVariable(SkipEnvVar) == "1")
         {
@@ -89,6 +94,46 @@ internal static class IlVerifier
         var (command, leadingArgs) = LocateTool();
         var references = BuildReferenceSet(assemblyPath, additionalReferences);
 
+        if (!string.IsNullOrWhiteSpace(ignoredErrorScope))
+        {
+            VerifyCore(
+                command,
+                leadingArgs,
+                assemblyPath,
+                references,
+                ignoredErrorCodes: null,
+                includedScope: null,
+                excludedScope: ignoredErrorScope);
+            VerifyCore(
+                command,
+                leadingArgs,
+                assemblyPath,
+                references,
+                ignoredErrorCodes,
+                includedScope: ignoredErrorScope,
+                excludedScope: null);
+            return;
+        }
+
+        VerifyCore(
+            command,
+            leadingArgs,
+            assemblyPath,
+            references,
+            ignoredErrorCodes,
+            includedScope: null,
+            excludedScope: null);
+    }
+
+    private static void VerifyCore(
+        string command,
+        IReadOnlyList<string> leadingArgs,
+        string assemblyPath,
+        IReadOnlyList<string> references,
+        IEnumerable<string>? ignoredErrorCodes,
+        string? includedScope,
+        string? excludedScope)
+    {
         var args = new List<string>(leadingArgs)
         {
             assemblyPath,
@@ -117,6 +162,18 @@ internal static class IlVerifier
                 args.Add("-g");
                 args.Add(code);
             }
+        }
+
+        if (includedScope is not null)
+        {
+            args.Add("-i");
+            args.Add(includedScope);
+        }
+
+        if (excludedScope is not null)
+        {
+            args.Add("-e");
+            args.Add(excludedScope);
         }
 
         var psi = new ProcessStartInfo(command)
@@ -378,27 +435,10 @@ internal static class IlVerifier
         psi.ArgumentList.Add("ilverify");
         psi.ArgumentList.Add("--version");
 
-        try
+        if (TryProbe(psi))
         {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                args = Array.Empty<string>();
-                return false;
-            }
-
-            proc.StandardOutput.ReadToEnd();
-            proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            if (proc.ExitCode == 0)
-            {
-                args = new[] { "tool", "run", "ilverify" };
-                return true;
-            }
-        }
-        catch
-        {
-            // Fall through to the next probe.
+            args = new[] { "tool", "run", "ilverify" };
+            return true;
         }
 
         args = Array.Empty<string>();
@@ -416,18 +456,20 @@ internal static class IlVerifier
         };
         psi.ArgumentList.Add("--version");
 
+        return TryProbe(psi);
+    }
+
+    internal static bool TryProbe(
+        ProcessStartInfo startInfo,
+        int timeoutMilliseconds = ToolProbeTimeoutMilliseconds)
+    {
         try
         {
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                return false;
-            }
-
-            proc.StandardOutput.ReadToEnd();
-            proc.StandardError.ReadToEnd();
-            proc.WaitForExit();
-            return proc.ExitCode == 0;
+            var (exitCode, _, _) = RunProcess(
+                startInfo,
+                "ilverify tool probe",
+                timeoutMilliseconds);
+            return exitCode == 0;
         }
         catch
         {

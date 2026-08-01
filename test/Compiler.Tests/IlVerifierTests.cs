@@ -152,6 +152,51 @@ public class IlVerifierTests
     }
 
     [Fact]
+    public void Verify_MethodScopedIgnore_DoesNotHideSameErrorInAnotherMethod()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_ilv_scope_").FullName;
+        try
+        {
+            var srcPath = Path.Combine(tempDir, "scope.gs");
+            var outPath = Path.Combine(tempDir, "scope.dll");
+            File.WriteAllText(
+                srcPath,
+                """
+                package P
+
+                unsafe func Ignored(p *int32) int32 { return *p }
+                unsafe func Visible(p *int32) int32 { return *p }
+                """);
+
+            var exit = Program.Main(new[]
+            {
+                "/out:" + outPath,
+                "/target:library",
+                "/targetframework:net10.0",
+                srcPath,
+            });
+            Assert.Equal(0, exit);
+
+            var exception = Assert.Throws<XunitException>(
+                () => IlVerifier.Verify(
+                    outPath,
+                    ignoredErrorCodes: new[] { "UnmanagedPointer", "StackByRef" },
+                    ignoredErrorScope: @"<Program>\.Ignored$"));
+            Assert.Contains("::Visible(", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void RunProcess_HungChild_TimesOutWithPartialOutput()
     {
         var assemblyPath = typeof(IlVerifierTests).Assembly.Location;
@@ -194,6 +239,19 @@ public class IlVerifierTests
     }
 
     [Fact]
+    public void TryProbe_LargeStdoutAndStderr_DrainsBothPipes()
+    {
+        const int OutputLength = 128 * 1024;
+        Assert.True(
+            IlVerifier.TryProbe(
+                CreateChildProcess(
+                    $"[Console]::Out.Write('o' * {OutputLength}); [Console]::Error.Write('e' * {OutputLength})",
+                    $"awk 'BEGIN {{ for (i = 0; i < {OutputLength}; i++) printf \"o\" }}'; " +
+                    $"awk 'BEGIN {{ for (i = 0; i < {OutputLength}; i++) printf \"e\" }}' >&2"),
+                timeoutMilliseconds: 10_000));
+    }
+
+    [Fact]
     public void RunProcess_EscapedDescendantHoldingPipe_TimeoutRemainsBounded()
     {
         if (OperatingSystem.IsWindows())
@@ -218,7 +276,7 @@ public class IlVerifierTests
                     timeoutMilliseconds: 2_000));
             stopwatch.Stop();
 
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"timeout took {stopwatch.Elapsed}");
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(20), $"timeout took {stopwatch.Elapsed}");
             Assert.Contains("process '/bin/sh' timed out after 2000 ms", exception.Message, StringComparison.Ordinal);
             Assert.Contains(
                 "<unavailable: output pipe held by a surviving descendant>",

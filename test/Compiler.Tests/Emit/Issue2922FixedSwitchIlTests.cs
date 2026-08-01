@@ -329,7 +329,8 @@ public class Issue2922FixedSwitchIlTests
         IlVerifier.Verify(
             program.AssemblyPath,
             additionalReferences: null,
-            ignoredErrorCodes: ignoredVerificationErrors);
+            ignoredErrorCodes: ignoredVerificationErrors,
+            ignoredErrorScope: ignoredVerificationErrors.Length == 0 ? null : @"<Program>\.F$");
         program.AssertLoadable();
         Assert.Equal(expectedOutput, program.Run());
     }
@@ -357,14 +358,38 @@ public class Issue2922FixedSwitchIlTests
         var method = assembly.GetTypes()
             .Single(type => type.Name == "<Program>")
             .GetMethod("F", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
-        var il = method.GetMethodBody()!.GetILAsByteArray()!;
-        var loadElementAddress = Array.IndexOf(il, unchecked((byte)OpCodes.Ldelema.Value));
+        var instructions = IlInstructionReader.Read(method.GetMethodBody()!.GetILAsByteArray()!);
+        var loadElementAddressIndex = Array.FindIndex(
+            instructions,
+            instruction => instruction.OpCode == OpCodes.Ldelema);
 
-        Assert.True(loadElementAddress >= 0);
-        var callOffset = loadElementAddress + 5;
-        Assert.Equal(unchecked((byte)OpCodes.Call.Value), il[callOffset]);
-        var calledMethod = method.Module.ResolveMethod(BitConverter.ToInt32(il, callOffset + 1));
+        Assert.True(loadElementAddressIndex >= 0);
+        Assert.True(loadElementAddressIndex + 1 < instructions.Length);
+        var call = instructions[loadElementAddressIndex + 1];
+        Assert.Equal(OpCodes.Call, call.OpCode);
+        Assert.True(call.MetadataToken.HasValue);
+        var calledMethod = method.Module.ResolveMethod(call.MetadataToken.Value);
         Assert.Equal("AsPointer", calledMethod!.Name);
+    }
+
+    [Fact]
+    public void InstructionReader_DoesNotTreatOperandByteAsOpcode()
+    {
+        var il = new byte[]
+        {
+            unchecked((byte)OpCodes.Ldc_I4.Value),
+            unchecked((byte)OpCodes.Ldelema.Value),
+            0,
+            0,
+            0,
+            unchecked((byte)OpCodes.Ret.Value),
+        };
+        Assert.Equal(1, Array.IndexOf(il, unchecked((byte)OpCodes.Ldelema.Value)));
+
+        var instructions = IlInstructionReader.Read(il);
+        Assert.Equal(
+            new[] { OpCodes.Ldc_I4, OpCodes.Ret },
+            instructions.Select(instruction => instruction.OpCode));
     }
 
     private static CompiledProgram Compile(string name, string source)

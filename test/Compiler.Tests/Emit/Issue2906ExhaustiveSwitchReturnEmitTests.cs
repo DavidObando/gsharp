@@ -311,7 +311,8 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
         var assembly = CompileVerifyLoadAndRun(
             "UnnamedFixed",
             Source,
-            ignoredVerificationErrors: new[] { "UnmanagedPointer", "StackByRef" });
+            ignoredVerificationErrors: new[] { "UnmanagedPointer", "StackByRef" },
+            ignoredVerificationScope: @"<Program>\.F$");
         // Known limitation (#2953): the fixed-return epilogue must be emitted first,
         // so fixed-containing non-void functions bypass the fall-through guard and
         // silently return the default slot instead of throwing.
@@ -324,7 +325,8 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
     private static Assembly CompileVerifyLoadAndRun(
         string name,
         string source,
-        IEnumerable<string> ignoredVerificationErrors = null)
+        IEnumerable<string> ignoredVerificationErrors = null,
+        string ignoredVerificationScope = null)
     {
         using var peStream = new MemoryStream();
         var result = new Compilation(SyntaxTree.Parse(SourceText.From(source))).Emit(peStream);
@@ -337,7 +339,10 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
         try
         {
             File.WriteAllBytes(assemblyPath, bytes);
-            IlVerifier.Verify(assemblyPath, ignoredErrorCodes: ignoredVerificationErrors);
+            IlVerifier.Verify(
+                assemblyPath,
+                ignoredErrorCodes: ignoredVerificationErrors,
+                ignoredErrorScope: ignoredVerificationScope);
         }
         finally
         {
