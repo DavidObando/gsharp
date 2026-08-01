@@ -871,8 +871,7 @@ public sealed partial class Evaluator
     private static string GetLambdaMethodName(BoundFunctionLiteralExpression node)
     {
         if (node.CapturedVariables.Length != 0
-            || (!node.Function.IsGeneric
-                && node.Function.LexicalEnclosingType is StructSymbol enclosingType
+            || (node.Function.LexicalEnclosingType is StructSymbol enclosingType
                 && enclosingType.TypeParameters.IsDefaultOrEmpty))
         {
             return "Invoke";
