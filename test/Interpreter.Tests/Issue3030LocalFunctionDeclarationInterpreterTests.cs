@@ -13,7 +13,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #3030: generic local-function declarations are evaluator no-ops.
+/// Issues #3030 and #3050: generic local-function declarations register bodies for direct calls.
 /// </summary>
 public class Issue3030LocalFunctionDeclarationInterpreterTests
 {
@@ -44,6 +44,23 @@ public class Issue3030LocalFunctionDeclarationInterpreterTests
             PrintValues()
             """,
             "42\nnested\n");
+
+        yield return Case(
+            """
+            data struct Item {
+                var Value int32
+            }
+
+            let MakeIdentity[T] = func() (T) -> T {
+                return (value T) -> value
+            }
+
+            let identity = MakeIdentity[Item]()
+            Console.WriteLine(identity(Item{ Value: 11 }).Value)
+            Console.WriteLine(identity(Item{ Value: 22 }).Value)
+            Console.WriteLine(identity(Item{ Value: 33 }).Value)
+            """,
+            "11\n22\n33\n");
     }
 
     [Theory]
