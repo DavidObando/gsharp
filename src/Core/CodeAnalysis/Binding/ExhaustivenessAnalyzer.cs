@@ -42,11 +42,6 @@ public static class ExhaustivenessAnalyzer
         ImmutableArray<StructSymbol> structs,
         DiagnosticBag diagnostics)
     {
-        if (!IsExhaustiveDiscriminant(discriminantType))
-        {
-            return;
-        }
-
         if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
         {
             diagnostics.ReportSwitchExpressionNotExhaustive(location, discriminantDescription, missingNames);

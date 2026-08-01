@@ -17,6 +17,24 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2941FlagsEnumExhaustivenessTests
 {
+    private const string UnmatchedSource = """
+        package Issue2941.Unmatched
+        import System
+
+        @Flags
+        enum Access { None = 0, Read = 1, Write = 2 }
+
+        func F(x Access) int32 {
+            return switch x {
+                case Access.None: 0
+                case Access.Read: 1
+                case Access.Write: 2
+            }
+        }
+
+        Console.WriteLine(F(Access.Read | Access.Write))
+        """;
+
     private const string Source = """
         package Issue2941.Runtime
         import System
@@ -91,9 +109,28 @@ public class Issue2941FlagsEnumExhaustivenessTests
 
         for (var i = 0; i < 3; i++)
         {
-            Assert.Equal("11\n22\n31\n42\n51\n62\n", RunBounded(assemblyPath));
+            var result = RunBounded(assemblyPath);
+            Assert.True(result.ExitCode == 0, $"emitted program failed:\n{result.Error}");
+            Assert.Equal("11\n22\n31\n42\n51\n62\n", result.Output);
         }
 
+        IlVerifier.Verify(assemblyPath);
+    }
+
+    [Fact]
+    public void UnmatchedFlagsValue_FailsLoudly()
+    {
+        var assemblyPath = Compile(UnmatchedSource);
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        Assert.NotEmpty(assembly.GetTypes());
+
+        var result = RunBounded(assemblyPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Empty(result.Output);
+        Assert.Contains(
+            "System.InvalidOperationException: Unmatched switch expression value.",
+            result.Error);
         IlVerifier.Verify(assemblyPath);
     }
 
@@ -134,7 +171,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
         return assemblyPath;
     }
 
-    private static string RunBounded(string assemblyPath)
+    private static (int ExitCode, string Output, string Error) RunBounded(string assemblyPath)
     {
         using var process = Process.Start(new ProcessStartInfo("dotnet")
         {
@@ -164,7 +201,9 @@ public class Issue2941FlagsEnumExhaustivenessTests
         Assert.True(exited, "emitted program timed out");
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
-        Assert.True(process.ExitCode == 0, $"emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return (
+            process.ExitCode,
+            output.Replace("\r\n", "\n", StringComparison.Ordinal),
+            error.Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 }

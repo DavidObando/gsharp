@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -14,6 +15,21 @@ namespace GSharp.Interpreter.Tests;
 /// </summary>
 public class Issue2941FlagsEnumExhaustivenessTests
 {
+    private const string UnmatchedSource = """
+        @Flags
+        enum Access { None = 0, Read = 1, Write = 2 }
+
+        func F(x Access) int32 {
+            return switch x {
+                case Access.None: 0
+                case Access.Read: 1
+                case Access.Write: 2
+            }
+        }
+
+        F(Access.Read | Access.Write)
+        """;
+
     [Fact]
     public void NameCompleteEnumSwitches_RunWithExactOutput()
     {
@@ -97,5 +113,16 @@ public class Issue2941FlagsEnumExhaustivenessTests
         Assert.Equal(
             "11\n22\n31\n42\n51\n62\n",
             output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UnmatchedFlagsValue_ReportsRuntimeError()
+    {
+        var result = new SessionEngine().Evaluate(UnmatchedSource);
+        var diagnostic = Assert.Single(result.Diagnostics);
+
+        Assert.True(result.HasError);
+        Assert.Equal("GS9999", diagnostic.Id);
+        Assert.Equal("Unmatched switch expression value.", diagnostic.Message);
     }
 }

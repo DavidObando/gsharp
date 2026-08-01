@@ -141,6 +141,15 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(defaultArm.Result);
             this.il.StoreLocal(resultSlot);
         }
+        else
+        {
+            const string Message = "Unmatched switch expression value.";
+            var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message));
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
+            this.il.OpCode(ILOpCode.Throw);
+        }
 
         this.il.MarkLabel(endLabel);
         this.il.LoadLocal(resultSlot);

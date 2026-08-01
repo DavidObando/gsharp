@@ -58,6 +58,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 > **Enum exhaustiveness.** Enum switches cover named constants only.
 > `[Flags]` does not add unnamed bit combinations as required switch arms.
 > This rule is identical for imported CLR enums and source-declared enums.
+> If a switch expression receives a value that matches no arm, compiled and interpreted execution fail with `Unmatched switch expression value.` instead of producing a default value.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
