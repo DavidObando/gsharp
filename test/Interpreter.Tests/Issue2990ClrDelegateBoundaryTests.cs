@@ -5,6 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -100,6 +102,17 @@ public class Issue2990ClrDelegateBoundaryTests
             """;
 
         Assert.Equal("88\n", Evaluate(Source));
+    }
+
+    [Fact]
+    public void BuildRefSlots_RequiresMethodBaseArgument()
+    {
+        var method = typeof(Evaluator).GetMethod("BuildRefSlots", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+        var parameter = method.GetParameters()[3];
+        Assert.Equal(typeof(MethodBase), parameter.ParameterType);
+        Assert.False(parameter.IsOptional);
     }
 
     private static string Evaluate(string source)

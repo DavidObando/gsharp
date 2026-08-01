@@ -63,7 +63,8 @@ public sealed partial class Evaluator
                 : BuildRefSlots(
                     node.Arguments,
                     node.Function.Parameters.Select(p => p.RefKind).ToImmutableArray(),
-                    args);
+                    args,
+                    null);
             var locals = new ConcurrentDictionary<VariableSymbol, object>();
 
             for (int i = 0; i < node.Arguments.Length; i++)
@@ -949,9 +950,9 @@ public sealed partial class Evaluator
         }
 
         receiver = UnwrapClrReceiver(receiver);
-        var method = ResolveMethodForReceiver(node.Method, receiver);
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, method);
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
+        var method = ResolveMethodForReceiver(node.Method, receiver);
 
         // concurrency: see TryGetInterpreterMapLock — routes `range m`'s
         // `GetEnumerator()`/`MoveNext()`, `m.ContainsKey(k)`, `m.Remove(k)`,
@@ -1121,7 +1122,7 @@ public sealed partial class Evaluator
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> refKinds,
         object[] args,
-        MethodBase method = null)
+        MethodBase method)
     {
         List<(int Index, BoundExpression Operand)> refSlots = null;
         var parameters = method?.GetParameters();
