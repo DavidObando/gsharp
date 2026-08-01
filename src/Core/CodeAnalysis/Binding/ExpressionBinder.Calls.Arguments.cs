@@ -419,9 +419,9 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    private bool TryBindUserStructDelegateMemberInvocation(
+    private bool TryBindUserDelegateMemberInvocation(
         BoundExpression receiver,
-        StructSymbol receiverStruct,
+        TypeSymbol receiverType,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
@@ -430,9 +430,10 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
+        var receiverStruct = receiverType as StructSymbol;
         FieldSymbol matchedField = null;
         StructSymbol declaringType = null;
-        if (isStatic)
+        if (isStatic && receiverStruct != null)
         {
             TypeMemberModel.TryGetStaticFieldIncludingInherited(
                 receiverStruct,
@@ -440,7 +441,7 @@ internal sealed partial class ExpressionBinder
                 out matchedField,
                 out declaringType);
         }
-        else
+        else if (receiverStruct != null)
         {
             // Walk the base chain so an inherited delegate field on a base class
             // is invokable on a derived instance.
@@ -465,7 +466,7 @@ internal sealed partial class ExpressionBinder
                     out var property,
                     out var propertyDeclaringType)
                 : TypeMemberModel.TryGetProperty(
-                    receiverStruct,
+                    receiverType,
                     methodName,
                     out property,
                     out propertyDeclaringType);
