@@ -27,7 +27,8 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         BoundExpression value,
         TypeSymbol resultType,
         TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeSymbol constrainedInterfaceType = null,
+        TypeSymbol staticContainerType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -36,6 +37,7 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         Type = resultType;
         ConstrainedReceiverTypeParameter = constrainedReceiverTypeParameter;
         ConstrainedInterfaceType = constrainedInterfaceType;
+        StaticContainerType = staticContainerType;
     }
 
     public BoundExpression Receiver { get; }
@@ -47,6 +49,8 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
     public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
 
     public TypeSymbol ConstrainedInterfaceType { get; }
+
+    public TypeSymbol StaticContainerType { get; }
 
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 

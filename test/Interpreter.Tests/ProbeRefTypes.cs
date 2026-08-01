@@ -51,3 +51,12 @@ public interface IReadWrite
     /// <summary>Gets or sets the value.</summary>
     string Value { get; set; }
 }
+/// <summary>Generic CLR static property used by symbolic-container interpreter tests.</summary>
+public static class GenericStaticSlot<T>
+{
+    /// <summary>Gets or sets the per-construction value.</summary>
+    public static int Value { get; set; }
+
+    /// <summary>Returns a marker that identifies the closed generic construction.</summary>
+    public static int GetMarker() => typeof(T) == typeof(int) ? 11 : -11;
+}

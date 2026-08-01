@@ -14,25 +14,23 @@ namespace GSharp.Interpreter.Tests;
 public class Issue2992SymbolicClrTypeInterpreterTests
 {
     [Fact]
-    public void GenericParameterPositionUsesClosedClrType()
+    public void StaticClrCallUsesClosedContainer()
     {
         var source = """
-            import System.Collections.Generic
+            import GSharp.Interpreter.Tests.ProbeRef
 
-            func First[T](items List[T]) T {
-                return items[0]
+            func Marker[T]() int32 {
+                return GenericStaticSlot[T].GetMarker()
             }
 
-            var numbers = List[int32]()
-            numbers.Add(10)
-            Console.WriteLine(First[int32](numbers))
+            Console.WriteLine(Marker[int32]())
             """;
 
-        Assert.Equal("10\n", RunSubmission(source));
+        Assert.Equal("11\n", RunSubmission(source));
     }
 
     [Fact]
-    public void GenericConstructionAndReturnUseClosedClrType()
+    public void ConstructorUsesClosedClrType()
     {
         var source = """
             import System.Collections.Generic
@@ -42,11 +40,176 @@ public class Issue2992SymbolicClrTypeInterpreterTests
             }
 
             var numbers = Make[int32]()
-            numbers.Add(10)
+            numbers.Add(33)
             Console.WriteLine(numbers[0])
             """;
 
-        Assert.Equal("10\n", RunSubmission(source));
+        Assert.Equal("33\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void PropertyReadUsesClosedReceiver()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func CapacityOf[T](items List[T]) int32 {
+                return items.Capacity
+            }
+
+            var numbers = List[int32](44)
+            Console.WriteLine(CapacityOf[int32](numbers))
+            """;
+
+        Assert.Equal("44\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void PropertyWriteUsesClosedReceiver()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func SetCapacity[T](items List[T]) {
+                items.Capacity = 55
+            }
+
+            var numbers = List[int32]()
+            SetCapacity[int32](numbers)
+            Console.WriteLine(numbers.Capacity)
+            """;
+
+        Assert.Equal("55\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void IndexReadUsesClosedReceiver()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func First[T](items List[T]) T {
+                return items[0]
+            }
+
+            var numbers = List[int32]()
+            numbers.Add(66)
+            Console.WriteLine(First[int32](numbers))
+            """;
+
+        Assert.Equal("66\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void IndexWriteUsesClosedReceiver()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func SetFirst[T](items List[T], value T) {
+                items[0] = value
+            }
+
+            var numbers = List[int32]()
+            numbers.Add(1)
+            SetFirst[int32](numbers, 77)
+            Console.WriteLine(numbers[0])
+            """;
+
+        Assert.Equal("77\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void ClassTypeParameterUsesClosedReceiver()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                func CountOf(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            var holder = Holder[int32]()
+            var numbers = List[int32]()
+            numbers.Add(1)
+            numbers.Add(88)
+            Console.WriteLine(holder.CountOf(numbers))
+            """;
+
+        Assert.Equal("2\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredClosureRetainsTypeArguments()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            func MakeCounter[T]() (List[T]) -> int32 {
+                return func(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            var counter = MakeCounter[int32]()
+            var numbers = List[int32]()
+            numbers.Add(1)
+            numbers.Add(99)
+            Console.WriteLine(counter(numbers))
+            """;
+
+        Assert.Equal("2\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredMethodGroupRetainsClassTypeArguments()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                func Count(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            func GetCounter[T](holder Holder[T]) (List[T]) -> int32 {
+                return holder.Count
+            }
+
+            var holder = Holder[int32]()
+            var counter = GetCounter[int32](holder)
+            var numbers = List[int32]()
+            numbers.Add(1)
+            numbers.Add(2)
+            numbers.Add(3)
+            Console.WriteLine(counter(numbers))
+            """;
+
+        Assert.Equal("3\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void StaticPropertyWriteUsesClosedContainer()
+    {
+        var source = """
+            import GSharp.Interpreter.Tests.ProbeRef
+
+            func Marker() int32 {
+                return 111
+            }
+
+            func SetValue[T]() {
+                GenericStaticSlot[T].Value = Marker()
+            }
+
+            SetValue[int32]()
+            Console.WriteLine(GenericStaticSlot[int32].Value)
+            """;
+
+        Assert.Equal("111\n", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)

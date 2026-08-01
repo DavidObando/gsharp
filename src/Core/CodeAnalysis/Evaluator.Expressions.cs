@@ -785,8 +785,12 @@ public sealed partial class Evaluator
         }
 
         var body = node.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(node.Body);
-        return MaterializeClosure(
-            new ClosureValue(node.Function, body, node.FunctionType, captured),
+        return MaterializeClosure(new ClosureValue(
+            node.Function,
+            body,
+            node.FunctionType,
+            captured,
+            CaptureRuntimeTypeArguments()),
             GetLambdaMethodName(node));
     }
 
@@ -806,8 +810,12 @@ public sealed partial class Evaluator
             captured[node.Function.ThisParameter] = EvaluateExpression(node.Receiver);
         }
 
-        return MaterializeClosure(
-            new ClosureValue(node.Function, body, node.FunctionType, captured),
+        return MaterializeClosure(new ClosureValue(
+            node.Function,
+            body,
+            node.FunctionType,
+            captured,
+            CaptureRuntimeTypeArguments(node.Receiver?.Type)),
             node.Function.Name);
     }
 
@@ -952,6 +960,7 @@ public sealed partial class Evaluator
             frame[closure.Function.Parameters[i]] = arguments[i];
         }
 
+        RegisterRuntimeTypeArguments(frame, closure.CapturedTypeArguments);
         using (PushFrame(frame))
         {
             return EvaluateUserMethodBody(closure.Function, closure.Body);
@@ -1341,7 +1350,7 @@ public sealed partial class Evaluator
         };
     }
 
-    private static System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver, Type symbolicReceiverType)
+    private System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver, Type symbolicReceiverType)
     {
         if (receiver == null || member == null)
         {
@@ -1458,7 +1467,9 @@ public sealed partial class Evaluator
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
         receiver = UnwrapClrReceiver(receiver);
         var value = EvaluateExpression(node.Value);
-        var member = ResolveMemberForRuntimeType(node.Member, ResolveRuntimeClrType(node.Receiver?.Type));
+        var member = ResolveMemberForRuntimeType(
+            node.Member,
+            ResolveRuntimeClrType(node.Receiver?.Type ?? node.StaticContainerType));
 
         // Issue #608: when the receiver is a StructValue (G# class instance)
         // and the member is from a CLR interface satisfied by a field, route the
