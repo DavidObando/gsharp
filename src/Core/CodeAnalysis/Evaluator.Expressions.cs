@@ -651,21 +651,41 @@ public sealed partial class Evaluator
 
     private object EvaluateStructLiteralExpression(BoundStructLiteralExpression node)
     {
-        var sv = new StructValue(node.StructType);
+        var constructor = node.StructType.EffectiveExplicitConstructors
+            .FirstOrDefault(c => c.Function.Parameters.IsDefaultOrEmpty);
+        var invokesConstructor = node.StructType.IsClass
+            && node.StructType.PrimaryConstructorParameters.IsDefaultOrEmpty
+            && (constructor != null || node.StructType.EffectiveExplicitConstructors.IsDefaultOrEmpty);
+        var sv = invokesConstructor
+            ? (StructValue)EvaluateConstructorCallExpression(
+                new BoundConstructorCallExpression(
+                    node.Syntax,
+                    node.StructType,
+                    ImmutableArray<BoundExpression>.Empty,
+                    constructor))
+            : new StructValue(node.StructType);
 
-        // Default-initialize all fields (walking inheritance), then apply explicit initializers.
-        for (var t = node.StructType; t != null; t = t.BaseClass)
+        // Primary-constructor literals use default construction before applying
+        // named initializers, matching the emitter's newobj/stfld sequence.
+        if (!invokesConstructor)
         {
-            foreach (var f in t.Fields)
+            for (var t = node.StructType; t != null; t = t.BaseClass)
             {
-                if (!sv.Fields.ContainsKey(f.Name))
+                foreach (var f in t.Fields)
                 {
-                    sv.Fields[f.Name] = ClrDefaultValue(f.Type);
+                    if (!sv.Fields.ContainsKey(f.Name))
+                    {
+                        sv.Fields[f.Name] = ClrDefaultValue(f.Type);
+                    }
                 }
             }
-        }
 
-        ApplyClassFieldInitializers(sv, node.StructType);
+            ApplyClassFieldInitializers(sv, node.StructType);
+            if (node.StructType.IsClass)
+            {
+                AllocateClrBacking(sv, node.StructType, activeInit: null);
+            }
+        }
 
         foreach (var init in node.Initializers)
         {
