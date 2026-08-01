@@ -12,8 +12,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2951: nested generic iterator state machines retain every enclosing
-/// and receiver type parameter in their emitted type and call signatures.
+/// Issue #2951 and #1537 residual: nested generic state machines and method
+/// references retain every enclosing and receiver type-parameter ordinal.
 /// </summary>
 public class Issue2951NestedGenericStructIteratorTests
 {
@@ -133,6 +133,161 @@ public class Issue2951NestedGenericStructIteratorTests
     }
 
     [Fact]
+    public void NonGenericOuterLevelDoesNotShiftGenericMiddleParameter()
+    {
+        const string Source = """
+            package Issue2951AsymmetricOuter
+            import System
+
+            class Outer {
+                struct Mid[U] {
+                    struct Inner {
+                        var Value U
+                        func vals() sequence[U] { yield Value }
+                    }
+                }
+            }
+
+            var value = Outer.Mid[string].Inner{Value: "q"}
+            for item in value.vals() {
+                Console.WriteLine(item)
+            }
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(NonGenericOuterLevelDoesNotShiftGenericMiddleParameter),
+            "q\n");
+    }
+
+    [Fact]
+    public void NonGenericClassMiddleDoesNotShiftOuterAndInnerParameters()
+    {
+        const string Source = """
+            package Issue2951AsymmetricClassMiddle
+            import System
+
+            class Outer[T] {
+                class Mid {
+                    struct Inner[V] {
+                        var A T
+                        var B V
+                        func vals() sequence[string] {
+                            yield A.ToString() + "|" + B.ToString()
+                        }
+                    }
+                }
+            }
+
+            var value = Outer[int32].Mid.Inner[string]{A: 7, B: "z"}
+            for item in value.vals() {
+                Console.WriteLine(item)
+            }
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(NonGenericClassMiddleDoesNotShiftOuterAndInnerParameters),
+            "7|z\n");
+    }
+
+    [Fact]
+    public void NonGenericStructMiddleDoesNotShiftOuterAndInnerParameters()
+    {
+        const string Source = """
+            package Issue2951AsymmetricStructMiddle
+            import System
+
+            class Outer[T] {
+                struct Mid {
+                    struct Inner[V] {
+                        var A T
+                        var B V
+                        func vals() sequence[string] {
+                            yield A.ToString() + "|" + B.ToString()
+                        }
+                    }
+                }
+            }
+
+            var value = Outer[bool].Mid.Inner[int32]{A: true, B: 5}
+            for item in value.vals() {
+                Console.WriteLine(item)
+            }
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(NonGenericStructMiddleDoesNotShiftOuterAndInnerParameters),
+            "True|5\n");
+    }
+
+    [Fact]
+    public void NonGenericOuterDoesNotShiftTwoNestedOwnParameters()
+    {
+        const string Source = """
+            package Issue2951AsymmetricOwnParameters
+            import System
+
+            class Outer {
+                class Mid[U] {
+                    struct Inner[V] {
+                        var A U
+                        var B V
+                        func vals() sequence[string] {
+                            yield A.ToString() + "|" + B.ToString()
+                        }
+                    }
+                }
+            }
+
+            var value = Outer.Mid[string].Inner[int32]{A: "k", B: 9}
+            for item in value.vals() {
+                Console.WriteLine(item)
+            }
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(NonGenericOuterDoesNotShiftTwoNestedOwnParameters),
+            "k|9\n");
+    }
+
+    [Fact]
+    public void AsyncNonGenericMiddleDoesNotShiftOuterAndInnerParameters()
+    {
+        const string Source = """
+            package Issue2951AsymmetricAsync
+            import System
+            import System.Threading.Tasks
+
+            class Outer[T] {
+                class Mid {
+                    struct Inner[V] {
+                        var A T
+                        var B V
+                        async func vals() async sequence[string] {
+                            yield A.ToString() + "|" + B.ToString()
+                            await Task.Delay(1)
+                        }
+                    }
+                }
+            }
+
+            var value = Outer[int32].Mid.Inner[string]{A: 3, B: "w"}
+            let iterator = value.vals().GetAsyncEnumerator()
+            for iterator.MoveNextAsync().AsTask().Result {
+                Console.WriteLine(iterator.Current)
+            }
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(AsyncNonGenericMiddleDoesNotShiftOuterAndInnerParameters),
+            "3|w\n");
+    }
+
+    [Fact]
     public void NestedClassIteratorUsesEnclosingTypeParameter()
     {
         const string Source = """
@@ -240,6 +395,33 @@ public class Issue2951NestedGenericStructIteratorTests
             """;
 
         AssertLoadsAndRuns(Source, nameof(SharedNestedGenericStructIteratorUsesOwnTypeParameter), "shared\n");
+    }
+
+    [Fact]
+    public void NestedGenericNonIteratorMethodUsesDistinctParameterOrdinals()
+    {
+        const string Source = """
+            package Issue2951MethodMemberRef
+            import System
+
+            class Outer[T] {
+                struct Cell[U] {
+                    var A T
+                    var B U
+                    func echo(u U, t T) string {
+                        return u.ToString() + "/" + t.ToString()
+                    }
+                }
+            }
+
+            var value = Outer[int32].Cell[string]{A: 1, B: "b"}
+            Console.WriteLine(value.echo("z", 9))
+            """;
+
+        AssertLoadsAndRuns(
+            Source,
+            nameof(NestedGenericNonIteratorMethodUsesDistinctParameterOrdinals),
+            "z/9\n");
     }
 
     [Fact]

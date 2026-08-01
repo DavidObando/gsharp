@@ -1313,6 +1313,9 @@ internal sealed class UserTokenResolver
         string methodName,
         BlobBuilder signature)
     {
+        // A caller may encode the signature under containingType's registered
+        // remap, then restore the ambient remap used here. containingType
+        // determines that signature remap and is already part of the key.
         var key = (containingType, openMethodDef, (object)this.remaps.ActiveIteratorStateMachineRemap, (object)this.remaps.ActiveLambdaMethodTypeParamRemap);
         if (this.userStructMethodRefCache.TryGetValue(key, out var cached))
         {
