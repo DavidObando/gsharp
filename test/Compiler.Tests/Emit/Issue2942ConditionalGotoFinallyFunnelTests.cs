@@ -68,6 +68,29 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
         VerifyLoadAndRunChild(bytes, expectedExitCode);
     }
 
+    [Fact]
+    public void EmittedCatchConditionalExit_RunsFinallyBeforeDispatch()
+    {
+        var program = BuildProgram(Lowerer.Lower(BuildCatchBody()));
+
+        var bytes = Emit(program);
+        VerifyLoadAndRunChild(bytes, expectedExitCode: 10);
+    }
+
+    [Theory]
+    [InlineData(1, 11)]
+    [InlineData(2, 21)]
+    [InlineData(3, 120)]
+    public void EmittedMultipleConditionalExits_DispatchSelectedTarget_AndRunFinallyOnce(
+        int selectedTarget,
+        int expectedExitCode)
+    {
+        var program = BuildProgram(Lowerer.Lower(BuildMultipleTargetBody(selectedTarget)));
+
+        var bytes = Emit(program);
+        VerifyLoadAndRunChild(bytes, expectedExitCode);
+    }
+
     private static (BoundBlockStatement Body, BoundLabel TryExit, BoundLabel LocalTarget) BuildBody(
         bool jumpIfTrue,
         int comparedValue)
@@ -78,19 +101,6 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
         var tryExit = new BoundLabel("tryExit");
         var finallyExit = new BoundLabel("finallyExit");
         var localTarget = new BoundLabel("localTarget");
-
-        BoundExpression Read(VariableSymbol variable) => new BoundVariableExpression(null, variable);
-        BoundExpression Literal(int value) => new BoundLiteralExpression(null, value);
-        BoundExpression Binary(BoundExpression left, SyntaxKind kind, BoundExpression right)
-            => new BoundBinaryExpression(
-                null,
-                left,
-                BoundBinaryOperator.Bind(kind, left.Type, right.Type),
-                right);
-        BoundStatement Assign(VariableSymbol variable, BoundExpression expression)
-            => new BoundExpressionStatement(
-                null,
-                new BoundAssignmentExpression(null, variable, expression));
 
         var incrementCounter = new BoundAssignmentExpression(
             null,
@@ -145,6 +155,140 @@ public class Issue2942ConditionalGotoFinallyFunnelTests
             tryExit,
             localTarget);
     }
+
+    private static BoundBlockStatement BuildCatchBody()
+    {
+        var zero = new LocalVariableSymbol("zero", isReadOnly: false, TypeSymbol.Int32);
+        var result = new LocalVariableSymbol("result", isReadOnly: false, TypeSymbol.Int32);
+        var finallyFlag = new LocalVariableSymbol("finallyFlag", isReadOnly: false, TypeSymbol.Bool);
+        var caught = new LocalVariableSymbol(
+            "caught",
+            isReadOnly: true,
+            TypeSymbol.FromClrType(typeof(DivideByZeroException)));
+        var catchExit = new BoundLabel("catchExit");
+        var finallyExit = new BoundLabel("finallyExit");
+
+        var tryBlock = Block(
+            Assign(result, Binary(Literal(1), SyntaxKind.SlashToken, Read(zero))));
+        var catchBlock = Block(
+            new BoundConditionalGotoStatement(
+                null,
+                catchExit,
+                new BoundLiteralExpression(null, true),
+                jumpIfTrue: true),
+            Assign(result, Literal(99)));
+        var finallyBlock = Block(
+            new BoundConditionalGotoStatement(
+                null,
+                finallyExit,
+                Read(finallyFlag),
+                jumpIfTrue: true),
+            Assign(result, Binary(Read(result), SyntaxKind.PlusToken, Literal(3))));
+
+        return Block(
+            new BoundVariableDeclaration(null, zero, Literal(0)),
+            new BoundVariableDeclaration(null, result, Literal(7)),
+            new BoundVariableDeclaration(
+                null,
+                finallyFlag,
+                new BoundLiteralExpression(null, false)),
+            new BoundTryStatement(
+                null,
+                tryBlock,
+                ImmutableArray.Create(
+                    new BoundCatchClause(caught.Type, caught, catchBlock)),
+                finallyBlock),
+            Assign(result, Literal(100)),
+            new BoundLabelStatement(null, catchExit),
+            new BoundReturnStatement(null, Read(result)),
+            new BoundLabelStatement(null, finallyExit),
+            new BoundReturnStatement(null, Literal(-1)));
+    }
+
+    private static BoundBlockStatement BuildMultipleTargetBody(int selectedTarget)
+    {
+        var counter = new LocalVariableSymbol("counter", isReadOnly: false, TypeSymbol.Int32);
+        var result = new LocalVariableSymbol("result", isReadOnly: false, TypeSymbol.Int32);
+        var finallyFlag = new LocalVariableSymbol("finallyFlag", isReadOnly: false, TypeSymbol.Bool);
+        var firstExit = new BoundLabel("firstExit");
+        var secondExit = new BoundLabel("secondExit");
+        var returnLabel = new BoundLabel("return");
+        var finallyExit = new BoundLabel("finallyExit");
+
+        BoundExpression NextCounterEqualsSelection()
+            => Binary(
+                new BoundAssignmentExpression(
+                    null,
+                    counter,
+                    Binary(Read(counter), SyntaxKind.PlusToken, Literal(1))),
+                SyntaxKind.EqualsEqualsToken,
+                Literal(selectedTarget));
+
+        var tryBlock = Block(
+            Assign(result, Literal(10)),
+            new BoundConditionalGotoStatement(
+                null,
+                firstExit,
+                NextCounterEqualsSelection(),
+                jumpIfTrue: true),
+            Assign(result, Literal(20)),
+            new BoundConditionalGotoStatement(
+                null,
+                secondExit,
+                NextCounterEqualsSelection(),
+                jumpIfTrue: true),
+            Assign(result, Literal(119)));
+        var finallyBlock = Block(
+            new BoundConditionalGotoStatement(
+                null,
+                finallyExit,
+                Read(finallyFlag),
+                jumpIfTrue: true),
+            Assign(result, Binary(Read(result), SyntaxKind.PlusToken, Literal(1))));
+
+        return Block(
+            new BoundVariableDeclaration(null, counter, Literal(0)),
+            new BoundVariableDeclaration(null, result, Literal(0)),
+            new BoundVariableDeclaration(
+                null,
+                finallyFlag,
+                new BoundLiteralExpression(null, false)),
+            new BoundTryStatement(
+                null,
+                tryBlock,
+                ImmutableArray<BoundCatchClause>.Empty,
+                finallyBlock),
+            new BoundGotoStatement(null, returnLabel),
+            new BoundLabelStatement(null, firstExit),
+            new BoundReturnStatement(null, Read(result)),
+            new BoundLabelStatement(null, secondExit),
+            new BoundReturnStatement(null, Read(result)),
+            new BoundLabelStatement(null, returnLabel),
+            new BoundReturnStatement(null, Read(result)),
+            new BoundLabelStatement(null, finallyExit),
+            new BoundReturnStatement(null, Literal(-1)));
+    }
+
+    private static BoundExpression Read(VariableSymbol variable)
+        => new BoundVariableExpression(null, variable);
+
+    private static BoundExpression Literal(int value)
+        => new BoundLiteralExpression(null, value);
+
+    private static BoundExpression Binary(
+        BoundExpression left,
+        SyntaxKind kind,
+        BoundExpression right)
+        => new BoundBinaryExpression(
+            null,
+            left,
+            BoundBinaryOperator.Bind(kind, left.Type, right.Type),
+            right);
+
+    private static BoundStatement Assign(VariableSymbol variable, BoundExpression expression)
+        => new BoundExpressionStatement(
+            null,
+            new BoundAssignmentExpression(null, variable, expression));
 
     private static BoundProgram BuildProgram(BoundBlockStatement body)
     {
