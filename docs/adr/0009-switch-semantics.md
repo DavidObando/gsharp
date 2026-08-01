@@ -55,6 +55,10 @@ Neutral:
 
 - Loses Go's `fallthrough`. Cases that genuinely need fall-through can be expressed by sharing a target via labels (Phase 6 or Phase 7) or by listing values in the same case arm.
 
+## Implementation notes
+
+`BoundPatternSwitchStatement.IsExhaustive` survives iterator lowering: every reconstruction of the node copies the flag — `BoundTreeRewriter.RewritePatternSwitchStatement`, `CaptureBoxingRewriter`, and the flattening pass in `Lowerer` — and no construction site drops it. Its only read is in control-flow-graph construction (`ControlFlowGraph.cs`), where a dispatch that is *not* exhaustive receives an extra fall-out edge to the default/end label, so the flag shapes the graph itself rather than being consumed by one analysis. Three analyses build that graph: definite-return (`ControlFlowGraph.AllPathsReturn`), out-parameter definite assignment (`RefKindDefiniteAssignmentAnalyzer`), and ref-struct liveness across `await` (`RefStructAsyncLivenessAnalyzer`). Only definite-return is exempted for iterator-returning functions; out-parameter definite assignment runs unconditionally on every function body. The marker is therefore **read for iterators** and must remain accurate through every lowering pass — it must not be treated as analysis-only or discarded after definite-return analysis.
+
 ## Alternatives considered
 
 - **`when` keyword** (Kotlin-faithful): rejected; `switch` is already reserved, recognized by every C# developer, and equally suitable.
