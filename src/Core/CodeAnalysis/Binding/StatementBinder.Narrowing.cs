@@ -232,41 +232,34 @@ internal sealed partial class StatementBinder
         return false;
     }
 
-    private bool InvalidatesInheritedNarrowing(
+    private static List<(int FrameIndex, AccessPath Path)> CollectInheritedNarrowingInvalidations(
         AssignedRootsCollector mutations,
         bool mayMutateMemberPaths,
         int frameCount,
         IReadOnlyList<Dictionary<AccessPath, TypeSymbol>> frames)
     {
+        var invalidations = new List<(int FrameIndex, AccessPath Path)>();
         for (var i = Math.Min(frameCount, frames.Count) - 1; i >= 0; i--)
         {
             foreach (var path in frames[i].Keys)
             {
-                if (mutations.AssignsRoot(path.Root) || (path.HasMembers && mayMutateMemberPaths))
+                if (mutations.InvalidatesNarrowing(path.Root, frames[i][path])
+                    || (path.HasMembers && mayMutateMemberPaths))
                 {
-                    return true;
+                    invalidations.Add((i, path));
                 }
             }
         }
 
-        return false;
+        return invalidations;
     }
 
     private void InvalidateInheritedNarrowings(
-        AssignedRootsCollector mutations,
-        bool mayMutateMemberPaths,
-        int frameCount)
+        IReadOnlyList<(int FrameIndex, AccessPath Path)> invalidations)
     {
-        for (var i = Math.Min(frameCount, binderCtx.NarrowedVariables.Count) - 1; i >= 0; i--)
+        foreach (var (frameIndex, path) in invalidations)
         {
-            var frame = binderCtx.NarrowedVariables[i];
-            var removed = frame.Keys
-                .Where(path => mutations.AssignsRoot(path.Root) || (path.HasMembers && mayMutateMemberPaths))
-                .ToArray();
-            foreach (var path in removed)
-            {
-                frame.Remove(path);
-            }
+            binderCtx.NarrowedVariables[frameIndex].Remove(path);
         }
     }
 
@@ -492,20 +485,6 @@ internal sealed partial class StatementBinder
             return false;
         }
 
-        var assignedType = assign.AssignedValueType;
-        if (assignedType == null || assignedType == TypeSymbol.Error)
-        {
-            return false;
-        }
-
-        // A possibly-null right-hand side does not narrow (invalidation already
-        // cleared any prior narrowing). Only a statically non-nullable value
-        // proves the local is non-null after the assignment.
-        if (assignedType == TypeSymbol.Null || assignedType is NullableTypeSymbol)
-        {
-            return false;
-        }
-
         // Issue #1123 is scoped to reference (and interface) types. Nullable
         // value types (`int32?` → `int32`) are excluded: the existing narrowed-
         // read emit path does not unwrap `Nullable<T>` to its underlying value
@@ -523,8 +502,7 @@ internal sealed partial class StatementBinder
         // value converts to the nullable declared type; this guards the value
         // narrowing to the underlying type (e.g. excludes shapes where the only
         // conversion to the bare underlying type would be explicit).
-        var conversion = Conversion.Classify(assignedType, u);
-        if (!conversion.Exists || !conversion.IsImplicit)
+        if (!AssignmentPreservesNarrowing(assign.AssignedValueType, u))
         {
             return false;
         }
@@ -532,6 +510,20 @@ internal sealed partial class StatementBinder
         local = l;
         underlying = u;
         return true;
+    }
+
+    private static bool AssignmentPreservesNarrowing(TypeSymbol assignedType, TypeSymbol narrowedType)
+    {
+        if (assignedType == null
+            || assignedType == TypeSymbol.Error
+            || assignedType == TypeSymbol.Null
+            || assignedType is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        var conversion = Conversion.Classify(assignedType, narrowedType);
+        return conversion.Exists && conversion.IsImplicit;
     }
 
     /// <summary>
@@ -877,6 +869,7 @@ internal sealed partial class StatementBinder
     {
         private readonly HashSet<(VariableSymbol Receiver, FieldSymbol Field)> assignedFields = new();
         private readonly HashSet<(VariableSymbol Receiver, PropertySymbol Property)> assignedProperties = new();
+        private readonly Dictionary<VariableSymbol, List<TypeSymbol>> assignedValueTypes = new();
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
 
@@ -891,6 +884,18 @@ internal sealed partial class StatementBinder
                     && assignedProperties.Contains((property.Receiver, property.Property)))
                 || (root is ImplicitStaticPropertyVariableSymbol staticProperty
                     && assignedProperties.Contains((null, staticProperty.Property)));
+        }
+
+        public bool InvalidatesNarrowing(VariableSymbol root, TypeSymbol narrowedType)
+        {
+            if (!Roots.Contains(root))
+            {
+                return AssignsRoot(root);
+            }
+
+            return root is not LocalVariableSymbol
+                || !assignedValueTypes.TryGetValue(root, out var types)
+                || types.Any(type => !AssignmentPreservesNarrowing(type, narrowedType));
         }
 
         public override void VisitExpression(BoundExpression node)
@@ -908,6 +913,13 @@ internal sealed partial class StatementBinder
             if (node.Variable != null)
             {
                 Roots.Add(node.Variable);
+                if (!assignedValueTypes.TryGetValue(node.Variable, out var types))
+                {
+                    types = new List<TypeSymbol>();
+                    assignedValueTypes.Add(node.Variable, types);
+                }
+
+                types.Add(node.AssignedValueType);
             }
 
             base.VisitAssignmentExpression(node);

@@ -180,11 +180,12 @@ internal sealed partial class StatementBinder
             firstContinueLabel,
             backEdgeTail,
             backEdgeCondition);
-        if (!InvalidatesInheritedNarrowing(
-                mutations,
-                mutations.MayMutateMemberPaths,
-                inheritedNarrowingFrameCount,
-                narrowingSnapshots))
+        var narrowingInvalidations = CollectInheritedNarrowingInvalidations(
+            mutations,
+            mutations.MayMutateMemberPaths,
+            inheritedNarrowingFrameCount,
+            narrowingSnapshots);
+        if (narrowingInvalidations.Count == 0)
         {
             breakLabel = firstBreakLabel;
             continueLabel = firstContinueLabel;
@@ -209,10 +210,7 @@ internal sealed partial class StatementBinder
         userGotoHandlerRegions.AddRange(userGotoHandlerSnapshot);
         binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
 
-        InvalidateInheritedNarrowings(
-            mutations,
-            mutations.MayMutateMemberPaths,
-            inheritedNarrowingFrameCount);
+        InvalidateInheritedNarrowings(narrowingInvalidations);
         return BindCore(out breakLabel, out continueLabel);
 
         BoundStatement BindCore(out BoundLabel localBreakLabel, out BoundLabel localContinueLabel)

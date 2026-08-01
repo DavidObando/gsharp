@@ -83,6 +83,132 @@ public class Issue2943LoopBackEdgeNarrowingTests
         Assert.Equal(expectedOutput, CompileAndRun(BuildAcceptedSource(shape), shape));
     }
 
+    [Theory]
+    [InlineData("constructor", "c = C(33)")]
+    [InlineData("local", "c = fresh")]
+    [InlineData("function", "c = Mk(33)")]
+    public void NonNullAssignmentAfterUse_PreservesInheritedNarrowing(
+        string shape,
+        string secondIterationAssignment)
+    {
+        var source = $$"""
+            import System
+
+            class C {
+                let Value int32
+
+                init(value int32) {
+                    Value = value
+                }
+
+                func Print() {
+                    Console.WriteLine(Value)
+                }
+            }
+
+            func Mk(value int32) C {
+                return C(value)
+            }
+
+            func Main() {
+                var c C? = C(11)
+                let fresh C = C(33)
+                if c != nil {
+                    for var i = 0; i < 3; i++ {
+                        c.Print()
+                        if i == 0 {
+                            c = C(22)
+                        }
+                        if i == 1 {
+                            {{secondIterationAssignment}}
+                        }
+                    }
+                }
+            }
+            """;
+
+        Assert.Equal("11\n22\n33\n", CompileAndRun(source, "non-null-after-use-" + shape));
+    }
+
+    [Fact]
+    public void UnrelatedMemberInvalidation_DoesNotMaskNonNullLocalAssignment()
+    {
+        const string Source = """
+            import System
+
+            class C {
+                let Value int32
+
+                init(value int32) {
+                    Value = value
+                }
+
+                func Print() {
+                    Console.WriteLine(Value)
+                }
+            }
+
+            class Box {
+                var Value C?
+            }
+
+            func Main() {
+                var c C? = C(11)
+                let box = Box{}
+                box.Value = C(99)
+                if c != nil {
+                    if box.Value != nil {
+                        for var i = 0; i < 3; i++ {
+                            c.Print()
+                            if i == 0 {
+                                c = C(22)
+                            }
+                            if i == 1 {
+                                c = C(33)
+                            }
+                        }
+                    }
+                }
+            }
+            """;
+
+        Assert.Equal("11\n22\n33\n", CompileAndRun(Source, "non-null-with-member-invalidation"));
+    }
+
+    [Fact]
+    public void NonNullAssignmentToDifferentSubtype_InvalidatesTypeNarrowing()
+    {
+        const string Source = """
+            open class Base {
+            }
+
+            class A : Base {
+                func OnlyA() {
+                }
+            }
+
+            class B : Base {
+            }
+
+            func Run() {
+                var value Base? = A()
+                if value is A {
+                    for var i = 0; i < 3; i++ {
+                        value.OnlyA()
+                        if i == 1 {
+                            value = B()
+                        }
+                    }
+                }
+            }
+            """;
+
+        var errors = Compile(Source).BoundProgram.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+
+        var error = Assert.Single(errors);
+        Assert.Equal("GS0159", error.Id);
+    }
+
     [Fact]
     public void SpeculativeRebind_RollsBackDiagnosticsAndLabelState()
     {
@@ -637,7 +763,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
             var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
             _ = assembly.GetTypes();
 
-            using var process = Process.Start(new ProcessStartInfo("dotnet")
+            var startInfo = new ProcessStartInfo("dotnet")
             {
                 ArgumentList =
                 {
@@ -650,20 +776,9 @@ public class Issue2943LoopBackEdgeNarrowingTests
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
-            });
-            Assert.NotNull(process);
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(30_000))
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit();
-                Assert.Fail("dotnet exec timed out");
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            var error = errorTask.GetAwaiter().GetResult();
-            Assert.True(process.ExitCode == 0, error);
+            };
+            var (processExitCode, output, error) = IlVerifier.RunProcess(startInfo, assemblyPath, 30_000);
+            Assert.True(processExitCode == 0, error);
             return output.Replace("\r\n", "\n", StringComparison.Ordinal);
         }
         finally
