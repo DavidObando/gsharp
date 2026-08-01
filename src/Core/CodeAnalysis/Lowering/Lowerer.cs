@@ -54,7 +54,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer();
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return RewriteProtectedRegionEntries(result);
+        return lowerer.RewriteProtectedRegionEntries(result);
     }
 
     /// <summary>
@@ -71,7 +71,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer(declaringType);
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return RewriteProtectedRegionEntries(result);
+        return lowerer.RewriteProtectedRegionEntries(result);
     }
 
     /// <inheritdoc/>
@@ -1383,10 +1383,38 @@ public sealed class Lowerer : BoundTreeRewriter
         };
     }
 
-    private static BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
+    private BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
     {
         var flattened = Flatten(statement);
         var preEmitAnalysisBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
+        if (this.returnValueLocal != null)
+        {
+            const string Message = "Compiler-generated guard reached: non-void function fell through without returning a value.";
+            var exceptionType = typeof(System.InvalidOperationException);
+            var constructor = exceptionType.GetConstructor(new[] { typeof(string) });
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>(flattened.Statements.Length + 1);
+            foreach (var current in flattened.Statements)
+            {
+                if (current is BoundLabelStatement label
+                    && ReferenceEquals(label.Label, this.methodExitLabel))
+                {
+                    statements.Add(new BoundThrowStatement(
+                        null,
+                        new BoundClrConstructorCallExpression(
+                            null,
+                            exceptionType,
+                            constructor,
+                            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, Message)),
+                            TypeSymbol.FromClrType(exceptionType)),
+                        DiagnosticDescriptors.AllPathsMustReturn));
+                }
+
+                statements.Add(current);
+            }
+
+            flattened = new BoundBlockStatement(flattened.Syntax, statements.ToImmutable());
+        }
+
         flattened = FinallyExitRewriter.Rewrite(flattened);
         var emittedBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
         return new BoundBlockStatement(

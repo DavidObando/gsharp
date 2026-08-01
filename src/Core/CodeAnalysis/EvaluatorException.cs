@@ -90,4 +90,24 @@ public class EvaluatorException : Exception
             Severity = descriptor.Severity,
         };
     }
+
+    /// <summary>
+    /// Creates an evaluator exception for a deliberate diagnostic while preserving
+    /// the evaluated exception's self-contained message.
+    /// </summary>
+    /// <param name="descriptor">The diagnostic descriptor.</param>
+    /// <param name="innerException">The evaluated exception.</param>
+    /// <param name="node">The bound node associated with the exception.</param>
+    /// <returns>The evaluator exception.</returns>
+    internal static EvaluatorException CreateDiagnostic(
+        DiagnosticDescriptor descriptor,
+        Exception innerException,
+        BoundNode node)
+    {
+        return new EvaluatorException(innerException.Message, innerException, node)
+        {
+            DiagnosticId = descriptor.Id,
+            Severity = descriptor.Severity,
+        };
+    }
 }

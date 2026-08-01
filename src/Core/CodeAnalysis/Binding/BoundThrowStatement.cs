@@ -15,9 +15,25 @@ public sealed class BoundThrowStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The bound exception expression.</param>
     public BoundThrowStatement(SyntaxNode syntax, BoundExpression expression)
+        : this(syntax, expression, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BoundThrowStatement"/> class
+    /// for a compiler-generated throw with an interpreter diagnostic.
+    /// </summary>
+    /// <param name="syntax">The originating syntax.</param>
+    /// <param name="expression">The bound exception expression.</param>
+    /// <param name="diagnosticDescriptor">The interpreter diagnostic.</param>
+    internal BoundThrowStatement(
+        SyntaxNode syntax,
+        BoundExpression expression,
+        DiagnosticDescriptor? diagnosticDescriptor)
         : base(syntax)
     {
         Expression = expression;
+        DiagnosticDescriptor = diagnosticDescriptor;
     }
 
     /// <inheritdoc/>
@@ -25,4 +41,7 @@ public sealed class BoundThrowStatement : BoundStatement
 
     /// <summary>Gets the bound exception expression.</summary>
     public BoundExpression Expression { get; }
+
+    /// <summary>Gets the interpreter diagnostic for a compiler-generated throw.</summary>
+    internal DiagnosticDescriptor? DiagnosticDescriptor { get; }
 }

@@ -241,17 +241,30 @@ internal sealed partial class MethodBodyEmitter
     {
         this.EmitBlock(body);
 
+        var emitFallthroughGuard = !alwaysAppendRet && !this.currentPositionEndsInTerminator;
+        LabelHandle? fallthroughGuardLabel = null;
+        if (emitFallthroughGuard && this.fixedReturnLabel.HasValue)
+        {
+            fallthroughGuardLabel = this.il.DefineLabel();
+            this.il.Branch(ILOpCode.Br, fallthroughGuardLabel.Value);
+        }
+
         if (this.EmitFixedReturnEpilogue())
         {
             this.il.OpCode(ILOpCode.Ret);
-            return;
+            if (!fallthroughGuardLabel.HasValue)
+            {
+                return;
+            }
+
+            this.il.MarkLabel(fallthroughGuardLabel.Value);
         }
 
         if (alwaysAppendRet)
         {
             this.il.OpCode(ILOpCode.Ret);
         }
-        else if (!this.currentPositionEndsInTerminator)
+        else if (emitFallthroughGuard)
         {
             const string Message = "Compiler-generated guard reached: non-void function fell through without returning a value.";
             var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
