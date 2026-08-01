@@ -1255,7 +1255,7 @@ public sealed partial class Evaluator
     private object EvaluateClrConstructorCallExpression(BoundClrConstructorCallExpression node)
     {
         var args = new object[node.Arguments.Length];
-        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args);
+        var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Constructor);
 
         var result = node.Constructor.Invoke(args);
         WriteBackRefSlots(refSlots, args);
