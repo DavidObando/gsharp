@@ -3,11 +3,9 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -32,12 +30,6 @@ public class Issue2900FixedPinReleaseEmitTests
         "StackUnexpectedArrayType",
         "ExpectedNumericType",
     };
-
-    private static readonly Dictionary<short, OpCode> OpCodesByValue = typeof(OpCodes)
-        .GetFields(BindingFlags.Public | BindingFlags.Static)
-        .Where(field => field.FieldType == typeof(OpCode))
-        .Select(field => (OpCode)field.GetValue(null)!)
-        .ToDictionary(opcode => opcode.Value);
 
     [Fact]
     public void BranchExits_UseLeaveThroughFinally_AndRun()
@@ -951,74 +943,14 @@ public class Issue2900FixedPinReleaseEmitTests
         var name = metadata.GetString(definition.Name);
         if (definition.RelativeVirtualAddress == 0)
         {
-            return new MethodIl(name, Array.Empty<Instruction>(), Array.Empty<ExceptionRegion>());
+            return new MethodIl(name, Array.Empty<IlInstruction>(), Array.Empty<ExceptionRegion>());
         }
 
         var body = pe.GetMethodBody(definition.RelativeVirtualAddress);
         return new MethodIl(
             name,
-            Decode(body.GetILBytes() ?? Array.Empty<byte>()),
+            IlInstructionReader.Read(body.GetILBytes() ?? Array.Empty<byte>()),
             body.ExceptionRegions.ToArray());
-    }
-
-    private static Instruction[] Decode(byte[] il)
-    {
-        var instructions = new List<Instruction>();
-        var offset = 0;
-        while (offset < il.Length)
-        {
-            var instructionOffset = offset;
-            short value = il[offset++] == 0xFE
-                ? unchecked((short)(0xFE00 | il[offset++]))
-                : unchecked((short)il[instructionOffset]);
-            var opcode = OpCodesByValue[value];
-            int? branchTarget = null;
-
-            switch (opcode.OperandType)
-            {
-                case OperandType.InlineNone:
-                    break;
-                case OperandType.ShortInlineBrTarget:
-                    branchTarget = offset + 1 + unchecked((sbyte)il[offset]);
-                    offset++;
-                    break;
-                case OperandType.InlineBrTarget:
-                    branchTarget = offset + 4 + BitConverter.ToInt32(il, offset);
-                    offset += 4;
-                    break;
-                case OperandType.InlineSwitch:
-                    var count = BitConverter.ToInt32(il, offset);
-                    offset += 4 + (count * 4);
-                    break;
-                case OperandType.ShortInlineI:
-                case OperandType.ShortInlineVar:
-                    offset++;
-                    break;
-                case OperandType.InlineVar:
-                    offset += 2;
-                    break;
-                case OperandType.InlineI:
-                case OperandType.ShortInlineR:
-                case OperandType.InlineField:
-                case OperandType.InlineMethod:
-                case OperandType.InlineSig:
-                case OperandType.InlineString:
-                case OperandType.InlineTok:
-                case OperandType.InlineType:
-                    offset += 4;
-                    break;
-                case OperandType.InlineI8:
-                case OperandType.InlineR:
-                    offset += 8;
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unsupported IL operand type {opcode.OperandType}.");
-            }
-
-            instructions.Add(new Instruction(instructionOffset, opcode, branchTarget));
-        }
-
-        return instructions.ToArray();
     }
 
     private sealed class CompiledProgram : IDisposable
@@ -1093,11 +1025,6 @@ public class Issue2900FixedPinReleaseEmitTests
 
     private sealed record MethodIl(
         string Name,
-        Instruction[] Instructions,
+        IlInstruction[] Instructions,
         ExceptionRegion[] Regions);
-
-    private sealed record Instruction(
-        int Offset,
-        OpCode OpCode,
-        int? BranchTarget);
 }
