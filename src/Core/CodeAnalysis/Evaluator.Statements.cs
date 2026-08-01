@@ -33,7 +33,8 @@ public sealed partial class Evaluator
     /// nothing catches it). That wrapping must not leak into typed catch
     /// matching or handler-variable binding, so unwrap repeatedly down to the
     /// innermost real exception. TargetInvocationException (thrown by
-    /// reflection-based CLR calls) gets the same treatment.
+    /// reflection-based CLR calls) gets the same treatment, including when it
+    /// is the sole unambiguous child of an AggregateException.
     /// </summary>
     /// <param name="ex">Exception to unwrap.</param>
     /// <returns>Innermost runtime exception.</returns>
@@ -50,6 +51,14 @@ public sealed partial class Evaluator
             if (ex is TargetInvocationException { InnerException: { } tieInner })
             {
                 ex = tieInner;
+                continue;
+            }
+
+            if (ex is AggregateException aggregate
+                && aggregate.InnerExceptions.Count == 1
+                && aggregate.InnerException is TargetInvocationException aggregateInner)
+            {
+                ex = aggregateInner;
                 continue;
             }
 

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -22,6 +23,8 @@ public class Issue2938DelegateExceptionDiagnosticTests
     /// <summary>
     /// Gets delegate-storage cases that cover CLR and interpreter containers.
     /// </summary>
+    // Reflection-routed storage reports the call site, while closure-routed
+    // storage reports the lambda body. This is a known inconsistency, not a contract.
     public static TheoryData<string, string, string> StorageCases => new()
     {
         {
@@ -180,6 +183,56 @@ public class Issue2938DelegateExceptionDiagnosticTests
     }
 
     [Fact]
+    public void UserThrownTargetInvocationException_IsIntentionallyUnwrapped()
+    {
+        const string Source = """
+            import System
+            import System.Reflection
+
+            let handler () -> int32 = () -> throw TargetInvocationException(
+                "author outer",
+                InvalidOperationException("author inner"))
+            handler()
+            """;
+
+        var diagnostic = Assert.Single(Evaluate(Source).Diagnostics);
+
+        Assert.Equal("GS9999", diagnostic.Id);
+        Assert.Equal("author inner", diagnostic.Message);
+    }
+
+    [Fact]
+    public void AwaitedChannelValue_SingleAggregateTargetInvocation_UnwrapsInnerMessage()
+    {
+        const string Source = """
+            import GSharp.Interpreter.Tests
+            import Gsharp.Extensions.Go
+            import System.Threading.Tasks
+
+            let ch = make(chan ValueTask[int32], 1)
+            ch <- Issue2938ExceptionProbe.CreateSingleAggregateValueTaskAsync()
+            await <-ch
+            """;
+
+        AssertDiagnostic(Source, "aggregate await boom", "await <-ch");
+    }
+
+    [Fact]
+    public void MultipleAggregateExceptions_RemainAggregate()
+    {
+        const string Source = """
+            import GSharp.Interpreter.Tests
+
+            await Issue2938ExceptionProbe.CreateMultipleAggregateValueTaskAsync()
+            """;
+
+        AssertDiagnostic(
+            Source,
+            "One or more errors occurred. (Exception has been thrown by the target of an invocation.) (second aggregate boom)",
+            "await GSharp.Interpreter.Tests.Issue2938ExceptionProbe.CreateMultipleAggregateValueTaskAsync()");
+    }
+
+    [Fact]
     public void ClrMemberDelegateDiagnostic_RemainsAnchoredAtCallSite()
     {
         const string Source = """
@@ -227,8 +280,6 @@ public class Issue2938DelegateExceptionDiagnosticTests
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Equal(message, diagnostic.Message);
         Assert.Equal(sourceNode, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
-        Assert.Equal(0, diagnostic.Location.StartLine);
-        Assert.Equal(0, diagnostic.Location.StartCharacter);
     }
 
     private static EvaluationResult Evaluate(string source)
@@ -265,4 +316,25 @@ public static class Issue2938ExceptionProbe
         => new InvalidOperationException(
             "outer boom",
             new DivideByZeroException("inner boom"));
+
+    /// <summary>
+    /// Creates an awaitable whose result throws a single-inner aggregate wrapper.
+    /// </summary>
+    /// <returns>Awaitable exception probe.</returns>
+    public static ValueTask<int> CreateSingleAggregateValueTaskAsync()
+        => new(Task.FromException<int>(
+            new AggregateException(
+                new TargetInvocationException(
+                    new DivideByZeroException("aggregate await boom")))));
+
+    /// <summary>
+    /// Creates an awaitable whose result throws a multi-inner aggregate wrapper.
+    /// </summary>
+    /// <returns>Awaitable exception probe.</returns>
+    public static ValueTask<int> CreateMultipleAggregateValueTaskAsync()
+        => new(Task.FromException<int>(
+            new AggregateException(
+                new TargetInvocationException(
+                    new DivideByZeroException("aggregate await boom")),
+                new InvalidOperationException("second aggregate boom"))));
 }
