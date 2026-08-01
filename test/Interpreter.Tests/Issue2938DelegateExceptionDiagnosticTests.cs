@@ -233,6 +233,30 @@ public class Issue2938DelegateExceptionDiagnosticTests
     }
 
     [Fact]
+    public void SingleAggregateTargetInvocation_RemainsCatchableAsAggregateException()
+    {
+        const string Source = """
+            import System
+            import System.Reflection
+
+            var message = "none"
+            try {
+                throw AggregateException(TargetInvocationException(DivideByZeroException("boom")))
+            } catch (ex AggregateException) {
+                message = "caught-aggregate"
+            } catch (ex DivideByZeroException) {
+                message = "caught-dbz"
+            }
+            message
+            """;
+
+        var result = Evaluate(Source);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("caught-aggregate", result.Value);
+    }
+
+    [Fact]
     public void ClrMemberDelegateDiagnostic_RemainsAnchoredAtCallSite()
     {
         const string Source = """

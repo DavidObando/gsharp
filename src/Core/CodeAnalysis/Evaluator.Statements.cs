@@ -33,8 +33,7 @@ public sealed partial class Evaluator
     /// nothing catches it). That wrapping must not leak into typed catch
     /// matching or handler-variable binding, so unwrap repeatedly down to the
     /// innermost real exception. TargetInvocationException (thrown by
-    /// reflection-based CLR calls) gets the same treatment, including when it
-    /// is the sole unambiguous child of an AggregateException.
+    /// reflection-based CLR calls) gets the same treatment.
     /// </summary>
     /// <param name="ex">Exception to unwrap.</param>
     /// <returns>Innermost runtime exception.</returns>
@@ -55,17 +54,27 @@ public sealed partial class Evaluator
                 continue;
             }
 
-            if (ex is AggregateException aggregate
-                && aggregate.InnerExceptions.Count == 1
-                && aggregate.InnerException is TargetInvocationException aggregateInner
-                && IsReflectionInvocationWrapper(aggregateInner))
-            {
-                ex = aggregateInner;
-                continue;
-            }
-
             return ex;
         }
+    }
+
+    /// <summary>
+    /// Unwraps runtime transport exceptions for diagnostic messages without
+    /// changing catch matching or handler-variable binding.
+    /// </summary>
+    /// <param name="ex">Exception to unwrap.</param>
+    /// <returns>Innermost diagnostic exception.</returns>
+    internal static Exception UnwrapDiagnosticException(Exception ex)
+    {
+        var unwrapped = UnwrapRuntimeException(ex);
+        if (unwrapped is AggregateException { InnerExceptions.Count: 1 } aggregate
+            && aggregate.InnerException is TargetInvocationException inner
+            && IsReflectionInvocationWrapper(inner))
+        {
+            return UnwrapRuntimeException(inner);
+        }
+
+        return unwrapped;
     }
 
     // Reflection-generated wrappers are thrown from CoreLib; a user-thrown
