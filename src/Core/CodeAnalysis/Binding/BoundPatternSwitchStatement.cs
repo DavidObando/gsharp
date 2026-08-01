@@ -19,7 +19,7 @@ public sealed class BoundPatternSwitchStatement : BoundStatement
         SyntaxNode syntax,
         BoundExpression discriminant,
         ImmutableArray<BoundPatternSwitchArm> arms,
-        bool isExhaustive = false)
+        bool isExhaustive)
         : base(syntax)
     {
         Discriminant = discriminant;

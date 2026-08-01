@@ -55,6 +55,12 @@ Neutral:
 
 - Loses Go's `fallthrough`. Cases that genuinely need fall-through can be expressed by sharing a target via labels (Phase 6 or Phase 7) or by listing values in the same case arm.
 
+## Implementation notes
+
+`BoundPatternSwitchStatement.IsExhaustive` is semantic metadata, not a definite-return-only cache. The binder originates it, and every reconstruction of the node passes it through — `BoundTreeRewriter.RewritePatternSwitchStatement`, `CaptureBoxingRewriter`, and the flattening pass in `Lowerer`. The constructor requires the value explicitly so a new construction site cannot silently default to "not exhaustive". Its only consuming read is in control-flow-graph construction (`ControlFlowGraph.cs`), where a dispatch that is *not* exhaustive receives an extra fall-out edge to the default/end label.
+
+Current observation is narrower than preservation. Definite-return analysis skips iterator-returning functions. Out-parameter definite assignment is invoked only from the top-level function-body path, and ref-kind parameters are rejected on sequence functions (`GS0422`); member-body paths do not invoke that analyzer. Ref-struct async liveness is invoked from all body-binding paths, but it builds a graph only for applicable async scopes. No valid synchronous-iterator program is currently known where changing this flag changes a diagnostic or runtime value. The decision is nevertheless to preserve the flag across iterator lowering: these passes reconstruct the same semantic switch, preserving the value is an explicit one-argument invariant, and erasing it would make the bound tree inaccurate without a demonstrated benefit.
+
 ## Alternatives considered
 
 - **`when` keyword** (Kotlin-faithful): rejected; `switch` is already reserved, recognized by every C# developer, and equally suitable.
