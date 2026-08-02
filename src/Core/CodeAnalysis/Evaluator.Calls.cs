@@ -1005,15 +1005,12 @@ public sealed partial class Evaluator
         {
             static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
             {
-                for (var current = method; current != null; current = current.OverriddenMethod)
+                while (method.OverriddenMethod != null)
                 {
-                    if (current.ExternalOverriddenMethod != null)
-                    {
-                        return current.ExternalOverriddenMethod;
-                    }
+                    method = method.OverriddenMethod;
                 }
 
-                return null;
+                return method.ExternalOverriddenMethod;
             }
 
             FunctionSymbol externalOverride = null;

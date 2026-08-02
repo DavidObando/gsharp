@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -85,14 +86,14 @@ public class Issue2896StructObjectOverrideTests
     [InlineData(true, "gsc-evaluate")]
     [InlineData(true, "gsc-emit")]
     [InlineData(true, "gsi")]
-    public void ClassObjectOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
+    public async Task ClassObjectOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
         bool insideFunction,
         string driver)
     {
         var suffix = Guid.NewGuid().ToString("N");
         var source = BuildClassOverrideChainSource(insideFunction, suffix);
 
-        Assert.Equal("L0-11\nL1-22\nL2-33\n", RunDriver(source, suffix, driver));
+        Assert.Equal("L0-11\nL1-22\nL2-33\n", await RunDriverAsync(source, suffix, driver));
     }
 
     [Fact]
@@ -286,13 +287,15 @@ public class Issue2896StructObjectOverrideTests
             : declarations + "\n" + calls;
     }
 
-    private static string RunDriver(string source, string suffix, string driver)
+    private static async Task<string> RunDriverAsync(string source, string suffix, string driver)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
             nameof(Issue2896StructObjectOverrideTests),
             suffix);
+        Assert.False(Directory.Exists(directory));
         Directory.CreateDirectory(directory);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
         try
         {
             var sourcePath = Path.Combine(directory, "test.gs");
@@ -301,7 +304,7 @@ public class Issue2896StructObjectOverrideTests
             return driver switch
             {
                 "gsc-evaluate" => RunCompilerEvaluation(sourcePath),
-                "gsc-emit" => RunEmittedBinary(directory, sourcePath, suffix),
+                "gsc-emit" => await RunEmittedBinaryAsync(directory, sourcePath, suffix),
                 "gsi" => RunInterpreter(sourcePath),
                 _ => throw new ArgumentOutOfRangeException(nameof(driver), driver, null),
             };
@@ -335,7 +338,7 @@ public class Issue2896StructObjectOverrideTests
         return result.StandardOutput;
     }
 
-    private static string RunEmittedBinary(string directory, string sourcePath, string suffix)
+    private static async Task<string> RunEmittedBinaryAsync(string directory, string sourcePath, string suffix)
     {
         var assemblyName = "Issue2896Driver" + suffix;
         var outputPath = Path.Combine(directory, assemblyName + ".dll");
@@ -377,9 +380,21 @@ public class Issue2896StructObjectOverrideTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start emitted assembly");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), "Emitted assembly timed out");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            throw new Xunit.Sdk.XunitException("Emitted assembly timed out");
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
         Assert.Equal(0, process.ExitCode);
         Assert.Equal(string.Empty, stderr);
         return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
