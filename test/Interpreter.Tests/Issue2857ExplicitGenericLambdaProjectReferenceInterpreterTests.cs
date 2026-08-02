@@ -51,6 +51,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceInterpreterTes
         var consumer = useFunction
             ? $$"""
                 package {{packageName}}use
+                import System
 
                 {{intermediateDeclaration}}
                 class Derived : {{derivedBase}} {}
@@ -61,17 +62,18 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceInterpreterTes
                     return value.Value
                 }
 
-                Read()
+                Console.WriteLine(Read())
                 """
             : $$"""
                 package {{packageName}}use
+                import System
 
                 {{intermediateDeclaration}}
                 class Derived : {{derivedBase}} {}
 
                 let value = {{baseType}}.Make[Derived](
                     (item Derived) -> { item.Value = {{expected}} })
-                value.Value
+                Console.WriteLine(value.Value)
                 """;
 
         using var peStream = new MemoryStream();
