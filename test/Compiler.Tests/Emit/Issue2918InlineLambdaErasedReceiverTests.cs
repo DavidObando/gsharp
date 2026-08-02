@@ -368,10 +368,12 @@ public class Issue2918InlineLambdaErasedReceiverTests
             CompileVerifyLoadAndRun(source, "Issue2918ConstructorOverloads.Src"));
     }
 
-    [Fact]
-    public void NominalDelegateDisagreement_KeepsMethodOverloadAmbiguous()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NominalDelegateDisagreement_KeepsMethodOverloadAmbiguous(bool topLevel)
     {
-        const string source = """
+        const string declarations = """
             package Issue2948MethodNominalDisagreement
             import System
             import Issue2918Contracts
@@ -380,20 +382,23 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 let N int32
                 init(n int32) { N = n }
             }
-
-            func Main() {
-                let methods = MethodDelegateOverloads[Src]()
-                Console.WriteLine(methods.Add((item) -> true))
-            }
             """;
 
-        _ = CompileExpectingFailureOrReportingRuntimeOutput(source);
+        const string statements = """
+            let methods = MethodDelegateOverloads[Src]()
+            Console.WriteLine(methods.Add((item) -> true))
+            """;
+
+        _ = CompileExpectingFailureOrReportingRuntimeOutput(
+            WithExecutionScope(declarations, statements, topLevel));
     }
 
-    [Fact]
-    public void NominalDelegateDisagreement_PreservesConstructorOverloadResolution()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NominalDelegateDisagreement_PreservesConstructorOverloadResolution(bool topLevel)
     {
-        const string source = """
+        const string declarations = """
             package Issue2948ConstructorNominalDisagreement
             import System
             import Issue2918Contracts
@@ -402,20 +407,126 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 let N int32
                 init(n int32) { N = n }
             }
+            """;
 
-            func Main() {
-                let constructed = ConstructorDelegateOverloads[Src](
-                    (item) -> true)
-                Console.WriteLine(constructed.Kind)
-            }
+        const string statements = """
+            let constructed = ConstructorDelegateOverloads[Src](
+                (item) -> true)
+            Console.WriteLine(constructed.Kind)
             """;
 
         Assert.Equal(
             "func\n",
             CompileVerifyLoadAndRun(
-                source,
+                WithExecutionScope(declarations, statements, topLevel),
                 expectedSourceTypeName: null,
                 allowDirectObjectParameter: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CorpusJoinLetConstruct_ResolvesDelegateAndExpressionTargets(bool topLevel)
+    {
+        const string declarations = """
+            package Issue2948CorpusJoinLet
+            import System
+            import System.Linq
+
+            data class Owner(Id int32, Name string) {
+            }
+
+            data class Pet(Name string, OwnerId int32) {
+            }
+            """;
+
+        const string statements = """
+            let owners []Owner = []Owner{Owner(1, "ada"), Owner(2, "bea")}
+            let pets []Pet = []Pet{Pet("rex", 2), Pet("tom", 1)}
+            let matched = owners.Join(
+                pets,
+                (o Owner) -> o.Id,
+                (p Pet) -> p.OwnerId,
+                (o Owner, p Pet) -> { return (o, p) })
+            Console.WriteLine(matched.Count())
+            """;
+
+        Assert.Equal(
+            "2\n",
+            CompileVerifyLoadAndRun(
+                WithExecutionScope(declarations, statements, topLevel),
+                "Issue2948CorpusJoinLet.Owner"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CorpusJoinResultSelectorLetConstruct_VerifyLoadAndRun(bool topLevel)
+    {
+        const string declarations = """
+            package Issue2948CorpusJoinResult
+            import System
+            import System.Linq
+
+            data class Owner(Id int32, Name string) {
+            }
+
+            data class Pet(Name string, OwnerId int32) {
+            }
+            """;
+
+        const string statements = """
+            let owners []Owner = []Owner{Owner(1, "ada"), Owner(2, "bea")}
+            let pets []Pet = []Pet{Pet("rex", 2), Pet("tom", 1)}
+            let matched = owners.Join(
+                pets,
+                (o Owner) -> o.Id,
+                (p Pet) -> p.OwnerId,
+                (o Owner, p Pet) -> o.Name + "+" + p.Name)
+            Console.WriteLine(String.Join(",", matched!!))
+            """;
+
+        Assert.Equal(
+            "ada+tom,bea+rex\n",
+            CompileVerifyLoadAndRun(
+                WithExecutionScope(declarations, statements, topLevel),
+                "Issue2948CorpusJoinResult.Owner"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CorpusJoinChainedSelectAndWriteLine_VerifyLoadAndRun(bool topLevel)
+    {
+        const string declarations = """
+            package Issue2948CorpusJoinChain
+            import System
+            import System.Linq
+
+            data class Owner(Id int32, Name string) {
+            }
+
+            data class Pet(Name string, OwnerId int32) {
+            }
+            """;
+
+        const string statements = """
+            let owners []Owner = []Owner{Owner(1, "ada"), Owner(2, "bea"), Owner(3, "cid")}
+            let pets []Pet = []Pet{Pet("rex", 2), Pet("tom", 1), Pet("ziggy", 2)}
+            let matched = owners.Join(pets, (o Owner) -> o.Id, (p Pet) -> p.OwnerId, (o Owner, p Pet) -> {
+                return (o, p)
+            }).Select((pair (Owner, Pet)) -> {
+                let (o, p) = pair
+                return "${o.Name}+${p.Name}"
+            })
+            Console.WriteLine("JoinClause: matched=${String.Join(",", matched!!)}")
+            """;
+
+        Assert.Equal(
+            "JoinClause: matched=ada+tom,bea+rex,bea+ziggy\n",
+            CompileVerifyLoadAndRun(
+                WithExecutionScope(declarations, statements, topLevel),
+                "Issue2948CorpusJoinChain.Owner"));
     }
 
     [Fact]
@@ -811,6 +922,14 @@ public class Issue2918InlineLambdaErasedReceiverTests
             DeleteDirectory(directory);
         }
     }
+
+    private static string WithExecutionScope(
+        string declarations,
+        string statements,
+        bool topLevel) =>
+        topLevel
+            ? declarations + "\n" + statements
+            : declarations + "\nfunc Main() {\n" + statements + "\n}";
 
     private static string CompileVerifyLoadAndRun(
         string source,

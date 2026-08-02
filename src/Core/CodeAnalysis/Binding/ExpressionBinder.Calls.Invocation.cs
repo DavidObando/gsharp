@@ -815,12 +815,14 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
+    private static TypeSymbol UnwrapExpressionTreeDelegate(TypeSymbol type) =>
+        MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType)
+            ? delegateType
+            : type;
+
     private static bool IsCanonicalFunctionDelegate(TypeSymbol type)
     {
-        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
-        {
-            type = delegateType;
-        }
+        type = UnwrapExpressionTreeDelegate(type);
 
         if (type is ImportedTypeSymbol imported)
         {
@@ -854,10 +856,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType))
-        {
-            type = delegateType;
-        }
+        type = UnwrapExpressionTreeDelegate(type);
 
         return !TypeSymbol.ContainsTypeParameter(type)
             && type?.ClrType?.ContainsGenericParameters != true;
@@ -865,6 +864,9 @@ internal sealed partial class ExpressionBinder
 
     private static bool SameDelegateIdentity(TypeSymbol left, TypeSymbol right)
     {
+        left = UnwrapExpressionTreeDelegate(left);
+        right = UnwrapExpressionTreeDelegate(right);
+
         if (ReferenceEquals(left, right))
         {
             return true;
