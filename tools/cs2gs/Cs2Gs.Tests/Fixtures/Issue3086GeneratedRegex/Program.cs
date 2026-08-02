@@ -35,11 +35,40 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
             object.ReferenceEquals(regex, Pattern());
     }
 
+    public static bool HasDefaultRegexSemantics()
+    {
+        Regex regex = DefaultPattern();
+        return regex.ToString() == "^default$" &&
+            regex.Options == RegexOptions.None &&
+            regex.MatchTimeout == Regex.InfiniteMatchTimeout &&
+            object.ReferenceEquals(regex, DefaultPattern());
+    }
+
+    public static bool HasInvariantInlineIgnoreCaseSemantics()
+    {
+        Regex regex = InvariantPattern();
+        return regex.IsMatch("INVARIANT") &&
+            regex.Options == RegexOptions.CultureInvariant &&
+            object.ReferenceEquals(regex, InvariantPattern());
+    }
+
     [GeneratedRegex(
         PatternText,
         RegexOptions.ExplicitCapture,
         matchTimeoutMilliseconds: 1000)]
     private static partial Regex Pattern();
+
+    [GeneratedRegex("^default$")]
+    private static partial Regex DefaultPattern();
+
+    [GeneratedRegex("(?i)^invariant$", RegexOptions.CultureInvariant)]
+    private static partial Regex InvariantPattern();
+}
+
+public sealed partial class InstanceRegexOwner
+{
+    [GeneratedRegex("^[a-z]+$")]
+    public partial Regex LowercaseWords();
 }
 
 public static class Program
@@ -52,6 +81,23 @@ public static class Program
         if (!GitHubUrl.HasExpectedRegexSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex semantics changed.");
+        }
+
+        if (!GitHubUrl.HasDefaultRegexSemantics() ||
+            !GitHubUrl.HasInvariantInlineIgnoreCaseSemantics())
+        {
+            throw new InvalidOperationException("GeneratedRegex default semantics changed.");
+        }
+
+        var firstOwner = new InstanceRegexOwner();
+        var secondOwner = new InstanceRegexOwner();
+        Regex firstRegex = firstOwner.LowercaseWords();
+        if (!firstRegex.IsMatch("lowercase") ||
+            firstRegex.IsMatch("UPPERCASE") ||
+            !object.ReferenceEquals(firstRegex, firstOwner.LowercaseWords()) ||
+            !object.ReferenceEquals(firstRegex, secondOwner.LowercaseWords()))
+        {
+            throw new InvalidOperationException("GeneratedRegex instance lowering changed.");
         }
 
         Console.WriteLine("repository+pull-request+regex-ok");

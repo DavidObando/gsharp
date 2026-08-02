@@ -6,7 +6,10 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Pipeline;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -71,6 +74,23 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Contains("RegexOptions.ExplicitCapture", translated, StringComparison.Ordinal);
         Assert.Contains("TimeSpan.FromMilliseconds(1000.0)", translated, StringComparison.Ordinal);
         Assert.Contains("func Pattern() Regex -> __generatedRegex_Pattern", translated, StringComparison.Ordinal);
+        Assert.Contains("let __generatedRegex_DefaultPattern Regex = Regex(", translated, StringComparison.Ordinal);
+        Assert.Contains("RegexOptions.None", translated, StringComparison.Ordinal);
+        Assert.Contains("Regex.InfiniteMatchTimeout", translated, StringComparison.Ordinal);
+        Assert.Contains(
+            "func DefaultPattern() Regex -> __generatedRegex_DefaultPattern",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains("RegexOptions.CultureInvariant", translated, StringComparison.Ordinal);
+        Assert.Contains(
+            "let __generatedRegex_LowercaseWords Regex = Regex(",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "partial class InstanceRegexOwner {" + Environment.NewLine +
+            "    func LowercaseWords() Regex -> __generatedRegex_LowercaseWords",
+            translated,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("@GeneratedRegex", translated, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
@@ -78,6 +98,81 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
+    }
+
+    [Fact]
+    public async Task InlineIgnoreCaseWithoutInvariant_ReportsUnsupported()
+    {
+        string sourceRoot = NewDirectory("scratch-projects");
+        File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
+        string projectDirectory = Path.Combine(sourceRoot, "Issue3086InlineIgnoreCase");
+        CopyFixture(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Program.cs"),
+            """
+            using System.Text.RegularExpressions;
+
+            public static partial class Patterns
+            {
+                [GeneratedRegex("(?i)abc")]
+                private static partial Regex GlobalIgnoreCase();
+
+                [GeneratedRegex("(?i:abc)")]
+                private static partial Regex ScopedIgnoreCase();
+
+                [GeneratedRegex("(?-i)(?m-i)(?im-s:abc)")]
+                private static partial Regex ToggledIgnoreCase();
+
+                [GeneratedRegex("(?-i:abc)")]
+                private static partial Regex DisabledIgnoreCase();
+
+                [GeneratedRegex(@"\(\?i\)")]
+                private static partial Regex EscapedLiteral();
+
+                [GeneratedRegex("[(?i)]")]
+                private static partial Regex CharacterClassLiteral();
+
+                [GeneratedRegex("(?i)abc", RegexOptions.CultureInvariant)]
+                private static partial Regex InvariantIgnoreCase();
+            }
+
+            public static class Program
+            {
+                public static void Main()
+                {
+                }
+            }
+            """);
+
+        string projectPath = Path.Combine(projectDirectory, "Issue3086GeneratedRegex.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = project.Documents.Single(
+            candidate => Path.GetFileName(candidate.FilePath) == "Program.cs");
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string translated = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        TranslationDiagnostic[] diagnostics = context.Diagnostics
+            .Where(diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported)
+            .ToArray();
+
+        Assert.Equal(3, diagnostics.Length);
+        Assert.All(
+            diagnostics,
+            diagnostic => Assert.Contains(
+                "including inline option groups",
+                diagnostic.Message,
+                StringComparison.Ordinal));
+        Assert.Contains("func DisabledIgnoreCase()", translated, StringComparison.Ordinal);
+        Assert.Contains("func EscapedLiteral()", translated, StringComparison.Ordinal);
+        Assert.Contains("func CharacterClassLiteral()", translated, StringComparison.Ordinal);
+        Assert.Contains("func InvariantIgnoreCase()", translated, StringComparison.Ordinal);
     }
 
     private static void CopyFixture(string destination)

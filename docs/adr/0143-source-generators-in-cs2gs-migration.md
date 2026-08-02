@@ -82,10 +82,13 @@ largely does:
 non-void partial-method definition. G# has no partial methods, so the generic
 ADR-0143 §D rule would erase the declaration while value-position calls such as
 `Pattern().Match(...)` remain. cs2gs instead emits one private cached `Regex`
-constructed from the bound attribute's pattern, options, and timeout, plus the
-original method as a private accessor, and removes the generator attribute to
-avoid duplicate output from gsgen. This preserves runtime behavior without
-back-translating the generator's large specialized runner.
+constructed from the bound attribute's pattern, options, and timeout, plus an
+accessor preserving the original method's static/instance shape and visibility,
+and removes the generator attribute to avoid duplicate output from gsgen.
+Culture-sensitive ignore-case patterns — including inline `(?i)` option groups —
+are reported unsupported unless invariant construction preserves their
+semantics. This preserves runtime behavior without back-translating the
+generator's large specialized runner.
 
 **File/options-driven generators (Avalonia `.axaml`, issue #2223).** Some
 generators consume non-source inputs rather than attributes — Avalonia's XAML

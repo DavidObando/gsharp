@@ -56,7 +56,9 @@ public sealed partial class CSharpToGSharpTranslator
                         out MethodDeclaration generatedRegexMethod))
                     {
                         yield return (generatedRegexField, true);
-                        yield return (generatedRegexMethod, true);
+                        yield return (
+                            generatedRegexMethod,
+                            method.Modifiers.Any(SyntaxKind.StaticKeyword));
                         break;
                     }
 
@@ -260,7 +262,6 @@ public sealed partial class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             if (symbol == null ||
                 !symbol.IsPartialDefinition ||
-                !symbol.IsStatic ||
                 symbol.Parameters.Length != 0 ||
                 symbol.TypeParameters.Length != 0)
             {
@@ -318,11 +319,14 @@ public sealed partial class CSharpToGSharpTranslator
             long optionBits = Convert.ToInt64(optionsValue, CultureInfo.InvariantCulture);
             const long IgnoreCase = 1;
             const long CultureInvariant = 512;
-            if ((optionBits & IgnoreCase) != 0 &&
+            bool usesIgnoreCase = (optionBits & IgnoreCase) != 0 ||
+                PatternEnablesInlineIgnoreCase(pattern);
+            if (usesIgnoreCase &&
                 ((optionBits & CultureInvariant) == 0 || cultureName.Length > 0))
             {
-                const string Message = "GeneratedRegex with culture-sensitive IgnoreCase cannot be lowered to " +
-                    "Regex construction without changing culture or Regex.Options semantics.";
+                const string Message = "GeneratedRegex with culture-sensitive IgnoreCase, including inline " +
+                    "option groups, cannot be lowered to Regex construction without changing culture or " +
+                    "Regex.Options semantics.";
                 this.context.ReportUnsupported(node, Message);
                 return false;
             }
@@ -395,6 +399,122 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string simpleName = name.Substring(name.LastIndexOf('.') + 1);
             return simpleName == "GeneratedRegex" || simpleName == "GeneratedRegexAttribute";
+        }
+
+        private static bool PatternEnablesInlineIgnoreCase(string pattern)
+        {
+            bool inCharacterClass = false;
+            bool firstCharacterInClass = false;
+
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char current = pattern[i];
+                if (current == '\\')
+                {
+                    if (inCharacterClass)
+                    {
+                        firstCharacterInClass = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                if (inCharacterClass)
+                {
+                    if (current == ']' && !firstCharacterInClass)
+                    {
+                        inCharacterClass = false;
+                    }
+                    else if (current != '^' || !firstCharacterInClass)
+                    {
+                        firstCharacterInClass = false;
+                    }
+
+                    continue;
+                }
+
+                if (current == '[')
+                {
+                    inCharacterClass = true;
+                    firstCharacterInClass = true;
+                    continue;
+                }
+
+                if (current != '(' ||
+                    i + 2 >= pattern.Length ||
+                    pattern[i + 1] != '?')
+                {
+                    continue;
+                }
+
+                if (pattern[i + 2] == '#')
+                {
+                    int commentEnd = pattern.IndexOf(')', i + 3);
+                    if (commentEnd < 0)
+                    {
+                        return false;
+                    }
+
+                    i = commentEnd;
+                    continue;
+                }
+
+                if (InlineOptionsEnableIgnoreCase(pattern, i + 2))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool InlineOptionsEnableIgnoreCase(string pattern, int start)
+        {
+            bool disabling = false;
+            bool sawOption = false;
+            bool sawDisabledOption = false;
+            bool enabledIgnoreCase = false;
+            bool disabledIgnoreCase = false;
+            int i = start;
+
+            for (; i < pattern.Length; i++)
+            {
+                char option = pattern[i];
+                if (option == '-')
+                {
+                    if (disabling)
+                    {
+                        return false;
+                    }
+
+                    disabling = true;
+                    continue;
+                }
+
+                if (option is not ('i' or 'm' or 'n' or 's' or 'x'))
+                {
+                    break;
+                }
+
+                sawOption = true;
+                if (disabling)
+                {
+                    sawDisabledOption = true;
+                    disabledIgnoreCase |= option == 'i';
+                }
+                else
+                {
+                    enabledIgnoreCase |= option == 'i';
+                }
+            }
+
+            return sawOption &&
+                (!disabling || sawDisabledOption) &&
+                i < pattern.Length &&
+                pattern[i] is ')' or ':' &&
+                enabledIgnoreCase &&
+                !disabledIgnoreCase;
         }
 
         private bool CanLowerOwnedExtension(MethodDeclarationSyntax method)
