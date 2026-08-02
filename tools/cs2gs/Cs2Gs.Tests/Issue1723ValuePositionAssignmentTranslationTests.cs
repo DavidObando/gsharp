@@ -276,11 +276,143 @@ namespace Demo
         Assert.DoesNotContain(
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Equal(1, CountOccurrences(printed, "map_[key] = C.Next()"));
+        Assert.Equal(1, CountOccurrences(printed, "map_[key] = __spill"));
         Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
         Assert.Contains("else {\n", printed, StringComparison.Ordinal);
 
         Assert.Equal("1,1,42,42,42", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void PropertyAssignmentResult_UsesAssignedValueWithoutCallingGetter()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int stored;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.stored + 100;
+                        }
+
+                        set
+                        {
+                            this.stored = value;
+                        }
+                    }
+
+                    public int Stored => this.stored;
+
+                    public int Gets => this.gets;
+
+                    private static int Echo(int value) => value;
+
+                    private int AssignAndReturn()
+                    {
+                        return P = 8;
+                    }
+
+                    public string Assign()
+                    {
+                        int argument = Echo(P = 7);
+                        int returned = AssignAndReturn();
+                        return argument + "," + returned + "," + this.Stored + "," + this.Gets;
+                    }
+                }
+
+                public static class C
+                {
+                    public static string Run() => new Holder().Assign();
+                }
+            }
+            """);
+
+        Assert.Equal(2, CountOccurrences(printed, "P = __spill"));
+        Assert.Equal("7,8,8,0", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void SetOnlyIndexerAssignment_SideEffectingTargetAndValueRunOnce()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int[] values = new int[2];
+                    private int writes;
+
+                    public int this[int index]
+                    {
+                        set
+                        {
+                            this.writes++;
+                            this.values[index] = value;
+                        }
+                    }
+
+                    public int Read(int index) => this.values[index];
+
+                    public int Writes => this.writes;
+                }
+
+                public static class C
+                {
+                    private static Holder current = new Holder();
+                    private static int receiverCalls;
+                    private static int indexCalls;
+                    private static int valueCalls;
+                    private static string trace = "";
+
+                    private static Holder Receiver()
+                    {
+                        trace += "R";
+                        receiverCalls++;
+                        return current;
+                    }
+
+                    private static int NextIndex()
+                    {
+                        trace += "I";
+                        indexCalls++;
+                        return 1;
+                    }
+
+                    private static int NextValue()
+                    {
+                        trace += "V";
+                        valueCalls++;
+                        return 42;
+                    }
+
+                    public static string Run()
+                    {
+                        current = new Holder();
+                        receiverCalls = 0;
+                        indexCalls = 0;
+                        valueCalls = 0;
+                        trace = "";
+                        int result = Receiver()[NextIndex()] = NextValue();
+                        return trace + "," + receiverCalls + "," + indexCalls + "," + valueCalls + ","
+                            + current.Writes + "," + result + "," + current.Read(1);
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.NextIndex()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.NextValue()"));
+        Assert.Equal("RIV,1,1,1,1,42,42", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     [Fact]
@@ -300,6 +432,8 @@ namespace Demo
                         int value = candidate is { } text ? text.Length : (x = 5);
                         return value + x;
                     }
+
+                    public static string Run() => Pick(null) + "," + Pick("abc");
                 }
             }
             """,
@@ -312,6 +446,7 @@ namespace Demo
         int assignment = printed.IndexOf("x = 5", StringComparison.Ordinal);
         Assert.True(elseArm >= 0 && assignment > elseArm, printed);
         Assert.Equal(1, CountOccurrences(printed, "x = 5"));
+        Assert.Equal("10,3", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     /// <summary>

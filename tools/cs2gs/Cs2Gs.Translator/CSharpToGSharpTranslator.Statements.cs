@@ -2070,7 +2070,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is AssignmentExpressionSyntax outerAssignment &&
                 Unwrap(outerAssignment.Right) is AssignmentExpressionSyntax)
             {
-                return this.FlattenChainedAssignment(outerAssignment);
+                return this.FlattenChainedAssignment(outerAssignment, preserveValue: false);
             }
 
             return this.WithHoistedAssignments(

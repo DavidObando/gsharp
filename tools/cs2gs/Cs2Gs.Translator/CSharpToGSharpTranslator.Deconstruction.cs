@@ -290,7 +290,9 @@ public sealed partial class CSharpToGSharpTranslator
                 .ToList();
         }
 
-        private IEnumerable<GStatement> FlattenChainedAssignment(AssignmentExpressionSyntax assignment)
+        private IEnumerable<GStatement> FlattenChainedAssignment(
+            AssignmentExpressionSyntax assignment,
+            bool preserveValue = true)
         {
             // Follows the chain through ANY assignment operator (`=`, `+=`, …), not
             // just `=`: `a = b += c` is `a = (b += c)`, so the `+=` link must also be
@@ -385,6 +387,11 @@ public sealed partial class CSharpToGSharpTranslator
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
                 bool hasOuterLink = i > 0;
+                bool captureRootValue =
+                    preserveValue &&
+                    i == 0 &&
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    this.AssignmentTargetNeedsCapturedValue(lefts[i].Syntax);
                 GExpression assignedValue = value;
                 if (lefts[i].Op == "=")
                 {
@@ -416,7 +423,21 @@ public sealed partial class CSharpToGSharpTranslator
                         includePromotedValue: true);
                 }
 
-                if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
+                if (captureRootValue)
+                {
+                    // C# yields the converted RHS, never a post-set target read.
+                    // A typed temp preserves that value for properties, set-only
+                    // storage, and targets whose receiver/index had to be spilled.
+                    string temp = $"__spill{this.state.SpillCounter++}";
+                    statements.Add(new LocalDeclarationStatement(
+                        BindingKind.Let,
+                        temp,
+                        this.ResolveExpressionType(assignment),
+                        assignedValue));
+                    assignedValue = new IdentifierExpression(temp);
+                    this.state.AssignmentValues[assignment] = assignedValue;
+                }
+                else if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
                 {
                     // About to be assigned to more than one target — spill once
                     // so the RHS expression is evaluated exactly one time, then
@@ -468,6 +489,16 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return statements;
+        }
+
+        private bool AssignmentTargetNeedsCapturedValue(ExpressionSyntax target)
+        {
+            if (this.context.GetSymbolInfo(target).Symbol is IPropertySymbol)
+            {
+                return true;
+            }
+
+            return target is not IdentifierNameSyntax;
         }
 
         // Maps a C# compound-assignment operator token (`+=`, `-=`, …) to its
@@ -1231,6 +1262,10 @@ public sealed partial class CSharpToGSharpTranslator
                     // `^n` is contextual index syntax: spilling the whole expression
                     // turns `target[^n]` into `let i = ^n; target[i]`, which loses
                     // from-end semantics. Spill only `n` and keep `^` at the access.
+                    GExpression safeTarget = this.MakeDuplicationSafeTarget(
+                        index.Target,
+                        prologue,
+                        (syntax as ElementAccessExpressionSyntax)?.Expression);
                     bool isFromEnd = syntax is ElementAccessExpressionSyntax elementAccess
                         && elementAccess.ArgumentList.Arguments.Count == 1
                         && elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression);
@@ -1239,10 +1274,7 @@ public sealed partial class CSharpToGSharpTranslator
                         ? new UnaryExpression("^", this.SpillOperand(fromEnd.Operand, prologue))
                         : this.SpillOperand(index.Index, prologue);
                     return new IndexExpression(
-                        this.MakeDuplicationSafeTarget(
-                            index.Target,
-                            prologue,
-                            (syntax as ElementAccessExpressionSyntax)?.Expression),
+                        safeTarget,
                         safeIndex);
 
                 default:

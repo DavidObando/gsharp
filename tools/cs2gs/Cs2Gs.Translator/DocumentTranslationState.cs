@@ -72,10 +72,17 @@ internal sealed class DocumentTranslationState
     // surrounding statement/condition seam has hoisted into a preceding
     // assignment statement (G# assignment is a statement, not a
     // value-yielding expression; spec §Statements). While a node is in this
-    // set, `TranslateExpression` renders it as a bare read of its already-
-    // written target rather than dropping the write (issue #1723).
+    // set, `TranslateExpression` renders its preserved assignment value rather
+    // than dropping the write (issue #1723).
     public HashSet<SyntaxNode> SuppressedAssignments { get; } =
         new HashSet<SyntaxNode>();
+
+    // Exact result of a value-position simple assignment whose target cannot be
+    // safely read back (property/indexer, side-effecting receiver/index, etc.).
+    // FlattenChainedAssignment captures the converted RHS before the write, so
+    // the expression result never invokes a getter or re-evaluates the target.
+    public Dictionary<AssignmentExpressionSyntax, GExpression> AssignmentValues { get; } =
+        new Dictionary<AssignmentExpressionSyntax, GExpression>();
 
     // Caches the G# value expression a value-position deconstruction
     // assignment (`(a, b) = (1, 2)` used as a value, not a bare statement)

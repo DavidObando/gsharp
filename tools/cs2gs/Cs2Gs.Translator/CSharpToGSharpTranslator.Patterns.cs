@@ -343,10 +343,21 @@ public sealed partial class CSharpToGSharpTranslator
                     // / TranslateConditionWithHoist / HoistLoopConditionClause)
                     // hoists the write into a preceding assignment statement and
                     // marks this node suppressed; reading it here means the write
-                    // already happened, so the expression's value is just the
-                    // (now up-to-date) target (issue #1723).
+                    // already happened (issue #1723).
                     if (this.state.SuppressedAssignments.Contains(nestedAssignment))
                     {
+                        // A property/indexer/non-trivial target cannot be read back:
+                        // doing so can invoke a getter, fail for set-only storage, or
+                        // re-evaluate its receiver/index. FlattenChainedAssignment
+                        // captured the converted RHS before writing it; return that
+                        // exact assignment result.
+                        if (this.state.AssignmentValues.TryGetValue(
+                                nestedAssignment,
+                                out GExpression assignmentValue))
+                        {
+                            return assignmentValue;
+                        }
+
                         // A deconstruction assignment (`(a, b) = ...`) has no
                         // single "target" to read back — LowerTupleAssignmentForValue
                         // already computed its value (a tuple of the assigned
