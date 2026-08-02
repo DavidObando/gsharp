@@ -1346,7 +1346,10 @@ internal sealed partial class ExpressionBinder
             var valueExpr = BindExpression(initSyntax.Value);
             valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
             inits.Add(hasField
-                ? new BoundFieldInitializer(field, valueExpr)
+                ? new BoundFieldInitializer(
+                    field,
+                    valueExpr,
+                    ReferenceEquals(fieldDeclaringType, structSymbol) ? null : fieldDeclaringType)
                 : new BoundFieldInitializer(property, valueExpr));
         }
 

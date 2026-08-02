@@ -2026,7 +2026,7 @@ public static class SpillSequenceSpiller
             {
                 var original = structLiteral.Initializers[i];
                 initializers.Add(original.Field != null
-                    ? new BoundFieldInitializer(original.Field, spilledValues[i])
+                    ? new BoundFieldInitializer(original.Field, spilledValues[i], original.FieldDeclaringType)
                     : new BoundFieldInitializer(original.Property, spilledValues[i]));
             }
 
