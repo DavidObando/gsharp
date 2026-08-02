@@ -1559,7 +1559,7 @@ internal sealed partial class ExpressionBinder
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = WrapWithHandlerPrelude(new BoundImportedCallExpression(null, function, bound, refKinds, extensionTypeArgSymbolsForCall), extensionHandlerPrelude, ce);
+        result = WrapWithHandlerPrelude(new BoundImportedCallExpression(ce, function, bound, refKinds, extensionTypeArgSymbolsForCall), extensionHandlerPrelude, ce);
         return true;
     }
 

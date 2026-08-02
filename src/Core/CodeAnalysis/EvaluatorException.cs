@@ -85,7 +85,10 @@ public class EvaluatorException : Exception
     /// <returns>The evaluator exception.</returns>
     internal static EvaluatorException CreateDiagnostic(DiagnosticDescriptor descriptor, BoundNode node, params object[] messageArguments)
     {
-        return new EvaluatorException(string.Format(descriptor.MessageFormat, messageArguments), node)
+        var message = messageArguments.Length == 0
+            ? descriptor.MessageFormat
+            : string.Format(descriptor.MessageFormat, messageArguments);
+        return new EvaluatorException(message, node)
         {
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,

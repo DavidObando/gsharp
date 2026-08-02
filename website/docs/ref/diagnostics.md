@@ -1856,12 +1856,12 @@ above retain their longer explanations and examples.
 | GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained. |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. |
 
-## Stack-only CLR values in the interpreter (GS0516)
+## Stack-only CLR values in the interpreter (GS0511)
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0516 | Error | The interpreter cannot represent a stack-only (`ByRefLike`) CLR value such as `Span[T]` or `ReadOnlySpan[T]`. |
+| GS0511 | Error | The interpreter cannot represent a stack-only (`ByRefLike`) CLR value such as `Span[T]` or `ReadOnlySpan[T]`. |
 
 Interpreter values use boxed storage, which cannot hold stack-only CLR values
-or preserve their interior references. Compile the program with `gsc` to use
-these types.
+or preserve their interior references. Compile the program with `gsc /out:<file>`
+to use these types.

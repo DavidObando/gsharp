@@ -714,7 +714,7 @@ internal sealed partial class ExpressionBinder
             returnTypeOverride: symbolicReturn);
         var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
         result = new BoundImportedCallExpression(
-            null,
+            ce,
             overriddenFn,
             convertedArgs.MoveToImmutable(),
             refKinds,
@@ -2216,7 +2216,7 @@ internal sealed partial class ExpressionBinder
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
 
-                BoundExpression staticCall = new BoundImportedCallExpression(null, staticFn, staticArguments, refKinds, staticTypeArgSymbolsForCall);
+                BoundExpression staticCall = new BoundImportedCallExpression(ce, staticFn, staticArguments, refKinds, staticTypeArgSymbolsForCall);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
 

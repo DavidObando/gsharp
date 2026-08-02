@@ -31,6 +31,28 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
         {
             """
             import System
+            import GSharp.Interpreter.Tests
+
+            func value() int32 {
+                var span = Issue2987ByRefLikePropertyProbe.Value
+                return span.Length
+            }
+
+            value()
+            """,
+            "System.Span[int32]"
+        },
+        {
+            """
+            import GSharp.Interpreter.Tests
+
+            Issue2987ByRefLikeDeclaringTypePropertyProbe.Value = 33
+            """,
+            "GSharp.Interpreter.Tests.Issue2987ByRefLikeDeclaringTypePropertyProbe"
+        },
+        {
+            """
+            import System
 
             func value(values []int32) int32 {
                 var span = MemoryExtensions.AsSpan(values)
@@ -58,17 +80,41 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
 
     [Theory]
     [MemberData(nameof(UnsupportedCases))]
-    public void ByRefLikeReflectionSignature_ReportsGs0516(string source, string typeName)
+    public void ByRefLikeReflectionSignature_ReportsGs0511(string source, string typeName)
     {
         var cell = new SessionEngine().Evaluate(source);
 
         var diagnostic = Assert.Single(cell.Diagnostics);
         Assert.True(cell.HasError);
-        Assert.Equal("GS0516", diagnostic.Id);
+        Assert.Equal("GS0511", diagnostic.Id);
         Assert.Contains(typeName, diagnostic.Message);
         Assert.Contains("stack-only (ByRefLike)", diagnostic.Message);
-        Assert.Contains("compile this program with 'gsc' instead", diagnostic.Message);
+        Assert.Contains("compile this program with 'gsc /out:<file>' instead", diagnostic.Message);
         Assert.DoesNotContain("Specified method is not supported", diagnostic.Message);
+    }
+
+    [Fact]
+    public void ByRefLikeDiagnostic_UsesOriginalSourceLocation()
+    {
+        const string Source = """
+            import System
+
+            func value() int32 {
+                return 11
+            }
+
+            MemoryExtensions.AsSpan([]int32{11, 22, 33})
+            """;
+
+        var cell = new SessionEngine().Evaluate(Source, "byreflike.gs");
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.Equal("GS0511", diagnostic.Id);
+        Assert.Equal("byreflike.gs", diagnostic.Location.FileName);
+        Assert.Equal(6, diagnostic.Location.StartLine);
+        Assert.Equal(17, diagnostic.Location.StartCharacter);
+        Assert.Equal(6, diagnostic.Location.EndLine);
+        Assert.Equal(44, diagnostic.Location.EndCharacter);
     }
 
     [Fact]
@@ -138,6 +184,24 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
     {
         public readonly int GetValue() => 42;
     }
+}
+
+/// <summary>Fixture whose Span property reaches reflective get/set wrappers.</summary>
+public static class Issue2987ByRefLikePropertyProbe
+{
+    /// <summary>Gets or accepts a Span without storing it.</summary>
+    public static Span<int> Value
+    {
+        get => Span<int>.Empty;
+        set { }
+    }
+}
+
+/// <summary>Ref-struct fixture whose property write reaches the reflective setter wrapper.</summary>
+public ref struct Issue2987ByRefLikeDeclaringTypePropertyProbe
+{
+    /// <summary>Gets or sets a normal value through a ByRefLike declaring type.</summary>
+    public static int Value { get; set; }
 }
 
 /// <summary>Interpreter fixture for reflective interpolated-string-handler dispatch.</summary>

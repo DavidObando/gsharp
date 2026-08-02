@@ -1227,7 +1227,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundImportedCallExpression(null, node.Function, builder.MoveToImmutable(), node.ArgumentRefKinds, node.TypeArgumentSymbols, node.StaticContainerType);
+        return new BoundImportedCallExpression(node.Syntax, node.Function, builder.MoveToImmutable(), node.ArgumentRefKinds, node.TypeArgumentSymbols, node.StaticContainerType);
     }
 
     /// <summary>
@@ -1270,7 +1270,7 @@ public abstract class BoundTreeRewriter
         }
 
         return new BoundImportedInstanceCallExpression(
-            null,
+            node.Syntax,
             newReceiver,
             node.Method,
             node.Type,
