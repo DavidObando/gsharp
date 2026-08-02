@@ -11,8 +11,8 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// ADR-0092 / issue #758: interpreter coverage for the
 /// <c>@LibraryImport</c> source-generator-shaped P/Invoke attribute.
-/// The interpreter has no native-call transition, so valid declarations
-/// report the intentional GS0514 boundary and direct users to <c>gsc</c>.
+/// The interpreter has no native-call transition, so calls report the
+/// intentional GS0514 boundary and direct users to <c>gsc /out:</c>.
 /// Binder diagnostics for invalid declarations still take precedence.
 /// </summary>
 public class Issue758LibraryImportInterpreterTests

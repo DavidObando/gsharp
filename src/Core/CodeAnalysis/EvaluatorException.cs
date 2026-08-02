@@ -83,6 +83,11 @@ public class EvaluatorException : Exception
     internal DiagnosticSeverity Severity { get; private set; } = DiagnosticSeverity.Error;
 
     /// <summary>
+    /// Gets the source location for a deliberate diagnostic, when available.
+    /// </summary>
+    internal TextLocation? Location { get; private set; }
+
+    /// <summary>
     /// Creates an evaluator exception for a deliberate diagnostic.
     /// </summary>
     /// <param name="descriptor">The diagnostic descriptor.</param>
@@ -117,6 +122,28 @@ public class EvaluatorException : Exception
         TextLocation? location = null)
     {
         return new EvaluatorException(innerException.Message, innerException, node)
+        {
+            DiagnosticId = descriptor.Id,
+            Severity = descriptor.Severity,
+            Location = location,
+        };
+    }
+
+    /// <summary>
+    /// Creates an evaluator exception for a deliberate located diagnostic.
+    /// </summary>
+    /// <param name="descriptor">The diagnostic descriptor.</param>
+    /// <param name="location">The source location.</param>
+    /// <param name="node">The bound node associated with the exception.</param>
+    /// <param name="messageArguments">The message format arguments.</param>
+    /// <returns>The evaluator exception.</returns>
+    internal static EvaluatorException CreateDiagnostic(
+        DiagnosticDescriptor descriptor,
+        TextLocation location,
+        BoundNode node,
+        params object[] messageArguments)
+    {
+        return new EvaluatorException(string.Format(descriptor.MessageFormat, messageArguments), node)
         {
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,

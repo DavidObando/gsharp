@@ -41,6 +41,8 @@ public sealed partial class Evaluator
             return null;
         }
 
+        RejectPInvoke(node.Function, node);
+
         if (node.Function == BuiltinFunctions.Input)
         {
             return Console.ReadLine();

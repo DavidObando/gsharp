@@ -10,14 +10,14 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Interpreter coverage for ADR-0095 / issue #761 — P/Invoke
-/// function-pointer marshalling. Valid P/Invoke declarations report the
-/// intentional GS0514 interpreter boundary. Binder diagnostics
+/// function-pointer marshalling. Unused valid P/Invoke declarations remain
+/// legal under interpretation. Binder diagnostics
 /// (GS0353–GS0356) still surface first for invalid declarations.
 /// </summary>
 public class Issue761PInvokeFunctionPointerInterpreterTests
 {
     [Fact]
-    public void DllImport_RawFunctionPointer_Parameter_ReportsGS0514()
+    public void DllImport_RawFunctionPointer_Parameter_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -29,12 +29,12 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]
-    public void DllImport_DelegateWithUnmanagedFunctionPointer_ReportsGS0514()
+    public void DllImport_DelegateWithUnmanagedFunctionPointer_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -49,8 +49,8 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
     }
 
     [Fact]
-    public void DllImport_FunctionPointer_ReturnType_ReportsGS0514()
+    public void DllImport_FunctionPointer_ReturnType_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -103,8 +103,8 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]

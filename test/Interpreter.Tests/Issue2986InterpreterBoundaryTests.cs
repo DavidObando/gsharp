@@ -23,7 +23,7 @@ namespace GSharp.Interpreter.Tests;
 public class Issue2986InterpreterBoundaryTests
 {
     [Fact]
-    public void PInvokeDeclaration_ReportsGS0514BeforeExecution()
+    public void PInvokeDeclaration_WithoutUse_IsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -31,7 +31,27 @@ public class Issue2986InterpreterBoundaryTests
             @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
             func NativeStrLen(text string) nint;
 
-            Console.WriteLine("unreachable")
+            Console.WriteLine(33)
+            """;
+        var engine = new SessionEngine { CaptureConsole = true };
+
+        var cell = engine.Evaluate(source, "pinvoke.gs");
+
+        Assert.Empty(cell.Diagnostics);
+        Assert.False(cell.HasError);
+        Assert.Equal("33\n", cell.Output);
+    }
+
+    [Fact]
+    public void PInvokeDirectCall_ReportsLocatedGS0514()
+    {
+        var source = """
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+
+            Console.WriteLine(NativeStrLen("Hello"))
             """;
         var engine = new SessionEngine { CaptureConsole = true };
 
@@ -44,7 +64,7 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal("pinvoke.gs", diagnostic.Location.FileName);
         Assert.Equal(3, diagnostic.Location.StartLine);
         Assert.Contains("NativeStrLen", diagnostic.Message);
-        Assert.Contains("'gsc'", diagnostic.Message);
+        Assert.Contains("'gsc /out:<path>'", diagnostic.Message);
         Assert.Equal(string.Empty, cell.Output);
     }
 
@@ -67,6 +87,55 @@ public class Issue2986InterpreterBoundaryTests
         Assert.True(cell.HasError);
         Assert.Equal("GS0514", diagnostic.Id);
         Assert.DoesNotContain("IConvertible", diagnostic.Message);
+        Assert.Contains("'gsc /out:<path>'", diagnostic.Message);
+    }
+
+    [Fact]
+    public void PInvokeCallInsideInvokedFunction_ReportsGS0514()
+    {
+        var source = """
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+
+            func CallNative() nint {
+                return NativeStrLen("Hello")
+            }
+
+            Console.WriteLine(CallNative())
+            """;
+
+        var cell = new SessionEngine().Evaluate(source);
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.Equal("GS0514", diagnostic.Id);
+        Assert.True(cell.HasError);
+        Assert.Contains("NativeStrLen", diagnostic.Message);
+    }
+
+    [Fact]
+    public void PInvokeDeclaredInEarlierCell_IsDiagnosedOnlyWhenUsed()
+    {
+        var engine = new SessionEngine { CaptureConsole = true };
+        var declaration = engine.Evaluate(
+            """
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+            """,
+            "declaration.gs");
+
+        var unrelated = engine.Evaluate("Console.WriteLine(33)", "unrelated.gs");
+        var use = engine.Evaluate("let f = NativeStrLen", "use.gs");
+
+        Assert.Empty(declaration.Diagnostics);
+        Assert.Empty(unrelated.Diagnostics);
+        Assert.Equal("33\n", unrelated.Output);
+        var diagnostic = Assert.Single(use.Diagnostics);
+        Assert.Equal("GS0514", diagnostic.Id);
+        Assert.Equal("declaration.gs", diagnostic.Location.FileName);
     }
 
     /// <summary>

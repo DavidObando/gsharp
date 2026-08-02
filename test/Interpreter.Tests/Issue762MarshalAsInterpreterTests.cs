@@ -11,14 +11,14 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Interpreter coverage for ADR-0096 / issue #762 — per-parameter
 /// <c>@MarshalAs(UnmanagedType.…)</c> overrides on P/Invoke
-/// declarations. Valid declarations report the intentional GS0514
-/// interpreter boundary. Binder diagnostics (GS0357–GS0360) still surface
+/// declarations. Unused valid declarations remain legal under interpretation.
+/// Binder diagnostics (GS0357–GS0360) still surface
 /// first for invalid declarations.
 /// </summary>
 public class Issue762MarshalAsInterpreterTests
 {
     [Fact]
-    public void MarshalAs_LPWStr_OnString_ReportsGS0514()
+    public void MarshalAs_LPWStr_OnString_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -34,12 +34,12 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]
-    public void MarshalAs_I4_OnBool_ReportsGS0514()
+    public void MarshalAs_I4_OnBool_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -51,12 +51,12 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]
-    public void MarshalAs_LPArray_WithSizeParamIndex_ReportsGS0514()
+    public void MarshalAs_LPArray_WithSizeParamIndex_DeclarationIsAllowed()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -70,8 +70,8 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
+        Assert.DoesNotContain("GS0514", output);
+        Assert.Contains("ran", output);
     }
 
     [Fact]

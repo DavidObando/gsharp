@@ -220,7 +220,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DeinitMayNotDeclareReturnType);
 
     /// <summary>
-    /// Reports a P/Invoke declaration that cannot be evaluated without the
+    /// Reports a P/Invoke function use that cannot be evaluated without the
     /// compiler's CLR native-call stub.
     /// </summary>
     /// <param name="location">The P/Invoke function identifier.</param>

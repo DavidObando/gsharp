@@ -368,21 +368,6 @@ public class Compilation
             return new EvaluationResult(allWarnings.Concat(allErrors).ToImmutableArray(), null);
         }
 
-        var interpreterDiagnostics = new DiagnosticBag();
-        foreach (var function in program.Functions.Keys.Where(
-                     f => f.IsPInvoke
-                         && f.Declaration != null
-                         && SyntaxTrees.Contains(f.Declaration.SyntaxTree)))
-        {
-            interpreterDiagnostics.ReportPInvokeNotSupportedInInterpreter(function.Declaration.Identifier.Location, function.Name);
-        }
-
-        var boundaries = interpreterDiagnostics.ToImmutableArray();
-        if (boundaries.Any())
-        {
-            return new EvaluationResult(allWarnings.Concat(boundaries).ToImmutableArray(), null);
-        }
-
         // Keep interpreted closure cells aligned with emitted closure cells.
         // Evaluation consumes expression receivers directly and exactly once,
         // so it does not need the emit-only side-effect spiller first.

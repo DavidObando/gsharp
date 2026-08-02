@@ -11,8 +11,8 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Interpreter coverage for ADR-0094 / issue #760 — P/Invoke
 /// <c>ref</c>/<c>out</c>/<c>in</c> parameter marshalling. The interpreter
-/// accepts valid ref/out/in declarations, then reports the intentional
-/// GS0514 interpreter boundary before any native call can fabricate a result.
+/// accepts valid ref/out/in declarations, then reports GS0514 when execution
+/// reaches a native call.
 /// Binder diagnostics for invalid declarations still take precedence.
 /// </summary>
 public class Issue760PInvokeRefOutInInterpreterTests

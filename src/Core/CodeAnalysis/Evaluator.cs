@@ -224,6 +224,18 @@ public sealed partial class Evaluator
         return entryPoint.Type == TypeSymbol.Void ? null : value;
     }
 
+    private static void RejectPInvoke(FunctionSymbol function, BoundNode node)
+    {
+        if (function.IsPInvoke)
+        {
+            throw EvaluatorException.CreateDiagnostic(
+                DiagnosticDescriptors.PInvokeNotSupportedInInterpreter,
+                function.Declaration.Identifier.Location,
+                node,
+                function.Name);
+        }
+    }
+
     // Issue #1651: goroutines run with their own locals/control-transfer
     // state (see EvaluateGoStatement), but globals, struct/interface static
     // fields, the iterator-function cache and the lazily-created Random

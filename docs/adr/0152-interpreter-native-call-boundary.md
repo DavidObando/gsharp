@@ -21,16 +21,18 @@ This ADR does not redefine that boundary.
 
 ## Decision
 
-A bound P/Invoke declaration presented to the tree evaluator reports **GS0514
-(Error)** before evaluation, located at the function identifier. The message
-names P/Invoke and directs the user to compile with `gsc`.
+Interpreted execution reports **GS0514 (Error)** when it reaches either a
+direct P/Invoke call or a first-class reference to a P/Invoke function. The
+diagnostic is located at the function identifier and directs the user to emit
+with `gsc /out:<path>` and run the emitted program.
 
-The error applies even when the declaration is not called. The evaluator cannot
-create a valid callable value for the declaration, and function references can
-escape the declaring expression before a later indirect call. Refusing the
-declaration at the shared evaluation boundary is deterministic, prevents both
-fabricated results and delayed `GS9999` failures, and adds no native or
-reflection dispatch path.
+An unused P/Invoke declaration remains valid. This preserves programs such as
+`samples/PInvokeFunctionPointer.gs`, which declare native signatures for the
+emit pipeline but execute only managed code. A first-class reference is refused
+when evaluated because the interpreter cannot create a valid callable value for
+it. A direct call is refused before argument evaluation or native dispatch.
+This prevents fabricated results and delayed `GS9999` failures without adding
+a native or reflection dispatch path.
 
 Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
 `Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
@@ -40,10 +42,12 @@ is deprecated and scheduled for removal in Phase 3c.
 
 ## Consequences
 
-- The tree evaluator never loads a native library for a P/Invoke declaration.
+- Interpreted execution never loads a native library for a P/Invoke use.
 - P/Invoke cannot silently return zero, `nil`, or another fabricated default.
-- Default drivers run P/Invoke through the CLR; evaluator submissions report
-  GS0514 even when a particular execution would not call the declaration.
+- Programs may declare P/Invoke functions under interpretation when execution
+  never calls or references them.
+- Default drivers run P/Invoke through emitted CLR execution; native calls are
+  unavailable only on the deprecated evaluator path.
 - `GS9999` remains an unexpected evaluator-exception diagnostic, not a
   deliberate capability boundary.
 
@@ -52,7 +56,10 @@ is deprecated and scheduled for removal in Phase 3c.
 - **Implement P/Invoke with `NativeLibrary` and delegates** — rejected because
   it would cover only a subset of CLR marshalling and preserve divergence for
   unsupported signatures.
-- **Diagnose only direct call syntax** — rejected because first-class function
-  references and indirect calls would bypass that syntactic check.
+- **Reject every P/Invoke declaration** — rejected because declaration alone
+  does not require a callable interpreter value and shipped emit-focused
+  samples contain intentionally unused native signatures.
+- **Diagnose only direct calls** — rejected because first-class function
+  references would otherwise create invalid callable values and fail later.
 - **Let the evaluator fail with GS9999** — rejected because a designed
   capability boundary needs a stable, actionable diagnostic contract.

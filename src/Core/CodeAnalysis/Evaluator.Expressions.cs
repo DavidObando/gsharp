@@ -811,6 +811,8 @@ public sealed partial class Evaluator
 
     private object EvaluateMethodGroupExpression(BoundMethodGroupExpression node)
     {
+        RejectPInvoke(node.Function, node);
+
         // Issue #324: a named-function method group behaves like a no-capture
         // closure over the function's own body, so indirect invocation reuses
         // the ClosureValue path.

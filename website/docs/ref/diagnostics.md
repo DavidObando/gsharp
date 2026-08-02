@@ -1774,7 +1774,7 @@ GS0264, even though iterator specialization synthesizes equivalent variants.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0514 | Error | A P/Invoke declaration cannot run under the interpreter. Evaluation stops before the native function can return a fabricated default value; compile with `gsc` to call native code. |
+| GS0514 | Error | Interpreted execution reached a P/Invoke call or function reference. Use `gsc /out:<path>` and run the emitted program to call native code; unused P/Invoke declarations remain valid. |
 
 This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
