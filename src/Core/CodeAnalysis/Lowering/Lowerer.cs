@@ -120,6 +120,49 @@ public sealed class Lowerer : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
+    protected override BoundStatement RewritePatternSwitchStatement(BoundPatternSwitchStatement node)
+    {
+        var discriminant = RewriteExpression(node.Discriminant);
+        if (discriminant is not BoundLiteralExpression literal
+            || node.Arms.Any(arm => arm.Guard != null))
+        {
+            return base.RewritePatternSwitchStatement(node);
+        }
+
+        BoundPatternSwitchArm defaultArm = null;
+        foreach (var arm in node.Arms)
+        {
+            if (arm.IsDefault)
+            {
+                defaultArm = arm;
+                continue;
+            }
+
+            if (RewritePattern(arm.Pattern) is not BoundConstantPattern
+                {
+                    Value: BoundLiteralExpression patternLiteral,
+                })
+            {
+                return base.RewritePatternSwitchStatement(node);
+            }
+
+            var matches = literal.Type == TypeSymbol.Float32
+                ? (float)literal.Value == (float)patternLiteral.Value
+                : literal.Type == TypeSymbol.Float64
+                    ? (double)literal.Value == (double)patternLiteral.Value
+                    : Equals(literal.Value, patternLiteral.Value);
+            if (matches)
+            {
+                return RewriteStatement(arm.Body);
+            }
+        }
+
+        return defaultArm == null
+            ? new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty)
+            : RewriteStatement(defaultArm.Body);
+    }
+
+    /// <inheritdoc/>
     /// <remarks>
     /// Issue #419 (P0-2): rewrites <c>return</c> statements that appear
     /// lexically inside a try / catch / finally region. The original

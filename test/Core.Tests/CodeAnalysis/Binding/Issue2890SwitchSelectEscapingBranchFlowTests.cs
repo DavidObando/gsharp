@@ -205,7 +205,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
     }
 
     [Fact]
-    public void LiteralSwitchWithoutDefault_ReportsGs0100()
+    public void LiteralSwitchWithoutDefault_DoesNotReportGs0100()
     {
         const string Source = """
             package Issue2890.LiteralNoDefault
@@ -218,11 +218,11 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertNoErrors(Source);
     }
 
     [Fact]
-    public void ImpossibleLiteralArmBreak_ReportsGs0100()
+    public void ImpossibleLiteralArmBreak_DoesNotReportGs0100()
     {
         const string Source = """
             package Issue2890.ImpossibleLiteralBreak
@@ -236,7 +236,7 @@ public class Issue2890SwitchSelectEscapingBranchFlowTests
             }
             """;
 
-        AssertOnlyGs0100(Source);
+        AssertNoErrors(Source);
     }
 
     [Fact]
