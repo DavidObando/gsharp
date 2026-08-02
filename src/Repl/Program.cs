@@ -54,18 +54,28 @@ public static class Program
             return 1;
         }
 
-        var engine = new SessionEngine();
+        var engine = new SessionEngine { RunEntryPoint = true };
         var cell = engine.Evaluate(File.ReadAllText(arg), arg);
         if (cell.Diagnostics.Length > 0)
         {
             Console.Error.WriteDiagnostics(cell.Diagnostics);
         }
 
-        if (!cell.HasError && cell.Value is not null)
+        if (cell.HasError)
         {
-            Console.WriteLine(cell.Value);
+            return 1;
         }
 
-        return cell.HasError ? 1 : 0;
+        if (cell.Value is int exitCode)
+        {
+            return exitCode;
+        }
+
+        if (cell.Value is uint unsignedExitCode)
+        {
+            return unchecked((int)unsignedExitCode);
+        }
+
+        return 0;
     }
 }
