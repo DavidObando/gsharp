@@ -95,9 +95,10 @@ public class Issue2990ClrDelegateBoundaryTests
 
         Assert.NotNull(constructor);
         Assert.NotNull(invoke);
+        var argument = CreateErasedClosure(77);
         var result = Assert.IsAssignableFrom<ConstructorProbe>(invoke.Invoke(
             evaluator,
-            [structType, constructor, ImmutableArray.Create<BoundExpression>(CreateErasedClosure(77)), ImmutableArray<RefKind>.Empty]));
+            [structType, constructor, ImmutableArray.Create<BoundExpression>(argument), ImmutableArray<RefKind>.Empty, argument]));
 
         Assert.Equal(77, result.Value);
     }

@@ -367,10 +367,19 @@ public class Compilation
         }
         catch (EvaluatorException ex)
         {
-            using var textWriter = new StringWriter();
-            ex.Node?.WriteTo(textWriter);
-            var sourceText = SourceText.From(textWriter.ToString());
-            var location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
+            TextLocation location;
+            if (ex.Node?.Syntax != null)
+            {
+                location = ex.Node.Syntax.Location;
+            }
+            else
+            {
+                using var textWriter = new StringWriter();
+                ex.Node?.WriteTo(textWriter);
+                var sourceText = SourceText.From(textWriter.ToString());
+                location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
+            }
+
             var message = Evaluator.UnwrapDiagnosticException(ex).Message;
             var diagnostic = new Diagnostic(location, ex.DiagnosticId, ex.Severity, message);
             return new EvaluationResult(allWarnings.Add(diagnostic), null);

@@ -6,6 +6,8 @@
 // and a `Span[T]` element write `s[i] = v` stores through the returned `ref T`.
 // Spans are stack-only (GS0219), so the span locals live inside functions and
 // are exercised from top-level statements.
+// The tree-walk interpreter cannot represent these values and reports GS0511;
+// compile this sample with gsc /out:<file>.
 
 package GSharp.Samples.SpanIndexing
 

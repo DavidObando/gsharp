@@ -6,6 +6,8 @@
 // local signature is correct, but boxing it, storing it in a field, capturing it
 // in a closure, or hoisting it into an async/iterator state machine is rejected
 // (GS0219). This sample exercises only the legal, stack-confined uses.
+// The tree-walk interpreter cannot represent these values and reports GS0511;
+// compile this sample with gsc /out:<file>.
 
 package GSharp.Samples.RefStructSpan
 

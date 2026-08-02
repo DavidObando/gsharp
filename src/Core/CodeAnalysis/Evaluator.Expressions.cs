@@ -202,7 +202,7 @@ public sealed partial class Evaluator
             ctorArgs[ctorArgs.Length - 1] = false;
         }
 
-        var handler = info.Constructor.Invoke(ctorArgs);
+        var handler = InvokeReflective(info.Constructor, null, ctorArgs, node);
         if (info.HasTrailingOutBool)
         {
             shouldAppend = (bool)ctorArgs[ctorArgs.Length - 1];
@@ -224,7 +224,7 @@ public sealed partial class Evaluator
                     continue;
                 }
 
-                var literalResult = appendLiteral.Invoke(handler, [part.Literal]);
+                var literalResult = InvokeReflective(appendLiteral, handler, [part.Literal], node);
                 if (literalResult is bool lb)
                 {
                     shouldAppend = lb;
@@ -234,7 +234,7 @@ public sealed partial class Evaluator
             }
 
             var value = EvaluateExpression(part.Value);
-            var formattedResult = InvokeUserAppendFormatted(handlerType, handler, part, value);
+            var formattedResult = InvokeUserAppendFormatted(handlerType, handler, part, value, node);
             if (formattedResult is bool fb)
             {
                 shouldAppend = fb;
@@ -244,7 +244,12 @@ public sealed partial class Evaluator
         return handler;
     }
 
-    private static object InvokeUserAppendFormatted(System.Type handlerType, object handler, BoundInterpolatedStringPart part, object value)
+    private object InvokeUserAppendFormatted(
+        System.Type handlerType,
+        object handler,
+        BoundInterpolatedStringPart part,
+        object value,
+        BoundNode node)
     {
         var wantAlign = part.Alignment.HasValue;
         var wantFormat = part.Format != null;
@@ -315,7 +320,7 @@ public sealed partial class Evaluator
             args.Add(part.Format);
         }
 
-        return best.Invoke(handler, args.ToArray());
+        return InvokeReflective(best, handler, args.ToArray(), node);
     }
 
     private object EvaluateVariableExpression(BoundVariableExpression v)
@@ -690,7 +695,7 @@ public sealed partial class Evaluator
             ApplyClassFieldInitializers(sv, node.StructType);
             if (node.StructType.IsClass)
             {
-                AllocateClrBacking(sv, node.StructType, activeInit: null);
+                AllocateClrBacking(sv, node.StructType, activeInit: null, node: node);
             }
         }
 
@@ -1064,7 +1069,7 @@ public sealed partial class Evaluator
                     }
                 }
 
-                AllocateClrBacking(sv, node.StructType, baseInitOnStruct);
+                AllocateClrBacking(sv, node.StructType, baseInitOnStruct, node);
                 return sv;
             }
 
@@ -1094,7 +1099,7 @@ public sealed partial class Evaluator
                     }
                 }
 
-                AllocateClrBacking(sv, node.StructType, explicitCtor.BaseInitializer);
+                AllocateClrBacking(sv, node.StructType, explicitCtor.BaseInitializer, node);
 
                 var body = program.Functions[ctorFunction];
                 EvaluateFunctionBody(body);
@@ -1137,7 +1142,7 @@ public sealed partial class Evaluator
                 // Issue #319: instantiate the CLR base instance (when the class
                 // ultimately derives from a CLR type) so inherited CLR instance
                 // state — such as Exception.Message — is set per the emit path.
-                AllocateClrBacking(sv, node.StructType, baseInit);
+                AllocateClrBacking(sv, node.StructType, baseInit, node);
             }
         }
 
@@ -1181,12 +1186,21 @@ public sealed partial class Evaluator
     /// parameterless constructor. The base-ctor argument expressions must be
     /// evaluated within whatever frame the caller has just pushed.
     /// </summary>
-    private void AllocateClrBacking(StructValue sv, StructSymbol structType, BaseConstructorInitializer activeInit)
+    private void AllocateClrBacking(
+        StructValue sv,
+        StructSymbol structType,
+        BaseConstructorInitializer activeInit,
+        BoundNode node)
     {
         // If an explicit `: base(args)` targets a CLR constructor, prefer that.
         if (activeInit is { IsClrBase: true } clrInit && clrInit.ClrConstructor != null)
         {
-            sv.ClrBacking = InvokeClrCtor(structType, clrInit.ClrConstructor, clrInit.Arguments, clrInit.ArgumentRefKinds);
+            sv.ClrBacking = InvokeClrCtor(
+                structType,
+                clrInit.ClrConstructor,
+                clrInit.Arguments,
+                clrInit.ArgumentRefKinds,
+                node);
             return;
         }
 
@@ -1214,7 +1228,7 @@ public sealed partial class Evaluator
                 var parameterless = ResolveParameterlessCtor(clrBase);
                 if (parameterless != null)
                 {
-                    sv.ClrBacking = InvokeClrBackingCtor(structType, parameterless, Array.Empty<object>());
+                    sv.ClrBacking = InvokeClrBackingCtor(structType, parameterless, Array.Empty<object>(), node);
                 }
 
                 return;
@@ -1223,16 +1237,21 @@ public sealed partial class Evaluator
     }
 
     /// <summary>Issue #319: invoke a CLR base constructor with the bound G# argument expressions.</summary>
-    private object InvokeClrCtor(StructSymbol structType, ConstructorInfo ctor, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds)
+    private object InvokeClrCtor(
+        StructSymbol structType,
+        ConstructorInfo ctor,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds,
+        BoundNode node)
     {
         var args = new object[arguments.Length];
         var refSlots = BuildRefSlots(arguments, argumentRefKinds, args, ctor);
-        var instance = InvokeClrBackingCtor(structType, ctor, args);
+        var instance = InvokeClrBackingCtor(structType, ctor, args, node);
         WriteBackRefSlots(refSlots, args);
         return instance;
     }
 
-    private static object InvokeClrBackingCtor(StructSymbol structType, ConstructorInfo baseCtor, object[] args)
+    private object InvokeClrBackingCtor(StructSymbol structType, ConstructorInfo baseCtor, object[] args, BoundNode node)
     {
         var clrBase = baseCtor.DeclaringType
             ?? throw new InvalidOperationException("Imported base constructor has no declaring type.");
@@ -1242,7 +1261,7 @@ public sealed partial class Evaluator
         var parameterTypes = Array.ConvertAll(baseCtor.GetParameters(), static parameter => parameter.ParameterType);
         var proxyCtor = backingType.GetConstructor(parameterTypes)
             ?? throw new InvalidOperationException($"Generated CLR backing type '{backingType.FullName}' has no matching constructor.");
-        return proxyCtor.Invoke(args);
+        return InvokeReflective(proxyCtor, null, args, node);
     }
 
     private static Type CreateClrBackingType(StructSymbol structType, Type clrBase)
@@ -1442,7 +1461,7 @@ public sealed partial class Evaluator
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Constructor);
 
         var constructor = ResolveMemberForRuntimeType(node.Constructor, ResolveRuntimeClrType(node.Type));
-        var result = constructor.Invoke(args);
+        var result = InvokeReflective(constructor, null, args, node);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
@@ -1452,7 +1471,7 @@ public sealed partial class Evaluator
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Method);
 
-        var result = node.Method.Invoke(null, args);
+        var result = InvokeReflective(node.Method, null, args, node);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
@@ -1504,21 +1523,11 @@ public sealed partial class Evaluator
                 var propReceiver = IsMapViewMember(member.Name)
                     ? CloneMapSnapshot((System.Collections.IDictionary)receiver)
                     : receiver;
-                return member switch
-                {
-                    System.Reflection.PropertyInfo p => p.GetValue(propReceiver),
-                    System.Reflection.FieldInfo f => f.GetValue(propReceiver),
-                    _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
-                };
+                return GetReflective(member, propReceiver, index: null, node: node);
             }
         }
 
-        return member switch
-        {
-            System.Reflection.PropertyInfo p => p.GetValue(receiver),
-            System.Reflection.FieldInfo f => f.GetValue(receiver),
-            _ => throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node),
-        };
+        return GetReflective(member, receiver, index: null, node: node);
     }
 
     private System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver, Type symbolicReceiverType)
@@ -1650,17 +1659,7 @@ public sealed partial class Evaluator
             return value;
         }
 
-        switch (member)
-        {
-            case System.Reflection.PropertyInfo p:
-                p.SetValue(receiver, value);
-                break;
-            case System.Reflection.FieldInfo f:
-                f.SetValue(receiver, value);
-                break;
-            default:
-                throw new EvaluatorException($"Unsupported CLR member kind '{node.Member.MemberType}'.", node);
-        }
+        SetReflective(member, receiver, value, index: null, node: node);
 
         return value;
     }
@@ -1797,19 +1796,19 @@ public sealed partial class Evaluator
 
         var left = EvaluateExpression(node.Left);
         var right = EvaluateExpression(node.Right);
-        return node.Method.Invoke(null, new[] { left, right });
+        return InvokeReflective(node.Method, null, new[] { left, right }, node);
     }
 
     private object EvaluateClrUnaryOperatorExpression(BoundClrUnaryOperatorExpression node)
     {
         var operand = EvaluateExpression(node.Operand);
-        return node.Method.Invoke(null, new[] { operand });
+        return InvokeReflective(node.Method, null, new[] { operand }, node);
     }
 
     private object EvaluateClrConversionCallExpression(BoundClrConversionCallExpression node)
     {
         var source = EvaluateExpression(node.Source);
-        return node.Method.Invoke(null, new[] { source });
+        return InvokeReflective(node.Method, null, new[] { source }, node);
     }
 
     private object EvaluateClrIndexExpression(BoundClrIndexExpression node)
@@ -1822,7 +1821,7 @@ public sealed partial class Evaluator
         }
 
         var indexer = ResolveMemberForRuntimeType(node.Indexer, ResolveRuntimeClrType(node.Target.Type));
-        return indexer.GetValue(target, args);
+        return GetReflective(indexer, target, args, node);
     }
 
     private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
@@ -1838,7 +1837,7 @@ public sealed partial class Evaluator
         var value = EvaluateExpression(node.Value);
         var targetType = node.TargetExpression?.Type ?? node.Target?.Type;
         var indexer = ResolveMemberForRuntimeType(node.Indexer, ResolveRuntimeClrType(targetType));
-        indexer.SetValue(target, value, args);
+        SetReflective(indexer, target, value, args, node);
         return value;
     }
 

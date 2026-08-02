@@ -1165,6 +1165,16 @@ This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
 `gsi` cannot create a valid callable value for direct or indirect use.
 
+## Stack-only CLR values in the interpreter (GS0511)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0511 | Error | The interpreter cannot represent a stack-only (`ByRefLike`) CLR value such as `Span[T]` or `ReadOnlySpan[T]`. |
+
+Interpreter values use boxed storage, which cannot hold stack-only CLR values
+or preserve their interior references. Compile the program with `gsc /out:<file>`
+to use these types.
+
 ## Internal compiler error diagnostics (GS9998–GS9999)
 
 | ID | Severity | Description |
