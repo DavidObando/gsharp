@@ -23,14 +23,14 @@
   <PropertyGroup>
     <DocumentationFile Condition=" '$(GenerateDocumentationFile)' == 'true' and '$(DocumentationFile)' == '' ">$(IntermediateOutputPath)$(TargetName).xml</DocumentationFile>
     <_GsharpShouldGenerateRunSettings Condition=" '$(IsTestProject)' == 'true' and '$(RunSettingsFilePath)' == '' ">true</_GsharpShouldGenerateRunSettings>
-    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$(MSBuildProjectDirectory)\$(IntermediateOutputPath)gsharp.generated.runsettings</RunSettingsFilePath>
+    <RunSettingsFilePath Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.generated.runsettings'))</RunSettingsFilePath>
   </PropertyGroup>
 
   <!-- Visual Studio's legacy VSTest launcher does not infer a target framework
        for non-C#/VB CPS projects. Supply the same standard runsettings property
        framework adapters already honor, without overriding user runsettings. -->
   <Target Name="_GsharpGenerateRunSettings"
-          BeforeTargets="CoreCompile"
+          BeforeTargets="CoreCompile;VSTest"
           Condition=" '$(_GsharpShouldGenerateRunSettings)' == 'true' ">
     <ItemGroup>
       <_GsharpRunSettingsLine Include="&lt;RunSettings&gt;" />

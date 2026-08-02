@@ -289,9 +289,13 @@ internal sealed partial class ExpressionBinder
         out BoundExpression bound)
     {
         // Keep event handlers and assignment RHS binding on one target-typing path.
+        // An explicitly typed lambda already has a complete natural shape.
+        // Preserve the regular conversion diagnostic for nullable delegate
+        // targets instead of replacing it with target-parameter diagnostics.
         bound = null;
         if (syntax is not LambdaExpressionSyntax lambda
             || targetType == null
+            || (targetType is NullableTypeSymbol && lambda.Parameters.All(p => p.Type != null))
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType))
         {
             return false;

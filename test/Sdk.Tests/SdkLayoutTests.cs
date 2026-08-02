@@ -125,9 +125,9 @@ public class SdkLayoutTests
 
         var runSettingsTarget = doc.Descendants(MsbuildNs + "Target")
             .Single(t => (string)t.Attribute("Name") == "_GsharpGenerateRunSettings");
-        Assert.Equal("CoreCompile", (string)runSettingsTarget.Attribute("BeforeTargets"));
-        Assert.Contains(
-            "$(MSBuildProjectDirectory)",
+        Assert.Equal("CoreCompile;VSTest", (string)runSettingsTarget.Attribute("BeforeTargets"));
+        Assert.Equal(
+            "$([MSBuild]::NormalizePath('$(IntermediateOutputPath)', 'gsharp.generated.runsettings'))",
             doc.Descendants(MsbuildNs + "RunSettingsFilePath").Single().Value);
         Assert.Contains(
             runSettingsTarget.Descendants(MsbuildNs + "_GsharpRunSettingsLine"),

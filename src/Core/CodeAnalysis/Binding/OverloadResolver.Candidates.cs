@@ -66,7 +66,15 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        var selected = SelectBestInstanceOverload(overloads, arguments.Length, argumentNames, arguments, out var ambiguous, out var nullSafetyFailure, explicitTypeArgCount);
+        var selected = SelectBestInstanceOverload(
+            overloads,
+            arguments.Length,
+            argumentNames,
+            arguments,
+            out var ambiguous,
+            out var nullSafetyFailure,
+            explicitTypeArgCount,
+            boundTypeArguments);
         if (selected != null)
         {
             return selected;
@@ -178,7 +186,8 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression> boundArguments,
         out bool ambiguous,
         out NullSafetyArgumentMismatch nullSafetyFailure,
-        int explicitTypeArgCount = 0)
+        int explicitTypeArgCount = 0,
+        ImmutableArray<TypeSymbol> explicitTypeArguments = default)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -194,7 +203,15 @@ internal sealed partial class OverloadResolver
 
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Length);
         builder.AddRange(boundArguments);
-        return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, builder, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
+        return SelectBestUserOverloadCore(
+            candidates,
+            argumentCount,
+            argumentNames,
+            builder,
+            out ambiguous,
+            out nullSafetyFailure,
+            explicitTypeArgCount,
+            explicitTypeArguments);
     }
 
     private FunctionSymbol SelectBestUserOverloadCore(
@@ -204,7 +221,8 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression>.Builder boundArguments,
         out bool ambiguous,
         out NullSafetyArgumentMismatch nullSafetyFailure,
-        int explicitTypeArgCount = 0)
+        int explicitTypeArgCount = 0,
+        ImmutableArray<TypeSymbol> explicitTypeArguments = default)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -215,6 +233,25 @@ internal sealed partial class OverloadResolver
         // inputs. Memoize per candidate for this call so unification runs once
         // instead of twice per generic candidate.
         var substitutionCache = new Dictionary<FunctionSymbol, (bool Ok, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
+        Dictionary<TypeParameterSymbol, TypeSymbol> GetCandidateSubstitution(FunctionSymbol candidate)
+        {
+            if (!explicitTypeArguments.IsDefaultOrEmpty
+                && candidate.TypeParameters.Length == explicitTypeArguments.Length)
+            {
+                return candidate.TypeParameters
+                    .Select((parameter, index) => (parameter, argument: explicitTypeArguments[index]))
+                    .ToDictionary(pair => pair.parameter, pair => pair.argument);
+            }
+
+            return GetCachedCandidateSubstitution(
+                candidate,
+                boundArguments,
+                argumentCount,
+                substitutionCache,
+                out var inferred)
+                    ? inferred
+                    : null;
+        }
 
         // Phase 1: applicability.
         var applicable = new List<FunctionSymbol>();
@@ -275,7 +312,7 @@ internal sealed partial class OverloadResolver
             foreach (var cand in applicable)
             {
                 if (!cand.IsGeneric
-                    || (GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out var substitution)
+                    || (GetCandidateSubstitution(cand) is { } substitution
                         && cand.TypeParameters.All(tp => satisfiesConstraint(substitution[tp], tp))))
                 {
                     constrained.Add(cand);
@@ -303,7 +340,7 @@ internal sealed partial class OverloadResolver
             var convertible = new List<FunctionSymbol>(applicable.Count);
             foreach (var cand in applicable)
             {
-                if (IsConvertibilityApplicable(cand, argumentCount, boundArguments))
+                if (IsConvertibilityApplicable(cand, argumentCount, boundArguments, GetCandidateSubstitution(cand)))
                 {
                     convertible.Add(cand);
                 }
@@ -378,7 +415,7 @@ internal sealed partial class OverloadResolver
             Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution = null;
             if (cand.IsGeneric)
             {
-                GetCachedCandidateSubstitution(cand, boundArguments, argumentCount, substitutionCache, out candSubstitution);
+                candSubstitution = GetCandidateSubstitution(cand);
             }
 
             // Classify each supplied argument's conversion to its ACTUAL
@@ -429,8 +466,13 @@ internal sealed partial class OverloadResolver
                 }
 
                 var argType = boundArguments[i]?.Type;
-                var paramType = cand.Parameters[slot + parameterOffset].Type;
-                paramTypes[i] = paramType;
+                var openParamType = cand.Parameters[slot + parameterOffset].Type;
+                paramTypes[i] = openParamType;
+                var paramType = openParamType;
+                if (candSubstitution != null)
+                {
+                    paramType = Binder.SubstituteType(paramType, candSubstitution);
+                }
 
                 // Issue #1531 control: a value-returning delegate/method-group
                 // argument that maps onto a `(...)->void` delegate parameter
@@ -913,11 +955,12 @@ internal sealed partial class OverloadResolver
     private bool IsConvertibilityApplicable(
         FunctionSymbol candidate,
         int argumentCount,
-        ImmutableArray<BoundExpression>.Builder boundArguments)
+        ImmutableArray<BoundExpression>.Builder boundArguments,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null)
     {
         // Generic candidates may carry unsubstituted method type parameters in
         // their signature; rely on the existing #1124 inference filter instead.
-        if (candidate.IsGeneric)
+        if (candidate.IsGeneric && substitution == null)
         {
             return true;
         }
@@ -946,6 +989,10 @@ internal sealed partial class OverloadResolver
 
             var argType = boundArguments[i]?.Type;
             var paramType = parameter.Type;
+            if (substitution != null)
+            {
+                paramType = Binder.SubstituteType(paramType, substitution);
+            }
 
             // Unknown argument or parameter type — be conservative, do not reject.
             if (argType == null || paramType == null)

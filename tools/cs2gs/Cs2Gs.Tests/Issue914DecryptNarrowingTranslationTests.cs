@@ -136,6 +136,30 @@ namespace Demo
         Assert.DoesNotContain("else { nil }", printed);
     }
 
+    [Fact]
+    public void AsyncNullableReturn_DoesNotAssertNullTernaryResult()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public async Task<string?> PickAsync(bool found)
+        {
+            await Task.Yield();
+            return found ? ""value"" : null;
+        }
+    }
+}");
+
+        Assert.Contains("async func PickAsync(found bool) string?", printed);
+        Assert.Contains("default(string?)", printed);
+        Assert.DoesNotContain("default(string?))!!", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

@@ -52,6 +52,28 @@ public class Issue1503GenericDelegateEmitTests
         Assert.Equal("True\nFalse\n", output);
     }
 
+    [Fact]
+    public void NullableConstructedDelegate_AssignmentPreservesSymbolicParameterType()
+    {
+        var source = """
+            package Gen1503Nullable
+            import System
+
+            interface ICancellation { }
+            class Cancellation : ICancellation { }
+            type Convert1503N[T ICancellation] = delegate func(context T) void
+
+            func Main() {
+                var convert Convert1503N[Cancellation]? = nil
+                convert = (context Cancellation) -> Console.WriteLine(context.GetType().Name)
+                convert!!(Cancellation())
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("Cancellation\n", output);
+    }
+
     // (a') construct the same generic delegate from a METHOD GROUP (not a
     // lambda) and invoke it.
     [Fact]
