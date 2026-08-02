@@ -191,6 +191,16 @@ internal sealed class SignatureEncoder
                 return;
             }
 
+            if (inner is TupleTypeSymbol nullableTuple)
+            {
+                var giNullableTuple = encoder.GenericInstantiation(
+                    this.outer.memberRefs.GetTypeReference(typeof(System.Nullable<>)),
+                    genericArgumentCount: 1,
+                    isValueType: true);
+                this.EncodeTypeSymbol(giNullableTuple.AddArgument(), nullableTuple);
+                return;
+            }
+
             if (inner is StructSymbol nestedStruct && !nestedStruct.IsClass)
             {
                 // Issue #1475: `S?` over a user-declared value-type struct

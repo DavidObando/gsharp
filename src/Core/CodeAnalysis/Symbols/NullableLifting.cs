@@ -116,9 +116,14 @@ public static class NullableLifting
     /// for object widening — none of which the reference-type path handles.
     /// </summary>
     /// <param name="nullable">The wrapper to test.</param>
-    /// <returns><see langword="true"/> when the underlying type is a CLR value type.</returns>
+    /// <returns><see langword="true"/> when the underlying type has a CLR value-type representation.</returns>
     internal static bool IsValueTypeNullable(NullableTypeSymbol nullable)
     {
+        if (nullable?.UnderlyingType is TupleTypeSymbol)
+        {
+            return true;
+        }
+
         if (nullable?.UnderlyingType?.ClrType is { IsValueType: true })
         {
             return true;
@@ -165,7 +170,7 @@ public static class NullableLifting
     /// wraps an underlying whose <c>Nullable&lt;T&gt;::get_Value()</c> MemberRef
     /// cannot be built from a runtime <see cref="Type"/> (the emit-side
     /// <c>WellKnownReferences.GetNullableGetValueReference</c> helper) because
-    /// the underlying has no <c>ClrType</c> during emit. Two shapes qualify:
+    /// the underlying has no <c>ClrType</c> during emit. Three shapes qualify:
     /// <list type="bullet">
     ///   <item><description>a user-declared value-kind struct or enum (see
     ///     <see cref="IsUserValueTypeNullable"/>);</description></item>
@@ -173,8 +178,11 @@ public static class NullableLifting
     ///     <c>struct</c> — its <c>Nullable&lt;T&gt;</c> instantiation closes
     ///     over a generic-parameter var/mvar signature slot, not a resolvable
     ///     host <c>Type</c>.</description></item>
+    ///   <item><description>a tuple whose symbolic element annotations prevent
+    ///     a direct <c>ClrType</c>, while its runtime representation remains
+    ///     <c>System.ValueTuple</c>.</description></item>
     /// </list>
-    /// Both shapes route through the emit-side
+    /// All shapes route through the emit-side
     /// <c>ReflectionMetadataEmitter.GetNullableGetValueMemberRefForUserValueType</c>
     /// helper, which builds the MemberRef symbolically off the
     /// emitted/encoded parent TypeSpec instead. Callers that must pick
@@ -188,6 +196,7 @@ public static class NullableLifting
     internal static bool RequiresSymbolicNullableGetValue(NullableTypeSymbol nullable)
     {
         return IsUserValueTypeNullable(nullable)
+            || nullable?.UnderlyingType is TupleTypeSymbol { ClrType: null }
             || (nullable?.UnderlyingType is TypeParameterSymbol tp && tp.HasValueTypeConstraint);
     }
 

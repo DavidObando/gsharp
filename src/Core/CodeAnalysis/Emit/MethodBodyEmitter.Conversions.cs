@@ -242,11 +242,13 @@ internal sealed partial class MethodBodyEmitter
         // `Nullable<>` over the type's emitted TypeDef/TypeSpec. Mirrors the
         // open-type-parameter branch in the value-type lift below.
         if (to is NullableTypeSymbol toUserVtNullableLift
-            && NullableLifting.IsUserValueTypeNullable(toUserVtNullableLift)
-            && from == toUserVtNullableLift.UnderlyingType)
+            && NullableLifting.RequiresSymbolicNullableGetValue(toUserVtNullableLift)
+            && Conversion.ClassifyNonStructural(from, toUserVtNullableLift.UnderlyingType).IsIdentity)
         {
             this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(toUserVtNullableLift));
+            this.il.Token(toUserVtNullableLift.UnderlyingType is TypeParameterSymbol
+                ? this.outer.memberRefs.GetNullableCtorMemberRefForOpenTypeParameter(toUserVtNullableLift)
+                : this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(toUserVtNullableLift));
             return;
         }
 

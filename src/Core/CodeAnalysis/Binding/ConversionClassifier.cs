@@ -676,10 +676,8 @@ internal sealed class ConversionClassifier
         // BoundDefaultExpression produces uniformly verifiable IL.
         if (expression.Type == TypeSymbol.Null
             && type is NullableTypeSymbol nilTargetNullable
-            && (nilTargetNullable.UnderlyingType?.ClrType is { IsValueType: true }
-                || nilTargetNullable.UnderlyingType is TypeParameterSymbol
-                || nilTargetNullable.UnderlyingType is EnumSymbol
-                || (nilTargetNullable.UnderlyingType is StructSymbol nilTargetStruct && !nilTargetStruct.IsClass)))
+            && (NullableLifting.IsAnyValueTypeNullable(nilTargetNullable)
+                || nilTargetNullable.UnderlyingType is TypeParameterSymbol))
         {
             return new BoundDefaultExpression(null, type);
         }
