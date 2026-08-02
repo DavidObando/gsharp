@@ -3508,6 +3508,9 @@ internal sealed partial class ExpressionBinder
                 }
 
             default:
+                var accessText = rightPart.SyntaxTree.Text.ToString(rightPart.Span);
+                Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
+                    rightPart.Location, tpSym.Name, accessText);
                 return new BoundErrorExpression(null);
         }
     }
