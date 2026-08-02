@@ -1085,7 +1085,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.ownedExtensions = ownedExtensions ?? new OwnedExtensionRegistry(context.Compilation.Assembly);
             this.preservePartialParts = preservePartialParts;
             this.markMergedTypePartial = markMergedTypePartial;
-            this.efEntityTypes = CollectEfEntityTypes(context.Compilation);
+            this.efEntityTypes = ObliviousNullabilityAnalyzer.CollectEfEntityTypes(context.Compilation);
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`

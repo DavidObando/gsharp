@@ -153,6 +153,38 @@ namespace Demo
     }
 
     [Fact]
+    public void EfEntityProperty_PromotesInterfaceAndImplementation()
+    {
+        string printed = TranslateOblivious(@"
+namespace Microsoft.EntityFrameworkCore
+{
+    public class DbSet<T> { }
+}
+
+namespace Demo
+{
+    using Microsoft.EntityFrameworkCore;
+
+    public interface IPerson
+    {
+        string Name { get; set; }
+    }
+
+    public class Author : IPerson
+    {
+        public string Name { get; set; }
+    }
+
+    public class Context
+    {
+        public DbSet<Author> Authors { get; set; }
+    }
+}");
+
+        Assert.Equal(2, printed.Split("prop Name string?", StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
     public void NullableEnabledCompilation_IsUnaffected()
     {
         // The oblivious taint analysis is gated to nullable-DISABLED

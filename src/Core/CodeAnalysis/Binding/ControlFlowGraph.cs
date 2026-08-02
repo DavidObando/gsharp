@@ -414,8 +414,20 @@ public sealed class ControlFlowGraph
                     continue;
                 }
 
+                HashSet<BoundLabel> bodyLabels = CollectLabels(body);
+
                 void RouteThroughFinally(BoundStatement transfer)
                 {
+                    // Issue #3061: loop and switch lowering emits gotos whose
+                    // targets remain inside the try body; they do not leave the
+                    // protected region and therefore must not run finally.
+                    if (transfer is BoundGotoStatement gotoStatement
+                        && bodyLabels.Contains(gotoStatement.Label))
+                    {
+                        builder.Add(transfer);
+                        return;
+                    }
+
                     Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
                     Add(transfer, outerRoute);
                 }
@@ -857,41 +869,39 @@ public sealed class ControlFlowGraph
 
         private void RemoveUnreachableBlocks(List<BasicBlock> blocks)
         {
-            // ponytail: single-pass worklist replacing the old goto-restart
-            // scan (was O(n^2)). Peels blocks whose incoming-branch count
-            // hits zero, cascading through their outgoing edges, same fixpoint
-            // as the original "remove and rescan" loop.
-            var removed = new HashSet<BasicBlock>();
+            // Issue #3061: incoming-edge peeling cannot remove an unreachable
+            // cycle. Walk from Start so dead loop SCCs are discarded too.
+            var reachable = new HashSet<BasicBlock> { start };
             var queue = new Queue<BasicBlock>();
-            foreach (var block in blocks)
-            {
-                if (!block.Incoming.Any())
-                {
-                    removed.Add(block);
-                    queue.Enqueue(block);
-                }
-            }
-
+            queue.Enqueue(start);
             while (queue.Count > 0)
             {
                 var block = queue.Dequeue();
                 foreach (var branch in block.Outgoing)
                 {
-                    branch.To.Incoming.Remove(branch);
-                    if (!removed.Contains(branch.To) && !branch.To.Incoming.Any())
+                    if (reachable.Add(branch.To))
                     {
-                        removed.Add(branch.To);
                         queue.Enqueue(branch.To);
                     }
                 }
             }
 
+            var removed = blocks.Where(block => !reachable.Contains(block)).ToHashSet();
             if (removed.Count == 0)
             {
                 return;
             }
 
-            branches.RemoveAll(branch => removed.Contains(branch.From) || removed.Contains(branch.To));
+            var removedBranches = branches
+                .Where(branch => removed.Contains(branch.From) || removed.Contains(branch.To))
+                .ToArray();
+            foreach (var branch in removedBranches)
+            {
+                branch.From.Outgoing.Remove(branch);
+                branch.To.Incoming.Remove(branch);
+            }
+
+            branches.RemoveAll(removedBranches.Contains);
             blocks.RemoveAll(block => removed.Contains(block));
         }
 
