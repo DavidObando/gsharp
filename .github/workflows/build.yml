@@ -102,7 +102,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore "${{ matrix.project }}"
+        run: dotnet restore GSharp.sln
 
       - name: Restore .NET local tools
         run: dotnet tool restore
@@ -179,7 +179,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj
+        run: dotnet restore GSharp.sln
 
       - name: Restore .NET local tools
         # dotnet-ilverify for the pipeline's stage 3.
@@ -231,7 +231,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj
+        run: dotnet restore GSharp.sln
 
       - name: Restore .NET local tools
         run: dotnet tool restore
