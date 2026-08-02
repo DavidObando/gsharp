@@ -2341,7 +2341,13 @@ internal sealed partial class ExpressionBinder
             && TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _))
         {
             var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticTargetSymbol), staticTargetSymbol);
-            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(
+                null,
+                receiver: null,
+                staticMember,
+                staticConverted,
+                staticTargetSymbol,
+                staticContainerType: constructedImported.SymbolicReceiver);
         }
 
         Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);

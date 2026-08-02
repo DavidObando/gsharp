@@ -786,7 +786,12 @@ public sealed partial class Evaluator
 
         var body = node.LoweredBody ??= (BoundBlockStatement)Lowering.Lowerer.Lower(node.Body);
         return MaterializeClosure(
-            new ClosureValue(node.Function, body, node.FunctionType, captured),
+            new ClosureValue(
+                node.Function,
+                body,
+                node.FunctionType,
+                captured,
+                CaptureRuntimeTypeArguments()),
             GetLambdaMethodName(node));
     }
 
@@ -807,7 +812,12 @@ public sealed partial class Evaluator
         }
 
         return MaterializeClosure(
-            new ClosureValue(node.Function, body, node.FunctionType, captured),
+            new ClosureValue(
+                node.Function,
+                body,
+                node.FunctionType,
+                captured,
+                CaptureRuntimeTypeArguments(node.Receiver?.Type)),
             node.Function.Name);
     }
 
@@ -952,6 +962,7 @@ public sealed partial class Evaluator
             frame[closure.Function.Parameters[i]] = arguments[i];
         }
 
+        RegisterRuntimeTypeArguments(frame, closure.CapturedTypeArguments);
         using (PushFrame(frame))
         {
             return EvaluateUserMethodBody(closure.Function, closure.Body);
@@ -1261,7 +1272,8 @@ public sealed partial class Evaluator
         var args = new object[node.Arguments.Length];
         var refSlots = BuildRefSlots(node.Arguments, node.ArgumentRefKinds, args, node.Constructor);
 
-        var result = node.Constructor.Invoke(args);
+        var constructor = ResolveMemberForRuntimeType(node.Constructor, ResolveRuntimeClrType(node.Type));
+        var result = constructor.Invoke(args);
         WriteBackRefSlots(refSlots, args);
         return result;
     }
@@ -1310,7 +1322,8 @@ public sealed partial class Evaluator
         // from `int[].GetEnumerator()`) fails because the receiver doesn't
         // implement `IEnumerator<object>`. Route through the matching
         // closed-generic interface on the receiver's runtime type.
-        var member = ResolvePropertyOrFieldForReceiver(node.Member, receiver);
+        var runtimeType = ResolveRuntimeClrType(node.Receiver?.Type ?? node.StaticContainerType);
+        var member = ResolvePropertyOrFieldForReceiver(node.Member, receiver, runtimeType);
 
         // concurrency: see TryGetInterpreterMapLock — routes `m.Count`,
         // `m.Keys`, `m.Values`, etc. through the same per-map lock as
@@ -1339,13 +1352,14 @@ public sealed partial class Evaluator
         };
     }
 
-    private static System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver)
+    private System.Reflection.MemberInfo ResolvePropertyOrFieldForReceiver(System.Reflection.MemberInfo member, object receiver, Type symbolicReceiverType)
     {
         if (receiver == null || member == null)
         {
-            return member;
+            return ResolveMemberForRuntimeType(member, symbolicReceiverType);
         }
 
+        member = ResolveMemberForRuntimeType(member, symbolicReceiverType);
         var declaring = member.DeclaringType;
         if (declaring == null || declaring.IsAssignableFrom(receiver.GetType()))
         {
@@ -1455,16 +1469,19 @@ public sealed partial class Evaluator
         var receiver = node.Receiver == null ? null : EvaluateExpression(node.Receiver);
         receiver = UnwrapClrReceiver(receiver);
         var value = EvaluateExpression(node.Value);
+        var member = ResolveMemberForRuntimeType(
+            node.Member,
+            ResolveRuntimeClrType(node.Receiver?.Type ?? node.StaticContainerType));
 
         // Issue #608: when the receiver is a StructValue (G# class instance)
         // and the member is from a CLR interface satisfied by a field, route the
         // write through the struct's field dictionary.
-        if (receiver is StructValue sv && TryWriteStructFieldForClrMember(sv, node.Member, value))
+        if (receiver is StructValue sv && TryWriteStructFieldForClrMember(sv, member, value))
         {
             return value;
         }
 
-        switch (node.Member)
+        switch (member)
         {
             case System.Reflection.PropertyInfo p:
                 p.SetValue(receiver, value);
@@ -1635,7 +1652,8 @@ public sealed partial class Evaluator
             args[i] = EvaluateExpression(node.Arguments[i]);
         }
 
-        return node.Indexer.GetValue(target, args);
+        var indexer = ResolveMemberForRuntimeType(node.Indexer, ResolveRuntimeClrType(node.Target.Type));
+        return indexer.GetValue(target, args);
     }
 
     private object EvaluateClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
@@ -1649,7 +1667,9 @@ public sealed partial class Evaluator
         }
 
         var value = EvaluateExpression(node.Value);
-        node.Indexer.SetValue(target, value, args);
+        var targetType = node.TargetExpression?.Type ?? node.Target?.Type;
+        var indexer = ResolveMemberForRuntimeType(node.Indexer, ResolveRuntimeClrType(targetType));
+        indexer.SetValue(target, value, args);
         return value;
     }
 
