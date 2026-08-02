@@ -23,36 +23,35 @@ public class Issue3034NullableNarrowingDiagnosticTests
     private const string NullableReceiverMessage =
         "Cannot call function M because receiver 'c' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.";
 
-    [Fact]
-    public void NullableReceiver_ExplainsMissingNarrowing()
+    [Theory]
+    [InlineData("function")]
+    [InlineData("top-level")]
+    public void NullableReceiver_ExplainsMissingNarrowing(string scope)
     {
-        var diagnostic = GetGs0159("""
-            class C {
-                func M() { }
-            }
+        var source = scope == "top-level"
+            ? """
+            class C { func M() { } }
+
+            var c C? = nil
+            c.M()
+            """
+            : """
+            class C { func M() { } }
 
             func Run() {
                 var c C? = nil
                 c.M()
             }
-            """);
+            """;
+        var diagnostic = GetGs0159(source, isLibrary: scope != "top-level");
 
         Assert.Equal(NullableReceiverMessage, diagnostic.Message);
-        AssertDiagnosticSpan(diagnostic, line: 6, startCharacter: 6, endCharacter: 9, text: "M()");
-    }
-
-    [Fact]
-    public void TopLevelNullableReceiver_ExplainsMissingNarrowing()
-    {
-        var diagnostic = GetGs0159("""
-            class C { func M() { } }
-
-            var c C? = nil
-            c.M()
-            """, isLibrary: false);
-
-        Assert.Equal(NullableReceiverMessage, diagnostic.Message);
-        AssertDiagnosticSpan(diagnostic, line: 3, startCharacter: 2, endCharacter: 5, text: "M()");
+        AssertDiagnosticSpan(
+            diagnostic,
+            line: scope == "top-level" ? 3 : 4,
+            startCharacter: scope == "top-level" ? 2 : 6,
+            endCharacter: scope == "top-level" ? 5 : 9,
+            text: "M()");
     }
 
     [Fact]
@@ -93,36 +92,66 @@ public class Issue3034NullableNarrowingDiagnosticTests
         Assert.Equal("Cannot find function Frobnicate.", diagnostic.Message);
     }
 
-    [Fact]
-    public void WrongArityOnNullableReceiver_KeepsLookupMessage()
+    [Theory]
+    [InlineData("function")]
+    [InlineData("top-level")]
+    public void WrongArityOnNullableReceiver_KeepsLookupMessage(string scope)
     {
-        var diagnostic = GetGs0159("""
+        var source = scope == "top-level"
+            ? """
+            class C { func M(value int32) { } }
+
+            var c C? = nil
+            c.M()
+            """
+            : """
             class C { func M(value int32) { } }
 
             func Run() {
                 var c C? = nil
                 c.M()
             }
-            """);
+            """;
+        var diagnostic = GetGs0159(source, isLibrary: scope != "top-level");
 
         Assert.Equal("Cannot find function M.", diagnostic.Message);
-        AssertDiagnosticSpan(diagnostic, line: 4, startCharacter: 6, endCharacter: 9, text: "M()");
+        AssertDiagnosticSpan(
+            diagnostic,
+            line: scope == "top-level" ? 3 : 4,
+            startCharacter: scope == "top-level" ? 2 : 6,
+            endCharacter: scope == "top-level" ? 5 : 9,
+            text: "M()");
     }
 
-    [Fact]
-    public void WrongArgumentTypeOnNullableReceiver_KeepsLookupMessage()
+    [Theory]
+    [InlineData("function")]
+    [InlineData("top-level")]
+    public void WrongArgumentTypeOnNullableReceiver_KeepsLookupMessage(string scope)
     {
-        var diagnostic = GetGs0159("""
+        var source = scope == "top-level"
+            ? """
+            class C { func M(value int32) { } }
+
+            var c C? = nil
+            c.M("x")
+            """
+            : """
             class C { func M(value int32) { } }
 
             func Run() {
                 var c C? = nil
                 c.M("x")
             }
-            """);
+            """;
+        var diagnostic = GetGs0159(source, isLibrary: scope != "top-level");
 
         Assert.Equal("Cannot find function M.", diagnostic.Message);
-        AssertDiagnosticSpan(diagnostic, line: 4, startCharacter: 6, endCharacter: 12, text: "M(\"x\")");
+        AssertDiagnosticSpan(
+            diagnostic,
+            line: scope == "top-level" ? 3 : 4,
+            startCharacter: scope == "top-level" ? 2 : 6,
+            endCharacter: scope == "top-level" ? 8 : 12,
+            text: "M(\"x\")");
     }
 
     [Fact]
