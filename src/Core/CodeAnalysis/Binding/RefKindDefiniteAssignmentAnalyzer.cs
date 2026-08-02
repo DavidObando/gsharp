@@ -35,6 +35,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal static class RefKindDefiniteAssignmentAnalyzer
 {
     public static void Analyze(BoundBlockStatement body, FunctionSymbol function, DiagnosticBag diagnostics)
+        => AnalyzeWithCaptured(body, function, diagnostics, capturedAssigned: null);
+
+    private static void AnalyzeWithCaptured(
+        BoundBlockStatement body,
+        FunctionSymbol function,
+        DiagnosticBag diagnostics,
+        IEnumerable<VariableSymbol> capturedAssigned)
     {
         if (body == null || function == null)
         {
@@ -51,6 +58,11 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             }
         }
 
+        if (capturedAssigned != null)
+        {
+            initialAssigned.UnionWith(capturedAssigned);
+        }
+
         var outParams = function.Parameters.Where(p => p.RefKind == RefKind.Out).ToImmutableArray();
 
         // Best-effort `p = &v` / `var p = &v` alias tracking so `*p = expr`
@@ -62,7 +74,15 @@ internal static class RefKindDefiniteAssignmentAnalyzer
 
         try
         {
-            AnalyzeRegion(body, initialAssigned, outParams, function, diagnostics, pointerAliases, isFunctionBody: true);
+            AnalyzeRegion(
+                body,
+                initialAssigned,
+                outParams,
+                function,
+                diagnostics,
+                pointerAliases,
+                FindMethodExitLabel(body),
+                isFunctionBody: true);
         }
         catch
         {
@@ -81,8 +101,6 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 diagnostics.ReportOutParameterNotAssigned(function.Declaration?.Location ?? default(TextLocation), op.Name);
             }
         }
-
-        new FunctionLiteralFinder(diagnostics).VisitStatement(body);
     }
 
     /// <summary>
@@ -92,12 +110,11 @@ internal static class RefKindDefiniteAssignmentAnalyzer
     /// When <paramref name="isFunctionBody"/> is true, every path reaching the
     /// region's end is an actual function exit and is checked against
     /// <paramref name="outParams"/> (mirrors the original top-level check).
-    /// Otherwise, only paths ending in an internal <c>return</c>/<c>throw</c>
-    /// are exits (checked here, since they leave the function from a point
-    /// the outer CFG never sees — issue #1642); paths that fall off the end
-    /// of the region normally are merged (intersected) and returned so the
-    /// caller can keep propagating assignment state past the compound
-    /// statement. Returns null when the region never completes normally.
+    /// Otherwise, internal returns are checked here because they leave the
+    /// function from a point the outer CFG never sees (issue #1642), throw
+    /// paths terminate without requiring assignment, and normal fall-through
+    /// paths are merged and returned. Returns null when the region never
+    /// completes normally.
     /// </summary>
     private static HashSet<VariableSymbol> AnalyzeRegion(
         BoundStatement regionBody,
@@ -106,6 +123,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel,
         bool isFunctionBody = false)
     {
         var graph = ControlFlowGraph.Create(AsBlock(regionBody));
@@ -149,7 +167,14 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                         entry = entry == null ? new HashSet<VariableSymbol>(predExit) : Intersect(entry, predExit);
                     }
 
-                    entry ??= new HashSet<VariableSymbol>(initialAssigned);
+                    // Wait until at least one reachable predecessor has been
+                    // simulated. Seeding an unvisited loop cycle with the
+                    // function-entry state can permanently intersect away
+                    // assignments made before the loop.
+                    if (entry == null)
+                    {
+                        continue;
+                    }
                 }
 
                 var prevEntry = entryAssigned[block];
@@ -159,7 +184,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                     changed = true;
                 }
 
-                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(entryAssigned[block]), outParams, function, null, pointerAliases);
+                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(entryAssigned[block]), outParams, function, null, pointerAliases, methodExitLabel);
                 var prevExit = exitAssigned[block];
                 if (prevExit == null || !SetsEqual(prevExit, exit))
                 {
@@ -182,7 +207,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 }
 
                 var entry = entryAssigned[block] ?? new HashSet<VariableSymbol>(initialAssigned);
-                SimulateBlock(block, new HashSet<VariableSymbol>(entry), outParams, function, diagnostics, pointerAliases);
+                SimulateBlock(block, new HashSet<VariableSymbol>(entry), outParams, function, diagnostics, pointerAliases, methodExitLabel);
             }
         }
 
@@ -192,6 +217,11 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             {
                 foreach (var endBranch in graph.End.Incoming)
                 {
+                    if (endBranch.From.Statements.LastOrDefault()?.Kind == BoundNodeKind.ThrowStatement)
+                    {
+                        continue;
+                    }
+
                     var exit = exitAssigned[endBranch.From] ?? new HashSet<VariableSymbol>(initialAssigned);
                     foreach (var op in outParams)
                     {
@@ -206,10 +236,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             return null;
         }
 
-        // Not the function body: classify each predecessor of this region's
-        // end as either an internal exit (return/throw — leaves the function
-        // right here, from a point the outer CFG can't see) or a normal
-        // fall-through (continues past the compound statement).
+        // Not the function body: discard throw paths, check function-return
+        // paths, and merge normal fall-through paths.
         HashSet<VariableSymbol> normalExit = null;
         var anyNormal = false;
         foreach (var endBranch in graph.End.Incoming)
@@ -217,10 +245,15 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             var fromBlock = endBranch.From;
             var exit = exitAssigned[fromBlock] ?? new HashSet<VariableSymbol>(initialAssigned);
             var lastStatement = fromBlock.Statements.LastOrDefault();
-            var isInternalExit = lastStatement != null
-                && (lastStatement.Kind == BoundNodeKind.ReturnStatement || lastStatement.Kind == BoundNodeKind.ThrowStatement);
+            if (lastStatement?.Kind == BoundNodeKind.ThrowStatement)
+            {
+                continue;
+            }
 
-            if (isInternalExit)
+            var exitsFunction = lastStatement?.Kind == BoundNodeKind.ReturnStatement
+                || (lastStatement is BoundGotoStatement gotoStatement
+                    && ReferenceEquals(gotoStatement.Label, methodExitLabel));
+            if (exitsFunction)
             {
                 if (diagnostics != null && !outParams.IsDefaultOrEmpty)
                 {
@@ -241,6 +274,18 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         }
 
         return anyNormal ? normalExit : null;
+    }
+
+    private static BoundLabel FindMethodExitLabel(BoundBlockStatement body)
+    {
+        if (body.Statements.Length >= 2
+            && body.Statements[^2] is BoundLabelStatement { Syntax: null } label
+            && body.Statements[^1] is BoundReturnStatement { Syntax: null })
+        {
+            return label.Label;
+        }
+
+        return null;
     }
 
     private static BoundBlockStatement AsBlock(BoundStatement statement)
@@ -305,11 +350,12 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         foreach (var statement in block.Statements)
         {
-            ProcessStatement(statement, assigned, outParams, function, diagnostics, pointerAliases);
+            ProcessStatement(statement, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
         }
 
         return assigned;
@@ -321,7 +367,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         switch (statement)
         {
@@ -337,7 +384,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                     // emitted for `var x T` without an explicit initializer
                     // should NOT count as definite assignment — Roslyn DA
                     // treats `int x;` as unassigned for the same reason.
-                    if (vd.Initializer is not BoundDefaultExpression)
+                    if (vd.Initializer is not BoundDefaultExpression
+                        || vd.Syntax is VariableDeclarationSyntax { Initializer: not null })
                     {
                         assigned.Add(vd.Variable);
                     }
@@ -369,14 +417,14 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             // nested bodies must be recursively analyzed here or assignments
             // inside them are invisible to this analyzer.
             case BoundTryStatement tryStmt:
-                ProcessTryStatement(tryStmt, assigned, outParams, function, diagnostics, pointerAliases);
+                ProcessTryStatement(tryStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
                 break;
             case BoundSelectStatement selectStmt:
-                ProcessSelectStatement(selectStmt, assigned, outParams, function, diagnostics, pointerAliases);
+                ProcessSelectStatement(selectStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
                 break;
             case BoundScopeStatement scopeStmt:
             {
-                var exit = AnalyzeRegion(scopeStmt.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases);
+                var exit = AnalyzeRegion(scopeStmt.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
                 if (exit != null)
                 {
                     assigned.Clear();
@@ -387,17 +435,23 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             }
 
             case BoundFixedStatement fixedStmt:
-                ProcessFixedStatement(fixedStmt, assigned, outParams, function, diagnostics, pointerAliases);
+                ProcessFixedStatement(fixedStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
                 break;
             case BoundPatternSwitchStatement switchStmt:
-                ProcessPatternSwitchStatement(switchStmt, assigned, outParams, function, diagnostics, pointerAliases);
+                ProcessPatternSwitchStatement(switchStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
                 break;
             default:
                 // Other opaque statement kinds (go/channel-send/await-for-range/
                 // yield) fall through to the next statement at the CFG level
                 // too, but their bodies either don't run unconditionally
                 // (a loop body may run zero times) or don't affect the
-                // enclosing function's locals, so no-op here is correct.
+                // enclosing function's locals. Their nested function literals
+                // still require their own analysis.
+                if (diagnostics != null)
+                {
+                    new FunctionLiteralFinder(assigned, diagnostics).VisitStatement(statement);
+                }
+
                 break;
         }
     }
@@ -423,11 +477,12 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         var preTry = new HashSet<VariableSymbol>(assigned);
 
-        var tryExit = AnalyzeRegion(tryStmt.TryBlock, preTry, outParams, function, diagnostics, pointerAliases);
+        var tryExit = AnalyzeRegion(tryStmt.TryBlock, preTry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
         var meet = tryExit;
         var anyReachable = tryExit != null;
 
@@ -439,7 +494,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 catchEntry.Add(clause.Variable);
             }
 
-            var catchExit = AnalyzeRegion(clause.Body, catchEntry, outParams, function, diagnostics, pointerAliases);
+            var catchExit = AnalyzeRegion(clause.Body, catchEntry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
             if (catchExit == null)
             {
                 continue;
@@ -449,19 +504,23 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             meet = meet == null ? catchExit : Intersect(meet, catchExit);
         }
 
-        // If neither the try body nor any catch can complete normally (every
-        // path always returns/throws), the code after this try statement is
-        // unreachable. Leave `assigned` untouched — ponytail: dead code, any
-        // choice here is equally "correct" since it can never execute.
+        // If neither the try body nor any catch can complete normally, the
+        // outer CFG's synthetic fall-through is unreachable. Unreachable is
+        // the top state for a must analysis, so it cannot create a second,
+        // false GS0238 at the function's synthetic final return.
         if (anyReachable)
         {
             assigned.Clear();
             assigned.UnionWith(meet);
         }
+        else
+        {
+            assigned.UnionWith(outParams);
+        }
 
         if (tryStmt.FinallyBlock != null)
         {
-            var finallyExit = AnalyzeRegion(tryStmt.FinallyBlock, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases);
+            var finallyExit = AnalyzeRegion(tryStmt.FinallyBlock, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
             if (finallyExit != null)
             {
                 assigned.Clear();
@@ -482,7 +541,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         HashSet<VariableSymbol> meet = null;
         var any = false;
@@ -505,7 +565,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 caseEntry.Add(c.Variable);
             }
 
-            var caseExit = AnalyzeRegion(c.Body, caseEntry, outParams, function, diagnostics, pointerAliases);
+            var caseExit = AnalyzeRegion(c.Body, caseEntry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
             if (caseExit == null)
             {
                 continue;
@@ -531,7 +591,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases);
 
@@ -545,7 +606,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             entry.Add(fixedStmt.SourceVariable);
         }
 
-        var exit = AnalyzeRegion(fixedStmt.Body, entry, outParams, function, diagnostics, pointerAliases);
+        var exit = AnalyzeRegion(fixedStmt.Body, entry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
         if (exit != null)
         {
             assigned.Clear();
@@ -565,7 +626,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        BoundLabel methodExitLabel)
     {
         ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases);
 
@@ -585,7 +647,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 ProcessExpression(arm.Guard, assigned, diagnostics, pointerAliases);
             }
 
-            var armExit = AnalyzeRegion(arm.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases);
+            var armExit = AnalyzeRegion(arm.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
             if (armExit == null)
             {
                 continue;
@@ -662,62 +724,54 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         switch (expression)
         {
             case BoundCallExpression call:
-                // Process arguments; for ref/out arguments, the read/write
-                // semantics interact with definite assignment.
-                for (var i = 0; i < call.Arguments.Length; i++)
-                {
-                    var arg = call.Arguments[i];
-                    ParameterSymbol parameter = i < call.Function.Parameters.Length ? call.Function.Parameters[i] : null;
-
-                    if (parameter != null && parameter.RefKind != RefKind.None
-                        && arg is BoundAddressOfExpression addr
-                        && addr.Operand is BoundVariableExpression bve)
-                    {
-                        if (parameter.RefKind == RefKind.Ref && !assigned.Contains(bve.Variable))
-                        {
-                            diagnostics?.ReportVariableNotAssignedBeforeRef(arg.Syntax?.Location ?? call.Syntax?.Location ?? default(TextLocation), bve.Variable.Name);
-                        }
-
-                        // Both ref and out arg-positions count as writes (the
-                        // callee may overwrite). 'in' is a read only.
-                        if (parameter.RefKind == RefKind.Ref || parameter.RefKind == RefKind.Out)
-                        {
-                            assigned.Add(bve.Variable);
-                        }
-                    }
-                    else
-                    {
-                        ProcessExpression(arg, assigned, diagnostics, pointerAliases);
-                    }
-                }
-
+                ProcessCallArguments(call.Arguments, call.Function.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
                 break;
             case BoundImportedCallExpression call:
-                for (var i = 0; i < call.Arguments.Length; i++)
-                {
-                    var arg = call.Arguments[i];
-                    var refKind = i < call.ArgumentRefKinds.Length ? call.ArgumentRefKinds[i] : RefKind.None;
-
-                    if (refKind != RefKind.None
-                        && arg is BoundAddressOfExpression addr
-                        && addr.Operand is BoundVariableExpression bve)
-                    {
-                        if (refKind == RefKind.Ref && !assigned.Contains(bve.Variable))
-                        {
-                            diagnostics?.ReportVariableNotAssignedBeforeRef(arg.Syntax?.Location ?? call.Syntax?.Location ?? default(TextLocation), bve.Variable.Name);
-                        }
-
-                        if (refKind == RefKind.Ref || refKind == RefKind.Out)
-                        {
-                            assigned.Add(bve.Variable);
-                        }
-                    }
-                    else
-                    {
-                        ProcessExpression(arg, assigned, diagnostics, pointerAliases);
-                    }
-                }
-
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundImportedInstanceCallExpression call:
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundConstrainedStaticCallExpression call:
+                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundConstructorCallExpression call:
+                var constructorParameters = call.SelectedConstructor != null
+                    ? call.SelectedConstructor.Parameters
+                    : call.StructType.PrimaryConstructorParameters;
+                ProcessCallArguments(call.Arguments, constructorParameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundConstructorChainingExpression call:
+                ProcessCallArguments(call.Arguments, call.SelectedConstructor.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundUserInstanceCallExpression call:
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundBaseInterfaceCallExpression call:
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundBaseClassCallExpression call:
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
+                ProcessCallArguments(
+                    call.Arguments,
+                    call.Method?.Parameters ?? ImmutableArray<ParameterSymbol>.Empty,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    call.Syntax);
+                break;
+            case BoundIndirectCallExpression call:
+                ProcessExpression(call.Target, assigned, diagnostics, pointerAliases);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundClrConstructorCallExpression call:
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                break;
+            case BoundClrConversionCallExpression call:
+                ProcessExpression(call.Source, assigned, diagnostics, pointerAliases);
                 break;
             case BoundAssignmentExpression assign:
                 ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases);
@@ -750,16 +804,82 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 ProcessExpression(conv.Expression, assigned, diagnostics, pointerAliases);
                 break;
             default:
+                if (diagnostics != null)
+                {
+                    new FunctionLiteralFinder(assigned, diagnostics).VisitExpression(expression);
+                }
+
                 break;
         }
     }
 
+    private static void ProcessCallArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<ParameterSymbol> parameters,
+        HashSet<VariableSymbol> assigned,
+        DiagnosticBag diagnostics,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        SyntaxNode callSyntax)
+    {
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var refKind = i < parameters.Length ? parameters[i].RefKind : RefKind.None;
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, callSyntax);
+        }
+    }
+
+    private static void ProcessCallArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> refKinds,
+        HashSet<VariableSymbol> assigned,
+        DiagnosticBag diagnostics,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        SyntaxNode callSyntax)
+    {
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var refKind = !refKinds.IsDefault && i < refKinds.Length ? refKinds[i] : RefKind.None;
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, callSyntax);
+        }
+    }
+
+    private static void ProcessCallArgument(
+        BoundExpression argument,
+        RefKind refKind,
+        HashSet<VariableSymbol> assigned,
+        DiagnosticBag diagnostics,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        SyntaxNode callSyntax)
+    {
+        if (refKind != RefKind.None
+            && argument is BoundAddressOfExpression { Operand: BoundVariableExpression variable })
+        {
+            if (refKind == RefKind.Ref && !assigned.Contains(variable.Variable))
+            {
+                diagnostics?.ReportVariableNotAssignedBeforeRef(
+                    argument.Syntax?.Location ?? callSyntax?.Location ?? default(TextLocation),
+                    variable.Variable.Name);
+            }
+
+            if (refKind == RefKind.Ref || refKind == RefKind.Out)
+            {
+                assigned.Add(variable.Variable);
+            }
+
+            return;
+        }
+
+        ProcessExpression(argument, assigned, diagnostics, pointerAliases);
+    }
+
     private sealed class FunctionLiteralFinder : BoundTreeWalker
     {
+        private readonly HashSet<VariableSymbol> assigned;
         private readonly DiagnosticBag diagnostics;
 
-        public FunctionLiteralFinder(DiagnosticBag diagnostics)
+        public FunctionLiteralFinder(HashSet<VariableSymbol> assigned, DiagnosticBag diagnostics)
         {
+            this.assigned = assigned;
             this.diagnostics = diagnostics;
         }
 
@@ -768,7 +888,11 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             if (node is BoundFunctionLiteralExpression literal)
             {
                 var lowered = (BoundBlockStatement)Lowerer.Lower(literal.Body);
-                Analyze(lowered.PreEmitAnalysisBody ?? lowered, literal.Function, diagnostics);
+                AnalyzeWithCaptured(
+                    lowered.PreEmitAnalysisBody ?? lowered,
+                    literal.Function,
+                    diagnostics,
+                    literal.CapturedVariables.Where(assigned.Contains));
                 return;
             }
 
