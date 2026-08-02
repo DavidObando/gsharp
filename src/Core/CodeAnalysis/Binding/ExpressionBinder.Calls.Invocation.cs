@@ -2555,12 +2555,21 @@ internal sealed partial class ExpressionBinder
 
             var effectiveReceiverSyntax = receiverSyntax ?? receiver?.Syntax;
             if (receiver?.Type is NullableTypeSymbol nullableRecvType
-                && (nullableRecvType.UnderlyingType as StructSymbol)?.GetMethods(methodName).Length > 0
+                && IsApplicableNullableUnderlyingCall(
+                    receiver,
+                    nullableRecvType.UnderlyingType,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    explicitTypeArgs,
+                    typeArgSymbols)
                 && effectiveReceiverSyntax != null)
             {
                 var receiverName = effectiveReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
                     receiverStart ?? effectiveReceiverSyntax.Span.Start,
                     effectiveReceiverSyntax.Span.End));
+                receiverName = string.Join(" ", receiverName.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
             }
             else
@@ -2864,5 +2873,189 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    private bool IsApplicableNullableUnderlyingCall(
+        BoundExpression receiver,
+        TypeSymbol underlyingType,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        Type[] explicitTypeArgs,
+        ImmutableArray<TypeSymbol> typeArgSymbols)
+    {
+        var narrowedReceiver = new BoundConversionExpression(receiver.Syntax, underlyingType, receiver);
+        var diagnosticMark = Diagnostics.Count;
+
+        // Reuse normal call binding as an applicability probe, then discard its
+        // diagnostics so only the nullable-receiver diagnostic reaches users.
+        bool Succeeded(BoundExpression call) =>
+            call is not null and not BoundErrorExpression && Diagnostics.Count == diagnosticMark;
+
+        try
+        {
+            if (underlyingType is InterfaceSymbol ifaceRecv)
+            {
+                var candidates = TypeMemberModel.GetMethods(ifaceRecv, methodName, MemberQuery.Instance(MemberKinds.Method));
+                if (!candidates.IsDefaultOrEmpty)
+                {
+                    var method = overloads.SelectInstanceOverloadOrReport(candidates, arguments, ce, methodName, argumentNames);
+                    return method != null
+                        && Succeeded(overloads.BindUserInstanceCall(narrowedReceiver, method, arguments, ce, argumentNames));
+                }
+            }
+
+            if (underlyingType is TypeParameterSymbol tpRecv)
+            {
+                var candidates = MemberLookup.CollectSourceInstanceMethods(tpRecv, methodName);
+                if (!candidates.IsDefaultOrEmpty)
+                {
+                    var method = overloads.SelectInstanceOverloadOrReport(candidates, arguments, ce, methodName, argumentNames);
+                    return method != null
+                        && Succeeded(overloads.BindUserInstanceCall(
+                            narrowedReceiver,
+                            method,
+                            arguments,
+                            ce,
+                            argumentNames,
+                            constrainedReceiverTypeParameter: tpRecv));
+                }
+
+                if (tpRecv.ClrInterfaceConstraint != null
+                    && TryBindConstrainedClrInterfaceCall(narrowedReceiver, tpRecv, methodName, arguments, ce, argumentNames, out var constrainedCall))
+                {
+                    return Succeeded(constrainedCall);
+                }
+            }
+
+            if (underlyingType is StructSymbol structRecv)
+            {
+                var candidates = MemberLookup.CollectSourceInstanceMethods(structRecv, methodName);
+                if (!candidates.IsDefaultOrEmpty)
+                {
+                    var method = overloads.SelectInstanceOverloadOrReport(candidates, arguments, ce, methodName, argumentNames);
+                    return method != null
+                        && Succeeded(overloads.BindUserInstanceCall(narrowedReceiver, method, arguments, ce, argumentNames));
+                }
+
+                var defaultInterfaceMethod = TryFindDefaultInterfaceMethod(structRecv, methodName, arguments, ce, argumentNames);
+                if (defaultInterfaceMethod != null)
+                {
+                    return Succeeded(overloads.BindUserInstanceCall(
+                        narrowedReceiver,
+                        defaultInterfaceMethod,
+                        arguments,
+                        ce,
+                        argumentNames));
+                }
+            }
+
+            if (underlyingType is StructSymbol or InterfaceSymbol
+                && TryBindUserDelegateMemberInvocation(
+                    narrowedReceiver,
+                    underlyingType,
+                    methodName,
+                    arguments,
+                    ce,
+                    isStatic: false,
+                    out var delegateCall))
+            {
+                return Succeeded(delegateCall);
+            }
+
+            if (TryBindExtensionFunctionOverload(narrowedReceiver, methodName, arguments, ce, argumentNames, out var extensionCall))
+            {
+                return Succeeded(extensionCall);
+            }
+
+            if (underlyingType is StructSymbol inheritedDerived
+                && (GetInheritedClrBaseType(inheritedDerived) ?? typeof(object)) is Type inheritedBaseClr
+                && TryBindInheritedClrInstanceCall(
+                    narrowedReceiver,
+                    inheritedBaseClr,
+                    methodName,
+                    arguments,
+                    ce,
+                    out var inheritedCall,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames,
+                    allowProtectedInherited: IsCurrentThisReceiver(receiver)))
+            {
+                return Succeeded(inheritedCall);
+            }
+
+            if (underlyingType is EnumSymbol
+                && TryBindInheritedClrInstanceCall(
+                    narrowedReceiver,
+                    typeof(Enum),
+                    methodName,
+                    arguments,
+                    ce,
+                    out var enumCall,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames,
+                    mapEnumArgumentsToBaseClr: true))
+            {
+                return Succeeded(enumCall);
+            }
+
+            if (TryBindImportedExtensionCall(
+                narrowedReceiver,
+                methodName,
+                arguments,
+                ce,
+                out var importedExtensionCall,
+                explicitTypeArgs,
+                typeArgSymbols,
+                argumentNames))
+            {
+                return Succeeded(importedExtensionCall);
+            }
+
+            if (underlyingType is InterfaceSymbol importedBaseIface
+                && TryBindInterfaceImportedBaseInstanceCall(
+                    narrowedReceiver,
+                    importedBaseIface,
+                    methodName,
+                    arguments,
+                    ce,
+                    out var importedBaseCall,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames))
+            {
+                return Succeeded(importedBaseCall);
+            }
+
+            if (underlyingType is TypeParameterSymbol tpObject
+                && TryBindConstrainedObjectMemberCall(
+                    narrowedReceiver,
+                    tpObject,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    out var objectCall))
+            {
+                return Succeeded(objectCall);
+            }
+
+            return underlyingType is InterfaceSymbol
+                && TryBindInterfaceObjectMemberCall(
+                    narrowedReceiver,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    out var interfaceObjectCall)
+                && Succeeded(interfaceObjectCall);
+        }
+        finally
+        {
+            Diagnostics.TruncateTo(diagnosticMark);
+        }
     }
 }
