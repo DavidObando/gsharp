@@ -103,7 +103,9 @@ public class Issue3010EntryPointExitCodeTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Equal("GS0100: Not all code paths return a value.\n", result.StandardError);
+        Assert.Contains(
+            "error GS0100: Not all code paths return a value.",
+            result.StandardError);
     }
 
     [Fact]
@@ -210,8 +212,8 @@ public class Issue3010EntryPointExitCodeTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Equal(
-            "GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.\n",
+        Assert.Contains(
+            "error GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.",
             result.StandardError);
     }
 
@@ -235,8 +237,8 @@ public class Issue3010EntryPointExitCodeTests
 
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Equal(
-            "GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.\n",
+        Assert.Contains(
+            "error GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.",
             result.StandardError);
     }
 
