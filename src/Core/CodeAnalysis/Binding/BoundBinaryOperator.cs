@@ -501,7 +501,10 @@ public sealed record BoundBinaryOperator
         //     System.MulticastDelegate-derived closure.
         //   * Named delegate types declared with `delegate` — DelegateTypeSymbol.
         //   * `sequence[T]` / `asyncSequence[T]` — IEnumerable<T> / IAsyncEnumerable<T>.
-        if (nullableOrUnderlying is FunctionTypeSymbol
+        // Issue #3089: `object` is also a managed reference, but unlike
+        // imported classes it is represented by the built-in TypeSymbol.
+        if (nullableOrUnderlying == TypeSymbol.Object
+            || nullableOrUnderlying is FunctionTypeSymbol
             || nullableOrUnderlying is DelegateTypeSymbol
             || nullableOrUnderlying is SequenceTypeSymbol
             || nullableOrUnderlying is AsyncSequenceTypeSymbol)
