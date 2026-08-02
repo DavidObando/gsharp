@@ -137,13 +137,12 @@ internal sealed class ImportedMemberRefFactory
         // token consumed by `box Nullable<E>` in the lifted enum-equality emit
         // (and by `initobj` when zero-initialising such a slot).
         //
-        // Issue #1475: the same TypeSpec form applies to `S?` over a
-        // user-declared value-type struct (no runtime `ClrType`). Recognise
-        // both user value-type underlyings here so the null-conditional emit
-        // can `initobj`/`box` the `Nullable<UserT>` slot.
+        // Issues #1475/#3088: the same TypeSpec form applies to any symbolic
+        // value-type underlying, including a tuple whose nullable-reference
+        // elements suppress its direct ClrType.
         if (element is NullableTypeSymbol nullableUserVtElement
-            && (nullableUserVtElement.UnderlyingType is EnumSymbol
-                || (nullableUserVtElement.UnderlyingType is StructSymbol userVtStruct && !userVtStruct.IsClass)))
+            && NullableLifting.RequiresSymbolicNullableGetValue(nullableUserVtElement)
+            && nullableUserVtElement.UnderlyingType is not TypeParameterSymbol)
         {
             var sigBlob = new BlobBuilder();
             this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), nullableUserVtElement);
@@ -1523,15 +1522,13 @@ internal sealed class ImportedMemberRefFactory
     }
 
     /// <summary>
-    /// Issue #1475: gets a MemberRef for <c>System.Nullable`1&lt;S&gt;::.ctor(!0)</c>
-    /// where <c>S</c> is a user-declared value-type struct emitted in this
-    /// assembly (or a user enum, by delegation). The struct has no runtime CLR
-    /// type, so the BCL-backed ctor path cannot construct it; instead the
-    /// parent TypeSpec closes <c>Nullable&lt;&gt;</c> over the struct's emitted
-    /// TypeDef/TypeSpec and the ctor signature refers to that argument as
-    /// <c>!0</c>. Mirrors <see cref="GetNullableCtorMemberRefForUserEnum"/>.
+    /// Issues #1475/#3088: gets a MemberRef for
+    /// <c>System.Nullable`1&lt;T&gt;::.ctor(!0)</c> where <c>T</c> requires
+    /// symbolic encoding. The parent TypeSpec closes <c>Nullable&lt;&gt;</c>
+    /// over that encoded underlying and the ctor signature refers to it as
+    /// <c>!0</c>.
     /// </summary>
-    /// <param name="nullableOfUserVt">A <c>Nullable&lt;S&gt;</c> over a user value type (enum or value struct).</param>
+    /// <param name="nullableOfUserVt">A nullable over a symbolically encoded value type.</param>
     /// <returns>The constructor MemberRef.</returns>
     internal MemberReferenceHandle GetNullableCtorMemberRefForUserValueType(NullableTypeSymbol nullableOfUserVt)
     {
@@ -1543,13 +1540,16 @@ internal sealed class ImportedMemberRefFactory
             return this.GetNullableCtorMemberRefForUserEnum(nullableOfUserVt);
         }
 
-        if (nullableOfUserVt?.UnderlyingType is not StructSymbol structSym || structSym.IsClass)
+        if (nullableOfUserVt == null
+            || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt)
+            || nullableOfUserVt.UnderlyingType is TypeParameterSymbol)
         {
             throw new InvalidOperationException(
-                "GetNullableCtorMemberRefForUserValueType requires Nullable<user enum or value struct>.");
+                "GetNullableCtorMemberRefForUserValueType requires Nullable<symbolic value type>.");
         }
 
-        if (this.cache.NullableUserStructCtorMemberRefs.TryGetValue(structSym, out var cached))
+        var underlying = nullableOfUserVt.UnderlyingType;
+        if (this.cache.NullableUserStructCtorMemberRefs.TryGetValue(underlying, out var cached))
         {
             return cached;
         }
@@ -1572,7 +1572,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableUserStructCtorMemberRefs[structSym] = handle;
+        this.cache.NullableUserStructCtorMemberRefs[underlying] = handle;
         return handle;
     }
 
@@ -1597,7 +1597,7 @@ internal sealed class ImportedMemberRefFactory
         if (nullableOfUserVt == null || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt))
         {
             throw new InvalidOperationException(
-                "GetNullableGetValueMemberRefForUserValueType requires Nullable<user enum, value struct, or struct-constrained type parameter>.");
+                "GetNullableGetValueMemberRefForUserValueType requires Nullable<symbolic value type>.");
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
@@ -1645,7 +1645,7 @@ internal sealed class ImportedMemberRefFactory
         if (nullableOfUserVt == null || !NullableLifting.RequiresSymbolicNullableGetValue(nullableOfUserVt))
         {
             throw new InvalidOperationException(
-                "GetNullableGetHasValueMemberRefForUserValueType requires Nullable<user enum, value struct, or struct-constrained type parameter>.");
+                "GetNullableGetHasValueMemberRefForUserValueType requires Nullable<symbolic value type>.");
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;

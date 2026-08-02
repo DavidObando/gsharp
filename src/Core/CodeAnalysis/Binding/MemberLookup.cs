@@ -5449,6 +5449,20 @@ internal sealed class MemberLookup
             return true;
         }
 
+        // Issue #3088: reference-nullable tuple elements make the tuple's
+        // direct ClrType unavailable even when every element has an exact CLR
+        // identity. Reuse the structural tuple/nullable projection before
+        // falling back to method-type-parameter matching.
+        if (effectiveClr == null
+            && candidate is TupleTypeSymbol or NullableTypeSymbol { UnderlyingType: TupleTypeSymbol }
+            && !TypeSymbol.ContainsTypeParameter(candidate)
+            && !TypeSymbol.ContainsSameCompilationUserType(candidate)
+            && TryProjectErasedClrType(candidate, out var projectedClr)
+            && ClrTypeUtilities.AreSame(projectedClr, openType))
+        {
+            return true;
+        }
+
         // Slow path: a constructed generic contract position nests the
         // method's own type parameter (e.g. `Func<TState, Exception, string>`
         // in `Log<TState>(..., Func<TState, Exception, string> formatter)`),

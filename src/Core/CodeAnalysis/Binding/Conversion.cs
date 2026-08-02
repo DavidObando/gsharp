@@ -2422,6 +2422,21 @@ public sealed class Conversion
             case MapTypeSymbol fromMap when to is MapTypeSymbol toMap:
                 return IsCrossContextIdenticalElement(fromMap.KeyType, toMap.KeyType)
                     && IsCrossContextIdenticalElement(fromMap.ValueType, toMap.ValueType);
+            case TupleTypeSymbol fromTuple when to is TupleTypeSymbol toTuple:
+                if (fromTuple.Arity != toTuple.Arity)
+                {
+                    return false;
+                }
+
+                for (var i = 0; i < fromTuple.Arity; i++)
+                {
+                    if (!IsCrossContextIdenticalElement(fromTuple.ElementTypes[i], toTuple.ElementTypes[i]))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             default:
                 return false;
         }

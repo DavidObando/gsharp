@@ -5001,6 +5001,11 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
+        if (type is NullableTypeSymbol { UnderlyingType: TupleTypeSymbol })
+        {
+            return true;
+        }
+
         // Issue #806: a `T?` over a value-type-constrained type parameter
         // lowers to `Nullable<T>` (a struct). Without recognising this
         // symbolic form, instance-method calls on the receiver would emit
