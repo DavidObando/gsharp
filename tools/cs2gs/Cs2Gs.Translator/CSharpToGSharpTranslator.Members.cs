@@ -281,6 +281,7 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol optionsType = this.context.Compilation.GetTypeByMetadataName(
                 "System.Text.RegularExpressions.RegexOptions");
             int timeoutMilliseconds = -1;
+            bool hasMatchTimeoutArgument = false;
             string cultureName = string.Empty;
 
             ImmutableArray<IParameterSymbol> constructorParameters = attribute.AttributeConstructor.Parameters;
@@ -304,6 +305,7 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     case "matchTimeoutMilliseconds" when value is int timeoutArgument:
                         timeoutMilliseconds = timeoutArgument;
+                        hasMatchTimeoutArgument = true;
                         break;
                     case "cultureName":
                         cultureName = value as string ?? string.Empty;
@@ -345,20 +347,31 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            string regexTypeName = regexType is NamedTypeReference namedRegex
-                ? namedRegex.Name
-                : "Regex";
-            GExpression milliseconds = LiteralExpression.Float(
-                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0");
-            GExpression matchTimeout = timeoutMilliseconds == -1
-                ? new MemberAccessExpression(
-                    new IdentifierExpression(regexTypeName),
-                    "InfiniteMatchTimeout")
-                : new InvocationExpression(
-                    new MemberAccessExpression(
-                        new IdentifierExpression("TimeSpan"),
-                        "FromMilliseconds"),
-                    new[] { milliseconds });
+            var constructionArguments = new List<GExpression>
+            {
+                LiteralExpression.String(pattern),
+                options,
+            };
+            if (hasMatchTimeoutArgument)
+            {
+                string regexTypeName = regexType is NamedTypeReference namedRegex
+                    ? namedRegex.Name
+                    : "Regex";
+                GExpression matchTimeout = timeoutMilliseconds == -1
+                    ? new MemberAccessExpression(
+                        new IdentifierExpression(regexTypeName),
+                        "InfiniteMatchTimeout")
+                    : new InvocationExpression(
+                        new MemberAccessExpression(
+                            new IdentifierExpression("TimeSpan"),
+                            "FromMilliseconds"),
+                        new[]
+                        {
+                            LiteralExpression.Float(
+                                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0"),
+                        });
+                constructionArguments.Add(matchTimeout);
+            }
 
             string cacheName = "__generatedRegex_" + SanitizeIdentifier(node.Identifier.Text);
             var occupiedNames = new HashSet<string>(
@@ -373,14 +386,7 @@ public sealed partial class CSharpToGSharpTranslator
                 BindingKind.Let,
                 cacheName,
                 regexType,
-                BuildConstruction(
-                    regexType,
-                    new GExpression[]
-                    {
-                        LiteralExpression.String(pattern),
-                        options,
-                        matchTimeout,
-                    }),
+                BuildConstruction(regexType, constructionArguments),
                 Visibility.Private);
 
             List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists)

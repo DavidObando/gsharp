@@ -37,11 +37,14 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
 
     public static bool HasDefaultRegexSemantics()
     {
-        Regex regex = DefaultPattern();
-        return regex.ToString() == "^default$" &&
-            regex.Options == RegexOptions.None &&
-            regex.MatchTimeout == Regex.InfiniteMatchTimeout &&
-            object.ReferenceEquals(regex, DefaultPattern());
+        Regex defaultRegex = DefaultPattern();
+        Regex infiniteRegex = InfinitePattern();
+        return defaultRegex.ToString() == "^default$" &&
+            defaultRegex.Options == RegexOptions.None &&
+            defaultRegex.MatchTimeout.TotalMilliseconds == 250 &&
+            object.ReferenceEquals(defaultRegex, DefaultPattern()) &&
+            infiniteRegex.MatchTimeout == Regex.InfiniteMatchTimeout &&
+            object.ReferenceEquals(infiniteRegex, InfinitePattern());
     }
 
     public static bool HasInvariantInlineIgnoreCaseSemantics()
@@ -61,6 +64,9 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
     [GeneratedRegex("^default$")]
     private static partial Regex DefaultPattern();
 
+    [GeneratedRegex("^infinite$", RegexOptions.None, matchTimeoutMilliseconds: -1)]
+    private static partial Regex InfinitePattern();
+
     [GeneratedRegex("(?i)^invariant$", RegexOptions.CultureInvariant)]
     private static partial Regex InvariantPattern();
 }
@@ -75,6 +81,8 @@ public static class Program
 {
     public static void Main()
     {
+        AppContext.SetData("REGEX_DEFAULT_MATCH_TIMEOUT", TimeSpan.FromMilliseconds(250));
+
         AssertUrl("https://github.com/DavidObando/gsharp", null);
         AssertUrl("https://github.com/DavidObando/gsharp/pull/3086", 3086);
 

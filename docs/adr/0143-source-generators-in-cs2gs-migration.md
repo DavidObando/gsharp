@@ -85,6 +85,9 @@ ADR-0143 §D rule would erase the declaration while value-position calls such as
 constructed from the bound attribute's pattern, options, and timeout, plus an
 accessor preserving the original method's static/instance shape and visibility,
 and removes the generator attribute to avoid duplicate output from gsgen.
+An omitted timeout uses the two-argument `Regex` constructor so
+`REGEX_DEFAULT_MATCH_TIMEOUT` still applies; an explicitly supplied `-1` remains
+`Regex.InfiniteMatchTimeout`.
 Culture-sensitive ignore-case patterns — including inline `(?i)` option groups —
 are reported unsupported unless invariant construction preserves their
 semantics. This preserves runtime behavior without back-translating the

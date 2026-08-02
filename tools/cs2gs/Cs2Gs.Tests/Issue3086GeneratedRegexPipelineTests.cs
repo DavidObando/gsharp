@@ -69,6 +69,10 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             Environment.NewLine,
             Directory.GetFiles(appDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
+        string defaultPatternField = translated.Split('\n').Single(
+            line => line.Contains("__generatedRegex_DefaultPattern Regex =", StringComparison.Ordinal));
+        string infinitePatternField = translated.Split('\n').Single(
+            line => line.Contains("__generatedRegex_InfinitePattern Regex =", StringComparison.Ordinal));
 
         Assert.Contains("let __generatedRegex_Pattern Regex = Regex(", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.ExplicitCapture", translated, StringComparison.Ordinal);
@@ -76,9 +80,18 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Contains("func Pattern() Regex -> __generatedRegex_Pattern", translated, StringComparison.Ordinal);
         Assert.Contains("let __generatedRegex_DefaultPattern Regex = Regex(", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.None", translated, StringComparison.Ordinal);
-        Assert.Contains("Regex.InfiniteMatchTimeout", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("Regex.InfiniteMatchTimeout", defaultPatternField, StringComparison.Ordinal);
         Assert.Contains(
             "func DefaultPattern() Regex -> __generatedRegex_DefaultPattern",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let __generatedRegex_InfinitePattern Regex = Regex(",
+            translated,
+            StringComparison.Ordinal);
+        Assert.Contains("Regex.InfiniteMatchTimeout", infinitePatternField, StringComparison.Ordinal);
+        Assert.Contains(
+            "func InfinitePattern() Regex -> __generatedRegex_InfinitePattern",
             translated,
             StringComparison.Ordinal);
         Assert.Contains("RegexOptions.CultureInvariant", translated, StringComparison.Ordinal);
