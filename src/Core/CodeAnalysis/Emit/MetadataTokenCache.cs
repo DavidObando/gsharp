@@ -455,10 +455,11 @@ internal sealed class MetadataTokenCache
     }
 
     /// <summary>
-    /// Issue #671: structural cache key for ctor MemberRef rows whose parent
-    /// TypeSpec carries G# user-defined symbolic type arguments. Includes both
-    /// active generic-remap scopes because the same symbols can encode to
-    /// different VAR/MVAR ordinals. Counterpart to <see cref="MethodSpecSymbolKey"/>.
+    /// Issues #671 and #2930: structural cache key for ctor MemberRef rows
+    /// whose parent TypeSpec carries G# user-defined symbolic type arguments.
+    /// Includes both active generic-remap scopes because the same symbols can
+    /// encode to different VAR/MVAR ordinals. Issue #3065 tracks equivalent
+    /// remap discrimination for <see cref="MethodSpecSymbolKey"/>.
     /// </summary>
     internal readonly struct CtorRefSymbolKey : IEquatable<CtorRefSymbolKey>
     {
