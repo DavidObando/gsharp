@@ -38,6 +38,25 @@ internal static class SmartCastStability
     }
 
     /// <summary>
+    /// Returns whether assignment flow can track <paramref name="variable"/>
+    /// by exact symbol identity. Plain locals (including captured locals and
+    /// value parameters) and top-level globals qualify. By-reference locals
+    /// and parameters are excluded because another alias may mutate their
+    /// storage; fields and properties use member-path invalidation instead.
+    /// </summary>
+    /// <param name="variable">The candidate assignment target.</param>
+    /// <returns><see langword="true"/> when assignment flow can track the variable.</returns>
+    public static bool IsAssignmentNarrowingRoot(VariableSymbol variable)
+    {
+        return variable switch
+        {
+            LocalVariableSymbol local => local.RefKind == RefKind.None,
+            GlobalVariableSymbol => true,
+            _ => false,
+        };
+    }
+
+    /// <summary>
     /// Returns whether <paramref name="field"/> is an immutable instance field
     /// (declared with <c>let</c>, hence emitted <c>initonly</c>, or a <c>const</c>)
     /// that may appear as a stable link. A <c>var</c> field is excluded.

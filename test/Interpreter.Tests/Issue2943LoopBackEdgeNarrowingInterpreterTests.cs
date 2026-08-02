@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -15,31 +16,101 @@ namespace GSharp.Interpreter.Tests;
 /// </summary>
 public class Issue2943LoopBackEdgeNarrowingInterpreterTests
 {
-    [Fact]
-    public void AssignmentAfterUse_ReportsNullableReceiver()
+    [Theory]
+    [InlineData("function")]
+    [InlineData("top-level")]
+    public void AssignmentAfterUse_ReportsNullableReceiver(string scope)
     {
-        const string Source = """
+        const string Declarations = """
             class C {
-                func M() { }
+                func Print() { }
             }
+            """;
+        const string Body = """
+            var c C? = C()
+            if c != nil {
+                for var i = 0; i < 2; i++ {
+                    c.Print()
+                    c = nil
+                }
+            }
+            """;
+        var source = scope == "top-level"
+            ? Declarations + Environment.NewLine + Body
+            : Declarations + Environment.NewLine + $$"""
 
             func run() {
-                var c C? = C()
-                if c != nil {
-                    for var i = 0; i < 2; i++ {
-                        c.M()
-                        c = nil
-                    }
-                }
+            {{Indent(Body)}}
             }
 
             run()
             """;
 
-        var result = new Compilation(SyntaxTree.Parse(Source))
+        var result = new Compilation(SyntaxTree.Parse(source))
             .Evaluate(new Dictionary<VariableSymbol, object>());
 
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0159");
+    }
+
+    [Theory]
+    [InlineData("constructor", "c = C(33)", "function")]
+    [InlineData("local", "c = fresh", "function")]
+    [InlineData("function", "c = Mk(33)", "function")]
+    [InlineData("constructor", "c = C(33)", "top-level")]
+    [InlineData("local", "c = fresh", "top-level")]
+    [InlineData("function", "c = Mk(33)", "top-level")]
+    public void NonNullAssignmentAfterUse_PreservesInheritedNarrowing(
+        string shape,
+        string secondIterationAssignment,
+        string scope)
+    {
+        const string Declarations = """
+            class C {
+                let Value int32
+
+                init(value int32) {
+                    Value = value
+                }
+            }
+
+            func Mk(value int32) C {
+                return C(value)
+            }
+            """;
+        var body = $$"""
+            var c C? = C(11)
+            let fresh C = C(33)
+            var sum = 0
+            if c != nil {
+                for var i = 0; i < 3; i++ {
+                    sum = sum + c.Value
+                    if i == 0 {
+                        c = C(22)
+                    }
+                    if i == 1 {
+                        {{secondIterationAssignment}}
+                    }
+                }
+            }
+            """;
+        var source = scope == "top-level"
+            ? Declarations + Environment.NewLine + body + Environment.NewLine + "sum"
+            : Declarations + Environment.NewLine + $$"""
+                func run() int32 {
+                {{Indent(body)}}
+                    return sum
+                }
+
+                run()
+                """;
+
+        var result = new Compilation(SyntaxTree.Parse(source))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+
+        Assert.True(
+            result.Diagnostics.IsEmpty,
+            $"{shape}/{scope}: {string.Join(Environment.NewLine, result.Diagnostics)}");
+        Assert.Equal(66, result.Value);
     }
 
     [Fact]
@@ -70,4 +141,7 @@ public class Issue2943LoopBackEdgeNarrowingInterpreterTests
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
     }
+
+    private static string Indent(string source)
+        => "    " + source.Replace(Environment.NewLine, Environment.NewLine + "    ", StringComparison.Ordinal);
 }

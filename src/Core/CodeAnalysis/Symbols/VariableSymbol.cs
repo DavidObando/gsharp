@@ -50,4 +50,10 @@ public abstract class VariableSymbol : Symbol
     /// state-machine locals) the hoisted-local-scope <c>CustomDebugInformation</c>.
     /// </summary>
     public SyntaxNode DeclaringSyntax { get; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this read-only variable's
+    /// initializer was proven non-null from its bound expression.
+    /// </summary>
+    internal bool HasDefinitelyNonNullValue { get; set; }
 }

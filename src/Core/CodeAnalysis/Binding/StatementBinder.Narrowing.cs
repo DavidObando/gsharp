@@ -141,7 +141,7 @@ internal sealed partial class StatementBinder
         HashSet<VariableSymbol> assignedRoots;
         if (boundStatement != null)
         {
-            var collector = new AssignedRootsCollector();
+            var collector = new AssignedRootsCollector(null);
             collector.Visit(boundStatement);
             assignedRoots = collector.Roots;
             foreach (var frame in binderCtx.NarrowedVariables)
@@ -263,7 +263,7 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static LoopBackEdgeMutationCollector CollectLoopBackEdgeMutations(
+    private LoopBackEdgeMutationCollector CollectLoopBackEdgeMutations(
             BoundStatement body,
             BoundLabel breakLabel,
             BoundLabel continueLabel,
@@ -298,7 +298,7 @@ internal sealed partial class StatementBinder
             Lowerer.Lower(new BoundBlockStatement(null, statements.ToImmutable())));
         var markerBlock = graph.Blocks.FirstOrDefault(
             block => block.Statements.Any(statement => ReferenceEquals(statement, marker)));
-        var collector = new LoopBackEdgeMutationCollector();
+        var collector = new LoopBackEdgeMutationCollector(AssignmentPreservesNarrowing);
         if (markerBlock == null)
         {
             return collector;
@@ -434,8 +434,8 @@ internal sealed partial class StatementBinder
 
     /// <summary>
     /// Issue #1123: assignment-based smart cast. When the bound statement is a
-    /// plain <c>x = rhs</c> assignment whose target is a nullable <c>var</c>
-    /// local and whose right-hand side is statically a <em>non-nullable</em>
+    /// plain <c>x = rhs</c> assignment whose target is a nullable flow-tracked
+    /// variable and whose right-hand side is statically <em>non-nullable</em>
     /// value assignable to the local's underlying type, record a narrowing of
     /// <c>x</c> to that underlying non-nullable type in
     /// <paramref name="persistentFrame"/>. Mirrors the post-guard narrowing of
@@ -448,39 +448,37 @@ internal sealed partial class StatementBinder
     private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
-            && TryClassifyNonNullAssignment(assign, out var local, out var underlying))
+            && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
-            persistentFrame[local] = underlying;
+            persistentFrame[variable] = underlying;
         }
     }
 
     /// <summary>
     /// Issue #1123 / issue #2159: classifies whether <paramref name="assign"/>
-    /// assigns a statically <em>non-nullable</em> value to a nullable
-    /// reference-like <c>var</c> local, proving the local is non-null after the
-    /// assignment. Shared by <see cref="ApplyAssignmentNarrowing"/> (straight-
-    /// line assignment narrowing) and the <c>if</c>-join narrowing pass (which
-    /// consults it to decide whether a branch leaves the local non-null).
+    /// assigns a statically <em>non-nullable</em> value to a nullable reference-like
+    /// flow-tracked variable, proving the variable is non-null after the
+    /// assignment. Shared by <see cref="ApplyAssignmentNarrowing"/>
+    /// (straight-line assignment narrowing) and the <c>if</c>-join narrowing
+    /// pass (which consults it to decide whether a branch leaves the variable
+    /// non-null).
     /// </summary>
     /// <param name="assign">The bound assignment to classify.</param>
-    /// <param name="local">On success, the narrowed local.</param>
-    /// <param name="underlying">On success, the local's underlying non-nullable type.</param>
-    /// <returns><see langword="true"/> when the assignment narrows the local.</returns>
-    private bool TryClassifyNonNullAssignment(BoundAssignmentExpression assign, out LocalVariableSymbol local, out TypeSymbol underlying)
+    /// <param name="variable">On success, the narrowed variable.</param>
+    /// <param name="underlying">On success, the variable's underlying non-nullable type.</param>
+    /// <returns><see langword="true"/> when the assignment narrows the variable.</returns>
+    private bool TryClassifyNonNullAssignment(BoundAssignmentExpression assign, out VariableSymbol variable, out TypeSymbol underlying)
     {
-        local = null;
+        variable = null;
         underlying = null;
 
-        // Narrow locals only — never parameters, fields, or read-only `let`
-        // locals (a `let` cannot be reassigned, so it never reaches here with a
-        // re-narrowable shape anyway). This matches the receiver-stability rule
-        // the type-test smart cast applies to `var` locals.
-        if (assign.Variable is not LocalVariableSymbol l || l.IsReadOnly)
+        if (!SmartCastStability.IsAssignmentNarrowingRoot(assign.Variable)
+            || assign.Variable.IsReadOnly)
         {
             return false;
         }
 
-        if (l.Type is not NullableTypeSymbol nullable)
+        if (assign.Variable.Type is not NullableTypeSymbol nullable)
         {
             return false;
         }
@@ -497,22 +495,25 @@ internal sealed partial class StatementBinder
             return false;
         }
 
-        // The right-hand side must be implicitly convertible to the local's
-        // underlying non-nullable type. The assignment itself already proved the
-        // value converts to the nullable declared type; this guards the value
-        // narrowing to the underlying type (e.g. excludes shapes where the only
-        // conversion to the bare underlying type would be explicit).
-        if (!AssignmentPreservesNarrowing(assign.AssignedValueType, u))
+        if (!AssignmentTypePreservesNarrowing(assign.AssignedValueType, u))
         {
             return false;
         }
 
-        local = l;
+        variable = assign.Variable;
         underlying = u;
         return true;
     }
 
-    private static bool AssignmentPreservesNarrowing(TypeSymbol assignedType, TypeSymbol narrowedType)
+    private bool AssignmentPreservesNarrowing(BoundAssignmentExpression assignment, TypeSymbol narrowedType)
+    {
+        // Loop back-edges need stronger proof than straight-line issue #1123
+        // narrowing because the assigned value feeds a later iteration.
+        return AssignmentTypePreservesNarrowing(assignment.AssignedValueType, narrowedType)
+            && IsDefinitelyNonNullValue(assignment.Expression);
+    }
+
+    private static bool AssignmentTypePreservesNarrowing(TypeSymbol assignedType, TypeSymbol narrowedType)
     {
         if (assignedType == null
             || assignedType == TypeSymbol.Error
@@ -524,6 +525,96 @@ internal sealed partial class StatementBinder
 
         var conversion = Conversion.Classify(assignedType, narrowedType);
         return conversion.Exists && conversion.IsImplicit;
+    }
+
+    private bool IsDefinitelyNonNullValue(BoundExpression expression)
+    {
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        return expression switch
+        {
+            BoundConstructorCallExpression => true,
+            BoundClrConstructorCallExpression => true,
+            BoundTypeParameterConstructionExpression => true,
+            BoundLiteralExpression literal => literal.Value != null,
+            BoundVariableExpression { NarrowedType: not null } variable
+                when variable.Variable.Type is NullableTypeSymbol
+                    && variable.NarrowedType is not NullableTypeSymbol => true,
+            BoundVariableExpression variable => IsDefinitelyNonNullVariable(variable.Variable),
+            BoundCallExpression call => FunctionReturnsDefinitelyNonNull(call.Function),
+            _ => false,
+        };
+    }
+
+    private static bool IsDefinitelyNonNullVariable(VariableSymbol variable)
+    {
+        if (variable is ParameterSymbol)
+        {
+            return false;
+        }
+
+        if (!SmartCastStability.IsAssignmentNarrowingRoot(variable)
+            || !variable.IsReadOnly
+            || variable.Type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        return variable.HasDefinitelyNonNullValue;
+    }
+
+    private bool FunctionReturnsDefinitelyNonNull(FunctionSymbol function)
+    {
+        if (function?.Declaration?.Body == null || function.Type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        var descendants = DescendantsAndSelf(function.Declaration.Body).ToArray();
+        if (descendants.Any(node =>
+                node is VariableDeclarationSyntax variable
+                && string.Equals(variable.Identifier.Text, function.Type.Name, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var returns = descendants.OfType<ReturnStatementSyntax>().ToArray();
+        return returns.Length > 0
+            && returns.All(statement => IsDefinitelyNonNullSyntax(statement.Expression, function.Type));
+    }
+
+    private bool IsDefinitelyNonNullSyntax(ExpressionSyntax expression, TypeSymbol expectedType)
+    {
+        if (expression is LiteralExpressionSyntax literal)
+        {
+            return literal.Value != null;
+        }
+
+        if (expression is not CallExpressionSyntax call
+            || call.Callee != null
+            || call.NullableQuestionToken != null)
+        {
+            return false;
+        }
+
+        return expectedType is StructSymbol
+            && string.Equals(call.Identifier.Text, expectedType.Name, StringComparison.Ordinal)
+            && scope.TryLookupFunctions(call.Identifier.Text).IsDefaultOrEmpty;
+    }
+
+    private static IEnumerable<SyntaxNode> DescendantsAndSelf(SyntaxNode node)
+    {
+        yield return node;
+        foreach (var child in node.GetChildren())
+        {
+            foreach (var descendant in DescendantsAndSelf(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     /// <summary>
@@ -580,13 +671,13 @@ internal sealed partial class StatementBinder
         {
             var path = kv.Key;
 
-            // Lift plain nullable reference-like `var` locals only, matching the
+            // Lift plain nullable reference-like flow variables only, matching the
             // scope of the straight-line assignment narrowing. Value-type
             // nullables and member paths are intentionally excluded.
             if (path.HasMembers
-                || path.Root is not LocalVariableSymbol local
-                || local.IsReadOnly
-                || local.Type is not NullableTypeSymbol nullable
+                || !SmartCastStability.IsAssignmentNarrowingRoot(path.Root)
+                || path.Root.IsReadOnly
+                || path.Root.Type is not NullableTypeSymbol nullable
                 || !IsReferenceLikeType(nullable.UnderlyingType))
             {
                 continue;
@@ -774,10 +865,9 @@ internal sealed partial class StatementBinder
 
     /// <summary>
     /// Issue #2159: returns a fresh dictionary combining <paramref name="baseState"/>
-    /// with the plain-local entries of <paramref name="add"/> (a
-    /// condition-narrowing frame). Only plain-variable paths rooted at a local
-    /// are kept — parameters and member paths are outside the join pass's lift
-    /// scope.
+    /// with the plain-variable entries of <paramref name="add"/> (a
+    /// condition-narrowing frame). Member paths and by-reference roots are
+    /// outside the join pass's lift scope.
     /// </summary>
     private static Dictionary<AccessPath, TypeSymbol> MergeLocalNonNull(Dictionary<AccessPath, TypeSymbol> baseState, Dictionary<AccessPath, TypeSymbol> add)
     {
@@ -789,7 +879,8 @@ internal sealed partial class StatementBinder
         {
             foreach (var kv in add)
             {
-                if (!kv.Key.HasMembers && kv.Key.Root is LocalVariableSymbol)
+                if (!kv.Key.HasMembers
+                    && SmartCastStability.IsAssignmentNarrowingRoot(kv.Key.Root))
                 {
                     result[kv.Key] = kv.Value;
                 }
@@ -845,14 +936,14 @@ internal sealed partial class StatementBinder
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// <paramref name="node"/>'s bound subtree assigns anywhere.
     /// </summary>
-    private static void ClearAssignedRoots(BoundNode node, Dictionary<AccessPath, TypeSymbol> state)
+    private void ClearAssignedRoots(BoundNode node, Dictionary<AccessPath, TypeSymbol> state)
     {
         if (state.Count == 0)
         {
             return;
         }
 
-        var collector = new AssignedRootsCollector();
+        var collector = new AssignedRootsCollector(null);
         collector.Visit(node);
         foreach (var root in collector.Roots)
         {
@@ -867,9 +958,15 @@ internal sealed partial class StatementBinder
     /// </summary>
     private class AssignedRootsCollector : BoundTreeWalker
     {
+        private readonly Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing;
         private readonly HashSet<(VariableSymbol Receiver, FieldSymbol Field)> assignedFields = new();
         private readonly HashSet<(VariableSymbol Receiver, PropertySymbol Property)> assignedProperties = new();
-        private readonly Dictionary<VariableSymbol, List<TypeSymbol>> assignedValueTypes = new();
+        private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
+
+        public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing)
+        {
+            this.assignmentPreservesNarrowing = assignmentPreservesNarrowing;
+        }
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
 
@@ -893,9 +990,10 @@ internal sealed partial class StatementBinder
                 return AssignsRoot(root);
             }
 
-            return root is not LocalVariableSymbol
-                || !assignedValueTypes.TryGetValue(root, out var types)
-                || types.Any(type => !AssignmentPreservesNarrowing(type, narrowedType));
+            return !SmartCastStability.IsAssignmentNarrowingRoot(root)
+                || assignmentPreservesNarrowing == null
+                || !assignments.TryGetValue(root, out var rootAssignments)
+                || rootAssignments.Any(assignment => !assignmentPreservesNarrowing(assignment, narrowedType));
         }
 
         public override void VisitExpression(BoundExpression node)
@@ -913,13 +1011,13 @@ internal sealed partial class StatementBinder
             if (node.Variable != null)
             {
                 Roots.Add(node.Variable);
-                if (!assignedValueTypes.TryGetValue(node.Variable, out var types))
+                if (!assignments.TryGetValue(node.Variable, out var rootAssignments))
                 {
-                    types = new List<TypeSymbol>();
-                    assignedValueTypes.Add(node.Variable, types);
+                    rootAssignments = new List<BoundAssignmentExpression>();
+                    assignments.Add(node.Variable, rootAssignments);
                 }
 
-                types.Add(node.AssignedValueType);
+                rootAssignments.Add(node);
             }
 
             base.VisitAssignmentExpression(node);
@@ -949,6 +1047,11 @@ internal sealed partial class StatementBinder
 
     private sealed class LoopBackEdgeMutationCollector : AssignedRootsCollector
     {
+        public LoopBackEdgeMutationCollector(Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing)
+            : base(assignmentPreservesNarrowing)
+        {
+        }
+
         public bool MayMutateMemberPaths { get; private set; }
 
         public override void VisitExpression(BoundExpression node)
@@ -1251,6 +1354,9 @@ internal sealed partial class StatementBinder
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var variable = bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, variableType, accessibility);
+        variable.HasDefinitelyNonNullValue = isReadOnly
+            && variableType is not NullableTypeSymbol
+            && IsDefinitelyNonNullValue(convertedInitializer);
 
         // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
         // or infer function-local escape scope from the initializer (STE data-flow propagation).

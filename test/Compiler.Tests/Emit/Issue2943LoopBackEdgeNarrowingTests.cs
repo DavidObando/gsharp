@@ -84,14 +84,18 @@ public class Issue2943LoopBackEdgeNarrowingTests
     }
 
     [Theory]
-    [InlineData("constructor", "c = C(33)")]
-    [InlineData("local", "c = fresh")]
-    [InlineData("function", "c = Mk(33)")]
+    [InlineData("constructor", "c = C(33)", "function")]
+    [InlineData("local", "c = fresh", "function")]
+    [InlineData("function", "c = Mk(33)", "function")]
+    [InlineData("constructor", "c = C(33)", "top-level")]
+    [InlineData("local", "c = fresh", "top-level")]
+    [InlineData("function", "c = Mk(33)", "top-level")]
     public void NonNullAssignmentAfterUse_PreservesInheritedNarrowing(
         string shape,
-        string secondIterationAssignment)
+        string secondIterationAssignment,
+        string scope)
     {
-        var source = $$"""
+        var declarations = """
             import System
 
             class C {
@@ -109,25 +113,208 @@ public class Issue2943LoopBackEdgeNarrowingTests
             func Mk(value int32) C {
                 return C(value)
             }
-
-            func Main() {
-                var c C? = C(11)
-                let fresh C = C(33)
-                if c != nil {
-                    for var i = 0; i < 3; i++ {
-                        c.Print()
-                        if i == 0 {
-                            c = C(22)
-                        }
-                        if i == 1 {
-                            {{secondIterationAssignment}}
-                        }
+            """;
+        var body = $$"""
+            var c C? = C(11)
+            let fresh C = C(33)
+            if c != nil {
+                for var i = 0; i < 3; i++ {
+                    c.Print()
+                    if i == 0 {
+                        c = C(22)
+                    }
+                    if i == 1 {
+                        {{secondIterationAssignment}}
                     }
                 }
             }
             """;
+        var source = scope == "top-level"
+            ? declarations + Environment.NewLine + body
+            : declarations + Environment.NewLine + $$"""
 
-        Assert.Equal("11\n22\n33\n", CompileAndRun(source, "non-null-after-use-" + shape));
+            func Main() {
+            {{Indent(body)}}
+            }
+            """;
+
+        Assert.Equal("11\n22\n33\n", CompileAndRun(source, $"non-null-after-use-{shape}-{scope}"));
+    }
+
+    [Theory]
+    [InlineData("function")]
+    [InlineData("top-level")]
+    public void OriginalAssignmentAfterUse_RemainsRejected(string scope)
+    {
+        const string Declarations = """
+            class C {
+                func Print() { }
+            }
+            """;
+        const string Body = """
+            var c C? = C()
+            if c != nil {
+                for var i = 0; i < 2; i++ {
+                    c.Print()
+                    c = nil
+                }
+            }
+            """;
+        var source = scope == "top-level"
+            ? Declarations + Environment.NewLine + Body
+            : Declarations + Environment.NewLine + $$"""
+                func Main() {
+                {{Indent(Body)}}
+                }
+                """;
+
+        var (exitCode, output) = CompileWithDriver(source, $"original-rejected-{scope}");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0159", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("straight-line")]
+    [InlineData("while")]
+    public void TopLevelNullableReassignment_RemainsRejected(string shape)
+    {
+        var body = shape switch
+        {
+            "straight-line" => """
+                var c C? = C()
+                if c != nil {
+                    c.Print()
+                }
+                c = nil
+                c.Print()
+                """,
+            "while" => """
+                var c C? = C()
+                if c != nil {
+                    var i = 0
+                    while i < 2 {
+                        c.Print()
+                        c = nil
+                        i++
+                    }
+                }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+        var source = """
+            class C {
+                func Print() { }
+            }
+            """ + Environment.NewLine + body;
+
+        var (exitCode, output) = CompileWithDriver(source, $"top-level-rejected-{shape}");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0159", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("field")]
+    [InlineData("function")]
+    [InlineData("shadowed-constructor")]
+    [InlineData("out-alias")]
+    [InlineData("imported")]
+    [InlineData("parameter")]
+    public void RuntimeNullableSource_DoesNotPreserveInheritedNarrowing(string shape)
+    {
+        var source = shape switch
+        {
+            "field" => """
+                class C { func M() { } }
+                class Box { var Value C }
+                func Run() {
+                    let box = Box{}
+                    var c C? = C()
+                    if c != nil {
+                        for var i = 0; i < 2; i++ {
+                            c.M()
+                            c = box.Value
+                        }
+                    }
+                }
+                """,
+            "function" => """
+                class C { func M() { } }
+                class Box { var Value C }
+                func Bad() C { return Box{}.Value }
+                func Run() {
+                    var c C? = C()
+                    if c != nil {
+                        for var i = 0; i < 2; i++ {
+                            c.M()
+                            c = Bad()
+                        }
+                    }
+                }
+                """,
+            "shadowed-constructor" => """
+                class C { func M() { } }
+                class Box { var Value C }
+                func C() C { return Box{}.Value }
+                func Mk() C { return C() }
+                func Run() {
+                    var c C? = C{}
+                    if c != nil {
+                        for var i = 0; i < 2; i++ {
+                            c.M()
+                            c = Mk()
+                        }
+                    }
+                }
+                """,
+            "out-alias" => """
+                class C { func M() { } }
+                func Run(out c C?, ref alias C?) {
+                    c = C()
+                    if c != nil {
+                        for var i = 0; i < 2; i++ {
+                            c.M()
+                            c = C()
+                            alias = nil
+                        }
+                    }
+                }
+                var x C? = nil
+                Run(out x, ref x)
+                """,
+            "imported" => """
+                import System
+                func Run() {
+                    var value string? = "ok"
+                    if value != nil {
+                        for var i = 0; i < 2; i++ {
+                            let length = value.Length
+                            value = Console.ReadLine()
+                        }
+                    }
+                }
+                """,
+            "parameter" => """
+                class C { func M() { } }
+                class Box { var Value C }
+                func Run(value C) {
+                    var c C? = C()
+                    if c != nil {
+                        for var i = 0; i < 2; i++ {
+                            c.M()
+                            c = value
+                        }
+                    }
+                }
+                Run(Box{}.Value)
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+
+        Assert.Contains(
+            Compile(source).BoundProgram.Diagnostics,
+            diagnostic => diagnostic.IsError);
     }
 
     [Fact]
@@ -365,6 +552,11 @@ public class Issue2943LoopBackEdgeNarrowingTests
 
     private static GsCompilation Compile(string source)
         => new(GsSyntaxTree.Parse(SourceText.From(source)));
+
+    private static string Indent(string source)
+        => string.Join(
+            Environment.NewLine,
+            source.Split(Environment.NewLine).Select(line => "    " + line));
 
     private static string BuildRejectedSource(string shape)
     {
@@ -810,6 +1002,54 @@ public class Issue2943LoopBackEdgeNarrowingTests
             var (processExitCode, output, error) = IlVerifier.RunProcess(startInfo, assemblyPath, 30_000);
             Assert.True(processExitCode == 0, error);
             return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static (int ExitCode, string Output) CompileWithDriver(string source, string caseName)
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue2943-artifacts",
+            caseName + "-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            var assemblyPath = Path.Combine(directory, "test.dll");
+            File.WriteAllText(sourcePath, source);
+
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            var previousOut = Console.Out;
+            var previousErr = Console.Error;
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            try
+            {
+                var exitCode = Program.Main(
+                [
+                    "/out:" + assemblyPath,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    sourcePath,
+                ]);
+                return (exitCode, stdout + Environment.NewLine + stderr);
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousErr);
+            }
         }
         finally
         {
