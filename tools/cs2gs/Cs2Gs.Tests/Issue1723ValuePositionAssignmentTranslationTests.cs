@@ -3,6 +3,9 @@
 // </copyright>
 
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -221,6 +224,436 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(printed, "= C.F()"));
         Assert.Contains("x = C.F()", printed);
         Assert.Contains("return (x)", printed);
+    }
+
+    /// <summary>
+    /// An assignment in a conditional-expression arm must stay inside that arm.
+    /// The false branch writes the dictionary exactly once and yields the written
+    /// value as the conditional result.
+    /// </summary>
+    [Fact]
+    public void ConditionalFalseBranchDictionaryAssignment_RunsOnceAndYieldsAssignedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Demo
+            {
+                public static class C
+                {
+                    private static int calls;
+
+                    private static int Next()
+                    {
+                        calls++;
+                        return 42;
+                    }
+
+                    private static int GetOrAdd(Dictionary<string, int> map, string key)
+                    {
+                        var value = map.TryGetValue(key, out var existing)
+                            ? existing
+                            : map[key] = Next();
+                        return value;
+                    }
+
+                    public static string Run()
+                    {
+                        calls = 0;
+                        var map = new Dictionary<string, int>();
+                        string key = "k";
+                        int first = GetOrAdd(map, key);
+                        int second = GetOrAdd(map, key);
+                        return calls + "," + map.Count + "," + first + "," + second + "," + map[key];
+                    }
+                }
+            }
+            """,
+            out TranslationContext context);
+
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal(1, CountOccurrences(printed, "map_[key] = __spill"));
+        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Contains("else {\n", printed, StringComparison.Ordinal);
+
+        Assert.Equal("1,1,42,42,42", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void PropertyAssignmentResult_UsesAssignedValueWithoutCallingGetter()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int stored;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.stored + 100;
+                        }
+
+                        set
+                        {
+                            this.stored = value;
+                        }
+                    }
+
+                    public int Stored => this.stored;
+
+                    public int Gets => this.gets;
+
+                    private static int Echo(int value) => value;
+
+                    private int AssignAndReturn()
+                    {
+                        return P = 8;
+                    }
+
+                    public string Assign()
+                    {
+                        int argument = Echo(P = 7);
+                        int returned = AssignAndReturn();
+                        return argument + "," + returned + "," + this.Stored + "," + this.Gets;
+                    }
+                }
+
+                public static class C
+                {
+                    public static string Run() => new Holder().Assign();
+                }
+            }
+            """);
+
+        Assert.Equal(2, CountOccurrences(printed, "P = __spill"));
+        Assert.Equal("7,8,8,0", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ConditionalCompoundPropertyAssignment_ReturnsCombinedValueWithoutGetterReadback()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int backing = 1;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.backing + 10;
+                        }
+
+                        set { this.backing = value; }
+                    }
+
+                    public int Gets => this.gets;
+
+                    public int Stored => this.backing;
+                }
+
+                public static class C
+                {
+                    private static Holder current = new Holder();
+                    private static int receiverCalls;
+                    private static int rhsCalls;
+
+                    private static Holder Receiver()
+                    {
+                        receiverCalls++;
+                        return current;
+                    }
+
+                    private static int Next()
+                    {
+                        rhsCalls++;
+                        return 2;
+                    }
+
+                    public static string Run()
+                    {
+                        current = new Holder();
+                        receiverCalls = 0;
+                        rhsCalls = 0;
+                        int result = false ? -1 : Receiver().P += Next();
+                        return receiverCalls + "," + rhsCalls + "," + current.Gets + ","
+                            + result + "," + current.Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal("1,1,1,13,13", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ReturnAndInvocationCompoundPropertyAssignments_ReuseCombinedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int backing = 1;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.backing + 10;
+                        }
+
+                        set { this.backing = value; }
+                    }
+
+                    public int Gets => this.gets;
+
+                    public int Stored => this.backing;
+                }
+
+                public static class C
+                {
+                    private static int rhsCalls;
+
+                    private static int Next()
+                    {
+                        rhsCalls++;
+                        return 2;
+                    }
+
+                    private static int Echo(int value) => value;
+
+                    private static int AddAndReturn(Holder holder)
+                    {
+                        return holder.P += Next();
+                    }
+
+                    public static string Run()
+                    {
+                        rhsCalls = 0;
+                        var holder = new Holder();
+                        int argument = Echo(holder.P += Next());
+                        int returned = AddAndReturn(holder);
+                        return rhsCalls + "," + holder.Gets + "," + argument + ","
+                            + returned + "," + holder.Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(2, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal("2,2,13,25,25", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void SetOnlyIndexerAssignment_SideEffectingTargetAndValueRunOnce()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int[] values = new int[2];
+                    private int writes;
+
+                    public int this[int index]
+                    {
+                        set
+                        {
+                            this.writes++;
+                            this.values[index] = value;
+                        }
+                    }
+
+                    public int Read(int index) => this.values[index];
+
+                    public int Writes => this.writes;
+                }
+
+                public static class C
+                {
+                    private static Holder current = new Holder();
+                    private static int receiverCalls;
+                    private static int indexCalls;
+                    private static int valueCalls;
+                    private static string trace = "";
+
+                    private static Holder Receiver()
+                    {
+                        trace += "R";
+                        receiverCalls++;
+                        return current;
+                    }
+
+                    private static int NextIndex()
+                    {
+                        trace += "I";
+                        indexCalls++;
+                        return 1;
+                    }
+
+                    private static int NextValue()
+                    {
+                        trace += "V";
+                        valueCalls++;
+                        return 42;
+                    }
+
+                    public static string Run()
+                    {
+                        current = new Holder();
+                        receiverCalls = 0;
+                        indexCalls = 0;
+                        valueCalls = 0;
+                        trace = "";
+                        int result = Receiver()[NextIndex()] = NextValue();
+                        return trace + "," + receiverCalls + "," + indexCalls + "," + valueCalls + ","
+                            + current.Writes + "," + result + "," + current.Read(1);
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.NextIndex()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.NextValue()"));
+        Assert.Equal("RIV,1,1,1,1,42,42", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ConditionalFalseBranchStaticPropertyAssignment_CompilesAndReturnsAssignedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public static class Store
+                {
+                    private static int backing;
+
+                    public static int P
+                    {
+                        get => backing + 100;
+                        set { backing = value; }
+                    }
+
+                    public static int Backing => backing;
+                }
+
+                public static class C
+                {
+                    private static int calls;
+
+                    private static int Next()
+                    {
+                        calls++;
+                        return 42;
+                    }
+
+                    public static string Run()
+                    {
+                        calls = 0;
+                        Store.P = 0;
+                        int result = false ? -1 : Store.P = Next();
+                        return calls + "," + result + "," + Store.Backing + "," + Store.P;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal("1,42,42,142", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ReturnStaticFieldAssignment_CompilesAndReturnsAssignedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public static class C
+                {
+                    private static int calls;
+                    public static int Stored;
+
+                    private static int Next()
+                    {
+                        calls++;
+                        return 9;
+                    }
+
+                    private static int AssignAndReturn()
+                    {
+                        return C.Stored = Next();
+                    }
+
+                    public static string Run()
+                    {
+                        calls = 0;
+                        Stored = 0;
+                        int result = AssignAndReturn();
+                        return calls + "," + result + "," + Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal("1,9,9", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ConditionalFalseBranchAssignment_WithIfLetCandidate_StaysInsideElseArm()
+    {
+        string printed = TranslateUnit(
+            """
+            #nullable enable
+
+            namespace Demo
+            {
+                public static class C
+                {
+                    public static int Pick(string? candidate)
+                    {
+                        int x = 0;
+                        int value = candidate is { } text ? text.Length : (x = 5);
+                        return value + x;
+                    }
+
+                    public static string Run() => Pick(null) + "," + Pick("abc");
+                }
+            }
+            """,
+            out TranslationContext context);
+
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        int elseArm = printed.IndexOf("else {", StringComparison.Ordinal);
+        int assignment = printed.IndexOf("x = 5", StringComparison.Ordinal);
+        Assert.True(elseArm >= 0 && assignment > elseArm, printed);
+        Assert.Equal(1, CountOccurrences(printed, "x = 5"));
+        Assert.Equal("10,3", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     /// <summary>
@@ -674,7 +1107,10 @@ namespace Demo
         return count;
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source) =>
+        TranslateUnit(source, out _);
+
+    private static string TranslateUnit(string source, out TranslationContext context)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -683,7 +1119,7 @@ namespace Demo
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
         LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
@@ -693,5 +1129,94 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static string CompileAndRun(string printed, string callExpression)
+    {
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built before running this test.");
+
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue-1723-e2e",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Snippet.gs");
+            string dllPath = Path.Combine(workDir, "Snippet.dll");
+            File.WriteAllText(
+                gsPath,
+                printed + Environment.NewLine +
+                    $"Console.WriteLine({callExpression})" + Environment.NewLine);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                compiler,
+                "/target:exe",
+                $"/out:{dllPath}",
+                gsPath);
+            Assert.True(
+                compileExit == 0 &&
+                    !compileOutput.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc must compile the translated snippet with zero errors. Output:\n" +
+                    compileOutput + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string runOutput) = RunDotnet(dllPath);
+            Assert.True(
+                runExit == 0,
+                "Translated snippet must run successfully. Output:\n" + runOutput);
+            return runOutput;
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    private static (int Exit, string Output) RunDotnet(params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo);
+        var output = new StringBuilder();
+        output.Append(process.StandardOutput.ReadToEnd());
+        output.Append(process.StandardError.ReadToEnd());
+        process.WaitForExit();
+        return (process.ExitCode, output.ToString());
+    }
+
+    private static string FindCompiler()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            foreach (string configuration in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(
+                    directory.FullName,
+                    "out",
+                    "bin",
+                    configuration,
+                    "Compiler",
+                    "gsc.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }

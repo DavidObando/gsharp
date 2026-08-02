@@ -601,7 +601,9 @@ public static class GSharpPrinter
                 return RenderSwitchExpression(switchExpression, indent);
 
             case IfExpression ifExpression:
-                return $"if {RenderExpression(ifExpression.Condition, indent)} {{ {RenderBranchValue(ifExpression.ThenExpression, indent)} }} else {{ {RenderBranchValue(ifExpression.ElseExpression, indent)} }}";
+                return $"if {RenderExpression(ifExpression.Condition, indent)} " +
+                    $"{RenderBranch(ifExpression.ThenStatements, ifExpression.ThenExpression, indent)} else " +
+                    $"{RenderBranch(ifExpression.ElseStatements, ifExpression.ElseExpression, indent)}";
 
             case IfLetExpression ifLetExpression:
                 return RenderIfLetExpression(ifLetExpression, indent);
@@ -699,6 +701,33 @@ public static class GSharpPrinter
         }
 
         return RenderExpression(expression, indent);
+    }
+
+    private static string RenderBranch(
+        IReadOnlyList<GStatement> statements,
+        GExpression value,
+        int indent)
+    {
+        if (statements.Count == 0)
+        {
+            return $"{{ {RenderBranchValue(value, indent)} }}";
+        }
+
+        var sb = new StringBuilder();
+        sb.Append('{');
+        foreach (GStatement statement in statements)
+        {
+            sb.Append('\n');
+            sb.Append(RenderStatement(statement, indent + 1));
+        }
+
+        sb.Append('\n');
+        sb.Append(Indent(indent + 1));
+        sb.Append(RenderBranchValue(value, indent));
+        sb.Append('\n');
+        sb.Append(Indent(indent));
+        sb.Append('}');
+        return sb.ToString();
     }
 
     private static string RenderCollectionInitializer(CollectionInitializerExpression collection, int indent)

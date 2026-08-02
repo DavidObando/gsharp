@@ -1011,10 +1011,58 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression condition = this.TranslateExpression(conditional.Condition);
-            GExpression whenTrue = this.TranslateValueWithNullForgiveness(conditional.WhenTrue);
-            GExpression whenFalse = this.TranslateValueWithNullForgiveness(conditional.WhenFalse);
+            (GExpression whenTrue, List<GStatement> thenStatements) =
+                this.TranslateConditionalBranch(conditional.WhenTrue);
+            (GExpression whenFalse, List<GStatement> elseStatements) =
+                this.TranslateConditionalBranch(conditional.WhenFalse);
             (whenTrue, whenFalse) = this.CoerceConditionalArms(conditional, whenTrue, whenFalse);
-            return new IfExpression(condition, whenTrue, whenFalse);
+            return new IfExpression(
+                condition,
+                whenTrue,
+                whenFalse,
+                thenStatements,
+                elseStatements);
+        }
+
+        // A G# if-expression arm is a block expression: it can run statements,
+        // then yield its trailing expression. Keep every arm-local spill/write in
+        // that block so only the selected C# arm executes it (issue #1723).
+        private (GExpression Value, List<GStatement> Statements) TranslateConditionalBranch(
+            ExpressionSyntax branch)
+        {
+            List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            var statements = new List<GStatement>();
+            this.state.PendingSpillPrologue = statements;
+            try
+            {
+                List<AssignmentExpressionSyntax> embedded =
+                    this.CollectEmbeddedAssignments(branch, includeSelf: true);
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    statements.AddRange(this.FlattenChainedAssignment(node));
+                }
+
+                foreach (AssignmentExpressionSyntax node in embedded)
+                {
+                    this.state.SuppressedAssignments.Add(node);
+                }
+
+                try
+                {
+                    return (this.TranslateValueWithNullForgiveness(branch), statements);
+                }
+                finally
+                {
+                    foreach (AssignmentExpressionSyntax node in embedded)
+                    {
+                        this.state.SuppressedAssignments.Remove(node);
+                    }
+                }
+            }
+            finally
+            {
+                this.state.PendingSpillPrologue = outerSpillPrologue;
+            }
         }
 
         // Shared by the general `IfExpression` lowering above and the ADR-0151
@@ -2022,7 +2070,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is AssignmentExpressionSyntax outerAssignment &&
                 Unwrap(outerAssignment.Right) is AssignmentExpressionSyntax)
             {
-                return this.FlattenChainedAssignment(outerAssignment);
+                return this.FlattenChainedAssignment(outerAssignment, preserveValue: false);
             }
 
             return this.WithHoistedAssignments(

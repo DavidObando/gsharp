@@ -71,11 +71,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // A guard/true-arm construct that hoists a spill `let` would have to
-            // put it OUTSIDE the `if let` — where it would run unconditionally
-            // and could not see the binding. Keep the conservative fallback.
+            // A guard/true-arm construct that hoists a spill `let` keeps the
+            // conservative fallback: the true arm can depend on the if-let
+            // binding, and existing spill rewrites are not binding-aware. A
+            // false-arm assignment owned by THIS conditional likewise falls
+            // back so the general if-expression lowering can host its write
+            // inside that arm. Assignments owned by a nested conditional arm
+            // are left to the nested conditional's own seam.
             if (guards.Any(ContainsSpillHoistingConstruct)
-                || ContainsSpillHoistingConstruct(conditional.WhenTrue))
+                || ContainsSpillHoistingConstruct(conditional.WhenTrue)
+                || ContainsAssignmentNeedingBranchSeam(conditional.WhenFalse))
             {
                 return false;
             }
@@ -131,6 +136,19 @@ public sealed partial class CSharpToGSharpTranslator
                 whenTrue,
                 whenFalse);
             return true;
+        }
+
+        private static bool ContainsAssignmentNeedingBranchSeam(ExpressionSyntax branch)
+        {
+            return branch.DescendantNodesAndSelf(
+                    descendIntoChildren: node =>
+                        node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+                .OfType<AssignmentExpressionSyntax>()
+                .Where(assignment =>
+                    assignment.Parent is not InitializerExpressionSyntax initializer ||
+                    (!initializer.IsKind(SyntaxKind.ObjectInitializerExpression) &&
+                     !initializer.IsKind(SyntaxKind.WithInitializerExpression)))
+                .Any(assignment => !IsInsideConditionalExpressionBranch(assignment, branch));
         }
 
         /// <summary>

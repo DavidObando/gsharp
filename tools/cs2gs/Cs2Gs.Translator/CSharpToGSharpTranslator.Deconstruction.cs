@@ -140,10 +140,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// excluding ones inside a nested lambda/local function (their own
         /// statement seam) and — for chained links (`a = b = c`) — excluding the
         /// inner links of a chain already captured by the outer node (see
-        /// <see cref="FlattenChainedAssignment"/>). An assignment hidden inside the
-        /// short-circuited operand of `&amp;&amp;`/`||` or a `?:` branch would change
-        /// evaluation COUNT/order if hoisted, so it is flagged unsupported instead
-        /// (issue #1723).
+        /// <see cref="FlattenChainedAssignment"/>). Assignments inside a conditional
+        /// (`?:`) arm are left for that arm's native G# block-expression seam.
+        /// Assignments hidden inside any other short-circuited operand would change
+        /// evaluation COUNT/order if hoisted, so they are flagged unsupported
+        /// instead (issue #1723).
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
@@ -212,11 +213,16 @@ public sealed partial class CSharpToGSharpTranslator
             var safe = new List<AssignmentExpressionSyntax>();
             foreach (AssignmentExpressionSyntax candidate in candidates)
             {
-                if (IsInShortCircuitOrConditionalBranch(candidate, expression))
+                if (IsInsideConditionalExpressionBranch(candidate, expression))
+                {
+                    continue;
+                }
+
+                if (IsInShortCircuitedSubexpression(candidate, expression))
                 {
                     this.context.ReportUnsupported(
                         candidate,
-                        "assignment inside a short-circuited '&&'/'||' operand or a conditional ('?:') branch has no side-effect-preserving G# lowering yet (issue #1723).");
+                        "assignment inside a short-circuited '&&'/'||'/'??' operand or a conditional-access branch has no side-effect-preserving G# lowering yet (issue #1723).");
                     continue;
                 }
 
@@ -226,14 +232,30 @@ public sealed partial class CSharpToGSharpTranslator
             return safe;
         }
 
+        // A `?:` arm owns a native G# block-expression seam. An enclosing seam
+        // must not hoist the arm's assignment unconditionally; it leaves the node
+        // for TranslateConditionalBranch to lower inside the selected arm.
+        private static bool IsInsideConditionalExpressionBranch(SyntaxNode node, ExpressionSyntax root)
+        {
+            for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
+            {
+                SyntaxNode parent = current.Parent;
+                if (parent is ConditionalExpressionSyntax conditional &&
+                    (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // True when `node` is reached only through a not-always-evaluated operand
-        // inside `root`: the right operand of a `&&`/`||`, either branch of a
-        // `?:`, the right operand of `??`, or the "when not null" side of a
-        // `?.`/`?[...]` conditional-access chain (including any member/element
-        // access further chained off it). Hoisting such an assignment out in
-        // front of `root` would evaluate/mutate it unconditionally, changing C#
-        // semantics.
-        private static bool IsInShortCircuitOrConditionalBranch(SyntaxNode node, ExpressionSyntax root)
+        // inside `root`: the right operand of `&&`/`||`/`??`, or the "when not
+        // null" side of a `?.`/`?[...]` conditional-access chain (including any
+        // member/element access further chained off it). Unlike a `?:` arm, these
+        // positions have no native statement-hosting expression seam.
+        private static bool IsInShortCircuitedSubexpression(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
             {
@@ -242,12 +264,6 @@ public sealed partial class CSharpToGSharpTranslator
                     (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
                      binary.IsKind(SyntaxKind.CoalesceExpression)) &&
                     current == binary.Right)
-                {
-                    return true;
-                }
-
-                if (parent is ConditionalExpressionSyntax conditional &&
-                    (current == conditional.WhenTrue || current == conditional.WhenFalse))
                 {
                     return true;
                 }
@@ -274,7 +290,9 @@ public sealed partial class CSharpToGSharpTranslator
                 .ToList();
         }
 
-        private IEnumerable<GStatement> FlattenChainedAssignment(AssignmentExpressionSyntax assignment)
+        private IEnumerable<GStatement> FlattenChainedAssignment(
+            AssignmentExpressionSyntax assignment,
+            bool preserveValue = true)
         {
             // Follows the chain through ANY assignment operator (`=`, `+=`, …), not
             // just `=`: `a = b += c` is `a = (b += c)`, so the `+=` link must also be
@@ -369,6 +387,21 @@ public sealed partial class CSharpToGSharpTranslator
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
                 bool hasOuterLink = i > 0;
+                bool targetNeedsCapturedValue =
+                    this.AssignmentTargetNeedsCapturedValue(lefts[i].Syntax);
+                bool captureRootSimpleValue =
+                    preserveValue &&
+                    i == 0 &&
+                    assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                    targetNeedsCapturedValue;
+                string compoundBinaryOp = lefts[i].Op == "="
+                    ? null
+                    : CompoundToBinaryOperator(lefts[i].Op);
+                bool captureRootCompoundValue =
+                    preserveValue &&
+                    i == 0 &&
+                    targetNeedsCapturedValue &&
+                    compoundBinaryOp != null;
                 GExpression assignedValue = value;
                 if (lefts[i].Op == "=")
                 {
@@ -400,7 +433,17 @@ public sealed partial class CSharpToGSharpTranslator
                         includePromotedValue: true);
                 }
 
-                if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
+                if (captureRootSimpleValue)
+                {
+                    // C# yields the converted RHS, never a post-set target read.
+                    // A typed temp preserves that value for properties, set-only
+                    // storage, and targets whose receiver/index had to be spilled.
+                    assignedValue = this.CaptureAssignmentValue(
+                        assignment,
+                        assignedValue,
+                        statements);
+                }
+                else if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
                 {
                     // About to be assigned to more than one target — spill once
                     // so the RHS expression is evaluated exactly one time, then
@@ -410,22 +453,23 @@ public sealed partial class CSharpToGSharpTranslator
                     valueIsShared = true;
                 }
 
-                if (hasOuterLink && lefts[i].Op != "=" &&
-                    !IsTrivialOperand(safeTargets[i]) &&
-                    CompoundToBinaryOperator(lefts[i].Op) is string binaryOp)
+                if ((hasOuterLink || captureRootCompoundValue) &&
+                    targetNeedsCapturedValue &&
+                    compoundBinaryOp is string binaryOp)
                 {
-                    // `c.P += d` reused above (`a = b = c.P += d`): re-embedding
-                    // a NON-trivial target (a property/indexer read, unlike a
-                    // bare local) would re-run its getter once per outer link
-                    // (issue #1875). Instead read c.P's getter exactly once,
-                    // combine it with the operand, and store the result — the
-                    // combined value (not a re-read of c.P) is what every
-                    // outer `=` link reuses, matching C#'s single-getter-call
-                    // semantics. A trivial target (bare local/`this`) has no
-                    // getter to protect, so it keeps the simpler read-back
-                    // below unchanged.
+                    // A non-trivial compound target must yield its computed value
+                    // without re-reading the getter: both an outer assignment chain
+                    // (`a = c.P += d`, issue #1875) and a standalone value position
+                    // (`Echo(c.P += d)`) reuse the captured combined value.
                     GExpression oldValue = this.SpillOperand(safeTargets[i], statements);
-                    GExpression newValue = this.SpillOperand(new BinaryExpression(oldValue, binaryOp, assignedValue), statements);
+                    GExpression combinedValue =
+                        new BinaryExpression(oldValue, binaryOp, assignedValue);
+                    GExpression newValue = captureRootCompoundValue
+                        ? this.CaptureAssignmentValue(
+                            assignment,
+                            combinedValue,
+                            statements)
+                        : this.SpillOperand(combinedValue, statements);
                     statements.Add(new AssignmentStatement(safeTargets[i], newValue, "="));
                     value = newValue;
                     valueIsShared = true;
@@ -452,6 +496,32 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return statements;
+        }
+
+        private GExpression CaptureAssignmentValue(
+            AssignmentExpressionSyntax assignment,
+            GExpression value,
+            List<GStatement> statements)
+        {
+            string temp = $"__spill{this.state.SpillCounter++}";
+            statements.Add(new LocalDeclarationStatement(
+                BindingKind.Let,
+                temp,
+                this.ResolveExpressionType(assignment),
+                value));
+            var captured = new IdentifierExpression(temp);
+            this.state.AssignmentValues[assignment] = captured;
+            return captured;
+        }
+
+        private bool AssignmentTargetNeedsCapturedValue(ExpressionSyntax target)
+        {
+            if (this.context.GetSymbolInfo(target).Symbol is IPropertySymbol)
+            {
+                return true;
+            }
+
+            return target is not IdentifierNameSyntax;
         }
 
         // Maps a C# compound-assignment operator token (`+=`, `-=`, …) to its
@@ -800,14 +870,15 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // True when duplicating `expression` in the output has no observable
-        // effect — a bare identifier, `this`, or a literal never has a side
-        // effect and always reads the same value, so it is safe to embed at more
-        // than one output position without spilling it to a temp first (issue
-        // #1731). Anything else (a method/property/indexer read, an arithmetic
-        // expression, …) may run a side effect or re-read a mutable value and
-        // must be evaluated exactly once if it needs to appear more than once.
+        // effect — a bare identifier, `this`, literal, or type-name receiver never
+        // has a side effect and always denotes the same value/name, so it is safe
+        // to embed at more than one output position without spilling it to a temp
+        // first (issue #1731). Anything else (a method/property/indexer read, an
+        // arithmetic expression, …) may run a side effect or re-read a mutable
+        // value and must be evaluated exactly once if it needs to appear more than
+        // once.
         private static bool IsTrivialOperand(GExpression expression) =>
-            expression is IdentifierExpression or ThisExpression or LiteralExpression;
+            expression is IdentifierExpression or ThisExpression or LiteralExpression or TypeExpression;
 
         // Spills `operand` into a fresh `let` in the active statement seam's
         // prologue (see <see cref="pendingSpillPrologue"/>/<see
@@ -1215,6 +1286,10 @@ public sealed partial class CSharpToGSharpTranslator
                     // `^n` is contextual index syntax: spilling the whole expression
                     // turns `target[^n]` into `let i = ^n; target[i]`, which loses
                     // from-end semantics. Spill only `n` and keep `^` at the access.
+                    GExpression safeTarget = this.MakeDuplicationSafeTarget(
+                        index.Target,
+                        prologue,
+                        (syntax as ElementAccessExpressionSyntax)?.Expression);
                     bool isFromEnd = syntax is ElementAccessExpressionSyntax elementAccess
                         && elementAccess.ArgumentList.Arguments.Count == 1
                         && elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression);
@@ -1223,10 +1298,7 @@ public sealed partial class CSharpToGSharpTranslator
                         ? new UnaryExpression("^", this.SpillOperand(fromEnd.Operand, prologue))
                         : this.SpillOperand(index.Index, prologue);
                     return new IndexExpression(
-                        this.MakeDuplicationSafeTarget(
-                            index.Target,
-                            prologue,
-                            (syntax as ElementAccessExpressionSyntax)?.Expression),
+                        safeTarget,
                         safeIndex);
 
                 default:
