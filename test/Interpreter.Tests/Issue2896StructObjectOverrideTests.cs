@@ -4,19 +4,24 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
+using CompilerProgram = GSharp.Compiler.Program;
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2896: plain structs may override Object virtual methods, including
-/// calls dispatched through an object-typed receiver.
+/// calls dispatched through an object-typed receiver. The evaluator's shared
+/// user-type dispatch path also preserves most-derived class overrides.
 /// </summary>
+[Collection("ConsoleIo")]
 public class Issue2896StructObjectOverrideTests
 {
     [Theory]
@@ -71,6 +76,23 @@ public class Issue2896StructObjectOverrideTests
         Assert.Equal(
             "OVERRIDDEN-11\nOVERRIDDEN-11\nFalse\nFalse\n289611\n289611\n",
             Evaluate(source));
+    }
+
+    [Theory]
+    [InlineData(false, "gsc-evaluate")]
+    [InlineData(false, "gsc-emit")]
+    [InlineData(false, "gsi")]
+    [InlineData(true, "gsc-evaluate")]
+    [InlineData(true, "gsc-emit")]
+    [InlineData(true, "gsi")]
+    public void ClassObjectOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
+        bool insideFunction,
+        string driver)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = BuildClassOverrideChainSource(insideFunction, suffix);
+
+        Assert.Equal("L0-11\nL1-22\nL2-33\n", RunDriver(source, suffix, driver));
     }
 
     [Fact]
@@ -230,5 +252,159 @@ public class Issue2896StructObjectOverrideTests
         }
 
         return outWriter.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static string BuildClassOverrideChainSource(bool insideFunction, string suffix)
+    {
+        var declarations = $$"""
+            package Issue2896.Driver{{suffix}}
+            import System
+
+            open class L0{{suffix}} {
+                open override func ToString() string -> "L0-11"
+            }
+
+            open class L1{{suffix}} : L0{{suffix}} {
+                open override func ToString() string -> "L1-22"
+            }
+
+            class L2{{suffix}} : L1{{suffix}} {
+                override func ToString() string -> "L2-33"
+            }
+            """;
+        var calls = $$"""
+            let l0 object = L0{{suffix}}()
+            let l1 object = L1{{suffix}}()
+            let l2 object = L2{{suffix}}()
+            Console.WriteLine(l0.ToString())
+            Console.WriteLine(l1.ToString())
+            Console.WriteLine(l2.ToString())
+            """;
+
+        return insideFunction
+            ? declarations + "\nfunc Run" + suffix + "() {\n" + calls + "\n}\nRun" + suffix + "()\n"
+            : declarations + "\n" + calls;
+    }
+
+    private static string RunDriver(string source, string suffix, string driver)
+    {
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue2896StructObjectOverrideTests),
+            suffix);
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var sourcePath = Path.Combine(directory, "test.gs");
+            File.WriteAllText(sourcePath, source);
+
+            return driver switch
+            {
+                "gsc-evaluate" => RunCompilerEvaluation(sourcePath),
+                "gsc-emit" => RunEmittedBinary(directory, sourcePath, suffix),
+                "gsi" => RunInterpreter(sourcePath),
+                _ => throw new ArgumentOutOfRangeException(nameof(driver), driver, null),
+            };
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static string RunCompilerEvaluation(string sourcePath)
+    {
+        var result = CaptureConsole(() => CompilerProgram.Main(new[] { sourcePath }));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardError);
+        Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
+        return result.StandardOutput[..^"Success.\n".Length];
+    }
+
+    private static string RunInterpreter(string sourcePath)
+    {
+        var result = CaptureConsole(() => GSharp.Repl.Program.Main(new[] { sourcePath }));
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardError);
+        return result.StandardOutput;
+    }
+
+    private static string RunEmittedBinary(string directory, string sourcePath, string suffix)
+    {
+        var assemblyName = "Issue2896Driver" + suffix;
+        var outputPath = Path.Combine(directory, assemblyName + ".dll");
+        var compile = CaptureConsole(() => CompilerProgram.Main(new[]
+        {
+            "/out:" + outputPath,
+            "/assemblyname:" + assemblyName,
+            "/target:exe",
+            "/targetframework:net10.0",
+            sourcePath,
+        }));
+        Assert.Equal(0, compile.ExitCode);
+        Assert.Equal(string.Empty, compile.StandardError);
+
+        var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
+        Assert.NotEmpty(assembly.GetTypes());
+
+        var runtimeConfigPath = Path.ChangeExtension(outputPath, ".runtimeconfig.json");
+        File.WriteAllText(runtimeConfigPath, """
+            {
+              "runtimeOptions": {
+                "tfm": "net10.0",
+                "framework": { "name": "Microsoft.NETCore.App", "version": "10.0.0" }
+              }
+            }
+            """);
+
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = directory,
+        };
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add("--runtimeconfig");
+        startInfo.ArgumentList.Add(runtimeConfigPath);
+        startInfo.ArgumentList.Add(outputPath);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start emitted assembly");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(30_000), "Emitted assembly timed out");
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(string.Empty, stderr);
+        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(Func<int> action)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        try
+        {
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            var exitCode = action();
+            return (
+                exitCode,
+                stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
+                stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
     }
 }

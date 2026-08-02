@@ -1003,11 +1003,24 @@ public sealed partial class Evaluator
 
         if (receiver is StructValue sv)
         {
+            static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
+            {
+                for (var current = method; current != null; current = current.OverriddenMethod)
+                {
+                    if (current.ExternalOverriddenMethod != null)
+                    {
+                        return current.ExternalOverriddenMethod;
+                    }
+                }
+
+                return null;
+            }
+
             FunctionSymbol externalOverride = null;
             for (var type = sv.StructType; type != null && externalOverride == null; type = type.BaseClass)
             {
                 externalOverride = type.Methods.FirstOrDefault(method =>
-                    method.IsOverride && method.ExternalOverriddenMethod?.Equals(node.Method) == true);
+                    method.IsOverride && FindExternalOverrideRoot(method)?.Equals(node.Method) == true);
             }
 
             if (externalOverride != null)
