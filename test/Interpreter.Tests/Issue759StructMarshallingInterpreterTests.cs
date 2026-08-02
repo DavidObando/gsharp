@@ -11,8 +11,8 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// ADR-0093 / issue #759: interpreter coverage for struct- and
 /// class-marshalling annotations. The G# interpreter does not call into
-/// native code, so the layout annotations are essentially "binder-only"
-/// metadata under the REPL. The acceptance contract:
+/// native code, but explicit field overlap still affects managed reads and
+/// writes. The acceptance contract:
 /// <list type="bullet">
 /// <item>Well-formed <c>@StructLayout</c> / <c>@FieldOffset</c> programs
 /// parse, bind, and run without diagnostics or crashes.</item>
