@@ -9,15 +9,16 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis.Emit;
 
 /// <summary>
-/// Issue #2118: walks a non-capturing lambda body and gathers every
+/// Walks a lambda body and gathers every
 /// <see cref="TypeParameterSymbol"/> it references (through expression types,
 /// declared-local types, type arguments, <c>is</c>/pattern target types, and
-/// <c>typeof</c>/<c>sizeof</c> operands). The lambda itself declares no type
-/// parameters, so any type parameter reachable from its body is necessarily an
-/// enclosing one that must be promoted onto the synthesized static method as a
-/// generic method type parameter for the emitted IL to verify. Mirrors the node
-/// coverage of <c>LambdaBinder.EnclosingTypeParameterReferenceWalker</c> but
-/// accumulates ALL references instead of stopping at the first.
+/// <c>typeof</c>/<c>sizeof</c> operands). Issue #2118 uses the result to promote
+/// non-capturing lambdas to generic static methods; issue #2894 uses it to
+/// reify capturing display classes. Nested ordinary lambda bodies are included
+/// because the outer lambda materializes their constructed display classes.
+/// Mirrors the node coverage of
+/// <c>LambdaBinder.EnclosingTypeParameterReferenceWalker</c> but accumulates all
+/// references instead of stopping at the first.
 /// </summary>
 internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
 {
@@ -56,6 +57,9 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
         TypeSymbol.CollectReferencedTypeParameters(node.Type, this.sink);
         switch (node)
         {
+            case BoundFunctionLiteralExpression literal when literal.Function?.IsGeneric != true:
+                this.VisitStatement(literal.Body);
+                break;
             case BoundCallExpression call:
                 this.CheckTypeArguments(call.MethodTypeArguments);
                 break;

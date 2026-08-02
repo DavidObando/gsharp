@@ -393,7 +393,10 @@ internal sealed class ClosureEmitter
         // capture site. Reify the display class generic over exactly the
         // referenced enclosing parameters (mirroring the state-machine
         // treatment); the emitter's outer-TP → own-TP remap then routes every
-        // field / Invoke signature through a valid `VAR(idx)` slot, and the
+        // field / Invoke signature and body through a valid `VAR(idx)` slot.
+        // Issue #2894 extends discovery to parameters referenced only by the
+        // body; they are otherwise absent from every signature while still
+        // requiring a valid slot in Invoke. The
         // returned constructed instance carries the original parameters as type
         // arguments for the capture-site `newobj`/field stores/delegate ctor.
         var enclosingRefSink = new List<TypeSymbol>();
@@ -408,6 +411,9 @@ internal sealed class ClosureEmitter
         }
 
         enclosingRefSink.Add(returnType);
+        var bodyTypeParameters = new List<TypeParameterSymbol>();
+        LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters);
+        enclosingRefSink.AddRange(bodyTypeParameters);
         var origTPs = SynthesizedClosureReifier.CollectOrdered(enclosingRefSink);
         StructSymbol constructedClass = closureClass;
         if (!origTPs.IsDefaultOrEmpty)
