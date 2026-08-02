@@ -2262,6 +2262,14 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // An argument that already failed to bind cannot participate in
+            // overload resolution. Preserve its primary diagnostic instead of
+            // adding a misleading "cannot find function" cascade at this call.
+            if (arguments.Any(static argument => argument.Type == TypeSymbol.Error))
+            {
+                return new BoundErrorExpression(ce);
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }

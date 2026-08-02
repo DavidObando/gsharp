@@ -610,6 +610,10 @@ public sealed class CSharpTypeMapper
                 return "int64";
             case SpecialType.System_UInt64:
                 return "uint64";
+            case SpecialType.System_IntPtr:
+                return "nint";
+            case SpecialType.System_UIntPtr:
+                return "nuint";
             case SpecialType.System_Single:
                 return "float32";
             case SpecialType.System_Double:

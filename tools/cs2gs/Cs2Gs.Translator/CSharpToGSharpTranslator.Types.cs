@@ -399,11 +399,16 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslatePredefinedTypeExpression(PredefinedTypeSyntax predefined)
         {
             // A C# predefined type used as an expression receiver (`string.Concat`,
-            // `int.Parse`) is a static-call target; G# resolves the BCL type name
-            // (`String`, `Int32`) there, not the lowercase value keyword, so emit
-            // the framework type name (ADR-0115 §B.12 receiver form).
+            // `int.Parse`) is a static-call target. Reuse the type mapper so the
+            // receiver and every type-clause position share one canonical G#
+            // spelling (`string`, `int32`, ...; ADR-0115 §B.12).
             ITypeSymbol symbol = this.context.GetTypeInfo(predefined).Type;
-            string name = symbol?.Name ?? predefined.Keyword.Text;
+            GTypeReference mapped = symbol == null
+                ? null
+                : this.typeMapper.Map(symbol, this.context, predefined.GetLocation());
+            string name = mapped is NamedTypeReference { TypeArguments.Count: 0 } named
+                ? named.Name
+                : symbol?.Name ?? predefined.Keyword.Text;
             return new IdentifierExpression(name);
         }
 

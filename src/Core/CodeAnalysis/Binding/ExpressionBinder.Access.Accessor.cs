@@ -1222,7 +1222,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        classSymbol = new ImportedClassSymbol(typeSymbol.ClrType, declaration, references: scope.References);
+        // Primitive symbols hold host-runtime CLR types. Project the receiver
+        // into the active reference context so its overload parameter types
+        // share identity with imported argument types under SDK compilation.
+        var receiverType = scope.References.MapClrTypeToReferences(typeSymbol.ClrType);
+        classSymbol = new ImportedClassSymbol(receiverType, declaration, references: scope.References);
         return true;
     }
 
