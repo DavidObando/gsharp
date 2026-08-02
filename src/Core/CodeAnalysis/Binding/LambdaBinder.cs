@@ -1368,7 +1368,7 @@ internal sealed class LambdaBinder
     /// treats member reads as fragile because another call or another
     /// receiver's assignment could mutate the member through an alias the
     /// closure's own narrowing analysis never observes — the same reasoning
-    /// <see cref="StatementBinder.InvalidateNarrowingsForAssignedVariables(SyntaxNode)"/>
+    /// <see cref="StatementBinder.InvalidateNarrowingsForAssignedVariables(SyntaxNode, BoundStatement)"/>
     /// applies at ordinary statement boundaries. Widening that guarantee to
     /// "safe forever, even across a closure capture" would be unsound, so
     /// this method conservatively keeps the pre-existing behaviour (drop) for

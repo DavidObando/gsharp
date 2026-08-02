@@ -534,7 +534,9 @@ internal sealed partial class StatementBinder
             bodySyntax,
             labelName,
             out var breakLabel,
-            out var continueLabel);
+            out var continueLabel,
+            backEdgeTail: null,
+            backEdgeCondition: condition);
 
         scope = scope.Parent;
 
@@ -583,6 +585,17 @@ internal sealed partial class StatementBinder
         scope = new BoundScope(scope);
 
         var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
+        if (init != null)
+        {
+            InvalidateNarrowingsForAssignedVariables(syntax.Initializer, init);
+            if (binderCtx.NarrowedVariables.Count > 0)
+            {
+                ApplyAssignmentNarrowing(
+                    init,
+                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]);
+            }
+        }
+
         var condition = syntax.Condition == null ? null : bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
         var post = syntax.Post == null ? null : BindStatement(syntax.Post);
         var body = BindConditionedLoopBody(
@@ -590,7 +603,9 @@ internal sealed partial class StatementBinder
             syntax.Body,
             labelName,
             out var breakLabel,
-            out var continueLabel);
+            out var continueLabel,
+            post,
+            condition);
 
         scope = scope.Parent;
 
@@ -632,20 +647,37 @@ internal sealed partial class StatementBinder
         StatementSyntax bodySyntax,
         string labelName,
         out BoundLabel breakLabel,
-        out BoundLabel continueLabel)
+        out BoundLabel continueLabel,
+        BoundStatement backEdgeTail,
+        BoundExpression backEdgeCondition)
     {
+        var inheritedNarrowingFrameCount = binderCtx.NarrowedVariables.Count;
         var loopNarrow = condition == null
             ? null
             : ComputeConditionNarrowing(condition).Then;
         if (loopNarrow == null)
         {
-            return BindLoopBody(bodySyntax, labelName, out breakLabel, out continueLabel);
+            return BindLoopBody(
+                bodySyntax,
+                labelName,
+                out breakLabel,
+                out continueLabel,
+                inheritedNarrowingFrameCount,
+                backEdgeTail,
+                backEdgeCondition);
         }
 
         binderCtx.NarrowedVariables.Add(loopNarrow);
         try
         {
-            return BindLoopBody(bodySyntax, labelName, out breakLabel, out continueLabel);
+            return BindLoopBody(
+                bodySyntax,
+                labelName,
+                out breakLabel,
+                out continueLabel,
+                inheritedNarrowingFrameCount,
+                backEdgeTail,
+                backEdgeCondition);
         }
         finally
         {
@@ -777,7 +809,13 @@ internal sealed partial class StatementBinder
         scope = new BoundScope(scope);
 
         var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
-        var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
+        var body = BindLoopBody(
+            bodySyntax,
+            labelName,
+            out var breakLabel,
+            out var continueLabel,
+            backEdgeTail: null,
+            backEdgeCondition: condition);
 
         scope = scope.Parent;
 
