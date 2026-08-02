@@ -323,15 +323,18 @@ public class Compilation
             .ToImmutableArray();
 
         var deinitDiagnostics = new DiagnosticBag();
-        foreach (var function in program.Functions.Keys.Where(_ => !allErrors.Any()))
+        if (!allErrors.Any())
         {
-            var deinitializer = (function.ReceiverType as StructSymbol)?.Deinitializer;
-            if (ReferenceEquals(deinitializer?.Function, function)
-                && SyntaxTrees.Contains(deinitializer.Declaration.SyntaxTree))
+            foreach (var function in program.Functions.Keys)
             {
-                deinitDiagnostics.ReportInterpreterDeinitializerNotSupported(
-                    deinitializer.Declaration.DeinitKeyword.Location,
-                    deinitializer.DeclaringType.Name);
+                var deinitializer = (function.ReceiverType as StructSymbol)?.Deinitializer;
+                if (ReferenceEquals(deinitializer?.Function, function)
+                    && SyntaxTrees.Contains(deinitializer.Declaration.SyntaxTree))
+                {
+                    deinitDiagnostics.ReportInterpreterDeinitializerNotSupported(
+                        deinitializer.Declaration.DeinitKeyword.Location,
+                        deinitializer.DeclaringType.Name);
+                }
             }
         }
 

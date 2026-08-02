@@ -26,6 +26,9 @@ public class Issue2988DeinitInterpreterTests
                 deinit {
                     Console.WriteLine("deinit-11")
                 }
+
+                func Touch() {
+                }
             }
 
             class Second {
@@ -47,7 +50,7 @@ public class Issue2988DeinitInterpreterTests
         Assert.False(cell.HasError);
         Assert.Equal("body-33\n", cell.Output);
         var warnings = cell.Diagnostics
-            .Where(diagnostic => diagnostic.Id == "GS0517")
+            .Where(diagnostic => diagnostic.Id == "GS0510")
             .OrderBy(diagnostic => diagnostic.Message)
             .ToArray();
         Assert.Collection(
@@ -57,7 +60,7 @@ public class Issue2988DeinitInterpreterTests
 
         var next = engine.Evaluate("""Console.WriteLine("next-44")""");
         Assert.Equal("next-44\n", next.Output);
-        Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0517");
+        Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
     }
 
     [Fact]
@@ -89,8 +92,26 @@ public class Issue2988DeinitInterpreterTests
 
         Assert.False(cell.HasError);
         Assert.Equal("made-22\nafter-collect-33\nkept\n", cell.Output);
-        var warning = Assert.Single(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0517");
+        var warning = Assert.Single(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
         AssertWarning(warning, "Res");
+    }
+
+    [Fact]
+    public void CompilationErrorsSuppressDeinitializerBoundaryWarning()
+    {
+        var source = """
+            class Resource {
+                deinit {
+                }
+            }
+
+            var broken =
+            """;
+
+        var cell = new SessionEngine().Evaluate(source);
+
+        Assert.True(cell.HasError);
+        Assert.DoesNotContain(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
     }
 
     [Fact]
@@ -118,10 +139,10 @@ public class Issue2988DeinitInterpreterTests
         {
             var exitCode = GSharp.Repl.Program.Main([sourcePath]);
 
-            // Unlike GS0513, GS0517 skips only a GC-scheduled side effect after evaluation completes.
+            // Unlike GS0513, GS0510 skips only a GC-scheduled side effect after evaluation completes.
             Assert.Equal(0, exitCode);
             Assert.Equal("body-33\n", output.ToString());
-            Assert.Contains("warning GS0517", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("warning GS0510", error.ToString(), StringComparison.Ordinal);
             Assert.Contains("deinit", error.ToString(), StringComparison.Ordinal);
         }
         finally

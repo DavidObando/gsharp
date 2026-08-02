@@ -1140,9 +1140,6 @@ public sealed partial class DiagnosticBag
         expectedType,
         actualType);
 
-    private static string GetAggregateKindName(StructSymbol symbol)
-        => symbol.IsClass ? "Class" : "Struct";
-
     /// <summary>
     /// Issue #2988: reports that a CLR GC finalizer declared with
     /// <c>deinit</c> cannot run under interpreted execution.
@@ -1151,4 +1148,7 @@ public sealed partial class DiagnosticBag
     /// <param name="className">The class that declares the deinitializer.</param>
     public void ReportInterpreterDeinitializerNotSupported(TextLocation location, string className)
     => Report(location, DiagnosticDescriptors.InterpreterDeinitializerNotSupported, className);
+
+    private static string GetAggregateKindName(StructSymbol symbol)
+        => symbol.IsClass ? "Class" : "Struct";
 }
