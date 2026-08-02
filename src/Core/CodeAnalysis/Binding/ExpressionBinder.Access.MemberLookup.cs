@@ -259,15 +259,6 @@ internal sealed partial class ExpressionBinder
                         return BindExtensionMethodGroupOrError(receiver, ne);
                     }
 
-                    // Stream B: static field/property read on imported type.
-                    // `Receiver == null` flags the access as static. Literal
-                    // (const) fields aren't real runtime fields, so we inline
-                    // their constant value rather than emit `ldsfld`.
-                    if (staticMember is FieldInfo litField && litField.IsLiteral)
-                    {
-                        return new BoundLiteralExpression(null, litField.GetRawConstantValue(), TypeSymbol.FromClrType(litField.FieldType));
-                    }
-
                     var staticType = staticMember switch
                     {
                         PropertyInfo sp => ClrNullability.GetPropertyTypeSymbol(sp),
@@ -293,7 +284,22 @@ internal sealed partial class ExpressionBinder
                             staticType = symbolicMemberType;
                         }
 
+                        if (staticMember is FieldInfo symbolicLiteral && symbolicLiteral.IsLiteral)
+                        {
+                            var literalType = classSymbol.ClassType.IsEnum
+                                ? classSymbol.SymbolicReceiver
+                                : staticType;
+                            return new BoundLiteralExpression(null, symbolicLiteral.GetRawConstantValue(), literalType);
+                        }
+
                         return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType, classSymbol.SymbolicReceiver);
+                    }
+
+                    // Literal (const) fields aren't real runtime fields, so
+                    // inline their constant value rather than emit `ldsfld`.
+                    if (staticMember is FieldInfo literal && literal.IsLiteral)
+                    {
+                        return new BoundLiteralExpression(null, literal.GetRawConstantValue(), staticType);
                     }
 
                     return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType);
@@ -826,7 +832,11 @@ internal sealed partial class ExpressionBinder
             if (scope.References.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType))
             {
                 var nested = new ImportedClassSymbol(nestedType, nameExpr, references: scope.References);
-                nestedClassSymbol = CloseImportedNestedType(classSymbol.ClassType, nested, nameExpr);
+                nestedClassSymbol = CloseImportedNestedType(
+                    classSymbol.ClassType,
+                    nested,
+                    nameExpr,
+                    classSymbol.SymbolicReceiver);
                 return true;
             }
 
