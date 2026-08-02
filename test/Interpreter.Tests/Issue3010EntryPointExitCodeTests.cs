@@ -22,13 +22,13 @@ public class Issue3010EntryPointExitCodeTests
 
             func Main() int32 {
                 Console.WriteLine("main")
-                return 3
+                return 7
             }
             """;
 
         var result = RunScript(Source);
 
-        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(7, result.ExitCode);
         Assert.Equal("main\n", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
@@ -40,28 +40,279 @@ public class Issue3010EntryPointExitCodeTests
             import System
 
             Console.WriteLine("tls")
-            return 3
+            return 7
             """;
 
         var result = RunScript(Source);
 
-        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(7, result.ExitCode);
         Assert.Equal("tls\n", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
     [Fact]
-    public void NonIntegerResultIsStillPrinted()
+    public void ExplicitMainIntegerZeroReturnsZero()
     {
-        var result = RunScript("\"text-result\"");
+        const string Source = """
+            import System
+
+            func Main() int32 {
+                Console.WriteLine("zero")
+                return 0
+            }
+            """;
+
+        var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("text-result\n", result.StandardOutput);
+        Assert.Equal("zero\n", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
     [Fact]
-    public void NoResultStillReturnsZeroWithoutOutput()
+    public void ExplicitMainUnsignedIntegerResultBecomesExitCode()
+    {
+        const string Source = """
+            import System
+
+            func Main() uint32 {
+                Console.WriteLine("unsigned")
+                return 7
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal("unsigned\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitMainIntegerFalloffIsRejected()
+    {
+        const string Source = """
+            import System
+
+            func Main() int32 {
+                Console.WriteLine("must-not-run")
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal("GS0100: Not all code paths return a value.\n", result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitVoidMainDiscardsBareIntegerExpression()
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                Console.WriteLine("void-int")
+                40 + 2
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("void-int\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitVoidMainDiscardsBareStringExpression()
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                Console.WriteLine("void-string")
+                "leaked"
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("void-string\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitVoidMainDiscardsIgnoredIntegerCall()
+    {
+        const string Source = """
+            import System
+
+            func Compute() int32 {
+                return 11
+            }
+
+            func Main() {
+                Console.WriteLine("void-call-int")
+                Compute()
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("void-call-int\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitVoidMainDiscardsIgnoredGSharpValueCall()
+    {
+        const string Source = """
+            import System
+
+            struct Marker {
+                var N int32
+            }
+
+            func Make() Marker {
+                return Marker{N: 33}
+            }
+
+            func Main() {
+                Console.WriteLine("void-call-type")
+                Make()
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("void-call-type\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitStringMainIsRejectedBeforeExecution()
+    {
+        const string Source = """
+            import System
+
+            func Main() string {
+                Console.WriteLine("must-not-run")
+                return "invalid"
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(
+            "GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.\n",
+            result.StandardError);
+    }
+
+    [Fact]
+    public void ExplicitGSharpValueMainIsRejectedBeforeExecution()
+    {
+        const string Source = """
+            import System
+
+            struct Marker {
+                var N int32
+            }
+
+            func Main() Marker {
+                Console.WriteLine("must-not-run")
+                return Marker{N: 33}
+            }
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(
+            "GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.\n",
+            result.StandardError);
+    }
+
+    [Fact]
+    public void TopLevelVoidEntryPointDiscardsBareIntegerExpression()
+    {
+        const string Source = """
+            import System
+
+            Console.WriteLine("top-int")
+            40 + 2
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("top-int\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void TopLevelVoidEntryPointDiscardsBareStringExpression()
+    {
+        const string Source = """
+            import System
+
+            Console.WriteLine("top-string")
+            "leaked"
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("top-string\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void TopLevelVoidEntryPointDiscardsIgnoredIntegerCall()
+    {
+        const string Source = """
+            import System
+
+            func Compute() int32 {
+                return 22
+            }
+
+            Console.WriteLine("top-call-int")
+            Compute()
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("top-call-int\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void TopLevelNoResultReturnsZero()
+    {
+        const string Source = """
+            import System
+
+            Console.WriteLine("top-no-result")
+            """;
+
+        var result = RunScript(Source);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("top-no-result\n", result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public void DeclarationOnlyScriptReturnsZeroWithoutOutput()
     {
         var result = RunScript("func Helper() { }");
 

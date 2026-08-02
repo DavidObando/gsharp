@@ -169,25 +169,43 @@ public sealed partial class Evaluator
     {
         // The binder has already resolved top-level-statement versus explicit-Main precedence.
         // A null declaration identifies the synthesized top-level entry point.
-        if (evaluateEntryPoint && program.EntryPoint?.Declaration != null)
+        if (evaluateEntryPoint && program.EntryPoint is { } entryPoint)
         {
-            // Every resolved explicit entry point must have a bound body; fail loudly if that
-            // invariant is broken rather than silently evaluating an empty top-level block.
-            var entryPointBody = program.Functions[program.EntryPoint];
-            var locals = new ConcurrentDictionary<VariableSymbol, object>();
-            if (program.EntryPoint.Parameters.Length == 1
-                && program.EntryPoint.Parameters[0].Type == SliceTypeSymbol.Get(TypeSymbol.String))
+            if (entryPoint.Declaration != null)
             {
-                locals[program.EntryPoint.Parameters[0]] = Array.Empty<string>();
+                // Every resolved explicit entry point must have a bound body; fail loudly if that
+                // invariant is broken rather than silently evaluating an empty top-level block.
+                var entryPointBody = program.Functions[entryPoint];
+                var locals = new ConcurrentDictionary<VariableSymbol, object>();
+                if (entryPoint.Parameters.Length == 1
+                    && entryPoint.Parameters[0].Type == SliceTypeSymbol.Get(TypeSymbol.String))
+                {
+                    locals[entryPoint.Parameters[0]] = Array.Empty<string>();
+                }
+
+                using (PushFrame(locals))
+                {
+                    return EvaluateEntryPointBody(entryPoint, entryPointBody);
+                }
             }
 
-            using (PushFrame(locals))
-            {
-                return EvaluateFunctionBody(entryPointBody);
-            }
+            return EvaluateEntryPointBody(entryPoint, program.Statement);
         }
 
         return EvaluateFunctionBody(program.Statement);
+    }
+
+    private object EvaluateEntryPointBody(FunctionSymbol entryPoint, BoundBlockStatement body)
+    {
+        if (entryPoint.Type != TypeSymbol.Void
+            && entryPoint.Type != TypeSymbol.Int32
+            && entryPoint.Type != TypeSymbol.UInt32)
+        {
+            throw new InvalidOperationException("Entry point must have a return type of void, int32, or uint32.");
+        }
+
+        var value = EvaluateFunctionBody(body);
+        return entryPoint.Type == TypeSymbol.Void ? null : value;
     }
 
     // Issue #1651: goroutines run with their own locals/control-transfer

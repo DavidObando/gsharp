@@ -71,9 +71,9 @@ public static class Program
             return exitCode;
         }
 
-        if (cell.Value is not null)
+        if (cell.Value is uint unsignedExitCode)
         {
-            Console.WriteLine(cell.Value);
+            return unchecked((int)unsignedExitCode);
         }
 
         return 0;

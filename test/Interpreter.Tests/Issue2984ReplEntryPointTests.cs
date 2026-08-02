@@ -34,4 +34,33 @@ public class Issue2984ReplEntryPointTests
             (string.Empty, string.Empty),
             (mainDeclaration.Output, nextDeclaration.Output));
     }
+
+    [Fact]
+    public void ScriptEntryPointRunsOnlyOnDeclaringSubmission()
+    {
+        var engine = new SessionEngine { CaptureConsole = true, RunEntryPoint = true };
+
+        var mainDeclaration = engine.Evaluate(
+            """
+            import System
+
+            func Main() int32 {
+                Console.WriteLine("main-once")
+                return 7
+            }
+            """);
+        var nextDeclaration = engine.Evaluate("func Helper() { }");
+        var nextExpression = engine.Evaluate("40 + 2");
+
+        Assert.False(mainDeclaration.HasError);
+        Assert.False(nextDeclaration.HasError);
+        Assert.False(nextExpression.HasError);
+        Assert.Equal(7, mainDeclaration.Value);
+        Assert.Null(nextDeclaration.Value);
+        Assert.Null(nextExpression.Value);
+        Assert.Equal("main-once\n", mainDeclaration.Output);
+        Assert.Equal(
+            (string.Empty, string.Empty),
+            (nextDeclaration.Output, nextExpression.Output));
+    }
 }

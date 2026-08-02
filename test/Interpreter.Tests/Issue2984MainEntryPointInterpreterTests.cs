@@ -37,6 +37,37 @@ public class Issue2984MainEntryPointInterpreterTests
     }
 
     [Fact]
+    public void EvaluatorDefaultRunsEntryPoint()
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                Console.WriteLine("evaluator-main")
+            }
+            """;
+
+        using var output = new StringWriter();
+        var previousOutput = Console.Out;
+        Console.SetOut(output);
+        try
+        {
+            var compilation = new Compilation(SyntaxTree.Parse(Source));
+            var evaluator = new Evaluator(
+                compilation.BoundProgram,
+                new Dictionary<VariableSymbol, object>());
+
+            evaluator.Evaluate();
+
+            Assert.Equal("evaluator-main\n", output.ToString().Replace("\r\n", "\n"));
+        }
+        finally
+        {
+            Console.SetOut(previousOutput);
+        }
+    }
+
+    [Fact]
     public void ClassScopedSharedMainRuns()
     {
         const string Source = """
