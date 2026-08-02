@@ -149,8 +149,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
 | GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
 | GS0186 | Error | _(historical — removed in ADR-0085)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
-| GS0187 | Error | Class does not implement interface method. | A class claims to implement an interface but a required method is absent. |
-| GS0188 | Error | Class cannot implement a sealed interface from a different package. | Implementing a `sealed interface` defined outside the current package. |
+| GS0187 | Error | Class or struct does not implement interface method. | A class or struct claims to implement an interface but a required method is absent. |
+| GS0188 | Error | Class or struct cannot implement a sealed interface from a different package. | A class or struct implements a `sealed interface` defined outside its package. |
 | GS0189 | Error | The return type of an `async func(...)` type clause is implicitly wrapped in `Task`; do not write `Task[…]` explicitly. | `async func(int) Task[int]` in a type position (ADR-0043). |
 
 ### Async state-machine diagnostics (GS0190)
@@ -609,9 +609,9 @@ See [ADR-0085](adr/0085-default-interface-methods-implementation.md) (which supe
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0318 | Error | `Class '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` | Two unrelated interfaces both supply a default body for the same signature; the class fails to override. Java-style rule per ADR-0085. |
-| GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'. Update the implementer or restore the default.` | Reserved — fires when an `override` keyword targets a slot that has been deleted from the interface. |
-| GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` | Replaces the historical GS0187 path when an implementer omits a method that has no default. |
+| GS0318 | Error | `<Kind> '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` | Two unrelated interfaces both supply a default body for the same signature; the class or struct fails to override. Java-style rule per ADR-0085. |
+| GS0319 | Error | `<Kind> '<C>' relied on a default implementation of '<I>.<Name>' that was removed. Declare an explicit override on '<C>'.` | Reserved for a class or struct that relied on a removed default-interface implementation. |
+| GS0320 | Error | `<Kind> '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` | Replaces the historical GS0187 path when a class or struct omits a method that has no default. |
 | GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers 'open', 'override', and 'sealed override' interface members.` | Fires when an interface method body carries a deferred modifier such as `open`, `override`, or `sealed override` — the parser accepts the shape so the binder can report a precise diagnostic. As of ADR-0090 (issue #756) `private` is no longer deferred and no longer fires GS0321. Per the issue #865 revision of ADR-0089, `static` is no longer a modifier on interface methods at all (static-virtual members are declared inside the interface's `shared { … }` block); the old `static func …` shape now produces a generic parser error rather than GS0321. |
 | GS0368 | Error | `Interface method '<Name>' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke.` | Issue #881: a body-less interface method (abstract instance method, or an abstract static slot inside the interface's `shared { … }` block) must end with `;`. A method with a `{ … }` body takes no `;`. |
 

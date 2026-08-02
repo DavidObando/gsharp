@@ -358,21 +358,21 @@ public sealed partial class DiagnosticBag
     public void ReportInterfaceMethodHasBody(TextLocation location, string methodName)
     => Report(location, DiagnosticDescriptors.InterfaceMethodHasBody, methodName);
 
-    /// <summary>Reports a class that fails to implement an interface method.</summary>
-    /// <param name="location">The text location of the class identifier.</param>
-    /// <param name="className">The implementing class.</param>
+    /// <summary>Reports an aggregate that fails to implement an interface method.</summary>
+    /// <param name="location">The text location of the aggregate identifier.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The interface name.</param>
     /// <param name="methodName">The missing method.</param>
-    public void ReportInterfaceMethodNotImplemented(TextLocation location, string className, string interfaceName, string methodName)
-    => Report(location, DiagnosticDescriptors.InterfaceMethodNotImplemented, className, interfaceName, methodName);
+    public void ReportInterfaceMethodNotImplemented(TextLocation location, StructSymbol implementer, string interfaceName, string methodName)
+    => Report(location, DiagnosticDescriptors.InterfaceMethodNotImplemented, GetAggregateKindName(implementer), implementer.Name, interfaceName, methodName);
 
-    /// <summary>Phase 3.B.5: reports a class that implements a sealed interface declared in a different package.</summary>
-    /// <param name="location">The text location of the implementing class identifier.</param>
-    /// <param name="className">The implementing class.</param>
+    /// <summary>Phase 3.B.5: reports an aggregate that implements a sealed interface declared in a different package.</summary>
+    /// <param name="location">The text location of the implementing aggregate identifier.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The sealed interface name.</param>
     /// <param name="interfacePackage">The package owning the sealed interface.</param>
-    public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, string className, string interfaceName, string interfacePackage)
-    => Report(location, DiagnosticDescriptors.SealedInterfaceImplementorOutsidePackage, className, interfaceName, interfacePackage);
+    public void ReportSealedInterfaceImplementorOutsidePackage(TextLocation location, StructSymbol implementer, string interfaceName, string interfacePackage)
+    => Report(location, DiagnosticDescriptors.SealedInterfaceImplementorOutsidePackage, GetAggregateKindName(implementer), implementer.Name, interfaceName, interfacePackage);
 
     /// <summary>ADR-0051: reports an <c>open</c> member declared on a class that is not itself <c>open</c>.</summary>
     /// <param name="location">The text location of the <c>open</c> modifier.</param>
@@ -594,26 +594,26 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.ReceiverClauseOnOwnedType, methodName, receiverTypeName);
 
     /// <summary>
-    /// ADR-0085 / issue #726: GS0318 — a class implements two unrelated
+    /// ADR-0085 / issue #726: GS0318 — an aggregate implements two unrelated
     /// interfaces that each provide a default body for the same method
-    /// signature, and the class does not declare its own override. The
+    /// signature, and the aggregate does not declare its own override. The
     /// implementer must declare a same-name same-signature method to
     /// disambiguate (Java-style "explicit override" rule). The message
     /// names both interfaces and the disputed method so the fix is
     /// immediately apparent.
     /// </summary>
-    /// <param name="location">The source location of the implementing class identifier.</param>
-    /// <param name="className">The implementing class name.</param>
+    /// <param name="location">The source location of the implementing aggregate identifier.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="methodName">The disputed method name.</param>
     /// <param name="firstInterfaceName">The name of the first interface providing a default.</param>
     /// <param name="secondInterfaceName">The name of the second interface providing a default.</param>
     public void ReportConflictingInterfaceDefaults(
         TextLocation location,
-        string className,
+        StructSymbol implementer,
         string methodName,
         string firstInterfaceName,
         string secondInterfaceName)
-    => Report(location, DiagnosticDescriptors.ConflictingInterfaceDefaults, className, methodName, firstInterfaceName, secondInterfaceName, className);
+    => Report(location, DiagnosticDescriptors.ConflictingInterfaceDefaults, GetAggregateKindName(implementer), implementer.Name, methodName, firstInterfaceName, secondInterfaceName, implementer.Name);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0319 — a call site (or override) references
@@ -624,19 +624,19 @@ public sealed partial class DiagnosticBag
     /// has been replaced by an abstract signature. Reserved so binary-compat
     /// regressions surface with a dedicated, actionable error.
     /// </summary>
-    /// <param name="location">The source location of the implementing class identifier.</param>
-    /// <param name="className">The implementing class name.</param>
+    /// <param name="location">The source location of the implementing aggregate identifier.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The interface that dropped the default.</param>
     /// <param name="methodName">The method that lost its default body.</param>
     public void ReportInterfaceDefaultRemoved(
         TextLocation location,
-        string className,
+        StructSymbol implementer,
         string interfaceName,
         string methodName)
-    => Report(location, DiagnosticDescriptors.InterfaceDefaultRemoved, className, interfaceName, methodName, className);
+    => Report(location, DiagnosticDescriptors.InterfaceDefaultRemoved, GetAggregateKindName(implementer), implementer.Name, interfaceName, methodName, implementer.Name);
 
     /// <summary>
-    /// ADR-0085 / issue #726: GS0320 — a class declares <c>: I</c> but
+    /// ADR-0085 / issue #726: GS0320 — an aggregate declares <c>: I</c> but
     /// neither provides an implementation of an abstract method <c>M</c>
     /// declared on <c>I</c> nor inherits one through its class chain, and
     /// the interface deliberately marked <c>M</c> abstract (no default
@@ -645,16 +645,16 @@ public sealed partial class DiagnosticBag
     /// not used to bridge the gap, so users see immediately that the
     /// interface intentionally requires an implementation.
     /// </summary>
-    /// <param name="location">The source location of the implementing class identifier.</param>
-    /// <param name="className">The implementing class name.</param>
+    /// <param name="location">The source location of the implementing aggregate identifier.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The interface declaring the abstract method.</param>
     /// <param name="methodName">The abstract method name.</param>
     public void ReportInterfaceAbstractMethodHasNoDefault(
         TextLocation location,
-        string className,
+        StructSymbol implementer,
         string interfaceName,
         string methodName)
-    => Report(location, DiagnosticDescriptors.InterfaceAbstractMethodHasNoDefault, className, interfaceName, methodName);
+    => Report(location, DiagnosticDescriptors.InterfaceAbstractMethodHasNoDefault, GetAggregateKindName(implementer), implementer.Name, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0321 — a deferred modifier (currently
@@ -763,24 +763,24 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.StaticVirtualInterfacePropertyNotImplemented, structName, interfaceName, propertyName, detail);
 
     /// <summary>
-    /// Reports GS0331 — ADR-0089 / issue #755: a struct that declares it
+    /// Reports GS0331 — ADR-0089 / issue #755: an aggregate that declares it
     /// implements an interface with one or more static-virtual abstract
     /// members does not provide the matching <c>shared { func … }</c>
     /// override for some of those slots.
     /// </summary>
-    /// <param name="location">The struct declaration head location.</param>
-    /// <param name="structName">The implementer struct name.</param>
+    /// <param name="location">The aggregate declaration head location.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The interface symbol display.</param>
     /// <param name="methodName">The unimplemented static-virtual method name.</param>
     public void ReportStaticVirtualInterfaceMethodNotImplemented(
         TextLocation location,
-        string structName,
+        StructSymbol implementer,
         string interfaceName,
         string methodName)
-    => Report(location, DiagnosticDescriptors.StaticVirtualInterfaceMethodNotImplemented, structName, interfaceName, methodName);
+    => Report(location, DiagnosticDescriptors.StaticVirtualInterfaceMethodNotImplemented, GetAggregateKindName(implementer), implementer.Name, interfaceName, methodName);
 
     /// <summary>
-    /// Reports GS0332 — ADR-0089 / issue #755: a struct declares a
+    /// Reports GS0332 — ADR-0089 / issue #755: an aggregate declares a
     /// non-<c>static</c> instance method with the same name and signature
     /// as a static-virtual interface slot. Instance methods cannot satisfy
     /// a static-virtual contract; the implementer must declare the method
@@ -788,15 +788,15 @@ public sealed partial class DiagnosticBag
     /// signature.
     /// </summary>
     /// <param name="location">The offending instance-method declaration location.</param>
-    /// <param name="structName">The implementer struct name.</param>
+    /// <param name="implementer">The implementing class or struct.</param>
     /// <param name="interfaceName">The interface symbol display.</param>
     /// <param name="methodName">The interface slot name.</param>
     public void ReportNonStaticMemberForStaticVirtualSlot(
         TextLocation location,
-        string structName,
+        StructSymbol implementer,
         string interfaceName,
         string methodName)
-    => Report(location, DiagnosticDescriptors.NonStaticMemberForStaticVirtualSlot, structName, methodName, interfaceName, methodName);
+    => Report(location, DiagnosticDescriptors.NonStaticMemberForStaticVirtualSlot, GetAggregateKindName(implementer), implementer.Name, methodName, interfaceName, methodName);
 
     /// <summary>
     /// ADR-0090 / issue #756: GS0335 — a <c>private</c> interface method was
@@ -1139,4 +1139,7 @@ public sealed partial class DiagnosticBag
         interfacePropertyName,
         expectedType,
         actualType);
+
+    private static string GetAggregateKindName(StructSymbol symbol)
+        => symbol.IsClass ? "Class" : "Struct";
 }

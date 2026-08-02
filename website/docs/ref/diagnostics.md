@@ -149,8 +149,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
 | GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
 | GS0186 | Error | Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
-| GS0187 | Error | Class does not implement interface method. | A class claims to implement an interface but a required method is absent. |
-| GS0188 | Error | Class cannot implement a sealed interface from a different package. | Implementing a `sealed interface` defined outside the current package. |
+| GS0187 | Error | Class or struct does not implement interface method. | A class or struct claims to implement an interface but a required method is absent. |
+| GS0188 | Error | Class or struct cannot implement a sealed interface from a different package. | A class or struct implements a `sealed interface` defined outside its package. |
 | GS0189 | Error | The return type of an `async func(...)` type clause is implicitly wrapped in `Task`; do not write `Task[…]` explicitly. | `async func(int) Task[int]` in a type position. |
 
 ### Async state-machine diagnostics (GS0190)
@@ -886,9 +886,9 @@ dropped-default, missing-implementer, and deferred-modifier cases.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0318 | Error | `Class '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` |
-| GS0319 | Error | `Override targets default-interface method '<Name>' that was removed in interface '<I>'.` |
-| GS0320 | Error | `Class '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
+| GS0318 | Error | `<Kind> '<C>' inherits conflicting default implementations of '<Name>' from interfaces '<IA>' and '<IB>'. Declare '<C>.<Name>' explicitly to disambiguate.` |
+| GS0319 | Error | `<Kind> '<C>' relied on a default implementation of '<I>.<Name>' that was removed. Declare an explicit override on '<C>'.` |
+| GS0320 | Error | `<Kind> '<C>' does not implement interface method '<I>.<Name>' and the interface does not provide a default.` |
 | GS0321 | Error | `Modifier '<modifier>' on interface method '<Name>' is not yet supported. ADR-0085 explicitly defers 'open', 'override', and 'sealed override' interface members.` |
 | GS0368 | Error | `Interface method '<Name>' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke.` |
 

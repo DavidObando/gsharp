@@ -366,7 +366,7 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportConflictingInterfaceDefaults(
                                 syntax.Identifier.Location,
-                                structSymbol.Name,
+                                structSymbol,
                                 imethod.Name,
                                 prior.Iface.Name,
                                 iface.Name);
@@ -387,7 +387,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceAbstractMethodHasNoDefault(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         imethod.Name);
                 }
@@ -395,7 +395,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         imethod.Name);
                 }
@@ -432,7 +432,7 @@ internal sealed partial class DeclarationBinder
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
-                            structSymbol.Name,
+                            structSymbol,
                             iface.Name,
                             imethod.Name);
                     }
@@ -528,7 +528,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         iprop.Name + " (getter)");
                 }
@@ -537,7 +537,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         iprop.Name + " (setter)");
                 }
@@ -644,7 +644,7 @@ internal sealed partial class DeclarationBinder
                     {
                         Diagnostics.ReportInterfaceMethodNotImplemented(
                             syntax.Identifier.Location,
-                            structSymbol.Name,
+                            structSymbol,
                             iface.Name,
                             iprop.Name);
                     }
@@ -664,7 +664,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         iprop.Name);
                 }
@@ -938,7 +938,7 @@ internal sealed partial class DeclarationBinder
             {
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     iface.Name,
                     interfaceEvent.Name);
             }
@@ -1329,7 +1329,7 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportNonStaticMemberForStaticVirtualSlot(
                                 syntax.Identifier.Location,
-                                structSymbol.Name,
+                                structSymbol,
                                 iface.Name,
                                 imethod.Name);
                             nameMatch = true;
@@ -1352,7 +1352,7 @@ internal sealed partial class DeclarationBinder
 
                 Diagnostics.ReportStaticVirtualInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     iface.Name,
                     imethod.Name);
             }
@@ -1657,7 +1657,7 @@ internal sealed partial class DeclarationBinder
 
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     interfaceName,
                     FormatClrMethodSignature(clrMethod));
             }
@@ -1701,7 +1701,7 @@ internal sealed partial class DeclarationBinder
 
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         interfaceName,
                         clrProp.Name);
                     continue;
@@ -1711,7 +1711,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         interfaceName,
                         clrProp.Name + " (getter)");
                 }
@@ -1720,7 +1720,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         interfaceName,
                         clrProp.Name + " (setter)");
                 }
@@ -1798,7 +1798,7 @@ internal sealed partial class DeclarationBinder
                     : SymbolDisplay.ToTypeDisplayString(declaringType);
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     interfaceName,
                     FormatClrMethodSignature(slot.Method));
             }
@@ -1863,7 +1863,7 @@ internal sealed partial class DeclarationBinder
 
             Diagnostics.ReportInterfaceMethodNotImplemented(
                 syntax.Identifier.Location,
-                structSymbol.Name,
+                structSymbol,
                 interfaceName,
                 FormatClrMethodSignature(openMethod));
         }
@@ -1875,7 +1875,7 @@ internal sealed partial class DeclarationBinder
             {
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     interfaceName,
                     openProp.Name);
                 continue;
@@ -1885,7 +1885,7 @@ internal sealed partial class DeclarationBinder
             {
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     interfaceName,
                     openProp.Name + " (getter)");
             }
@@ -1894,7 +1894,7 @@ internal sealed partial class DeclarationBinder
             {
                 Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
-                    structSymbol.Name,
+                    structSymbol,
                     interfaceName,
                     openProp.Name + " (setter)");
             }
