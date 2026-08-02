@@ -24,6 +24,14 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
             """
             import System
 
+            MemoryExtensions.AsSpan([]int32{11, 22, 33})
+            """,
+            "System.Span[int32]"
+        },
+        {
+            """
+            import System
+
             func value(values []int32) int32 {
                 var span = MemoryExtensions.AsSpan(values)
                 return 11
