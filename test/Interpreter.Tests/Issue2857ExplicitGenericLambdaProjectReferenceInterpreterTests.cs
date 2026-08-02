@@ -2,17 +2,17 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
+using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
+[Collection("ConsoleIo")]
 public sealed class Issue2857ExplicitGenericLambdaProjectReferenceInterpreterTests
 {
     [Theory]
@@ -85,14 +85,45 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceInterpreterTes
             "library emit failed:\n" + string.Join("\n", emitResult.Diagnostics.Select(diagnostic => diagnostic.ToString())));
 
         _ = Assembly.Load(peStream.ToArray());
-        using var resolver = ReferenceResolver.Default();
-        var evaluation = new Compilation(resolver, SyntaxTree.Parse(consumer))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
-        var errors = evaluation.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue2857ExplicitGenericLambdaProjectReferenceInterpreterTests),
+            packageName);
+        Directory.CreateDirectory(directory);
+        var sourcePath = Path.Combine(directory, "consumer.gs");
+        File.WriteAllText(sourcePath, consumer);
+        try
+        {
+            using var stdout = new StringWriter();
+            using var stderr = new StringWriter();
+            var previousOut = Console.Out;
+            var previousError = Console.Error;
+            try
+            {
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+                Assert.Equal(0, GSharp.Repl.Program.Main(new[] { sourcePath }));
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousError);
+            }
 
-        Assert.True(
-            errors.Length == 0,
-            "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        Assert.Equal(expected, evaluation.Value);
+            Assert.Equal(string.Empty, stderr.ToString());
+            Assert.Equal(
+                $"{expected}\n",
+                stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 }
