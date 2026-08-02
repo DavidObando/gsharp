@@ -1977,8 +1977,9 @@ internal sealed partial class MethodBodyEmitter
     // reachable from the receiver's hierarchy instead — this yields the
     // concrete base (`FrameFilterBase`1<int32>`) for a non-generic leaf and the
     // self-instantiation (`FrameFilterBase`1<!0>`) when accessed from within the
-    // generic type itself. Returns null when the bare FieldDef should be used
-    // (a non-generic declaring type with no generic base in scope).
+    // generic type itself. A non-generic declaring type is returned unchanged;
+    // ResolveFieldToken will then select its bare FieldDef instead of guessing
+    // from a generic derived receiver.
     private static StructSymbol ResolveFieldReferenceContainer(StructSymbol declaringType, StructSymbol receiver, FieldSymbol field)
     {
         if (declaringType == null)
@@ -2000,15 +2001,7 @@ internal sealed partial class MethodBodyEmitter
             return constructed;
         }
 
-        // No receiver-reachable constructed base (e.g. a null/static receiver):
-        // fall back to the declaring type when it is itself generic.
-        if (!declaringType.TypeArguments.IsDefaultOrEmpty)
-        {
-            return declaringType;
-        }
-
-        var def = declaringType.Definition ?? declaringType;
-        return def.TypeParameters.IsDefaultOrEmpty ? null : declaringType;
+        return declaringType;
     }
 
     // Issue #1467: the property analogue of ResolveFieldReferenceContainer.

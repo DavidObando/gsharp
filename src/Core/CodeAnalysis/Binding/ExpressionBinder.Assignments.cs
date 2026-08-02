@@ -474,7 +474,7 @@ internal sealed partial class ExpressionBinder
 
                 var value = BindExpression(initSyntax.Value);
                 var converted = conversions.BindConversion(initSyntax.Value.Location, value, field.Type);
-                return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, structSymbol, field, converted);
+                return new BoundFieldAssignmentExpression(initSyntax, receiverLocal, fieldDeclaringType, field, converted);
             }
 
             if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop, out var propDeclaringType))
@@ -991,10 +991,10 @@ internal sealed partial class ExpressionBinder
 
         if (usesExpressionReceiver)
         {
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, assignmentReceiver, structSymbol, field, converted);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, assignmentReceiver, fieldDeclaringType, field, converted);
         }
 
-        return new BoundFieldAssignmentExpression(null, variable, structSymbol, field, converted);
+        return new BoundFieldAssignmentExpression(null, variable, fieldDeclaringType, field, converted);
     }
 
     /// <summary>
