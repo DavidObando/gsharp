@@ -340,6 +340,132 @@ namespace Demo
     }
 
     [Fact]
+    public void ConditionalCompoundPropertyAssignment_ReturnsCombinedValueWithoutGetterReadback()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int backing = 1;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.backing + 10;
+                        }
+
+                        set { this.backing = value; }
+                    }
+
+                    public int Gets => this.gets;
+
+                    public int Stored => this.backing;
+                }
+
+                public static class C
+                {
+                    private static Holder current = new Holder();
+                    private static int receiverCalls;
+                    private static int rhsCalls;
+
+                    private static Holder Receiver()
+                    {
+                        receiverCalls++;
+                        return current;
+                    }
+
+                    private static int Next()
+                    {
+                        rhsCalls++;
+                        return 2;
+                    }
+
+                    public static string Run()
+                    {
+                        current = new Holder();
+                        receiverCalls = 0;
+                        rhsCalls = 0;
+                        int result = false ? -1 : Receiver().P += Next();
+                        return receiverCalls + "," + rhsCalls + "," + current.Gets + ","
+                            + result + "," + current.Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(1, CountOccurrences(printed, "C.Receiver()"));
+        Assert.Equal(1, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal("1,1,1,13,13", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ReturnAndInvocationCompoundPropertyAssignments_ReuseCombinedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public sealed class Holder
+                {
+                    private int backing = 1;
+                    private int gets;
+
+                    public int P
+                    {
+                        get
+                        {
+                            this.gets++;
+                            return this.backing + 10;
+                        }
+
+                        set { this.backing = value; }
+                    }
+
+                    public int Gets => this.gets;
+
+                    public int Stored => this.backing;
+                }
+
+                public static class C
+                {
+                    private static int rhsCalls;
+
+                    private static int Next()
+                    {
+                        rhsCalls++;
+                        return 2;
+                    }
+
+                    private static int Echo(int value) => value;
+
+                    private static int AddAndReturn(Holder holder)
+                    {
+                        return holder.P += Next();
+                    }
+
+                    public static string Run()
+                    {
+                        rhsCalls = 0;
+                        var holder = new Holder();
+                        int argument = Echo(holder.P += Next());
+                        int returned = AddAndReturn(holder);
+                        return rhsCalls + "," + holder.Gets + "," + argument + ","
+                            + returned + "," + holder.Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal(2, CountOccurrences(printed, "C.Next()"));
+        Assert.Equal("2,2,13,25,25", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
     public void SetOnlyIndexerAssignment_SideEffectingTargetAndValueRunOnce()
     {
         string printed = TranslateUnit(

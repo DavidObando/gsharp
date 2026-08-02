@@ -387,11 +387,21 @@ public sealed partial class CSharpToGSharpTranslator
             for (int i = lefts.Count - 1; i >= 0; i--)
             {
                 bool hasOuterLink = i > 0;
-                bool captureRootValue =
+                bool targetNeedsCapturedValue =
+                    this.AssignmentTargetNeedsCapturedValue(lefts[i].Syntax);
+                bool captureRootSimpleValue =
                     preserveValue &&
                     i == 0 &&
                     assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
-                    this.AssignmentTargetNeedsCapturedValue(lefts[i].Syntax);
+                    targetNeedsCapturedValue;
+                string compoundBinaryOp = lefts[i].Op == "="
+                    ? null
+                    : CompoundToBinaryOperator(lefts[i].Op);
+                bool captureRootCompoundValue =
+                    preserveValue &&
+                    i == 0 &&
+                    targetNeedsCapturedValue &&
+                    compoundBinaryOp != null;
                 GExpression assignedValue = value;
                 if (lefts[i].Op == "=")
                 {
@@ -423,19 +433,15 @@ public sealed partial class CSharpToGSharpTranslator
                         includePromotedValue: true);
                 }
 
-                if (captureRootValue)
+                if (captureRootSimpleValue)
                 {
                     // C# yields the converted RHS, never a post-set target read.
                     // A typed temp preserves that value for properties, set-only
                     // storage, and targets whose receiver/index had to be spilled.
-                    string temp = $"__spill{this.state.SpillCounter++}";
-                    statements.Add(new LocalDeclarationStatement(
-                        BindingKind.Let,
-                        temp,
-                        this.ResolveExpressionType(assignment),
-                        assignedValue));
-                    assignedValue = new IdentifierExpression(temp);
-                    this.state.AssignmentValues[assignment] = assignedValue;
+                    assignedValue = this.CaptureAssignmentValue(
+                        assignment,
+                        assignedValue,
+                        statements);
                 }
                 else if (hasOuterLink && lefts[i].Op == "=" && !valueIsShared)
                 {
@@ -447,22 +453,23 @@ public sealed partial class CSharpToGSharpTranslator
                     valueIsShared = true;
                 }
 
-                if (hasOuterLink && lefts[i].Op != "=" &&
-                    !IsTrivialOperand(safeTargets[i]) &&
-                    CompoundToBinaryOperator(lefts[i].Op) is string binaryOp)
+                if ((hasOuterLink || captureRootCompoundValue) &&
+                    targetNeedsCapturedValue &&
+                    compoundBinaryOp is string binaryOp)
                 {
-                    // `c.P += d` reused above (`a = b = c.P += d`): re-embedding
-                    // a NON-trivial target (a property/indexer read, unlike a
-                    // bare local) would re-run its getter once per outer link
-                    // (issue #1875). Instead read c.P's getter exactly once,
-                    // combine it with the operand, and store the result — the
-                    // combined value (not a re-read of c.P) is what every
-                    // outer `=` link reuses, matching C#'s single-getter-call
-                    // semantics. A trivial target (bare local/`this`) has no
-                    // getter to protect, so it keeps the simpler read-back
-                    // below unchanged.
+                    // A non-trivial compound target must yield its computed value
+                    // without re-reading the getter: both an outer assignment chain
+                    // (`a = c.P += d`, issue #1875) and a standalone value position
+                    // (`Echo(c.P += d)`) reuse the captured combined value.
                     GExpression oldValue = this.SpillOperand(safeTargets[i], statements);
-                    GExpression newValue = this.SpillOperand(new BinaryExpression(oldValue, binaryOp, assignedValue), statements);
+                    GExpression combinedValue =
+                        new BinaryExpression(oldValue, binaryOp, assignedValue);
+                    GExpression newValue = captureRootCompoundValue
+                        ? this.CaptureAssignmentValue(
+                            assignment,
+                            combinedValue,
+                            statements)
+                        : this.SpillOperand(combinedValue, statements);
                     statements.Add(new AssignmentStatement(safeTargets[i], newValue, "="));
                     value = newValue;
                     valueIsShared = true;
@@ -489,6 +496,22 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return statements;
+        }
+
+        private GExpression CaptureAssignmentValue(
+            AssignmentExpressionSyntax assignment,
+            GExpression value,
+            List<GStatement> statements)
+        {
+            string temp = $"__spill{this.state.SpillCounter++}";
+            statements.Add(new LocalDeclarationStatement(
+                BindingKind.Let,
+                temp,
+                this.ResolveExpressionType(assignment),
+                value));
+            var captured = new IdentifierExpression(temp);
+            this.state.AssignmentValues[assignment] = captured;
+            return captured;
         }
 
         private bool AssignmentTargetNeedsCapturedValue(ExpressionSyntax target)
