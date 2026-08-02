@@ -1,10 +1,10 @@
 name: cs2gs-nightly
 
-# ADR-0138: the deep C#→G# coverage run. Unlike the PR gate (build.yml `cs2gs`
-# job), the nightly runs the ledger in STRICT mode (stale open entries fail so
-# the ledger cannot rot) and then AUTO-FILES GitHub issues for any new gap
-# fingerprints (clustered by root cause, capped per run), pushing the updated
-# ledger back as a pull request for review.
+# ADR-0138: the deep C#→G# coverage run. Unlike the PR gates (build.yml
+# `cs2gs-corpus` and `cs2gs-oahu` jobs), the nightly runs the ledger in STRICT
+# mode (stale open entries fail so the ledger cannot rot) and then AUTO-FILES
+# GitHub issues for any new gap fingerprints (clustered by root cause, capped
+# per run), pushing the updated ledger back as a pull request for review.
 
 on:
   schedule:

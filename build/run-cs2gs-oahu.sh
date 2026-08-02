@@ -86,10 +86,13 @@ export NO_COLOR=1
 
 dotnet "$cli" --version > "$smoke_dir/version.txt"
 dotnet "$cli" --help > "$smoke_dir/help.txt"
+set +e
 dotnet "$cli" \
   --config-dir "$smoke_dir/config" \
   --log-dir "$smoke_dir/log" \
   --json auth status > "$smoke_dir/auth-status.json"
+auth_status_exit=$?
+set -e
 if [[ "$(uname -s)" == "Darwin" ]]; then
   # .NET resolves LocalApplicationData from the macOS account rather than HOME.
   jq -e '
@@ -106,6 +109,12 @@ else
     .count == 0 and
     (.items | type == "array" and length == 0)
   ' "$smoke_dir/auth-status.json" > /dev/null
+fi
+auth_count=$(jq -r '.count' "$smoke_dir/auth-status.json")
+expected_auth_exit=$((auth_count == 0 ? 3 : 0))
+if (( auth_status_exit != expected_auth_exit )); then
+  echo "Expected auth status exit $expected_auth_exit for $auth_count profiles, got $auth_status_exit." >&2
+  exit 1
 fi
 dotnet "$app" --smoke-test
 
