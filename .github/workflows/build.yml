@@ -107,6 +107,9 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
+      - name: Build
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
       - name: Test
         env:
           MSBUILDDISABLENODEREUSE: 1
@@ -115,6 +118,7 @@ jobs:
           args=(
             "${{ matrix.project }}"
             --configuration Release
+            --no-build
             --no-restore
             --logger "trx"
             --results-directory TestResults
