@@ -1432,7 +1432,6 @@ public sealed class Lowerer : BoundTreeRewriter
         var preEmitAnalysisBody = Flatten(ProtectedRegionBranchRewriter.Rewrite(flattened));
         if (this.returnValueLocal != null)
         {
-            const string Message = "Compiler-generated guard reached: non-void function fell through without returning a value.";
             var exceptionType = typeof(System.InvalidOperationException);
             var constructor = exceptionType.GetConstructor(new[] { typeof(string) });
             var statements = ImmutableArray.CreateBuilder<BoundStatement>(flattened.Statements.Length + 1);
@@ -1447,7 +1446,9 @@ public sealed class Lowerer : BoundTreeRewriter
                             null,
                             exceptionType,
                             constructor,
-                            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, Message)),
+                            ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(
+                                null,
+                                DiagnosticDescriptors.NonVoidFallthroughGuardMessage)),
                             TypeSymbol.FromClrType(exceptionType)),
                         DiagnosticDescriptors.AllPathsMustReturn));
                 }

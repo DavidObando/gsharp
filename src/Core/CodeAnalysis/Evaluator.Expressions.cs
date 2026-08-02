@@ -1790,7 +1790,10 @@ public sealed partial class Evaluator
             locals[node.Function.Parameters[1]] = rightValue;
             using (PushFrame(locals))
             {
-                return EvaluateFunctionBody(program.Functions[node.Function]);
+                return EvaluateFunctionBody(
+                    program.Functions[node.Function],
+                    node.Function.Type,
+                    node.Function.Declaration?.Identifier.Location);
             }
         }
 
@@ -1970,7 +1973,10 @@ public sealed partial class Evaluator
                 var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>();
                 using (PushFrame(frame))
                 {
-                    return EvaluateFunctionBody(staticGetterBody);
+                    return EvaluateFunctionBody(
+                        staticGetterBody,
+                        node.Property.GetterSymbol.Type,
+                        node.Property.Declaration?.Identifier.Location);
                 }
             }
 
@@ -2028,7 +2034,10 @@ public sealed partial class Evaluator
             };
             using (PushFrame(frame))
             {
-                return EvaluateFunctionBody(getterBody);
+                return EvaluateFunctionBody(
+                    getterBody,
+                    property.GetterSymbol.Type,
+                    property.Declaration?.Identifier.Location);
             }
         }
 

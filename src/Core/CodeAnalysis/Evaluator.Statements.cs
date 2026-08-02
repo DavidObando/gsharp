@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using Emit = GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis;
@@ -243,13 +244,34 @@ public sealed partial class Evaluator
     /// parked goto reaching the boundary would mean a `break`/`continue`
     /// escaped a function body, which the binder rejects — but we clear
     /// defensively so a stale flag from a partially-evaluated previous
-    /// call cannot corrupt the next invocation on this evaluator.
+    /// call cannot corrupt the next invocation on this evaluator. Issue
+    /// #3006: when a non-void function reaches this boundary without a
+    /// return, surface the same compiler-generated guard used by emitted
+    /// code instead of returning the CLR default value.
     /// </summary>
-    private object EvaluateFunctionBody(BoundBlockStatement body)
+    /// <param name="body">The lowered function body.</param>
+    /// <param name="returnType">The declared return type, or null for top-level and constructor bodies.</param>
+    /// <param name="location">The source location of the function declaration, when available.</param>
+    /// <returns>The function's return value.</returns>
+    private object EvaluateFunctionBody(
+        BoundBlockStatement body,
+        TypeSymbol returnType = null,
+        TextLocation? location = null)
     {
         var result = EvaluateStatement(body);
+        var returned = IsReturning;
         IsReturning = false;
         PendingGotoLabel = null;
+
+        if (!returned && returnType != null && returnType != TypeSymbol.Void)
+        {
+            throw EvaluatorException.CreateDiagnostic(
+                DiagnosticDescriptors.AllPathsMustReturn,
+                new InvalidOperationException(DiagnosticDescriptors.NonVoidFallthroughGuardMessage),
+                body,
+                location);
+        }
+
         return result;
     }
 

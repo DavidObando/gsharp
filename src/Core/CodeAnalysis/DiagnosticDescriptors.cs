@@ -8,6 +8,7 @@ internal static class DiagnosticDescriptors
 {
     internal const string AmbiguousOverloadCandidatesMessageFormat = " Candidates: {0}.";
     internal const string GoBuiltinSuggestionMessageFormat = " or call '{0}' directly";
+    internal const string NonVoidFallthroughGuardMessage = "Compiler-generated guard reached: non-void function fell through without returning a value.";
     internal const string ObsoleteUseDetailMessageFormat = ": '{0}'";
 
     internal static readonly DiagnosticDescriptor BadCharacter = new("GS0001", DiagnosticSeverity.Error, "Bad character input: '{0}'.");

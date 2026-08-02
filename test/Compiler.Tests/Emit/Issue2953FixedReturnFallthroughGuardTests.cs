@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -21,8 +22,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2953FixedReturnFallthroughGuardTests
 {
-    private const string GuardMessage =
-        "Compiler-generated guard reached: non-void function fell through without returning a value.";
+    private const string GuardMessage = DiagnosticDescriptors.NonVoidFallthroughGuardMessage;
 
     /// <summary>Gets fixed and protected-return shapes that must reach the fallthrough guard.</summary>
     public static IEnumerable<object[]> FallthroughCases()

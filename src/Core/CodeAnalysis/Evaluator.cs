@@ -203,7 +203,7 @@ public sealed partial class Evaluator
     {
         if (!useEntryPointReturnType)
         {
-            return EvaluateFunctionBody(body);
+            return EvaluateFunctionBody(body, entryPoint.Type, entryPoint.Declaration?.Identifier.Location);
         }
 
         if (entryPoint.Type != TypeSymbol.Void
@@ -213,7 +213,7 @@ public sealed partial class Evaluator
             throw new InvalidOperationException("Entry point must have a return type of void, int32, or uint32.");
         }
 
-        var value = EvaluateFunctionBody(body);
+        var value = EvaluateFunctionBody(body, entryPoint.Type, entryPoint.Declaration?.Identifier.Location);
         return entryPoint.Type == TypeSymbol.Void ? null : value;
     }
 
