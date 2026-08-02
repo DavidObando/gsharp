@@ -44,14 +44,24 @@ def main() -> int:
     entries.extend(
         [
             {
-                "name": "compiler-issue1",
+                "name": "compiler-issue10-13",
                 "project": "test/Compiler.Tests/Compiler.Tests.csproj",
-                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue1",
+                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue10|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue11|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue12|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue13",
             },
             {
-                "name": "compiler-issue2",
+                "name": "compiler-issue1-remainder",
                 "project": "test/Compiler.Tests/Compiler.Tests.csproj",
-                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue2",
+                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue1&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue10&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue11&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue12&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue13",
+            },
+            {
+                "name": "compiler-issue20-24",
+                "project": "test/Compiler.Tests/Compiler.Tests.csproj",
+                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue20|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue21|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue22|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue23|FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue24",
+            },
+            {
+                "name": "compiler-issue2-remainder",
+                "project": "test/Compiler.Tests/Compiler.Tests.csproj",
+                "filter": "FullyQualifiedName~GSharp.Compiler.Tests.Emit.Issue2&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue20&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue21&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue22&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue23&FullyQualifiedName!~GSharp.Compiler.Tests.Emit.Issue24",
             },
             {
                 "name": "compiler-issue5",
