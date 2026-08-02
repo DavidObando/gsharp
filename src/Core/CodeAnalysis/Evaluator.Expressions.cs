@@ -31,6 +31,7 @@ public sealed partial class Evaluator
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FunctionSymbol, ConcurrentDictionary<Type, Func<Func<object[], object>, Delegate>>> InterpreterDelegateFactoriesBySite = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Delegate, ClosureValue> InterpreterClosures = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<StructSymbol, Type> ClrBackingTypes = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeSymbol, Type> ClrReifiedTypes = new();
     private static int clrBackingAssemblyOrdinal;
 
     private object EvaluateExpression(BoundExpression node)
@@ -1266,15 +1267,20 @@ public sealed partial class Evaluator
 
     private static Type CreateClrBackingType(StructSymbol structType, Type clrBase)
     {
-        var assemblyOrdinal = Interlocked.Increment(ref clrBackingAssemblyOrdinal);
-        var assemblyName = new AssemblyName(string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
-            "GSharp.Interpreter.ClrBacking.{0}",
-            assemblyOrdinal));
-        var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
-            assemblyName,
-            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
-        var module = assembly.DefineDynamicModule(assemblyName.Name);
+        return CreateClrType(
+            structType,
+            clrBase,
+            TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Sealed,
+            emitBaseConstructors: true);
+    }
+
+    private static Type CreateClrType(
+        StructSymbol structType,
+        Type clrBase,
+        TypeAttributes attributes,
+        bool emitBaseConstructors)
+    {
+        var module = CreateClrBackingModule();
         var definition = structType.Definition ?? structType;
         var arity = definition.TypeParameters.Length;
         var enclosingTypes = new Stack<StructSymbol>();
@@ -1317,38 +1323,41 @@ public sealed partial class Evaluator
                 string.IsNullOrEmpty(structType.PackageName)
                     ? metadataName
                     : $"{structType.PackageName}.{metadataName}",
-                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Sealed,
+                attributes,
                 clrBase)
             : parentBuilder.DefineNestedType(
                 metadataName,
-                TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed,
+                (attributes & ~TypeAttributes.VisibilityMask) | TypeAttributes.NestedPublic,
                 clrBase);
         if (arity > 0)
         {
             typeBuilder.DefineGenericParameters(definition.TypeParameters.Select(static parameter => parameter.Name).ToArray());
         }
 
-        foreach (var baseCtor in clrBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        if (emitBaseConstructors)
         {
-            if (!baseCtor.IsPublic && !baseCtor.IsFamily && !baseCtor.IsFamilyOrAssembly)
+            foreach (var baseCtor in clrBase.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
             {
-                continue;
-            }
+                if (!baseCtor.IsPublic && !baseCtor.IsFamily && !baseCtor.IsFamilyOrAssembly)
+                {
+                    continue;
+                }
 
-            var parameterTypes = Array.ConvertAll(baseCtor.GetParameters(), static parameter => parameter.ParameterType);
-            var ctorBuilder = typeBuilder.DefineConstructor(
-                MethodAttributes.Public,
-                CallingConventions.Standard,
-                parameterTypes);
-            var il = ctorBuilder.GetILGenerator();
-            il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
-            for (var i = 0; i < parameterTypes.Length; i++)
-            {
-                il.Emit(System.Reflection.Emit.OpCodes.Ldarg, i + 1);
-            }
+                var parameterTypes = Array.ConvertAll(baseCtor.GetParameters(), static parameter => parameter.ParameterType);
+                var ctorBuilder = typeBuilder.DefineConstructor(
+                    MethodAttributes.Public,
+                    CallingConventions.Standard,
+                    parameterTypes);
+                var il = ctorBuilder.GetILGenerator();
+                il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+                for (var i = 0; i < parameterTypes.Length; i++)
+                {
+                    il.Emit(System.Reflection.Emit.OpCodes.Ldarg, i + 1);
+                }
 
-            il.Emit(System.Reflection.Emit.OpCodes.Call, baseCtor);
-            il.Emit(System.Reflection.Emit.OpCodes.Ret);
+                il.Emit(System.Reflection.Emit.OpCodes.Call, baseCtor);
+                il.Emit(System.Reflection.Emit.OpCodes.Ret);
+            }
         }
 
         var backingType = typeBuilder.CreateType();
@@ -1373,10 +1382,37 @@ public sealed partial class Evaluator
 
     private static Type ResolveClrBackingTypeArgument(TypeSymbol argument)
     {
-        if (argument is NullableTypeSymbol nullable
-            && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr)
+        if (argument is NullableTypeSymbol nullable)
         {
-            return typeof(Nullable<>).MakeGenericType(valueClr);
+            var underlying = ResolveClrBackingTypeArgument(nullable.UnderlyingType);
+            return underlying.IsValueType
+                ? typeof(Nullable<>).MakeGenericType(underlying)
+                : underlying;
+        }
+
+        if (argument is ImportedTypeSymbol imported
+            && imported.OpenDefinition is Type openDefinition
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            try
+            {
+                return openDefinition.MakeGenericType(
+                    imported.TypeArguments.Select(ResolveClrBackingTypeArgument).ToArray());
+            }
+            catch (ArgumentException)
+            {
+                return imported.ClrType ?? typeof(object);
+            }
+        }
+
+        if (argument is SliceTypeSymbol slice)
+        {
+            return ResolveClrBackingTypeArgument(slice.ElementType).MakeArrayType();
+        }
+
+        if (argument is ArrayTypeSymbol array)
+        {
+            return ResolveClrBackingTypeArgument(array.ElementType).MakeArrayType();
         }
 
         if (argument.ClrType is Type clrType)
@@ -1386,22 +1422,75 @@ public sealed partial class Evaluator
 
         if (argument is StructSymbol { IsClass: true } gsharpClass)
         {
-            var clrBase = typeof(object);
-            for (var type = gsharpClass; type != null; type = type.BaseClass)
-            {
-                if (type.ImportedBaseType?.ClrType is Type importedBase)
-                {
-                    clrBase = importedBase;
-                    break;
-                }
-            }
-
             return ClrBackingTypes.GetValue(
                 gsharpClass,
-                _ => CreateClrBackingType(gsharpClass, clrBase));
+                _ => CreateClrBackingType(gsharpClass, FindImportedClrBase(gsharpClass)));
+        }
+
+        if (argument is StructSymbol or EnumSymbol)
+        {
+            return ClrReifiedTypes.GetValue(argument, CreateClrReifiedType);
         }
 
         return typeof(object);
+    }
+
+    private static Type CreateClrReifiedType(TypeSymbol type)
+    {
+        if (type is EnumSymbol enumType)
+        {
+            return CreateClrEnumType(enumType);
+        }
+
+        var structType = (StructSymbol)type;
+        return CreateClrType(
+            structType,
+            typeof(ValueType),
+            TypeAttributes.Public | TypeAttributes.SequentialLayout | TypeAttributes.Sealed,
+            emitBaseConstructors: false);
+    }
+
+    private static Type FindImportedClrBase(StructSymbol structType)
+    {
+        for (var type = structType; type != null; type = type.BaseClass)
+        {
+            if (type.ImportedBaseType?.ClrType is Type importedBase)
+            {
+                return importedBase;
+            }
+        }
+
+        return typeof(object);
+    }
+
+    private static Type CreateClrEnumType(EnumSymbol enumType)
+    {
+        var module = CreateClrBackingModule();
+        var enumBuilder = module.DefineEnum(
+            string.IsNullOrEmpty(enumType.PackageName)
+                ? enumType.Name
+                : $"{enumType.PackageName}.{enumType.Name}",
+            TypeAttributes.Public,
+            typeof(int));
+        foreach (var member in enumType.Members)
+        {
+            enumBuilder.DefineLiteral(member.Name, member.Value);
+        }
+
+        return enumBuilder.CreateTypeInfo().AsType();
+    }
+
+    private static System.Reflection.Emit.ModuleBuilder CreateClrBackingModule()
+    {
+        var assemblyOrdinal = Interlocked.Increment(ref clrBackingAssemblyOrdinal);
+        var assemblyName = new AssemblyName(string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            "GSharp.Interpreter.ClrBacking.{0}",
+            assemblyOrdinal));
+        var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            assemblyName,
+            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        return assembly.DefineDynamicModule(assemblyName.Name);
     }
 
     private static string GetClrMetadataTypeName(StructSymbol type)
