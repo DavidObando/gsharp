@@ -265,7 +265,14 @@ internal sealed partial class ExpressionBinder
                     // their constant value rather than emit `ldsfld`.
                     if (staticMember is FieldInfo litField && litField.IsLiteral)
                     {
-                        return new BoundLiteralExpression(null, litField.GetRawConstantValue(), TypeSymbol.FromClrType(litField.FieldType));
+                        var literalType = TypeSymbol.FromClrType(litField.FieldType);
+                        if (classSymbol.SymbolicReceiver != null)
+                        {
+                            literalType = ResolveStaticMemberTypeFromSymbolicReceiver(classSymbol.SymbolicReceiver, litField)
+                                ?? literalType;
+                        }
+
+                        return new BoundLiteralExpression(null, litField.GetRawConstantValue(), literalType);
                     }
 
                     var staticType = staticMember switch
@@ -826,7 +833,11 @@ internal sealed partial class ExpressionBinder
             if (scope.References.TryResolveNestedType(classSymbol.ClassType, name, out var nestedType))
             {
                 var nested = new ImportedClassSymbol(nestedType, nameExpr, references: scope.References);
-                nestedClassSymbol = CloseImportedNestedType(classSymbol.ClassType, nested, nameExpr);
+                nestedClassSymbol = CloseImportedNestedType(
+                    classSymbol.ClassType,
+                    nested,
+                    nameExpr,
+                    symbolicReceiver: classSymbol.SymbolicReceiver);
                 return true;
             }
 
@@ -2200,7 +2211,9 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openMemberType, symbolicReceiver.OpenDefinition, symbolicReceiver.TypeArguments);
+            var mapped = ClrTypeUtilities.AreSame(openMemberType, symbolicReceiver.OpenDefinition)
+                ? symbolicReceiver
+                : MemberLookup.MapOpenClrTypeToSymbolic(openMemberType, symbolicReceiver.OpenDefinition, symbolicReceiver.TypeArguments);
             return TypeSymbol.ContainsTypeParameter(mapped)
                 || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
                 || openMemberType.IsGenericParameter

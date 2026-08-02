@@ -695,7 +695,8 @@ internal sealed partial class ExpressionBinder
     private ImportedClassSymbol CloseImportedNestedType(
         Type constructedOuter,
         ImportedClassSymbol nested,
-        ExpressionSyntax syntax)
+        ExpressionSyntax syntax,
+        ImportedTypeSymbol symbolicReceiver = null)
     {
         var nestedType = nested?.ClassType;
         if (constructedOuter?.IsConstructedGenericType != true
@@ -713,7 +714,10 @@ internal sealed partial class ExpressionBinder
         try
         {
             var closedType = nestedType.MakeGenericType(outerArguments);
-            return new ImportedClassSymbol(closedType, syntax, references: scope.References);
+            var symbolicNested = symbolicReceiver == null
+                ? null
+                : ImportedTypeSymbol.GetConstructed(closedType, nestedType, symbolicReceiver.TypeArguments);
+            return new ImportedClassSymbol(closedType, syntax, symbolicNested, scope.References);
         }
         catch (ArgumentException)
         {
