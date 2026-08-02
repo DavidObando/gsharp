@@ -8,6 +8,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -90,6 +93,296 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
     }
 
     [Fact]
+    public void PlainStructObjectOverrides_AllShapes_DispatchReflectAndEmitExpectedCallSites()
+    {
+        const string Source = """
+            package Issue2896
+            import System
+
+            interface IMarker {
+                func Marker() string;
+            }
+
+            struct ToStringOnly {
+                var Number int32
+                override func ToString() string -> "OVERRIDDEN-11"
+            }
+
+            struct EqualsOnly {
+                var Number int32
+                override func Equals(value object) bool -> false
+            }
+
+            struct HashOnly {
+                var Number int32
+                override func GetHashCode() int32 -> 289613
+            }
+
+            struct AllValue {
+                var Number int32
+                override func ToString() string -> "ALL-OVERRIDDEN-17"
+                override func Equals(value object) bool -> false
+                override func GetHashCode() int32 -> 289617
+            }
+
+            struct GenericValue[T any] {
+                var Item T
+                override func ToString() string -> "GENERIC-OVERRIDDEN-23"
+            }
+
+            struct InterfaceValue : IMarker {
+                var Number int32
+                func Marker() string -> "MARKER-31"
+                override func ToString() string -> "INTERFACE-OVERRIDDEN-31"
+            }
+
+            struct OperatorValue : IEquatable[OperatorValue] {
+                var Number int32
+                func Equals(other OperatorValue) bool -> Number == other.Number
+                override func Equals(value object) bool -> false
+                override func GetHashCode() int32 -> 289637
+            }
+
+            func (left OperatorValue) operator ==(right OperatorValue) bool ->
+                left.Number == right.Number
+
+            func (left OperatorValue) operator !=(right OperatorValue) bool ->
+                left.Number != right.Number
+
+            class Container {
+                struct NestedValue {
+                    var Number int32
+                    override func ToString() string -> "NESTED-OVERRIDDEN-41"
+                }
+            }
+
+            struct SharedValue {
+                var Number int32
+                shared {
+                    func Label() string -> "SHARED-43"
+                }
+                override func ToString() string -> "SHARED-OVERRIDDEN-43"
+            }
+
+            data struct DataValue {
+                var Number int32
+            }
+
+            struct DefaultValue {
+                var Number int32
+            }
+
+            func PrintGeneric[T any](value T) {
+                Console.WriteLine(value.ToString())
+            }
+
+            func CallSiteProbe(value AllValue, boxed object, peer object) {
+                Console.WriteLine(value.ToString())
+                Console.WriteLine(boxed.ToString())
+                Console.WriteLine(value.Equals(peer))
+                Console.WriteLine(boxed.Equals(peer))
+                Console.WriteLine(value.GetHashCode())
+                Console.WriteLine(boxed.GetHashCode())
+            }
+
+            let toStringValue = ToStringOnly{Number: 7}
+            let boxedToString object = toStringValue
+            Console.WriteLine(toStringValue.ToString())
+            Console.WriteLine(boxedToString.ToString())
+
+            let equalsValue = EqualsOnly{Number: 7}
+            let equalsPeer object = EqualsOnly{Number: 7}
+            let boxedEquals object = equalsValue
+            Console.WriteLine(equalsValue.Equals(equalsPeer))
+            Console.WriteLine(boxedEquals.Equals(equalsPeer))
+
+            let hashValue = HashOnly{Number: 7}
+            let boxedHash object = hashValue
+            Console.WriteLine(hashValue.GetHashCode())
+            Console.WriteLine(boxedHash.GetHashCode())
+
+            let allValue = AllValue{Number: 7}
+            let allPeer object = AllValue{Number: 7}
+            let boxedAll object = allValue
+            Console.WriteLine(allValue.ToString())
+            Console.WriteLine(boxedAll.ToString())
+            Console.WriteLine(allValue.Equals(allPeer))
+            Console.WriteLine(boxedAll.Equals(allPeer))
+            Console.WriteLine(allValue.GetHashCode())
+            Console.WriteLine(boxedAll.GetHashCode())
+            CallSiteProbe(allValue, boxedAll, allPeer)
+
+            let genericValue = GenericValue[int32]{Item: 7}
+            Console.WriteLine(genericValue.ToString())
+            PrintGeneric(genericValue)
+
+            let interfaceValue = InterfaceValue{Number: 7}
+            let boxedInterface object = interfaceValue
+            Console.WriteLine(interfaceValue.Marker())
+            Console.WriteLine(interfaceValue.ToString())
+            Console.WriteLine(boxedInterface.ToString())
+
+            let operatorLeft = OperatorValue{Number: 7}
+            let operatorRight = OperatorValue{Number: 7}
+            let boxedOperator object = operatorLeft
+            Console.WriteLine(operatorLeft == operatorRight)
+            Console.WriteLine(operatorLeft.Equals(operatorRight))
+            Console.WriteLine(boxedOperator.Equals(operatorRight))
+            Console.WriteLine(boxedOperator.GetHashCode())
+
+            let nestedValue = Container.NestedValue{Number: 7}
+            let boxedNested object = nestedValue
+            Console.WriteLine(nestedValue.ToString())
+            Console.WriteLine(boxedNested.ToString())
+
+            let sharedValue = SharedValue{Number: 7}
+            let boxedShared object = sharedValue
+            Console.WriteLine(SharedValue.Label())
+            Console.WriteLine(sharedValue.ToString())
+            Console.WriteLine(boxedShared.ToString())
+
+            let dataValue = DataValue{Number: 7}
+            let boxedData object = dataValue
+            Console.WriteLine(dataValue.ToString())
+            Console.WriteLine(boxedData.ToString())
+
+            let defaultValue = DefaultValue{Number: 7}
+            let boxedDefault object = defaultValue
+            Console.WriteLine(defaultValue.ToString())
+            Console.WriteLine(boxedDefault.ToString())
+            """;
+
+        var result = Compile(Source, target: "exe");
+        try
+        {
+            Assert.Equal(
+                """
+                OVERRIDDEN-11
+                OVERRIDDEN-11
+                False
+                False
+                289613
+                289613
+                ALL-OVERRIDDEN-17
+                ALL-OVERRIDDEN-17
+                False
+                False
+                289617
+                289617
+                ALL-OVERRIDDEN-17
+                ALL-OVERRIDDEN-17
+                False
+                False
+                289617
+                289617
+                GENERIC-OVERRIDDEN-23
+                GENERIC-OVERRIDDEN-23
+                MARKER-31
+                INTERFACE-OVERRIDDEN-31
+                INTERFACE-OVERRIDDEN-31
+                True
+                True
+                False
+                289637
+                NESTED-OVERRIDDEN-41
+                NESTED-OVERRIDDEN-41
+                SHARED-43
+                SHARED-OVERRIDDEN-43
+                SHARED-OVERRIDDEN-43
+                DataValue(Number=7)
+                DataValue(Number=7)
+                Issue2896.DefaultValue
+                Issue2896.DefaultValue
+                """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+                Run(result.OutputPath));
+
+            var assembly = Assembly.Load(File.ReadAllBytes(result.OutputPath));
+            var types = assembly.GetTypes();
+            var objectToString = typeof(object).GetMethod(nameof(object.ToString))!;
+            var objectEquals = typeof(object).GetMethod(nameof(object.Equals), new[] { typeof(object) })!;
+            var objectGetHashCode = typeof(object).GetMethod(nameof(object.GetHashCode))!;
+
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.ToStringOnly").GetMethod(nameof(object.ToString))!,
+                objectToString);
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.EqualsOnly").GetMethod(nameof(object.Equals), new[] { typeof(object) })!,
+                objectEquals);
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.HashOnly").GetMethod(nameof(object.GetHashCode))!,
+                objectGetHashCode);
+
+            var allType = types.Single(type => type.FullName == "Issue2896.AllValue");
+            AssertValueTypeObjectOverride(allType.GetMethod(nameof(object.ToString))!, objectToString);
+            AssertValueTypeObjectOverride(allType.GetMethod(nameof(object.Equals), new[] { typeof(object) })!, objectEquals);
+            AssertValueTypeObjectOverride(allType.GetMethod(nameof(object.GetHashCode))!, objectGetHashCode);
+
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.GenericValue`1").GetMethod(nameof(object.ToString))!,
+                objectToString);
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.InterfaceValue").GetMethod(nameof(object.ToString))!,
+                objectToString);
+
+            var operatorType = types.Single(type => type.FullName == "Issue2896.OperatorValue");
+            AssertValueTypeObjectOverride(operatorType.GetMethod(nameof(object.Equals), new[] { typeof(object) })!, objectEquals);
+            AssertValueTypeObjectOverride(operatorType.GetMethod(nameof(object.GetHashCode))!, objectGetHashCode);
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.Container+NestedValue").GetMethod(nameof(object.ToString))!,
+                objectToString);
+            AssertValueTypeObjectOverride(
+                types.Single(type => type.FullName == "Issue2896.SharedValue").GetMethod(nameof(object.ToString))!,
+                objectToString);
+
+            var dataType = types.Single(type => type.FullName == "Issue2896.DataValue");
+            AssertValueTypeObjectOverride(dataType.GetMethod(nameof(object.ToString))!, objectToString);
+            var defaultType = types.Single(type => type.FullName == "Issue2896.DefaultValue");
+            Assert.Null(defaultType.GetMethod(
+                nameof(object.ToString),
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly));
+
+            using var peReader = new PEReader(File.OpenRead(result.OutputPath));
+            var metadata = peReader.GetMetadataReader();
+            AssertMethodImplCount(metadata, "ToStringOnly", 1);
+            AssertMethodImplCount(metadata, "EqualsOnly", 1);
+            AssertMethodImplCount(metadata, "HashOnly", 1);
+            AssertMethodImplCount(metadata, "AllValue", 3);
+            AssertMethodImplCount(metadata, "GenericValue`1", 1);
+            AssertMethodImplCount(metadata, "InterfaceValue", 1);
+            AssertMethodImplCount(metadata, "OperatorValue", 2);
+            AssertMethodImplCount(metadata, "NestedValue", 1);
+            AssertMethodImplCount(metadata, "SharedValue", 1);
+
+            var programType = types.Single(type => type.Name == "<Program>");
+            var callSiteProbe = programType.GetMethod("CallSiteProbe", BindingFlags.Static | BindingFlags.Public)!;
+            var callSiteInstructions = IlInstructionReader.Read(callSiteProbe.GetMethodBody()!.GetILAsByteArray()!);
+            Assert.Contains(
+                callSiteInstructions,
+                instruction => instruction.OpCode == OpCodes.Call
+                    && callSiteProbe.Module.ResolveMethod(instruction.MetadataToken!.Value)?.DeclaringType == allType);
+            Assert.Contains(
+                callSiteInstructions,
+                instruction => instruction.OpCode == OpCodes.Callvirt
+                    && callSiteProbe.Module.ResolveMethod(instruction.MetadataToken!.Value)?.DeclaringType == typeof(object));
+
+            var printGeneric = programType.GetMethod("PrintGeneric", BindingFlags.Static | BindingFlags.Public)!;
+            var genericInstructions = IlInstructionReader.Read(printGeneric.GetMethodBody()!.GetILAsByteArray()!);
+            var constrainedIndex = Array.FindIndex(
+                genericInstructions,
+                instruction => instruction.OpCode == OpCodes.Constrained);
+            Assert.True(constrainedIndex >= 0);
+            Assert.Equal(OpCodes.Callvirt, genericInstructions[constrainedIndex + 1].OpCode);
+            Assert.Equal(
+                typeof(object),
+                printGeneric.Module.ResolveMethod(genericInstructions[constrainedIndex + 1].MetadataToken!.Value)?.DeclaringType);
+        }
+        finally
+        {
+            result.Dispose();
+        }
+    }
+
+    [Fact]
     public void MatchingImplicitObjectVirtualWithoutOverride_RemainsAnAcceptedShadow()
     {
         const string Source = """
@@ -137,12 +430,6 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         package Issue2486
         class Bad {
             override func Missing() string -> "bad"
-        }
-        """, "GS0183")]
-    [InlineData("""
-        package Issue2486
-        struct Bad {
-            override func ToString() string -> "bad"
         }
         """, "GS0183")]
     public void ImplicitObjectOverride_InvalidShapesRetainSpecificDiagnostics(string source, string diagnosticId)
@@ -353,6 +640,21 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
     {
         Assert.True(implementation.IsVirtual);
         Assert.False((implementation.Attributes & MethodAttributes.NewSlot) != 0);
+    }
+
+    private static void AssertValueTypeObjectOverride(MethodInfo implementation, MethodInfo declaration)
+    {
+        AssertOverrideSlot(implementation, declaration);
+        Assert.True(implementation.IsFinal);
+        Assert.True(implementation.IsHideBySig);
+    }
+
+    private static void AssertMethodImplCount(MetadataReader reader, string typeName, int expected)
+    {
+        var type = reader.TypeDefinitions
+            .Select(reader.GetTypeDefinition)
+            .Single(definition => reader.GetString(definition.Name) == typeName);
+        Assert.Equal(expected, type.GetMethodImplementations().Count);
     }
 
     private static CompilationResult Compile(string source, string target, params string[] references)
@@ -579,9 +881,17 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             UseShellExecute = false,
         };
         using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            throw new Xunit.Sdk.XunitException("child process timed out after 30000 ms");
+        }
+
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
         return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
