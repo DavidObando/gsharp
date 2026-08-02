@@ -166,10 +166,14 @@ namespace Oahu.BooksDatabase.Migrations
             Directory.GetFiles(runtimeDir, "*.dll").Concat(new[] { dllPath }));
         using var mlc = new System.Reflection.MetadataLoadContext(resolver, "System.Private.CoreLib");
         System.Reflection.Assembly asm = mlc.LoadFromAssemblyPath(dllPath);
+        Type emittedType = asm.GetType(fullTypeName, throwOnError: false);
         Assert.True(
-            asm.GetType(fullTypeName, throwOnError: false) != null,
+            emittedType != null,
             $"Expected emitted type '{fullTypeName}' not found. Available types: " +
                 string.Join(", ", Array.ConvertAll(asm.GetTypes(), t => t.FullName)));
+        Assert.Null(emittedType.GetProperty(
+            "EqualityContract",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
     }
 
     private static (int Exit, string Output) RunDotnet(string arguments)

@@ -3449,7 +3449,11 @@ internal sealed class ReflectionMetadataEmitter
 
             // ADR-0051 Phase 6: emit property accessor methods for classes.
             this.memberDefEmitter.EmitPropertyAccessors(c);
-            if (c.IsData)
+            // cs2gs uses this stable synthetic-name shape for translated C#
+            // anonymous types. Keep data-class value semantics, but omit the
+            // record-only EqualityContract PropertyInfo that reflection-based
+            // consumers such as EF Core would mistake for an anonymous member.
+            if (c.IsData && !IsTranslatedAnonymousType(c.Name))
             {
                 this.dataStructSynth.EmitDataClassEqualityContractProperty(c);
             }
@@ -4882,6 +4886,46 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         return match;
+    }
+
+    private static bool IsTranslatedAnonymousType(string name)
+    {
+        const string Prefix = "AnonymousType";
+        if (name == null)
+        {
+            return false;
+        }
+
+        int start = name.LastIndexOf('.') + 1;
+        if (!name.AsSpan(start).StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int prefixEnd = start + Prefix.Length;
+        int separator = name.IndexOf('_', prefixEnd);
+        if (separator <= prefixEnd || name.Length - separator - 1 != 16)
+        {
+            return false;
+        }
+
+        for (int i = prefixEnd; i < separator; i++)
+        {
+            if (!char.IsDigit(name[i]))
+            {
+                return false;
+            }
+        }
+
+        for (int i = separator + 1; i < name.Length; i++)
+        {
+            if (!Uri.IsHexDigit(name[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // Issue #1785: `async func f(...) T?` for a same-compilation user value

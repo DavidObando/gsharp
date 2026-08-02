@@ -359,10 +359,10 @@ public sealed class CSharpTypeMapper
                 List<GTypeReference> delegateArgs = named.TypeArguments
                     .Select(a => this.Map(a, context, location))
                     .ToList();
-                return new NamedTypeReference(this.QualifiedTypeName(named, context), delegateArgs);
+                return new NamedTypeReference(this.QualifiedTypeName(named, context, location), delegateArgs);
             }
 
-            return new NamedTypeReference(this.QualifiedTypeName(named, context));
+            return new NamedTypeReference(this.QualifiedTypeName(named, context, location));
         }
 
         return this.Map(type, context, location);
@@ -720,9 +720,9 @@ public sealed class CSharpTypeMapper
                 {
                     return named.IsGenericType
                         ? new NamedTypeReference(
-                            this.QualifiedTypeName(named, context),
+                            this.QualifiedTypeName(named, context, location),
                             named.TypeArguments.Select(a => this.Map(a, context, location)).ToList())
-                        : new NamedTypeReference(this.QualifiedTypeName(named, context));
+                        : new NamedTypeReference(this.QualifiedTypeName(named, context, location));
                 }
 
                 return this.MapDelegate(named.DelegateInvokeMethod, context, location);
@@ -733,10 +733,10 @@ public sealed class CSharpTypeMapper
                 List<GTypeReference> args = named.TypeArguments
                     .Select(a => this.Map(a, context, location))
                     .ToList();
-                return new NamedTypeReference(this.QualifiedTypeName(named, context), args);
+                return new NamedTypeReference(this.QualifiedTypeName(named, context, location), args);
             }
 
-            return new NamedTypeReference(this.QualifiedTypeName(named, context));
+            return new NamedTypeReference(this.QualifiedTypeName(named, context, location));
         }
 
         return new NamedTypeReference(CSharpToGSharpTranslator.SanitizeIdentifier(type.Name));
@@ -759,7 +759,7 @@ public sealed class CSharpTypeMapper
     // language fix, so the qualified form round-trips under gsc. Issue #2509
     // additionally prefixes the namespace when the OUTERMOST containing type
     // itself collides across imported packages.
-    private string QualifiedTypeName(INamedTypeSymbol named, TranslationContext context)
+    private string QualifiedTypeName(INamedTypeSymbol named, TranslationContext context, Location location)
     {
         if (named.ContainingType == null)
         {
@@ -795,9 +795,12 @@ public sealed class CSharpTypeMapper
                 : simpleName;
         }
 
-        // A source nested type only needs qualifying when its simple name is
-        // ambiguous within the package (a same-named source homonym exists).
-        if (named.Locations.Any(l => l.IsInSource) && !this.HasSourceHomonym(named, context))
+        // A source nested type may use its simple name only from inside its
+        // containing type. External references still require `Outer.Nested`
+        // even when no homonym exists.
+        if (named.Locations.Any(l => l.IsInSource)
+            && !this.HasSourceHomonym(named, context)
+            && IsWithinContainingType(named, context, location))
         {
             return CSharpToGSharpTranslator.SanitizeIdentifier(named.Name);
         }
@@ -820,6 +823,30 @@ public sealed class CSharpTypeMapper
             && outermost.ContainingNamespace is { IsGlobalNamespace: false } outerNamespace
                 ? $"{outerNamespace.ToDisplayString()}.{nestedName}"
                 : nestedName;
+    }
+
+    private static bool IsWithinContainingType(
+        INamedTypeSymbol nestedType,
+        TranslationContext context,
+        Location location)
+    {
+        INamedTypeSymbol containingType = nestedType.ContainingType;
+        if (containingType == null || location == null || !location.IsInSource)
+        {
+            return false;
+        }
+
+        ISymbol enclosing = context.SemanticModel.GetEnclosingSymbol(location.SourceSpan.Start);
+        INamedTypeSymbol currentType = enclosing as INamedTypeSymbol ?? enclosing?.ContainingType;
+        for (INamedTypeSymbol current = currentType; current != null; current = current.ContainingType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, containingType))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

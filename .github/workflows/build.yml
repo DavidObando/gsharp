@@ -158,6 +158,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$exit_code"
 
+      - name: Migrate and run pinned Oahu
+        env:
+          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-pinned
+        run: ./build/run-cs2gs-oahu.sh
+
       - name: Upload migration report
         if: always()
         uses: actions/upload-artifact@v5
@@ -167,6 +172,11 @@ jobs:
             cs2gs-ci-runs/**/report.html
             cs2gs-ci-runs/**/summary.json
             cs2gs-ci-runs/**/run.json
+            ${{ runner.temp }}/cs2gs-oahu-pinned/migrate.log
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/report.html
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/summary.json
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/run.json
+            ${{ runner.temp }}/cs2gs-oahu-pinned/smoke/*
 
   vscode-extension:
     name: vscode-extension (${{ matrix.os }})

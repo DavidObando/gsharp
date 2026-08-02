@@ -65,6 +65,28 @@ jobs:
           # so a red night still files its issues first.
           exit 0
 
+      - name: Migrate and run pinned Oahu
+        id: oahu_pinned
+        env:
+          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-pinned
+        run: |
+          set +e
+          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-pinned.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Migrate and run latest Oahu
+        id: oahu_latest
+        env:
+          OAHU_GATE_LABEL: latest
+          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-latest
+          OAHU_REF: main
+        run: |
+          set +e
+          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-latest.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
       - name: File issues for new gaps (automated, ADR-0138 guardrails)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,7 +133,22 @@ jobs:
             cs2gs-nightly-runs/**/report.html
             cs2gs-nightly-runs/**/summary.json
             cs2gs-nightly-runs/**/run.json
+            cs2gs-oahu-pinned.log
+            cs2gs-oahu-latest.log
+            ${{ runner.temp }}/cs2gs-oahu-pinned/migrate.log
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/report.html
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/summary.json
+            ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/run.json
+            ${{ runner.temp }}/cs2gs-oahu-pinned/smoke/*
+            ${{ runner.temp }}/cs2gs-oahu-latest/migrate.log
+            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/report.html
+            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/summary.json
+            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/run.json
+            ${{ runner.temp }}/cs2gs-oahu-latest/smoke/*
 
       - name: Enforce gate outcome
         run: |
-          exit "${{ steps.migrate.outputs.migrate_exit }}"
+          if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ||
+                "${{ steps.oahu_pinned.outputs.exit_code }}" != "0" ]]; then
+            exit 1
+          fi

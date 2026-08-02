@@ -109,6 +109,35 @@ public class Issue1124GenericUninferableOverloadEmitTests
         Assert.Equal("99\n-1\n", CompileAndRun(source));
     }
 
+    [Fact]
+    public void ExplicitTypeArguments_RankUsingSubstitutedParameterTypes()
+    {
+        var source = """
+            package p
+            import System
+
+            interface IFormatter {
+                func Format[T](value T) string;
+                func Format[T](value object) string;
+            }
+
+            class Formatter : IFormatter {
+                func Format[T](value T) string { return "typed" }
+                func Format[T](value object) string { return "object" }
+            }
+
+            class C {
+                func Run(formatter IFormatter, value object) string {
+                    return formatter.Format[Enum](value)
+                }
+            }
+
+            Console.WriteLine(C().Run(Formatter(), "x"))
+            """;
+
+        Assert.Equal("object\n", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1124_emit_").FullName;

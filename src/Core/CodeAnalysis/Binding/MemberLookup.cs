@@ -2120,6 +2120,8 @@ internal sealed class MemberLookup
             case DelegateTypeSymbol del:
                 functionType = del.EquivalentFunctionType;
                 return functionType != null;
+            case NullableTypeSymbol nullable:
+                return TryGetDelegateFunctionTypeFromSymbol(nullable.UnderlyingType, out functionType);
 
             // Issue #2375: a constructed `Func`/`Action`/named-delegate
             // `ImportedTypeSymbol` closed over a same-compilation class or

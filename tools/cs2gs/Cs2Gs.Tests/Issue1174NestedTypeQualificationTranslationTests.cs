@@ -23,7 +23,7 @@ namespace Cs2Gs.Tests;
 /// qualified <c>Container.Nested</c> form so the generated G# binds against the
 /// NESTED type (not the top-level homonym holding the simple key). This mirrors
 /// the cs2gs SttsBox.SampleEntry migration shape. A non-colliding source nested
-/// type is still emitted by its simple name (no gratuitous qualification).
+/// type is emitted by its simple name only inside its containing type.
 /// </summary>
 public class Issue1174NestedTypeQualificationTranslationTests
 {
@@ -69,6 +69,22 @@ namespace Corpus
 }
 ";
 
+    private const string ExternalReferenceSource = @"
+namespace Corpus
+{
+    public class Host
+    {
+        public interface IReader
+        {
+        }
+    }
+
+    public class Reader : Host.IReader
+    {
+    }
+}
+";
+
     [Fact]
     public void Collision_NestedType_IsEmittedQualified_AndBinds()
     {
@@ -97,6 +113,20 @@ namespace Corpus
         // Without a homonym the nested type keeps its simple name (no gratuitous
         // qualification) and still binds.
         Assert.DoesNotContain("SttsBox.Entry", printed);
+
+        RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+
+        var diagnostics = BindDiagnostics(printed);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void NoCollision_NestedTypeReferencedExternally_IsQualified()
+    {
+        string printed = Translate(ExternalReferenceSource);
+
+        Assert.Contains("class Reader : Host.IReader", printed);
 
         RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
         Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
