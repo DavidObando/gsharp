@@ -217,6 +217,7 @@ public static class IteratorRewriter
         {
             foreach (var arm in node.Cases)
             {
+                // As above, ByRef-like values cannot be state-machine fields.
                 if (arm.Variable != null
                     && !TypeSymbol.IsByRefLike(arm.Variable.Type)
                     && !Locals.Contains(arm.Variable))

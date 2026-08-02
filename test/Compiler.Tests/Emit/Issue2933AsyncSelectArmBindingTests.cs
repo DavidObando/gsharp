@@ -292,46 +292,107 @@ public class Issue2933AsyncSelectArmBindingTests
     }
 
     [Fact]
-    public void SynchronousIteratorReceiveBindingRetainsSelectedArmValueAtRuntime()
+    public void SynchronousIteratorReceiveBindingSurvivesYieldAtRuntime()
     {
         const string Source = """
-            package Issue2975.SyncIterator
+            package Issue2975.YieldThenRead
             import System
             import Gsharp.Extensions.Go
 
             func Values() sequence[int32] {
-                let first = make(chan int32, 1)
-                let selected = make(chan int32, 1)
-                let third = make(chan int32, 1)
-                selected <- 7
+                let ch = make(chan int32, 1)
+                ch <- 33
                 select {
-                    case let value = <-first {
-                        yield -100
-                        yield value + 1000
-                    }
-                    case let value = <-selected {
-                        yield 200
+                    case let value = <-ch {
+                        yield 11
                         yield value
-                    }
-                    case let value = <-third {
-                        yield -300
-                        yield value + 3000
+                        yield 22
                     }
                 }
             }
 
             for value in Values() {
-                if value != 200 {
-                    Console.WriteLine(value)
-                }
+                Console.WriteLine(value)
             }
             """;
 
         Assert.Equal(
-            "7\n",
+            "11\n33\n22\n",
             CompileLoadAndRun(
                 Source,
-                nameof(SynchronousIteratorReceiveBindingRetainsSelectedArmValueAtRuntime)));
+                nameof(SynchronousIteratorReceiveBindingSurvivesYieldAtRuntime)));
+    }
+
+    [Fact]
+    public void SynchronousIteratorReceiveBindingSurvivesLoopedYieldsAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.LoopedYields
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let ch = make(chan int32, 1)
+                ch <- 44
+                select {
+                    case let value = <-ch {
+                        for i in 0 ... 2 {
+                            yield 100 + i
+                        }
+                        yield value
+                    }
+                }
+            }
+
+            for value in Values() {
+                Console.WriteLine(value)
+            }
+            """;
+
+        Assert.Equal(
+            "100\n101\n44\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(SynchronousIteratorReceiveBindingSurvivesLoopedYieldsAtRuntime)));
+    }
+
+    [Fact]
+    public void NestedSynchronousIteratorReceiveBindingsSurviveYieldsAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.NestedSelects
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let outer = make(chan int32, 1)
+                let inner = make(chan int32, 1)
+                outer <- 55
+                inner <- 66
+                select {
+                    case let outerValue = <-outer {
+                        yield 1
+                        select {
+                            case let innerValue = <-inner {
+                                yield 2
+                                yield innerValue
+                            }
+                        }
+                        yield outerValue
+                    }
+                }
+            }
+
+            for value in Values() {
+                Console.WriteLine(value)
+            }
+            """;
+
+        Assert.Equal(
+            "1\n2\n66\n55\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(NestedSynchronousIteratorReceiveBindingsSurviveYieldsAtRuntime)));
     }
 
     [Theory]
