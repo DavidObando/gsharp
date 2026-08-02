@@ -847,14 +847,15 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // True when duplicating `expression` in the output has no observable
-        // effect — a bare identifier, `this`, or a literal never has a side
-        // effect and always reads the same value, so it is safe to embed at more
-        // than one output position without spilling it to a temp first (issue
-        // #1731). Anything else (a method/property/indexer read, an arithmetic
-        // expression, …) may run a side effect or re-read a mutable value and
-        // must be evaluated exactly once if it needs to appear more than once.
+        // effect — a bare identifier, `this`, literal, or type-name receiver never
+        // has a side effect and always denotes the same value/name, so it is safe
+        // to embed at more than one output position without spilling it to a temp
+        // first (issue #1731). Anything else (a method/property/indexer read, an
+        // arithmetic expression, …) may run a side effect or re-read a mutable
+        // value and must be evaluated exactly once if it needs to appear more than
+        // once.
         private static bool IsTrivialOperand(GExpression expression) =>
-            expression is IdentifierExpression or ThisExpression or LiteralExpression;
+            expression is IdentifierExpression or ThisExpression or LiteralExpression or TypeExpression;
 
         // Spills `operand` into a fresh `let` in the active statement seam's
         // prologue (see <see cref="pendingSpillPrologue"/>/<see

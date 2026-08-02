@@ -416,6 +416,87 @@ namespace Demo
     }
 
     [Fact]
+    public void ConditionalFalseBranchStaticPropertyAssignment_CompilesAndReturnsAssignedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public static class Store
+                {
+                    private static int backing;
+
+                    public static int P
+                    {
+                        get => backing + 100;
+                        set { backing = value; }
+                    }
+
+                    public static int Backing => backing;
+                }
+
+                public static class C
+                {
+                    private static int calls;
+
+                    private static int Next()
+                    {
+                        calls++;
+                        return 42;
+                    }
+
+                    public static string Run()
+                    {
+                        calls = 0;
+                        Store.P = 0;
+                        int result = false ? -1 : Store.P = Next();
+                        return calls + "," + result + "," + Store.Backing + "," + Store.P;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal("1,42,42,142", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
+    public void ReturnStaticFieldAssignment_CompilesAndReturnsAssignedValue()
+    {
+        string printed = TranslateUnit(
+            """
+            namespace Demo
+            {
+                public static class C
+                {
+                    private static int calls;
+                    public static int Stored;
+
+                    private static int Next()
+                    {
+                        calls++;
+                        return 9;
+                    }
+
+                    private static int AssignAndReturn()
+                    {
+                        return C.Stored = Next();
+                    }
+
+                    public static string Run()
+                    {
+                        calls = 0;
+                        Stored = 0;
+                        int result = AssignAndReturn();
+                        return calls + "," + result + "," + Stored;
+                    }
+                }
+            }
+            """);
+
+        Assert.Equal("1,9,9", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    [Fact]
     public void ConditionalFalseBranchAssignment_WithIfLetCandidate_StaysInsideElseArm()
     {
         string printed = TranslateUnit(
