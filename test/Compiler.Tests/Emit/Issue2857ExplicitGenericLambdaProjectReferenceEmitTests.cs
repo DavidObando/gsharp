@@ -15,11 +15,14 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
 {
     [Theory]
-    [InlineData("i2857direct", false, 11)]
-    [InlineData("i2857transitive", true, 22)]
+    [InlineData("i2857topdirect", false, false, 11)]
+    [InlineData("i2857toptransitive", true, false, 22)]
+    [InlineData("i2857funcdirect", false, true, 33)]
+    [InlineData("i2857functransitive", true, true, 44)]
     public void ExplicitGenericTypeArgument_WithTypedLambdaAcrossReference_Runs(
         string packageName,
         bool useIntermediateBase,
+        bool useFunction,
         int expected)
     {
         var baseType = packageName + ".Base";
@@ -27,6 +30,8 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             ? $"open class Middle : {baseType} {{}}"
             : "";
         var derivedBase = useIntermediateBase ? "Middle" : baseType;
+        var entryPointStart = useFunction ? "func Main() {" : "";
+        var entryPointEnd = useFunction ? "}" : "";
         var library = $$"""
             package {{packageName}}
 
@@ -52,11 +57,11 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             {{intermediateDeclaration}}
             class Derived : {{derivedBase}} {}
 
-            func Main() {
-                let value = {{baseType}}.Make[Derived](
-                    (item Derived) -> { item.Value = {{expected}} })
-                Console.WriteLine(value.Value)
-            }
+            {{entryPointStart}}
+            let value = {{baseType}}.Make[Derived](
+                (item Derived) -> { item.Value = {{expected}} })
+            Console.WriteLine(value.Value)
+            {{entryPointEnd}}
             """;
 
         Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
