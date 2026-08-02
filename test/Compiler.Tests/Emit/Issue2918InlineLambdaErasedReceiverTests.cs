@@ -529,6 +529,54 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 "Issue2948CorpusJoinChain.Owner"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CanonicalLinqSelectorsOverErasedUserTypes_VerifyLoadAndRun(bool topLevel)
+    {
+        const string declarations = """
+            package Issue2948CanonicalLinqSelectors
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            interface IEntry {
+                prop Size int64 {
+                    get;
+                }
+            }
+
+            class Entry : IEntry {
+                prop Size int64 {
+                    get;
+                    init;
+                }
+
+                init(size int64) { Size = size }
+            }
+
+            func Total(entries List[IEntry]) int64 ->
+                int64(8) + entries.Sum(
+                    (entry IEntry) -> entry.Size)
+            """;
+
+        const string statements = """
+            let entries = List[IEntry]{
+                Entry(11),
+                Entry(22),
+                Entry(33)
+            }
+            Console.WriteLine(Total(entries))
+            """;
+
+        Assert.Equal(
+            "74\n",
+            CompileVerifyLoadAndRun(
+                WithExecutionScope(declarations, statements, topLevel),
+                "Issue2948CanonicalLinqSelectors.IEntry",
+                useRefPackReferences: true));
+    }
+
     [Fact]
     public void ImportedNamedDelegatesThroughErasedListSlots_VerifyLoadAndRun()
     {
@@ -937,7 +985,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
         bool verifyIl = true,
         string contractsSource = Contracts,
         string contractsAssemblyName = "Issue2918Contracts",
-        bool allowDirectObjectParameter = false)
+        bool allowDirectObjectParameter = false,
+        bool useRefPackReferences = false)
     {
         var directory = CreateDirectory("Issue2918_");
         try
@@ -949,15 +998,21 @@ public class Issue2918InlineLambdaErasedReceiverTests
             var sourcePath = Path.Combine(directory, "test.gs");
             var assemblyPath = Path.Combine(directory, "test.dll");
             File.WriteAllText(sourcePath, source);
-            Compile(
-            [
+            var args = new List<string>
+            {
                 "/out:" + assemblyPath,
                 "/target:exe",
                 "/targetframework:net10.0",
                 "/nowarn:GS9100",
-                "/r:" + contractsPath,
-                sourcePath,
-            ]);
+            };
+            if (useRefPackReferences)
+            {
+                args.AddRange(RefPackReferences().Select(reference => "/r:" + reference));
+            }
+
+            args.Add("/r:" + contractsPath);
+            args.Add(sourcePath);
+            Compile(args.ToArray());
 
             if (verifyIl)
             {
@@ -1212,6 +1267,30 @@ public class Issue2918InlineLambdaErasedReceiverTests
             prefix + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         return directory;
+    }
+
+    private static IEnumerable<string> RefPackReferences()
+    {
+        var runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        var dotnetRoot = Directory.GetParent(runtimeDirectory)?.Parent?.Parent?.FullName;
+        var tfm = $"net{Environment.Version.Major}.0";
+        var packsRoot = Path.Combine(dotnetRoot!, "packs", "Microsoft.NETCore.App.Ref");
+        var version = Environment.Version.ToString(3);
+        var referenceDirectory = Path.Combine(packsRoot, version, "ref", tfm);
+        if (!Directory.Exists(referenceDirectory))
+        {
+            referenceDirectory = Directory.EnumerateDirectories(
+                    packsRoot,
+                    Environment.Version.Major + ".*")
+                .OrderByDescending(directory => directory, StringComparer.Ordinal)
+                .Select(directory => Path.Combine(directory, "ref", tfm))
+                .FirstOrDefault(Directory.Exists);
+        }
+
+        Assert.False(
+            string.IsNullOrEmpty(referenceDirectory),
+            $"No {tfm} reference pack found under '{packsRoot}'.");
+        return Directory.EnumerateFiles(referenceDirectory!, "*.dll");
     }
 
     private static void DeleteDirectory(string directory)

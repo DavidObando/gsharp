@@ -827,19 +827,27 @@ internal sealed partial class ExpressionBinder
         if (type is ImportedTypeSymbol imported)
         {
             var definition = imported.OpenDefinition ?? imported.ClrType;
-            if (definition != null
-                && AssemblyName.ReferenceMatchesDefinition(
-                    definition.Assembly.GetName(),
-                    typeof(Action).Assembly.GetName()))
+            if (definition?.IsGenericType == true && !definition.IsGenericTypeDefinition)
             {
-                var coreLibrary = definition.Assembly;
+                definition = definition.GetGenericTypeDefinition();
+            }
+
+            var coreLibrary = definition?.BaseType?.Assembly;
+            if (string.Equals(
+                    definition?.BaseType?.FullName,
+                    "System.MulticastDelegate",
+                    StringComparison.Ordinal)
+                && coreLibrary != null)
+            {
                 var arity = definition.IsGenericTypeDefinition
                     ? definition.GetGenericArguments().Length
                     : 0;
-                if (definition == coreLibrary.GetType("System.Action")
-                    || (arity > 0
-                        && (definition == coreLibrary.GetType($"System.Action`{arity}")
-                            || definition == coreLibrary.GetType($"System.Func`{arity}"))))
+                var fullName = definition.FullName;
+                if ((string.Equals(fullName, "System.Action", StringComparison.Ordinal)
+                        || (arity > 0
+                            && (string.Equals(fullName, $"System.Action`{arity}", StringComparison.Ordinal)
+                                || string.Equals(fullName, $"System.Func`{arity}", StringComparison.Ordinal))))
+                    && TypeIdentityComparer.Instance.Equals(definition, coreLibrary.GetType(fullName)))
                 {
                     return true;
                 }

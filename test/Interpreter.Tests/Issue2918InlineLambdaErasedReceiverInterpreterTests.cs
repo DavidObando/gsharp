@@ -217,6 +217,51 @@ public class Issue2918InlineLambdaErasedReceiverInterpreterTests
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CanonicalLinqSelectorsOverErasedUserTypes_Evaluate(bool topLevel)
+    {
+        const string declarations = """
+            package Issue2948CanonicalLinqSelectorsInterpreter
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            interface IEntry {
+                prop Size int64 {
+                    get;
+                }
+            }
+
+            class Entry : IEntry {
+                prop Size int64 {
+                    get;
+                    init;
+                }
+
+                init(size int64) { Size = size }
+            }
+
+            func Total(entries List[IEntry]) int64 ->
+                int64(8) + entries.Sum(
+                    (entry IEntry) -> entry.Size)
+            """;
+
+        const string statements = """
+            let entries = List[IEntry]{
+                Entry(11),
+                Entry(22),
+                Entry(33)
+            }
+            Console.WriteLine(Total(entries))
+            """;
+
+        Assert.Equal(
+            "74\n",
+            Evaluate(WithExecutionScope(declarations, statements, topLevel)));
+    }
+
     private static string WithExecutionScope(
         string declarations,
         string statements,
