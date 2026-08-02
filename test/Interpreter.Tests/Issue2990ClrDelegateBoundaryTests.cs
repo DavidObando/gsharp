@@ -84,14 +84,20 @@ public class Issue2990ClrDelegateBoundaryTests
     public void InvokeClrCtor_CoercesClosureWithUserTypeParameter()
     {
         var evaluator = new Evaluator(null, new Dictionary<VariableSymbol, object>());
+        var structType = new StructSymbol(
+            "ConstructorProbeDerived",
+            ImmutableArray<FieldSymbol>.Empty,
+            GSharp.Core.CodeAnalysis.Symbols.Accessibility.Private,
+            declaration: null,
+            packageName: "Issue2990");
         var constructor = typeof(ConstructorProbe).GetConstructor([typeof(Func<object, int>)]);
         var invoke = typeof(Evaluator).GetMethod("InvokeClrCtor", BindingFlags.Instance | BindingFlags.NonPublic);
 
         Assert.NotNull(constructor);
         Assert.NotNull(invoke);
-        var result = Assert.IsType<ConstructorProbe>(invoke.Invoke(
+        var result = Assert.IsAssignableFrom<ConstructorProbe>(invoke.Invoke(
             evaluator,
-            [constructor, ImmutableArray.Create<BoundExpression>(CreateErasedClosure(77)), ImmutableArray<RefKind>.Empty]));
+            [structType, constructor, ImmutableArray.Create<BoundExpression>(CreateErasedClosure(77)), ImmutableArray<RefKind>.Empty]));
 
         Assert.Equal(77, result.Value);
     }
@@ -202,7 +208,7 @@ public class Issue2990ClrDelegateBoundaryTests
         return outWriter.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
-    private sealed class ConstructorProbe
+    public class ConstructorProbe
     {
         public ConstructorProbe(Func<object, int> selector)
         {
