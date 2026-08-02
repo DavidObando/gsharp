@@ -47,6 +47,21 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     }
 
+                    // A GeneratedRegex trigger is a non-void partial definition,
+                    // so ordinary partial-method elision would drop its declaration
+                    // while value-position calls remain.
+                    if (this.TryTranslateGeneratedRegex(
+                        method,
+                        out FieldDeclaration generatedRegexField,
+                        out MethodDeclaration generatedRegexMethod))
+                    {
+                        yield return (generatedRegexField, true);
+                        yield return (
+                            generatedRegexMethod,
+                            method.Modifiers.Any(SyntaxKind.StaticKeyword));
+                        break;
+                    }
+
                     (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
                         method,
                         ownerKind,
@@ -234,6 +249,278 @@ public sealed partial class CSharpToGSharpTranslator
                         $"member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.11).");
                     break;
             }
+        }
+
+        private bool TryTranslateGeneratedRegex(
+            MethodDeclarationSyntax node,
+            out FieldDeclaration cacheField,
+            out MethodDeclaration method)
+        {
+            cacheField = null;
+            method = null;
+
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
+            if (symbol == null ||
+                !symbol.IsPartialDefinition ||
+                symbol.Parameters.Length != 0 ||
+                symbol.TypeParameters.Length != 0)
+            {
+                return false;
+            }
+
+            AttributeData attribute = symbol.GetAttributes().FirstOrDefault(
+                candidate => candidate.AttributeClass?.ToDisplayString() ==
+                    "System.Text.RegularExpressions.GeneratedRegexAttribute");
+            if (attribute?.AttributeConstructor == null)
+            {
+                return false;
+            }
+
+            string pattern = null;
+            object optionsValue = 0;
+            ITypeSymbol optionsType = this.context.Compilation.GetTypeByMetadataName(
+                "System.Text.RegularExpressions.RegexOptions");
+            int timeoutMilliseconds = -1;
+            bool hasMatchTimeoutArgument = false;
+            string cultureName = string.Empty;
+
+            ImmutableArray<IParameterSymbol> constructorParameters = attribute.AttributeConstructor.Parameters;
+            ImmutableArray<TypedConstant> constructorArguments = attribute.ConstructorArguments;
+            if (constructorParameters.Length != constructorArguments.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < constructorParameters.Length; i++)
+            {
+                object value = constructorArguments[i].Value;
+                switch (constructorParameters[i].Name)
+                {
+                    case "pattern":
+                        pattern = value as string;
+                        break;
+                    case "options":
+                        optionsValue = value;
+                        optionsType = constructorArguments[i].Type ?? optionsType;
+                        break;
+                    case "matchTimeoutMilliseconds" when value is int timeoutArgument:
+                        timeoutMilliseconds = timeoutArgument;
+                        hasMatchTimeoutArgument = true;
+                        break;
+                    case "cultureName":
+                        cultureName = value as string ?? string.Empty;
+                        break;
+                }
+            }
+
+            if (pattern == null || optionsType == null)
+            {
+                return false;
+            }
+
+            long optionBits = Convert.ToInt64(optionsValue, CultureInfo.InvariantCulture);
+            const long IgnoreCase = 1;
+            const long CultureInvariant = 512;
+            bool usesIgnoreCase = (optionBits & IgnoreCase) != 0 ||
+                PatternEnablesInlineIgnoreCase(pattern);
+            if (usesIgnoreCase &&
+                ((optionBits & CultureInvariant) == 0 || cultureName.Length > 0))
+            {
+                const string Message = "GeneratedRegex with culture-sensitive IgnoreCase, including inline " +
+                    "option groups, cannot be lowered to Regex construction without changing culture or " +
+                    "Regex.Options semantics.";
+                this.context.ReportUnsupported(node, Message);
+                return false;
+            }
+
+            GTypeReference regexType = this.typeMapper.Map(
+                symbol.ReturnType,
+                this.context,
+                node.ReturnType.GetLocation());
+            GExpression options = this.MapConstantValue(
+                optionsValue,
+                optionsType,
+                node,
+                "GeneratedRegex options");
+            if (options == null)
+            {
+                return false;
+            }
+
+            var constructionArguments = new List<GExpression>
+            {
+                LiteralExpression.String(pattern),
+                options,
+            };
+            if (hasMatchTimeoutArgument)
+            {
+                string regexTypeName = regexType is NamedTypeReference namedRegex
+                    ? namedRegex.Name
+                    : "Regex";
+                GExpression matchTimeout = timeoutMilliseconds == -1
+                    ? new MemberAccessExpression(
+                        new IdentifierExpression(regexTypeName),
+                        "InfiniteMatchTimeout")
+                    : new InvocationExpression(
+                        new MemberAccessExpression(
+                            new IdentifierExpression("TimeSpan"),
+                            "FromMilliseconds"),
+                        new[]
+                        {
+                            LiteralExpression.Float(
+                                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0"),
+                        });
+                constructionArguments.Add(matchTimeout);
+            }
+
+            string cacheName = "__generatedRegex_" + SanitizeIdentifier(node.Identifier.Text);
+            var occupiedNames = new HashSet<string>(
+                symbol.ContainingType.GetMembers().Select(member => member.Name),
+                StringComparer.Ordinal);
+            while (occupiedNames.Contains(cacheName))
+            {
+                cacheName += "_";
+            }
+
+            cacheField = new FieldDeclaration(
+                BindingKind.Let,
+                cacheName,
+                regexType,
+                BuildConstruction(regexType, constructionArguments),
+                Visibility.Private);
+
+            List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists)
+                .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name))
+                .ToList();
+            method = new MethodDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                returnType: regexType,
+                visibility: MapVisibility(symbol, this.context, node),
+                attributes: attributes,
+                expressionBody: new ReturnStatement(new IdentifierExpression(cacheName)));
+            return true;
+        }
+
+        private static bool IsGeneratedRegexAttributeName(string name)
+        {
+            string simpleName = name.Substring(name.LastIndexOf('.') + 1);
+            return simpleName == "GeneratedRegex" || simpleName == "GeneratedRegexAttribute";
+        }
+
+        private static bool PatternEnablesInlineIgnoreCase(string pattern)
+        {
+            bool inCharacterClass = false;
+            bool firstCharacterInClass = false;
+
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                char current = pattern[i];
+                if (current == '\\')
+                {
+                    if (inCharacterClass)
+                    {
+                        firstCharacterInClass = false;
+                    }
+
+                    i++;
+                    continue;
+                }
+
+                if (inCharacterClass)
+                {
+                    if (current == ']' && !firstCharacterInClass)
+                    {
+                        inCharacterClass = false;
+                    }
+                    else if (current != '^' || !firstCharacterInClass)
+                    {
+                        firstCharacterInClass = false;
+                    }
+
+                    continue;
+                }
+
+                if (current == '[')
+                {
+                    inCharacterClass = true;
+                    firstCharacterInClass = true;
+                    continue;
+                }
+
+                if (current != '(' ||
+                    i + 2 >= pattern.Length ||
+                    pattern[i + 1] != '?')
+                {
+                    continue;
+                }
+
+                if (pattern[i + 2] == '#')
+                {
+                    int commentEnd = pattern.IndexOf(')', i + 3);
+                    if (commentEnd < 0)
+                    {
+                        return false;
+                    }
+
+                    i = commentEnd;
+                    continue;
+                }
+
+                if (InlineOptionsEnableIgnoreCase(pattern, i + 2))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool InlineOptionsEnableIgnoreCase(string pattern, int start)
+        {
+            bool disabling = false;
+            bool sawOption = false;
+            bool sawDisabledOption = false;
+            bool enabledIgnoreCase = false;
+            bool disabledIgnoreCase = false;
+            int i = start;
+
+            for (; i < pattern.Length; i++)
+            {
+                char option = pattern[i];
+                if (option == '-')
+                {
+                    if (disabling)
+                    {
+                        return false;
+                    }
+
+                    disabling = true;
+                    continue;
+                }
+
+                if (option is not ('i' or 'm' or 'n' or 's' or 'x'))
+                {
+                    break;
+                }
+
+                sawOption = true;
+                if (disabling)
+                {
+                    sawDisabledOption = true;
+                    disabledIgnoreCase |= option == 'i';
+                }
+                else
+                {
+                    enabledIgnoreCase |= option == 'i';
+                }
+            }
+
+            return sawOption &&
+                (!disabling || sawDisabledOption) &&
+                i < pattern.Length &&
+                pattern[i] is ')' or ':' &&
+                enabledIgnoreCase &&
+                !disabledIgnoreCase;
         }
 
         private bool CanLowerOwnedExtension(MethodDeclarationSyntax method)
