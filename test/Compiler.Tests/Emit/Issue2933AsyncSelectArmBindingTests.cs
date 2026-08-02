@@ -291,6 +291,110 @@ public class Issue2933AsyncSelectArmBindingTests
         Assert.Equal(new[] { 10, 10, 10 }, values);
     }
 
+    [Fact]
+    public void SynchronousIteratorReceiveBindingSurvivesYieldAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.YieldThenRead
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let ch = make(chan int32, 1)
+                ch <- 33
+                select {
+                    case let value = <-ch {
+                        yield 11
+                        yield value
+                        yield 22
+                    }
+                }
+            }
+
+            for value in Values() {
+                Console.WriteLine(value)
+            }
+            """;
+
+        Assert.Equal(
+            "11\n33\n22\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(SynchronousIteratorReceiveBindingSurvivesYieldAtRuntime)));
+    }
+
+    [Fact]
+    public void SynchronousIteratorReceiveBindingSurvivesLoopedYieldsAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.LoopedYields
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let ch = make(chan int32, 1)
+                ch <- 44
+                select {
+                    case let value = <-ch {
+                        for i in 0 ... 2 {
+                            yield 100 + i
+                        }
+                        yield value
+                    }
+                }
+            }
+
+            for value in Values() {
+                Console.WriteLine(value)
+            }
+            """;
+
+        Assert.Equal(
+            "100\n101\n44\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(SynchronousIteratorReceiveBindingSurvivesLoopedYieldsAtRuntime)));
+    }
+
+    [Fact]
+    public void NestedSynchronousIteratorReceiveBindingsSurviveYieldsAtRuntime()
+    {
+        const string Source = """
+            package Issue2975.NestedSelects
+            import System
+            import Gsharp.Extensions.Go
+
+            func Values() sequence[int32] {
+                let outer = make(chan int32, 1)
+                let inner = make(chan int32, 1)
+                outer <- 55
+                inner <- 66
+                select {
+                    case let outerValue = <-outer {
+                        yield 1
+                        select {
+                            case let innerValue = <-inner {
+                                yield 2
+                                yield innerValue
+                            }
+                        }
+                        yield outerValue
+                    }
+                }
+            }
+
+            for value in Values() {
+                Console.WriteLine(value)
+            }
+            """;
+
+        Assert.Equal(
+            "1\n2\n66\n55\n",
+            CompileLoadAndRun(
+                Source,
+                nameof(NestedSynchronousIteratorReceiveBindingsSurviveYieldsAtRuntime)));
+    }
+
     [Theory]
     [MemberData(nameof(SelectShapes))]
     public void RequestedSelectShapesLoadAndRun(string name, string expectedOutput, string source)
