@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -260,6 +261,100 @@ public class Issue3015ImportedBaseIdentityTests
             Evaluate(Source));
     }
 
+    [Fact]
+    public void GenericTypeArguments_AgreeAcrossCompilerEmitAndInterpreter()
+    {
+        const string Source = """
+            package Issue3015.GenericParity
+            import System
+
+            class Payload {
+            }
+
+            class Box[T] : EventArgs {
+            }
+
+            Console.WriteLine(Box[Payload]().GetType().FullName)
+            Console.WriteLine(Box[string]().GetType().FullName)
+            Console.WriteLine(Box[Box[Payload]]().GetType().FullName)
+            """;
+        const string Expected = """
+            Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Payload]]
+            Issue3015.GenericParity.Box`1[[System.String]]
+            Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Payload]]]]
+
+            """;
+
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3015-generic-parity-{Guid.NewGuid():N}");
+
+        try
+        {
+            var compilerEvaluation = RunSourceDriver(Path.Combine(root, "gsc-eval"), Source, Program.Main);
+            Assert.EndsWith("Success.\n", compilerEvaluation);
+            compilerEvaluation = compilerEvaluation[..^"Success.\n".Length];
+            var interpreter = RunSourceDriver(Path.Combine(root, "gsi"), Source, GSharp.Repl.Program.Main);
+            var emitDirectory = Path.Combine(root, "gsc-emit");
+            Directory.CreateDirectory(emitDirectory);
+            var emitSourcePath = Path.Combine(emitDirectory, "GenericParity.gs");
+            var assemblyPath = Path.Combine(emitDirectory, $"GenericParity-{Guid.NewGuid():N}.dll");
+            File.WriteAllText(emitSourcePath, Source);
+            _ = CaptureDriver(() => Program.Main(new[]
+            {
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                emitSourcePath,
+            }));
+            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            Assert.NotEmpty(assembly.GetTypes());
+            var entryPoint = assembly.EntryPoint
+                ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
+            var emitted = CaptureDriver(() =>
+            {
+                entryPoint.Invoke(
+                    null,
+                    entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
+                return 0;
+            });
+
+            Assert.Equal(Expected, NormalizeGenericTypeNames(compilerEvaluation));
+            Assert.Equal(Expected, NormalizeGenericTypeNames(emitted));
+            Assert.Equal(Expected, NormalizeGenericTypeNames(interpreter));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ProtectedParameterizedBaseConstructor_PreservesStateAndIdentity()
+    {
+        const string Source = """
+            package Issue3015.ProtectedConstructor
+            import System
+            import GSharp.Interpreter.Tests
+
+            class ProtectedSentinel(value int32) : Issue3015ProtectedParameterizedBase(value) {
+            }
+
+            var instance = ProtectedSentinel(37)
+            Console.WriteLine(instance.Value)
+            Console.WriteLine(instance.GetType().FullName)
+            """;
+
+        Assert.Equal(
+            "37\nIssue3015.ProtectedConstructor.ProtectedSentinel\n",
+            Evaluate(Source));
+    }
+
     private static string Evaluate(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(source));
@@ -281,6 +376,48 @@ public class Issue3015ImportedBaseIdentityTests
         }
 
         return outWriter.ToString().Replace("\r\n", "\n");
+    }
+
+    private static string RunSourceDriver(string directory, string source, Func<string[], int> driver)
+    {
+        Directory.CreateDirectory(directory);
+        var sourcePath = Path.Combine(directory, "Probe.gs");
+        File.WriteAllText(sourcePath, source);
+        return CaptureDriver(() => driver(new[] { sourcePath }));
+    }
+
+    private static string CaptureDriver(Func<int> driver)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        int exit;
+        try
+        {
+            exit = driver();
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+
+        Assert.True(
+            exit == 0,
+            $"driver failed with exit {exit}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        return stdout.ToString().Replace("\r\n", "\n");
+    }
+
+    private static string NormalizeGenericTypeNames(string output)
+    {
+        return Regex.Replace(
+            output,
+            @", [^,\[\]]+, Version=[^,\[\]]+, Culture=[^,\[\]]+, PublicKeyToken=[^,\[\]]+",
+            string.Empty,
+            RegexOptions.CultureInvariant);
     }
 
     private static string GetRepositoryRoot()
@@ -314,4 +451,18 @@ public class Issue3015OverloadedBase
 
     /// <summary>Gets constructor probe label.</summary>
     public string Label { get; }
+}
+
+/// <summary>Imported protected-constructor probe for issue #3015.</summary>
+public class Issue3015ProtectedParameterizedBase
+{
+    /// <summary>Initializes a new instance of the <see cref="Issue3015ProtectedParameterizedBase"/> class.</summary>
+    /// <param name="value">Probe value.</param>
+    protected Issue3015ProtectedParameterizedBase(int value)
+    {
+        Value = value;
+    }
+
+    /// <summary>Gets constructor probe value.</summary>
+    public int Value { get; }
 }

@@ -1346,14 +1346,43 @@ public sealed partial class Evaluator
         var typeArguments = new Type[structType.TypeArguments.Length];
         for (var i = 0; i < typeArguments.Length; i++)
         {
-            var argument = structType.TypeArguments[i];
-            typeArguments[i] = argument is NullableTypeSymbol nullable
-                && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr
-                    ? typeof(Nullable<>).MakeGenericType(valueClr)
-                    : argument.ClrType ?? typeof(object);
+            typeArguments[i] = ResolveClrBackingTypeArgument(structType.TypeArguments[i]);
         }
 
         return backingType.MakeGenericType(typeArguments);
+    }
+
+    private static Type ResolveClrBackingTypeArgument(TypeSymbol argument)
+    {
+        if (argument is NullableTypeSymbol nullable
+            && nullable.UnderlyingType.ClrType is { IsValueType: true } valueClr)
+        {
+            return typeof(Nullable<>).MakeGenericType(valueClr);
+        }
+
+        if (argument.ClrType is Type clrType)
+        {
+            return clrType;
+        }
+
+        if (argument is StructSymbol { IsClass: true } gsharpClass)
+        {
+            var clrBase = typeof(object);
+            for (var type = gsharpClass; type != null; type = type.BaseClass)
+            {
+                if (type.ImportedBaseType?.ClrType is Type importedBase)
+                {
+                    clrBase = importedBase;
+                    break;
+                }
+            }
+
+            return ClrBackingTypes.GetValue(
+                gsharpClass,
+                _ => CreateClrBackingType(gsharpClass, clrBase));
+        }
+
+        return typeof(object);
     }
 
     private static string GetClrMetadataTypeName(StructSymbol type)
