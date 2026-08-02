@@ -103,6 +103,52 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
+    public void PlainInterfaceIndexerParameterMismatch_ReportsGS0187()
+    {
+        const string source = """
+            package ParameterMismatch
+
+            interface ILookup {
+                prop this[key string] int32 { get; }
+            }
+            class Lookup : ILookup {
+                prop this[key int32] int32 -> key
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Equal(1, CountOccurrences(output, "error GS0187:"));
+        Assert.Contains(
+            "Class 'Lookup' does not implement interface method 'ILookup.Item'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0504", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NullableIndexerRejected_ReportsGS0504()
+    {
+        const string source = """
+            package NullableIndexerRejected
+
+            interface I[T] { prop this[key string] T? { get; } }
+            class C : I[int32] {
+                prop this[key string] int32? { get { return nil } }
+            }
+            """;
+
+        var output = CompileExpectingFailure(source);
+
+        Assert.Equal(1, CountOccurrences(output, "error GS0504:"));
+        Assert.Contains(
+            "Type 'C' cannot use property 'Item' to implement interface property 'I[int32].Item': expected type 'int32', actual type 'int32?'.",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0187", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompatibleBaselineSiblingShapes_EmitVerifyAndLoad()
     {
         const string source = """
@@ -307,13 +353,6 @@ public class Issue2888InterfacePropertyTypeMismatchTests
             package NullableImplicitSetRejected
             interface I[T] { prop Value T? { get; set; } }
             class C : I[int32] { prop Value int32? { get; set; } }
-            """,
-            """
-            package NullableIndexerRejected
-            interface I[T] { prop this[key string] T? { get; } }
-            class C : I[int32] {
-                prop this[key string] int32? { get { return nil } }
-            }
             """,
             """
             package NullableSliceRejected
