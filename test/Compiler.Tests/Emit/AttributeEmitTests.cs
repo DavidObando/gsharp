@@ -6,6 +6,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -340,6 +342,41 @@ public class AttributeEmitTests
         Assert.DoesNotContain(
             foo.GetCustomAttributesData(),
             d => d.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
+    }
+
+    [Fact]
+    public void Issue3082_PropertyTarget_On_DataPositionalMember_IsRuntimeObservable()
+    {
+        _ = typeof(JsonIgnoreAttribute).Assembly;
+        var source = """
+            package P
+            import System.Text.Json.Serialization
+
+            data class QuestionResult(
+                QuestionId string,
+                @property:JsonIgnore Points float64) {
+            }
+            """;
+
+        var assembly = CompileToAssembly(source);
+        var resultType = assembly.GetTypes().Single(t => t.Name == "QuestionResult");
+        var pointsProperty = resultType.GetProperty("Points");
+        Assert.NotNull(pointsProperty);
+        Assert.Contains(
+            pointsProperty.GetCustomAttributesData(),
+            data => data.AttributeType == typeof(JsonIgnoreAttribute));
+
+        var constructor = resultType.GetConstructors()
+            .Single(ctor => ctor.GetParameters().Any(parameter => parameter.Name == "Points"));
+        var pointsParameter = constructor.GetParameters().Single(parameter => parameter.Name == "Points");
+        Assert.DoesNotContain(
+            pointsParameter.GetCustomAttributesData(),
+            data => data.AttributeType == typeof(JsonIgnoreAttribute));
+
+        var instance = Activator.CreateInstance(resultType, "question-1", 2.5);
+        var json = JsonSerializer.Serialize(instance, resultType);
+        Assert.Contains("\"QuestionId\":\"question-1\"", json);
+        Assert.DoesNotContain("\"Points\"", json);
     }
 
     [Fact]

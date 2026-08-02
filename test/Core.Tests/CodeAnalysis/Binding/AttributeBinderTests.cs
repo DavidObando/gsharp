@@ -138,6 +138,34 @@ public class AttributeBinderTests
     }
 
     [Fact]
+    public void Issue3082_PropertyTarget_On_DataPositionalMember_BindsToSynthesizedProperty()
+    {
+        _ = typeof(System.Text.Json.Serialization.JsonIgnoreAttribute).Assembly;
+        var source = """
+            import System.Text.Json.Serialization
+
+            data class QuestionResult(
+                QuestionId string,
+                @property:JsonIgnore Points float64) {
+            }
+            """;
+
+        var globalScope = BindSource(source);
+
+        Assert.DoesNotContain(GetBinderDiagnostics(globalScope), d => d.Id == "GS0201");
+        var result = globalScope.Structs.Single(s => s.Name == "QuestionResult");
+        var parameter = result.PrimaryConstructorParameters.Single(p => p.Name == "Points");
+        Assert.Empty(parameter.Attributes);
+
+        var property = result.Properties.Single(p => p.Name == "Points");
+        var attribute = Assert.Single(property.Attributes);
+        Assert.Equal(AttributeTargetKind.Property, attribute.Target);
+        Assert.Equal(
+            "System.Text.Json.Serialization.JsonIgnoreAttribute",
+            attribute.AttributeType.Name);
+    }
+
+    [Fact]
     public void Allows_Return_Use_Site_Target_On_Function()
     {
         // `[Description]` carries `[AttributeUsage(All)]`, which includes
