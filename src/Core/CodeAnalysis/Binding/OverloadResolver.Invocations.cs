@@ -679,7 +679,24 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression BindIndirectCallExpression(CallExpressionSyntax syntax)
     {
-        var callee = bindExpression(syntax.Callee);
+        var calleeSyntax = syntax.Callee;
+        var callee = bindExpression(calleeSyntax);
+        var calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span);
+        return BindIndirectCallExpression(
+            syntax,
+            callee,
+            calleeName,
+            calleeSyntax.Location,
+            GetNullableDelegateNullSafeInvocation(calleeSyntax));
+    }
+
+    internal BoundExpression BindIndirectCallExpression(
+        CallExpressionSyntax syntax,
+        BoundExpression callee,
+        string calleeName,
+        TextLocation calleeLocation,
+        string nullSafeInvocation)
+    {
         if (callee is BoundErrorExpression)
         {
             return callee;
@@ -710,10 +727,6 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        // The verbatim source spelling of the callee (`(value)`, `handler!!`, ...)
-        // used in diagnostics — SyntaxNode.ToString() pretty-prints the whole tree.
-        var calleeName = syntax.Callee.SyntaxTree.Text.ToString(syntax.Callee.Span);
-
         BoundExpression CompleteInvocation(BoundExpression invocation) =>
             nullConditionalCallee == null
                 ? invocation
@@ -732,7 +745,7 @@ internal sealed partial class OverloadResolver
 
         if (!argumentNames.IsDefault)
         {
-            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Callee.Location, calleeName, FirstNamedArgumentName(argumentNames));
+            Diagnostics.ReportNamedArgumentParameterNotFound(calleeLocation, calleeName, FirstNamedArgumentName(argumentNames));
             return new BoundErrorExpression(null);
         }
 
@@ -767,9 +780,9 @@ internal sealed partial class OverloadResolver
 
         if (TryReportNullableDelegateReceiver(
             callee.Type,
-            syntax.Callee.Location,
+            calleeLocation,
             calleeName,
-            GetNullableDelegateNullSafeInvocation(syntax.Callee)))
+            nullSafeInvocation))
         {
             return new BoundErrorExpression(null);
         }
@@ -815,7 +828,7 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        Diagnostics.ReportNotAFunction(syntax.Callee.Location, calleeName);
+        Diagnostics.ReportNotAFunction(calleeLocation, calleeName);
         return new BoundErrorExpression(null);
     }
 
