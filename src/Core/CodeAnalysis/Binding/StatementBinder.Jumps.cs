@@ -867,8 +867,23 @@ internal sealed partial class StatementBinder
                 var receiver = clrPropAccess.Receiver == null
                     ? null
                     : CaptureReceiver(syntax, clrPropAccess.Receiver, preStatements);
-                var read = new BoundClrPropertyAccessExpression(syntax, receiver, clrPropAccess.Member, clrPropAccess.Type);
-                var write = new BoundClrPropertyAssignmentExpression(syntax, receiver, clrPropAccess.Member, boundRhs, clrPropAccess.Type);
+                var read = new BoundClrPropertyAccessExpression(
+                    syntax,
+                    receiver,
+                    clrPropAccess.Member,
+                    clrPropAccess.Type,
+                    clrPropAccess.StaticContainerType,
+                    clrPropAccess.ConstrainedReceiverTypeParameter,
+                    clrPropAccess.ConstrainedInterfaceType);
+                var write = new BoundClrPropertyAssignmentExpression(
+                    syntax,
+                    receiver,
+                    clrPropAccess.Member,
+                    boundRhs,
+                    clrPropAccess.Type,
+                    clrPropAccess.StaticContainerType,
+                    clrPropAccess.ConstrainedReceiverTypeParameter,
+                    clrPropAccess.ConstrainedInterfaceType);
                 return (read, write);
             }
 

@@ -1681,6 +1681,7 @@ public abstract class BoundTreeRewriter
             node.Member,
             value,
             node.Type,
+            node.StaticContainerType,
             node.ConstrainedReceiverTypeParameter,
             node.ConstrainedInterfaceType);
     }

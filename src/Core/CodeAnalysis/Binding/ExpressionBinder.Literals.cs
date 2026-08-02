@@ -1682,7 +1682,7 @@ internal sealed partial class ExpressionBinder
             var receiverExpr = new BoundVariableExpression(initSyntax, tempVar);
             statements.Add(new BoundExpressionStatement(
                 initSyntax,
-                new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol)));
+                new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol, staticContainerType: null)));
         }
 
         var resultExpr = new BoundVariableExpression(syntax, tempVar);
@@ -1810,8 +1810,9 @@ internal sealed partial class ExpressionBinder
                             clrProperty,
                             converted,
                             propertyType,
-                            tp,
-                            declaringInterface)));
+                            staticContainerType: null,
+                            constrainedReceiverTypeParameter: tp,
+                            constrainedInterfaceType: declaringInterface)));
                     continue;
                 }
             }

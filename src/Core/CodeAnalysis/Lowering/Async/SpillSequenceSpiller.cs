@@ -506,6 +506,7 @@ public static class SpillSequenceSpiller
                             clrPropAssign.Member,
                             val,
                             clrPropAssign.Type,
+                            clrPropAssign.StaticContainerType,
                             clrPropAssign.ConstrainedReceiverTypeParameter,
                             clrPropAssign.ConstrainedInterfaceType));
                 case BoundClrBinaryOperatorExpression clrBinary:

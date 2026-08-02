@@ -13,6 +13,162 @@ namespace GSharp.Compiler.Tests;
 
 public class ImportedMemberMatrixTests
 {
+    private const string Issue3076CsSource = """
+        namespace Issue3076.CSharp
+        {
+            public static class Issue3076GenericStaticSlot<T>
+            {
+                public static int Property { get; set; }
+                public static int Field;
+                public static string? TextProperty { get; set; }
+                public static string? TextField;
+
+                public static int ReadProperty() => Property;
+                public static int ReadField() => Field;
+            }
+
+            public static class Issue3076GenericPairSlot<TFirst, TSecond>
+            {
+                public static int Property { get; set; }
+                public static int Field;
+            }
+
+            public sealed class Issue3076GenericBox<T>
+            {
+            }
+
+            public static class Issue3076PlainStaticSlot
+            {
+                public static int Property { get; set; }
+                public static int Field;
+            }
+
+            public static class Issue3076AsyncValues
+            {
+                public static System.Threading.Tasks.Task<int> Get(int value)
+                    => System.Threading.Tasks.Task.FromResult(value);
+            }
+        }
+        """;
+
+    [Theory]
+    [InlineData(false, "301\n302\n311\n312\n321\n322\n331\n332\n341\n342\n351\n352\n")]
+    [InlineData(true, "201\n202\n211\n212\n121\n122\n221\n222\n231\n232\n241\n242\n")]
+    public void Issue3076_GenericStaticClrStores_CompileAndRun(bool throughTypeParameter, string expected)
+    {
+        var source = Issue3076Source("Issue3076.CSharp", throughTypeParameter);
+        Assert.Equal(expected, CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
+    }
+
+    [Fact]
+    public void Issue3076_GenericStaticClrStores_PreserveContainerThroughSideEffectSpilling()
+    {
+        const string source = """
+            import Issue3076.CSharp
+            import System
+
+            func PropertyMarker() int32 { return 401 }
+            func FieldMarker() int32 { return 402 }
+
+            func Store[T]() {
+                Issue3076GenericStaticSlot[T].Property = PropertyMarker()
+                Issue3076GenericStaticSlot[T].Field = FieldMarker()
+            }
+
+            Issue3076GenericStaticSlot[int32].Property = 101
+            Issue3076GenericStaticSlot[int32].Field = 102
+            Issue3076GenericStaticSlot[object].Property = 121
+            Issue3076GenericStaticSlot[object].Field = 122
+            Store[int32]()
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].Property)
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].Field)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].Property)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].Field)
+            """;
+
+        Assert.Equal(
+            "401\n402\n121\n122\n",
+            CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
+    }
+
+    [Fact]
+    public void Issue3076_GenericStaticClrStores_PreserveContainerThroughNullCoalescingAssignment()
+    {
+        const string source = """
+            import Issue3076.CSharp
+            import System
+
+            func StoreIfMissing[T]() {
+                Issue3076GenericStaticSlot[T].TextProperty ??= "property"
+                Issue3076GenericStaticSlot[T].TextField ??= "field"
+            }
+
+            Issue3076GenericStaticSlot[int32].TextProperty = nil
+            Issue3076GenericStaticSlot[int32].TextField = nil
+            Issue3076GenericStaticSlot[object].TextProperty = "object-property"
+            Issue3076GenericStaticSlot[object].TextField = "object-field"
+            StoreIfMissing[int32]()
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].TextProperty)
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].TextField)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].TextProperty)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].TextField)
+            """;
+
+        Assert.Equal(
+            "property\nfield\nobject-property\nobject-field\n",
+            CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
+    }
+
+    [Fact]
+    public void Issue3076_GenericStaticClrStores_PreserveContainerThroughAsyncSpilling()
+    {
+        const string source = """
+            import Issue3076.CSharp
+            import System
+
+            async func StoreAsync[T]() {
+                Issue3076GenericStaticSlot[T].Property = await Issue3076AsyncValues.Get(501)
+                Issue3076GenericStaticSlot[T].Field = await Issue3076AsyncValues.Get(502)
+            }
+
+            Issue3076GenericStaticSlot[int32].Property = 101
+            Issue3076GenericStaticSlot[int32].Field = 102
+            Issue3076GenericStaticSlot[object].Property = 121
+            Issue3076GenericStaticSlot[object].Field = 122
+            StoreAsync[int32]().GetAwaiter().GetResult()
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].Property)
+            Console.WriteLine(Issue3076GenericStaticSlot[int32].Field)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].Property)
+            Console.WriteLine(Issue3076GenericStaticSlot[object].Field)
+            """;
+
+        Assert.Equal(
+            "501\n502\n121\n122\n",
+            CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
+    }
+
+    [Theory]
+    [InlineData(false, "301\n302\n311\n312\n321\n322\n331\n332\n341\n342\n351\n352\n")]
+    [InlineData(true, "201\n202\n211\n212\n121\n122\n221\n222\n231\n232\n241\n242\n")]
+    public void Issue3076_GenericStaticClrStores_Evaluate(bool throughTypeParameter, string expected)
+    {
+        var workDir = CreateWorkDir("issue3076_evaluate_");
+        try
+        {
+            var sourcePath = Path.Combine(workDir, "test.gs");
+            File.WriteAllText(sourcePath, Issue3076Source("GSharp.Compiler.Tests", throughTypeParameter));
+
+            var (exitCode, output) = RunCompiler(new[] { sourcePath });
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(expected + "Success.\n", output.Replace("\r\n", "\n"));
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
     [Fact]
     public void ImportedMemberMatrix_GenericImportedInterfaceMethodAndInterfaceObjectMembers_CompileAndRun()
     {
@@ -946,6 +1102,113 @@ public class ImportedMemberMatrixTests
         {
             TryDelete(workDir);
         }
+    }
+
+    private static string Issue3076Source(string fixtureNamespace, bool throughTypeParameter)
+    {
+        if (!throughTypeParameter)
+        {
+            return $$"""
+                    import {{fixtureNamespace}}
+                    import System
+
+                    Issue3076GenericStaticSlot[int32].Property = 301
+                    Issue3076GenericStaticSlot[int32].Field = 302
+                    Issue3076GenericStaticSlot[string].Property = 311
+                    Issue3076GenericStaticSlot[string].Field = 312
+                    Issue3076GenericStaticSlot[object].Property = 321
+                    Issue3076GenericStaticSlot[object].Field = 322
+                    Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Property = 331
+                    Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Field = 332
+                    Issue3076GenericPairSlot[int32, string].Property = 341
+                    Issue3076GenericPairSlot[int32, string].Field = 342
+                    Issue3076PlainStaticSlot.Property = 351
+                    Issue3076PlainStaticSlot.Field = 352
+
+                    Console.WriteLine(Issue3076GenericStaticSlot[int32].Property)
+                    Console.WriteLine(Issue3076GenericStaticSlot[int32].Field)
+                    Console.WriteLine(Issue3076GenericStaticSlot[string].Property)
+                    Console.WriteLine(Issue3076GenericStaticSlot[string].Field)
+                    Console.WriteLine(Issue3076GenericStaticSlot[object].Property)
+                    Console.WriteLine(Issue3076GenericStaticSlot[object].Field)
+                    Console.WriteLine(Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Property)
+                    Console.WriteLine(Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Field)
+                    Console.WriteLine(Issue3076GenericPairSlot[int32, string].Property)
+                    Console.WriteLine(Issue3076GenericPairSlot[int32, string].Field)
+                    Console.WriteLine(Issue3076PlainStaticSlot.Property)
+                    Console.WriteLine(Issue3076PlainStaticSlot.Field)
+                """;
+        }
+
+        return $$"""
+                import {{fixtureNamespace}}
+                import System
+
+                func Store[T](propertyValue int32, fieldValue int32) {
+                    Issue3076GenericStaticSlot[T].Property = propertyValue
+                    Issue3076GenericStaticSlot[T].Field = fieldValue
+                }
+
+                func StorePropertyAndRead[T](value int32) int32 {
+                    Issue3076GenericStaticSlot[T].Property = value
+                    return Issue3076GenericStaticSlot[T].Property
+                }
+
+                func StoreFieldAndRead[T](value int32) int32 {
+                    Issue3076GenericStaticSlot[T].Field = value
+                    return Issue3076GenericStaticSlot[T].Field
+                }
+
+                func ReadProperty[T]() int32 {
+                    return Issue3076GenericStaticSlot[T].Property
+                }
+
+                func ReadField[T]() int32 {
+                    return Issue3076GenericStaticSlot[T].Field
+                }
+
+                func StoreNested[T](propertyValue int32, fieldValue int32) {
+                    Issue3076GenericStaticSlot[Issue3076GenericBox[T]].Property = propertyValue
+                    Issue3076GenericStaticSlot[Issue3076GenericBox[T]].Field = fieldValue
+                }
+
+                func StorePair[TFirst, TSecond](propertyValue int32, fieldValue int32) {
+                    Issue3076GenericPairSlot[TFirst, TSecond].Property = propertyValue
+                    Issue3076GenericPairSlot[TFirst, TSecond].Field = fieldValue
+                }
+
+                Issue3076GenericStaticSlot[int32].Property = 101
+                Issue3076GenericStaticSlot[int32].Field = 102
+                Issue3076GenericStaticSlot[string].Property = 111
+                Issue3076GenericStaticSlot[string].Field = 112
+                Issue3076GenericStaticSlot[object].Property = 121
+                Issue3076GenericStaticSlot[object].Field = 122
+                Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Property = 131
+                Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].Field = 132
+                Issue3076GenericPairSlot[int32, string].Property = 141
+                Issue3076GenericPairSlot[int32, string].Field = 142
+
+                var intProperty = StorePropertyAndRead[int32](201)
+                var intField = StoreFieldAndRead[int32](202)
+                Store[string](211, 212)
+                StoreNested[int32](221, 222)
+                StorePair[int32, string](231, 232)
+                Issue3076PlainStaticSlot.Property = 241
+                Issue3076PlainStaticSlot.Field = 242
+
+                Console.WriteLine(intProperty)
+                Console.WriteLine(intField)
+                Console.WriteLine(ReadProperty[string]())
+                Console.WriteLine(ReadField[string]())
+                Console.WriteLine(Issue3076GenericStaticSlot[object].Property)
+                Console.WriteLine(Issue3076GenericStaticSlot[object].Field)
+                Console.WriteLine(Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].ReadProperty())
+                Console.WriteLine(Issue3076GenericStaticSlot[Issue3076GenericBox[int32]].ReadField())
+                Console.WriteLine(Issue3076GenericPairSlot[int32, string].Property)
+                Console.WriteLine(Issue3076GenericPairSlot[int32, string].Field)
+                Console.WriteLine(Issue3076PlainStaticSlot.Property)
+                Console.WriteLine(Issue3076PlainStaticSlot.Field)
+            """;
     }
 
     private static List<string> CompileExpectingErrorsWithSiblingCs(string csSource, string gSource, string siblingName)

@@ -3153,7 +3153,8 @@ internal sealed class ConversionClassifier
                     receiver,
                     slot.TargetClrMember,
                     value,
-                    slot.TargetType);
+                    slot.TargetType,
+                    staticContainerType: null);
             }
 
             statements.Add(new BoundExpressionStatement(expression.Syntax, assignment));

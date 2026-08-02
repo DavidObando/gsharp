@@ -457,7 +457,7 @@ internal sealed partial class ExpressionBinder
             var value = BindExpression(initSyntax.Value);
             var converted = conversions.BindConversion(initSyntax.Value.Location, value, instTargetSymbol);
             var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
-            return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, instanceMember, converted, instTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, instanceMember, converted, instTargetSymbol, staticContainerType: null);
         }
 
         if (receiverType is StructSymbol structSymbol)
@@ -518,7 +518,7 @@ internal sealed partial class ExpressionBinder
                     var value = BindExpression(initSyntax.Value);
                     var converted = conversions.BindConversion(initSyntax.Value.Location, value, inhTargetSymbol);
                     var receiverExpr = new BoundVariableExpression(initSyntax, receiverLocal);
-                    return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, inhMember, converted, inhTargetSymbol);
+                    return new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, inhMember, converted, inhTargetSymbol, staticContainerType: null);
                 }
             }
 
@@ -611,7 +611,7 @@ internal sealed partial class ExpressionBinder
                 {
                     var inheritedValue = BindAssignmentRhs(syntax.Value, inheritedTarget);
                     var inheritedConverted = conversions.BindConversion(syntax.Value.Location, inheritedValue, inheritedTarget);
-                    return new BoundClrPropertyAssignmentExpression(null, receiver: null, inheritedStaticMember, inheritedConverted, inheritedTarget);
+                    return new BoundClrPropertyAssignmentExpression(null, receiver: null, inheritedStaticMember, inheritedConverted, inheritedTarget, staticContainerType: null);
                 }
             }
 
@@ -665,7 +665,7 @@ internal sealed partial class ExpressionBinder
             _ = staticTargetType;
             var staticValue = BindAssignmentRhs(syntax.Value, staticTargetSymbol);
             var staticConverted = conversions.BindConversion(syntax.Value.Location, staticValue, staticTargetSymbol);
-            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver: null, staticMember, staticConverted, staticTargetSymbol, staticContainerType: null);
         }
 
         var variable = BindVariableReference(receiverName, syntax.Receiver.Location);
@@ -756,7 +756,7 @@ internal sealed partial class ExpressionBinder
             _ = instWritable;
             _ = instTargetType;
             var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
-            return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, instanceMember, instConverted, instTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, instanceMember, instConverted, instTargetSymbol, staticContainerType: null);
         }
 
         // Issue #1068: an interface-typed variable receiver (`d.W = v` where
@@ -861,8 +861,9 @@ internal sealed partial class ExpressionBinder
                         clrProperty,
                         constrainedConverted,
                         propertyType,
-                        tpVarType,
-                        declaringInterface);
+                        staticContainerType: null,
+                        constrainedReceiverTypeParameter: tpVarType,
+                        constrainedInterfaceType: declaringInterface);
                 }
             }
 
@@ -930,7 +931,7 @@ internal sealed partial class ExpressionBinder
                     _ = inhWritable;
                     _ = inhTargetType;
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
-                    return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, clrMember, inhConverted, inhTargetSymbol);
+                    return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
             }
 
@@ -1577,7 +1578,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol);
-        return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol);
+        return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol, staticContainerType: null);
     }
 
     /// <summary>
@@ -2147,7 +2148,7 @@ internal sealed partial class ExpressionBinder
                     _ = inhWritable;
                     _ = inhTargetType;
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
-                    return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol);
+                    return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
             }
 
@@ -2209,8 +2210,9 @@ internal sealed partial class ExpressionBinder
                     clrProperty,
                     constrainedConverted,
                     propertyType,
-                    tpReceiver,
-                    declaringInterface);
+                    staticContainerType: null,
+                    constrainedReceiverTypeParameter: tpReceiver,
+                    constrainedInterfaceType: declaringInterface);
             }
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
@@ -2243,7 +2245,7 @@ internal sealed partial class ExpressionBinder
             _ = instWritable;
             _ = instTargetType;
             var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
-            return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol);
+            return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol, staticContainerType: null);
         }
 
         Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
