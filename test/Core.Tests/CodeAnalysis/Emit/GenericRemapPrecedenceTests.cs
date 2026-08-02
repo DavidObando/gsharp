@@ -40,7 +40,26 @@ public sealed class GenericRemapPrecedenceTests
     }
 
     [Fact]
-    public void ImportedElementToken_ClassTypeParameter_UsesLambdaRemap()
+    public void ImportedElementToken_MethodTypeParameter_UsesLambdaRemapWithoutStateMachine()
+    {
+        var typeParameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None)
+        {
+            IsMethodTypeParameter = true,
+        };
+
+        AssertEncoding(
+            typeParameter,
+            SignatureTypeCode.GenericMethodParameter,
+            expectedOrdinal: 2,
+            includeStateMachineRemap: false);
+    }
+
+    [Fact]
+    public void ImportedElementToken_ClassTypeParameter_PrefersStateMachineRemap()
     {
         var typeParameter = new TypeParameterSymbol(
             "T",
@@ -50,14 +69,15 @@ public sealed class GenericRemapPrecedenceTests
 
         AssertEncoding(
             typeParameter,
-            SignatureTypeCode.GenericMethodParameter,
-            expectedOrdinal: 2);
+            SignatureTypeCode.GenericTypeParameter,
+            expectedOrdinal: 1);
     }
 
     private static void AssertEncoding(
         TypeParameterSymbol typeParameter,
         SignatureTypeCode expectedCode,
-        int expectedOrdinal)
+        int expectedOrdinal,
+        bool includeStateMachineRemap = true)
     {
         var emitter = CreateEmitter();
         var stateMachine = new StructSymbol(
@@ -75,9 +95,13 @@ public sealed class GenericRemapPrecedenceTests
             TypeSymbol.Void,
             package: Package);
 
-        emitter.remaps.RegisterClassRemap(
-            stateMachine,
-            new Dictionary<TypeParameterSymbol, int> { [typeParameter] = 1 });
+        if (includeStateMachineRemap)
+        {
+            emitter.remaps.RegisterClassRemap(
+                stateMachine,
+                new Dictionary<TypeParameterSymbol, int> { [typeParameter] = 1 });
+        }
+
         emitter.remaps.RegisterLambdaMethodRemap(
             lambda,
             new Dictionary<TypeParameterSymbol, int> { [typeParameter] = 2 });

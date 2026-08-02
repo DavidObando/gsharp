@@ -266,9 +266,8 @@ internal sealed class SignatureEncoder
             // emits `<Empty>d__0<T>` where the body's `!!0` becomes
             // `!0` on the SM class. The remap is pushed by
             // EmitIteratorStateMachineMember and is keyed by the
-            // method TP's instance identity.
+            // source TP's instance identity.
             if (this.remaps.ActiveIteratorStateMachineRemap != null
-                && tp.IsMethodTypeParameter
                 && this.remaps.ActiveIteratorStateMachineRemap.TryGetValue(tp, out var classOrdinal))
             {
                 encoder.GenericTypeParameter(classOrdinal);
