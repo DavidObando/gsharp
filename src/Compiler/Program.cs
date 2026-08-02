@@ -128,6 +128,7 @@ public class Program
                 {
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
                     IsLibrary = parsed.Target == OutputTarget.Library,
+                    Optimize = parsed.Optimize,
                     Logger = logger,
 
                     // Issue #1929/#1953: set as early as possible (right at
@@ -765,6 +766,7 @@ public class Program
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
+          /optimize[+|-]                Enable/disable JIT optimization (default: enabled).
           /debug[+|-][:<value>]         Emit debug info: none, portable, full, pdbonly, embedded.
           /pdb:<file>                   Sidecar PDB path.
           /doc:<file>                   XML documentation output path.
@@ -969,6 +971,18 @@ public class Program
                             result.WarnNotAsErrorIds.Add(id);
                         }
 
+                        break;
+
+                    case "optimize":
+                        result.Optimize = ParseBoolFlag(value, defaultIfEmpty: true);
+                        break;
+
+                    case "optimize+":
+                        result.Optimize = true;
+                        break;
+
+                    case "optimize-":
+                        result.Optimize = false;
                         break;
 
                     case "debug":
@@ -1287,6 +1301,9 @@ public class Program
 
         /// <summary>Gets or sets the requested PDB emit format (from /debug, /debug:&lt;value&gt;, /debug+/-). Defaults to None.</summary>
         public DebugInformationFormat DebugFormat { get; set; } = DebugInformationFormat.None;
+
+        /// <summary>Gets or sets a value indicating whether emitted assemblies allow JIT optimization (from /optimize, /optimize+/-). Defaults to true.</summary>
+        public bool Optimize { get; set; } = true;
 
         /// <summary>Gets or sets a value indicating whether a /debug, /debug+, or /debug- switch was observed on the command line. Used so that a bare /pdb:&lt;path&gt; can default the format to Portable without overriding a later /debug-.</summary>
         public bool DebugFlagSeen { get; set; }

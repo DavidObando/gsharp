@@ -103,6 +103,12 @@ public class Compilation
     public bool IsLibrary { get; set; } = false;
 
     /// <summary>
+    /// Gets or sets a value indicating whether emitted runtime assemblies
+    /// allow JIT optimization. Defaults to <see langword="true"/>.
+    /// </summary>
+    public bool Optimize { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets the active preprocessor symbol set used by
     /// <c>[Conditional("SYMBOL")]</c> call-site elision (ADR-0047 §6 /
     /// issue #176). A call to a function marked
@@ -716,9 +722,9 @@ public class Compilation
         };
     }
 
-    private static void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null, string targetFrameworkMoniker = null, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
+    private void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null, string targetFrameworkMoniker = null, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
     {
-        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker, embeddedResources);
+        ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker, embeddedResources, Optimize);
     }
 
     private void PrepareReferencesForBinding(string assemblyName)
