@@ -47,6 +47,19 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     }
 
+                    // A GeneratedRegex trigger is a non-void partial definition,
+                    // so ordinary partial-method elision would drop its declaration
+                    // while value-position calls remain.
+                    if (this.TryTranslateGeneratedRegex(
+                        method,
+                        out FieldDeclaration generatedRegexField,
+                        out MethodDeclaration generatedRegexMethod))
+                    {
+                        yield return (generatedRegexField, true);
+                        yield return (generatedRegexMethod, true);
+                        break;
+                    }
+
                     (GMember methodMember, bool methodIsStatic) = this.TranslateMethod(
                         method,
                         ownerKind,
@@ -234,6 +247,154 @@ public sealed partial class CSharpToGSharpTranslator
                         $"member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.11).");
                     break;
             }
+        }
+
+        private bool TryTranslateGeneratedRegex(
+            MethodDeclarationSyntax node,
+            out FieldDeclaration cacheField,
+            out MethodDeclaration method)
+        {
+            cacheField = null;
+            method = null;
+
+            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
+            if (symbol == null ||
+                !symbol.IsPartialDefinition ||
+                !symbol.IsStatic ||
+                symbol.Parameters.Length != 0 ||
+                symbol.TypeParameters.Length != 0)
+            {
+                return false;
+            }
+
+            AttributeData attribute = symbol.GetAttributes().FirstOrDefault(
+                candidate => candidate.AttributeClass?.ToDisplayString() ==
+                    "System.Text.RegularExpressions.GeneratedRegexAttribute");
+            if (attribute?.AttributeConstructor == null)
+            {
+                return false;
+            }
+
+            string pattern = null;
+            object optionsValue = 0;
+            ITypeSymbol optionsType = this.context.Compilation.GetTypeByMetadataName(
+                "System.Text.RegularExpressions.RegexOptions");
+            int timeoutMilliseconds = -1;
+            string cultureName = string.Empty;
+
+            ImmutableArray<IParameterSymbol> constructorParameters = attribute.AttributeConstructor.Parameters;
+            ImmutableArray<TypedConstant> constructorArguments = attribute.ConstructorArguments;
+            if (constructorParameters.Length != constructorArguments.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < constructorParameters.Length; i++)
+            {
+                object value = constructorArguments[i].Value;
+                switch (constructorParameters[i].Name)
+                {
+                    case "pattern":
+                        pattern = value as string;
+                        break;
+                    case "options":
+                        optionsValue = value;
+                        optionsType = constructorArguments[i].Type ?? optionsType;
+                        break;
+                    case "matchTimeoutMilliseconds" when value is int timeoutArgument:
+                        timeoutMilliseconds = timeoutArgument;
+                        break;
+                    case "cultureName":
+                        cultureName = value as string ?? string.Empty;
+                        break;
+                }
+            }
+
+            if (pattern == null || optionsType == null)
+            {
+                return false;
+            }
+
+            long optionBits = Convert.ToInt64(optionsValue, CultureInfo.InvariantCulture);
+            const long IgnoreCase = 1;
+            const long CultureInvariant = 512;
+            if ((optionBits & IgnoreCase) != 0 &&
+                ((optionBits & CultureInvariant) == 0 || cultureName.Length > 0))
+            {
+                const string Message = "GeneratedRegex with culture-sensitive IgnoreCase cannot be lowered to " +
+                    "Regex construction without changing culture or Regex.Options semantics.";
+                this.context.ReportUnsupported(node, Message);
+                return false;
+            }
+
+            GTypeReference regexType = this.typeMapper.Map(
+                symbol.ReturnType,
+                this.context,
+                node.ReturnType.GetLocation());
+            GExpression options = this.MapConstantValue(
+                optionsValue,
+                optionsType,
+                node,
+                "GeneratedRegex options");
+            if (options == null)
+            {
+                return false;
+            }
+
+            string regexTypeName = regexType is NamedTypeReference namedRegex
+                ? namedRegex.Name
+                : "Regex";
+            GExpression milliseconds = LiteralExpression.Float(
+                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0");
+            GExpression matchTimeout = timeoutMilliseconds == -1
+                ? new MemberAccessExpression(
+                    new IdentifierExpression(regexTypeName),
+                    "InfiniteMatchTimeout")
+                : new InvocationExpression(
+                    new MemberAccessExpression(
+                        new IdentifierExpression("TimeSpan"),
+                        "FromMilliseconds"),
+                    new[] { milliseconds });
+
+            string cacheName = "__generatedRegex_" + SanitizeIdentifier(node.Identifier.Text);
+            var occupiedNames = new HashSet<string>(
+                symbol.ContainingType.GetMembers().Select(member => member.Name),
+                StringComparer.Ordinal);
+            while (occupiedNames.Contains(cacheName))
+            {
+                cacheName += "_";
+            }
+
+            cacheField = new FieldDeclaration(
+                BindingKind.Let,
+                cacheName,
+                regexType,
+                BuildConstruction(
+                    regexType,
+                    new GExpression[]
+                    {
+                        LiteralExpression.String(pattern),
+                        options,
+                        matchTimeout,
+                    }),
+                Visibility.Private);
+
+            List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists)
+                .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name))
+                .ToList();
+            method = new MethodDeclaration(
+                SanitizeIdentifier(node.Identifier.Text),
+                returnType: regexType,
+                visibility: MapVisibility(symbol, this.context, node),
+                attributes: attributes,
+                expressionBody: new ReturnStatement(new IdentifierExpression(cacheName)));
+            return true;
+        }
+
+        private static bool IsGeneratedRegexAttributeName(string name)
+        {
+            string simpleName = name.Substring(name.LastIndexOf('.') + 1);
+            return simpleName == "GeneratedRegex" || simpleName == "GeneratedRegexAttribute";
         }
 
         private bool CanLowerOwnedExtension(MethodDeclarationSyntax method)
