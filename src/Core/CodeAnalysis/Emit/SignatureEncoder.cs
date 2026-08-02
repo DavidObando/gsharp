@@ -584,7 +584,7 @@ internal sealed class SignatureEncoder
         }
     }
 
-    private void EncodeTupleType(
+    internal void EncodeTupleType(
         SignatureTypeEncoder encoder,
         ImmutableArray<TypeSymbol> elementTypes,
         int start,

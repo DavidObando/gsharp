@@ -4160,6 +4160,16 @@ public sealed class Binder
         if (TypeSymbol.RequiresSymbolicProjection(type) || type.ClrType == null)
         {
             hasSymbolicArgument = true;
+
+            // Issue #3087: a tuple must retain its ValueTuple shape while its
+            // symbolic elements ride through erased CLR placeholders.
+            if ((type is TupleTypeSymbol
+                    or NullableTypeSymbol { UnderlyingType: TupleTypeSymbol })
+                && MemberLookup.TryProjectErasedClrType(type, out var projected))
+            {
+                return scope.References.MapClrTypeToReferences(projected);
+            }
+
             return TypeSymbol.ContainsTypeParameter(type)
                 || TypeSymbol.ContainsSameCompilationUserType(type)
                 || type.ClrType == null

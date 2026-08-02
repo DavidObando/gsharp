@@ -90,6 +90,9 @@ public sealed class TupleTypeSymbol : TypeSymbol
             _ => throw new ArgumentOutOfRangeException(nameof(arity)),
         };
 
+    internal static Type BuildClrType(Type[] elementTypes)
+        => BuildClrType(elementTypes, 0, elementTypes.Length);
+
     private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
     {
         var sb = new StringBuilder("(");
@@ -118,7 +121,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
         }
 
         var clrTypes = elementTypes.Select(t => t.ClrType).ToArray();
-        return BuildClrType(clrTypes, 0, clrTypes.Length);
+        return BuildClrType(clrTypes);
     }
 
     private static Type BuildClrType(Type[] elementTypes, int start, int count)

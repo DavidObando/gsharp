@@ -1588,27 +1588,36 @@ internal sealed partial class MethodBodyEmitter
         var clrType = tuple.TupleType.ClrType;
         var arity = tuple.TupleType.Arity;
 
-        if (clrType == null && arity >= 2 && arity <= 7)
+        if (clrType == null)
         {
-            // Issue #649: G#-defined types lack a ClrType, so we build the
-            // tuple TypeSpec and ctor MemberRef symbolically.
-            foreach (var elem in tuple.Elements)
-            {
-                this.EmitExpression(elem);
-            }
-
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetTupleCtorReference(tuple.TupleType));
+            // Issues #649/#3087: build every canonical ValueTuple node
+            // symbolically when an element lacks a CLR type.
+            this.EmitSymbolicTupleLiteral(tuple.Elements, tuple.TupleType, 0, arity);
             return;
         }
 
-        if (clrType == null)
+        this.EmitTupleLiteral(tuple.Elements, 0, tuple.Elements.Length, clrType);
+    }
+
+    private void EmitSymbolicTupleLiteral(
+        ImmutableArray<BoundExpression> elements,
+        TupleTypeSymbol tupleType,
+        int start,
+        int count)
+    {
+        var directCount = Math.Min(count, 7);
+        for (var i = 0; i < directCount; i++)
         {
-            throw new NotSupportedException(
-                $"Tuple of arity {arity} has no CLR backing type; emit not supported.");
+            this.EmitExpression(elements[start + i]);
         }
 
-        this.EmitTupleLiteral(tuple.Elements, 0, tuple.Elements.Length, clrType);
+        if (count > 7)
+        {
+            this.EmitSymbolicTupleLiteral(elements, tupleType, start + 7, count - 7);
+        }
+
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.memberRefs.GetTupleCtorReference(tupleType, start, count));
     }
 
     private void EmitTupleElementAccess(BoundTupleElementAccessExpression access)
@@ -1620,23 +1629,16 @@ internal sealed partial class MethodBodyEmitter
         // common cases (locals/params/temps) go through
         // EmitInstanceReceiver to prefer the address form.
         var clrType = access.TupleType.ClrType;
-        var arity = access.TupleType.Arity;
-        var fieldName = "Item" + (access.Index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-        if (clrType == null && arity >= 2 && arity <= 7)
-        {
-            // Issue #649: G#-defined types lack a ClrType, so we build the
-            // tuple TypeSpec and field MemberRef symbolically.
-            this.EmitInstanceReceiver(access.Receiver);
-            this.il.OpCode(ILOpCode.Ldfld);
-            this.il.Token(this.outer.memberRefs.GetTupleFieldReference(access.TupleType, fieldName));
-            return;
-        }
 
         if (clrType == null)
         {
-            throw new NotSupportedException(
-                $"Tuple of arity {arity} has no CLR backing type; emit not supported.");
+            // Issues #649/#3087: traverse canonical Rest nodes using
+            // symbolic TypeSpecs when an element lacks a CLR type.
+            this.EmitSymbolicTupleElementAccess(
+                access.TupleType,
+                access.Index,
+                () => this.EmitInstanceReceiver(access.Receiver));
+            return;
         }
 
         this.EmitInstanceReceiver(access.Receiver);
@@ -1649,7 +1651,7 @@ internal sealed partial class MethodBodyEmitter
             remainingIndex -= 7;
         }
 
-        fieldName = "Item" + (remainingIndex + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var fieldName = "Item" + (remainingIndex + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         this.il.OpCode(ILOpCode.Ldfld);
         if (clrType.IsConstructedGenericType)
         {
@@ -1661,6 +1663,29 @@ internal sealed partial class MethodBodyEmitter
             ?? throw new InvalidOperationException(
                 $"ValueTuple type '{clrType.FullName}' has no public field '{fieldName}'.");
         this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+    }
+
+    private void EmitSymbolicTupleElementAccess(
+        TupleTypeSymbol tupleType,
+        int index,
+        Action emitReceiver,
+        bool takeRestAddress = true)
+    {
+        emitReceiver();
+        var start = 0;
+        var count = tupleType.Arity;
+        while (index >= 7)
+        {
+            this.il.OpCode(takeRestAddress ? ILOpCode.Ldflda : ILOpCode.Ldfld);
+            this.il.Token(this.outer.memberRefs.GetTupleFieldReference(tupleType, start, count, "Rest"));
+            start += 7;
+            count -= 7;
+            index -= 7;
+        }
+
+        var fieldName = "Item" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        this.il.OpCode(ILOpCode.Ldfld);
+        this.il.Token(this.outer.memberRefs.GetTupleFieldReference(tupleType, start, count, fieldName));
     }
 
     private void EmitTupleLiteral(

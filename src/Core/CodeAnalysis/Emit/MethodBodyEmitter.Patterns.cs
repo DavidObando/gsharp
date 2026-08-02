@@ -355,33 +355,37 @@ internal sealed partial class MethodBodyEmitter
             // fields. ValueTuple exposes those as public fields, so each field
             // is a plain ldfld — same token resolution as EmitTupleElementAccess.
             var tupleClr = tupleType.ClrType;
-            var arity = tupleType.Arity;
             foreach (var field in pp.Fields)
             {
                 var fieldName = field.Field.Name;
                 Action loadTupleChild = () =>
                 {
-                    loadValue();
-                    this.il.OpCode(ILOpCode.Ldfld);
-                    if (tupleClr == null && arity is >= 2 and <= 7)
+                    if (tupleClr == null)
                     {
-                        this.il.Token(this.outer.memberRefs.GetTupleFieldReference(tupleType, fieldName));
-                    }
-                    else if (tupleClr == null)
-                    {
-                        throw new NotSupportedException(
-                            $"Tuple of arity {arity} has no CLR backing type; emit not supported.");
-                    }
-                    else if (tupleClr.IsConstructedGenericType)
-                    {
-                        this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
+                        var index = int.Parse(
+                            fieldName.AsSpan("Item".Length),
+                            System.Globalization.CultureInfo.InvariantCulture) - 1;
+                        this.EmitSymbolicTupleElementAccess(
+                            tupleType,
+                            index,
+                            loadValue,
+                            takeRestAddress: false);
                     }
                     else
                     {
-                        var clrField = tupleClr.GetField(fieldName)
-                            ?? throw new InvalidOperationException(
-                                $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
-                        this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
+                        loadValue();
+                        this.il.OpCode(ILOpCode.Ldfld);
+                        if (tupleClr.IsConstructedGenericType)
+                        {
+                            this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
+                        }
+                        else
+                        {
+                            var clrField = tupleClr.GetField(fieldName)
+                                ?? throw new InvalidOperationException(
+                                    $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
+                            this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
+                        }
                     }
                 };
 
