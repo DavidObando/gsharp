@@ -3181,7 +3181,9 @@ internal sealed class ReflectionMetadataEmitter
             // encoding field signatures and interface implementations.
             using (this.remaps.PushSmRemap(c))
             {
+                var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                 this.typeDefEmitter.EmitNestedStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
+                this.PreResolveReifiedGenericConstraints(gpRowStart);
 
                 if (this.stateMachines.IteratorStateMachineInfos.TryGetValue(c, out var iteratorInfo))
                 {
