@@ -153,7 +153,7 @@ internal static class ExternalClrOverrideResolver
             }
         }
 
-        return type?.IsClass == true ? TypeSymbol.Object : null;
+        return type != null ? TypeSymbol.Object : null;
     }
 
     private static Type GetReflectionBaseType(TypeSymbol importedBase)

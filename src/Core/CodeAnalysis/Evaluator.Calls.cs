@@ -1001,6 +1001,47 @@ public sealed partial class Evaluator
     {
         var receiver = EvaluateExpression(node.Receiver);
 
+        if (receiver is StructValue sv)
+        {
+            static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
+            {
+                while (method.OverriddenMethod != null)
+                {
+                    method = method.OverriddenMethod;
+                }
+
+                return method.ExternalOverriddenMethod;
+            }
+
+            FunctionSymbol externalOverride = null;
+            for (var type = sv.StructType; type != null && externalOverride == null; type = type.BaseClass)
+            {
+                externalOverride = type.Methods.FirstOrDefault(method =>
+                    method.IsOverride && FindExternalOverrideRoot(method)?.Equals(node.Method) == true);
+            }
+
+            if (externalOverride != null)
+            {
+                var frame = new ConcurrentDictionary<VariableSymbol, object>
+                {
+                    [externalOverride.ThisParameter] = receiver,
+                };
+
+                var parameterOffset = externalOverride.ExplicitReceiverParameter == null ? 0 : 1;
+                for (var i = 0; i < node.Arguments.Length; i++)
+                {
+                    var parameter = externalOverride.Parameters[i + parameterOffset];
+                    frame[parameter] = EvaluateExpression(node.Arguments[i]);
+                }
+
+                using (PushFrame(frame))
+                {
+                    var statement = program.Functions[externalOverride];
+                    return EvaluateUserMethodBody(externalOverride, statement);
+                }
+            }
+        }
+
         // Issue #517: Nullable<T> instance methods (e.g. `GetValueOrDefault`,
         // `Equals`, `ToString`) cannot dispatch through `MethodInfo.Invoke`
         // because the interpreter stores nullables as the underlying boxed T
