@@ -11,21 +11,14 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Interpreter coverage for ADR-0094 / issue #760 — P/Invoke
 /// <c>ref</c>/<c>out</c>/<c>in</c> parameter marshalling. The interpreter
-/// has no managed-IL emit pipeline, so it cannot actually transition to
-/// native code; instead it walks the bound tree and runs P/Invoke
-/// functions through the same empty-body path the binder reserves for
-/// <c>@DllImport</c> / <c>@LibraryImport</c>. The crucial guarantees are
-/// (a) the program parses, binds, and runs without diagnostics or
-/// crashes, and (b) the bound model accepts ref/out/in on P/Invoke
-/// declarations (no GS0326 / GS0352 escapes when the pointee is
-/// blittable). Programs that need to actually invoke native code must
-/// use the compiler (<c>gsc</c>) — covered end-to-end by
-/// <c>Issue760PInvokeRefOutInEmitTests</c>.
+/// accepts valid ref/out/in declarations, then reports the intentional
+/// GS0514 interpreter boundary before any native call can fabricate a result.
+/// Binder diagnostics for invalid declarations still take precedence.
 /// </summary>
 public class Issue760PInvokeRefOutInInterpreterTests
 {
     [Fact]
-    public void DllImport_RefInt64_DoesNotCrashInterpreter()
+    public void DllImport_RefInt64_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -39,14 +32,14 @@ public class Issue760PInvokeRefOutInInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
         Assert.DoesNotContain("GS0326", output);
         Assert.DoesNotContain("GS0352", output);
     }
 
     [Fact]
-    public void DllImport_OutInt32_DoesNotCrashInterpreter()
+    public void DllImport_OutInt32_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -60,12 +53,12 @@ public class Issue760PInvokeRefOutInInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void LibraryImport_RefInt64_DoesNotCrashInterpreter()
+    public void LibraryImport_RefInt64_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -79,12 +72,12 @@ public class Issue760PInvokeRefOutInInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void DllImport_RefBlittableStruct_DoesNotCrashInterpreter()
+    public void DllImport_RefBlittableStruct_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -104,8 +97,8 @@ public class Issue760PInvokeRefOutInInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]

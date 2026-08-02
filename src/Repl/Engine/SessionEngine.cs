@@ -14,6 +14,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Symbols.Display;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Repl.Engine;
 
@@ -163,7 +164,10 @@ public sealed class SessionEngine
     public Func<string?>? InputProvider { get; set; }
 
     /// <summary>Evaluate a submission, append a cell, and return it. Never throws.</summary>
-    public Cell Evaluate(string text) => EvaluateCore(text, CancellationToken.None);
+    public Cell Evaluate(string text) => EvaluateCore(text, string.Empty, CancellationToken.None);
+
+    /// <summary>Evaluate a named source file, append a cell, and return it. Never throws.</summary>
+    public Cell Evaluate(string text, string fileName) => EvaluateCore(text, fileName, CancellationToken.None);
 
     /// <summary>
     /// Evaluates a submission on a background thread so the caller's render loop stays
@@ -175,9 +179,9 @@ public sealed class SessionEngine
     /// thread itself keeps running to completion (or forever, for runaway code).
     /// </summary>
     public Task<Cell> EvaluateAsync(string text, CancellationToken cancellationToken)
-        => Task.Run(() => EvaluateCore(text, cancellationToken));
+        => Task.Run(() => EvaluateCore(text, string.Empty, cancellationToken));
 
-    private Cell EvaluateCore(string text, CancellationToken cancellationToken)
+    private Cell EvaluateCore(string text, string fileName, CancellationToken cancellationToken)
     {
         var index = cells.Count + 1;
 
@@ -205,7 +209,7 @@ public sealed class SessionEngine
         {
             try
             {
-                var tree = SyntaxTree.Parse(text);
+                var tree = SyntaxTree.Parse(SourceText.From(text, fileName));
                 var compilation = previous == null ? new Compilation(tree) : previous.ContinueWith(tree);
                 var result = compilation.Evaluate(variables);
 

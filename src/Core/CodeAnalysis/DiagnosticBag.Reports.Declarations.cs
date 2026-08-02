@@ -220,6 +220,15 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.DeinitMayNotDeclareReturnType);
 
     /// <summary>
+    /// Reports a P/Invoke declaration that cannot be evaluated without the
+    /// compiler's CLR native-call stub.
+    /// </summary>
+    /// <param name="location">The P/Invoke function identifier.</param>
+    /// <param name="functionName">The declared function name.</param>
+    public void ReportPInvokeNotSupportedInInterpreter(TextLocation location, string functionName)
+    => Report(location, DiagnosticDescriptors.PInvokeNotSupportedInInterpreter, functionName);
+
+    /// <summary>
     /// Issue #950: GS0380 — the <c>protected</c> modifier appears on a member
     /// (or nested type) whose enclosing type is not an inheritable
     /// <c>open class</c>. Nothing can derive from a non-<c>open</c> class, a

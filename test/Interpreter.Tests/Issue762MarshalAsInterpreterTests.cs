@@ -11,19 +11,14 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Interpreter coverage for ADR-0096 / issue #762 — per-parameter
 /// <c>@MarshalAs(UnmanagedType.…)</c> overrides on P/Invoke
-/// declarations. The interpreter delegates the actual unmanaged
-/// marshalling to the CLR at the P/Invoke transition (the binder
-/// attaches the metadata; the runtime stub honours it). The crucial
-/// guarantees in the interpreter are (a) the accepted shapes parse,
-/// bind, and submit without crashing the REPL, and (b) the new binder
-/// diagnostics (GS0357–GS0360) surface through the REPL when the user
-/// mis-uses the shape. End-to-end native callbacks live in
-/// <c>Issue762MarshalAsEmitTests</c>.
+/// declarations. Valid declarations report the intentional GS0514
+/// interpreter boundary. Binder diagnostics (GS0357–GS0360) still surface
+/// first for invalid declarations.
 /// </summary>
 public class Issue762MarshalAsInterpreterTests
 {
     [Fact]
-    public void MarshalAs_LPWStr_OnString_DoesNotCrashInterpreter()
+    public void MarshalAs_LPWStr_OnString_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -39,15 +34,12 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("GS0357", output);
-        Assert.DoesNotContain("GS0358", output);
-        Assert.DoesNotContain("GS0359", output);
-        Assert.DoesNotContain("GS0360", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void MarshalAs_I4_OnBool_DoesNotCrashInterpreter()
+    public void MarshalAs_I4_OnBool_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -59,12 +51,12 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("GS0358", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]
-    public void MarshalAs_LPArray_WithSizeParamIndex_DoesNotCrashInterpreter()
+    public void MarshalAs_LPArray_WithSizeParamIndex_ReportsGS0514()
     {
         var source = """
             import System.Runtime.InteropServices
@@ -78,8 +70,8 @@ public class Issue762MarshalAsInterpreterTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("ran", output);
-        Assert.DoesNotContain("GS0359", output);
+        Assert.Contains("GS0514", output);
+        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]

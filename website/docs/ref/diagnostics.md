@@ -1761,6 +1761,16 @@ it reports GS0266, and a nullable value-type argument may instead report
 GS0152. G# rejects source overloads differentiated only by constraints with
 GS0264, even though iterator specialization synthesizes equivalent variants.
 
+## P/Invoke interpreter boundary (GS0514)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0514 | Error | A P/Invoke declaration cannot run under the interpreter. Evaluation stops before the native function can return a fabricated default value; compile with `gsc` to call native code. |
+
+This is an intentional interpreter capability boundary, not an internal
+compiler error. It applies even when the declaration is not called because
+`gsi` cannot create a valid callable value for direct or indirect use.
+
 ## Additional current and reserved diagnostics
 
 These entries complete the current compiler catalogue. Older topic sections
