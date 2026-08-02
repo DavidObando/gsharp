@@ -876,7 +876,11 @@ internal sealed class ImportedMemberRefFactory
         }
         else
         {
-            var symbolKey = new MetadataTokenCache.MethodSpecSymbolKey(method, typeArgSymbols);
+            var symbolKey = new MetadataTokenCache.MethodSpecSymbolKey(
+                method,
+                typeArgSymbols,
+                this.remaps.ActiveIteratorStateMachineRemap,
+                this.remaps.ActiveLambdaMethodTypeParamRemap);
             if (this.cache.MethodSpecsWithSymbolArgs.TryGetValue(symbolKey, out var existingSym))
             {
                 return existingSym;
@@ -915,7 +919,12 @@ internal sealed class ImportedMemberRefFactory
         }
         else
         {
-            this.cache.MethodSpecsWithSymbolArgs[new MetadataTokenCache.MethodSpecSymbolKey(method, typeArgSymbols)] = spec;
+            this.cache.MethodSpecsWithSymbolArgs[
+                new MetadataTokenCache.MethodSpecSymbolKey(
+                    method,
+                    typeArgSymbols,
+                    this.remaps.ActiveIteratorStateMachineRemap,
+                    this.remaps.ActiveLambdaMethodTypeParamRemap)] = spec;
         }
 
         return spec;
