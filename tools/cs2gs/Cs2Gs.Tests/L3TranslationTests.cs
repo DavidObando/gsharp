@@ -286,11 +286,10 @@ namespace Demo
 
     /// <summary>
     /// ADR-0115 §B.24: a predefined type used as a static-call receiver
-    /// (<c>string.Concat(...)</c>) emits the BCL type name (<c>String</c>) so the
-    /// receiver resolves.
+    /// (<c>string.Concat(...)</c>) keeps the canonical G# type name.
     /// </summary>
     [Fact]
-    public void PredefinedTypeReceiver_EmitsBclTypeName()
+    public void PredefinedTypeReceiver_EmitsCanonicalTypeName()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -302,7 +301,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("String.Concat(parts)", printed);
+        Assert.Contains("string.Concat(parts)", printed);
         Assert.DoesNotContain("nil", printed);
     }
 

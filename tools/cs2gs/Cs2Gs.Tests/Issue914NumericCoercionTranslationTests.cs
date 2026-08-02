@@ -529,7 +529,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("int32(UInt16.MaxValue)", printed);
+        Assert.Contains("int32(uint16.MaxValue)", printed);
     }
 
     private static string TranslateUnit(string source)
