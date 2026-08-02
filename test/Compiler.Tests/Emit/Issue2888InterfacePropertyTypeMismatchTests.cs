@@ -549,6 +549,30 @@ public class Issue2888InterfacePropertyTypeMismatchTests
     }
 
     [Fact]
+    public void ImportedObliviousInterfaceProperty_NullableImplementation_EmitsVerifyAndLoads()
+    {
+        const string source = """
+            package ImportedOblivious
+            import ClrContracts
+
+            class Book : IObliviousBook {
+                prop Asin string?
+            }
+            """;
+
+        var directory = CreateWorkDirectory();
+        try
+        {
+            var referencePath = CompileCSharpFixture(directory);
+            AssertEmitsAndLoads(source, referencePath);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ImportedClrInterfaceProperty_WrongType_ReportsGS0187AndDoesNotEmit()
     {
         const string source = """
@@ -738,6 +762,13 @@ public class Issue2888InterfacePropertyTypeMismatchTests
                     {
                         int Value { get; set; }
                     }
+
+                    #nullable disable
+                    public interface IObliviousBook
+                    {
+                        string Asin { get; }
+                    }
+                    #nullable restore
 
                     public class Base
                     {

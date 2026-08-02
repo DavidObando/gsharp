@@ -944,16 +944,16 @@ internal sealed class MemberDefEmitter
                 foreach (var clrProp in clrIface.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 {
                     var indexParameters = clrProp.GetIndexParameters();
+
+                    // Nullable reference annotations do not participate in CLR interface slots.
                     if (clrProp.Name != prop.Name
                         || prop.IsIndexer != (indexParameters.Length > 0)
                         || prop.Parameters.Length != indexParameters.Length
                         || (clrProp.GetMethod != null && !prop.HasGetter)
                         || (clrProp.SetMethod != null && !prop.HasSetter)
-                        || !DeclarationBinder.IsInterfacePropertyTypeCompatible(
-                            prop.Type,
-                            MemberLookup.GetClrPropertyTypeSymbol(ifaceSym, clrProp),
-                            clrProp.SetMethod != null,
-                            typeParameterMap: null))
+                        || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                                prop.Type,
+                                MemberLookup.GetClrPropertyTypeSymbol(ifaceSym, clrProp)))
                     {
                         continue;
                     }
