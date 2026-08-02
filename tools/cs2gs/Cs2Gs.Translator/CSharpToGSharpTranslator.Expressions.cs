@@ -912,11 +912,26 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol targetType = target switch
             {
-                IMethodSymbol method => method.ReturnType,
+                IMethodSymbol method => GetEffectiveReturnType(method),
                 IPropertySymbol property => property.Type,
                 _ => this.context.GetTypeInfo(value).ConvertedType,
             };
             return (targetType, target);
+
+            static ITypeSymbol GetEffectiveReturnType(IMethodSymbol method)
+            {
+                if (method.IsAsync
+                    && method.ReturnType is INamedTypeSymbol taskLike
+                    && taskLike.IsGenericType
+                    && taskLike.TypeArguments.Length == 1
+                    && taskLike.Name is "Task" or "ValueTask"
+                    && taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
+                {
+                    return taskLike.TypeArguments[0];
+                }
+
+                return method.ReturnType;
+            }
         }
 
         // Issue #2511: element-access arguments are call-like value sinks too.
