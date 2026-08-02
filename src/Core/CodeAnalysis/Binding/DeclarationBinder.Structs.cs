@@ -2880,7 +2880,7 @@ internal sealed partial class DeclarationBinder
                 {
                     Diagnostics.ReportSealedInterfaceImplementorOutsidePackage(
                         syntax.Identifier.Location,
-                        structSymbol.Name,
+                        structSymbol,
                         iface.Name,
                         iface.PackageName ?? string.Empty);
                 }
