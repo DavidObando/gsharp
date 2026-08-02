@@ -61,6 +61,28 @@ internal sealed partial class ExpressionBinder
             ? "Item" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
             : memberName ?? string.Empty;
 
+    private static bool RequiresSymbolicTupleElementInvocation(
+        TupleTypeSymbol tupleType,
+        int index)
+    {
+        if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(tupleType.ElementTypes[index], out _))
+        {
+            return false;
+        }
+
+        if (tupleType.ClrType == null)
+        {
+            return true;
+        }
+
+        var fieldName = "Item" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var field = ClrTypeUtilities.SafeGetField(
+            tupleType.ClrType,
+            fieldName,
+            BindingFlags.Public | BindingFlags.Instance);
+        return field == null || !ClrTypeUtilities.IsDelegateType(field.FieldType);
+    }
+
     private BoundExpression BindAccessorStep(
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
@@ -135,6 +157,26 @@ internal sealed partial class ExpressionBinder
                 return BindAccessorStep(head, null, nested.RightPart, nested.LeftPart);
 
             case CallExpressionSyntax ce:
+                // Issue #3084: bind tuple fields symbolically when their CLR
+                // projection cannot expose the stored function as a delegate.
+                if (ce.NullableQuestionToken == null
+                    && receiver?.Type is TupleTypeSymbol tupleType
+                    && TryGetTupleElementIndex(ce.Identifier.Text, tupleType, out var tupleIndex)
+                    && RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex))
+                {
+                    var tupleElement = new BoundTupleElementAccessExpression(
+                        null,
+                        receiver,
+                        tupleType,
+                        tupleIndex);
+                    return overloads.BindIndirectCallExpression(
+                        ce,
+                        tupleElement,
+                        ce.Identifier.Text,
+                        ce.Identifier.Location,
+                        nullSafeInvocation: "?(...)");
+                }
+
                 var callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax);
                 CheckValueTaskGetAwaiterGetResult(callResult, ce);
                 return callResult;
