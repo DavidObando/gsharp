@@ -331,7 +331,10 @@ internal sealed partial class DeclarationBinder
 
                 // Issue #1913: primary-constructor parameters can carry
                 // `@Attr` annotations same as any other parameter list.
-                BindAndAttachParameterAttributes(paramSyntax, primaryCtorParam);
+                BindAndAttachParameterAttributes(
+                    paramSyntax,
+                    primaryCtorParam,
+                    isDataPositionalMember: syntax.IsData);
                 ctorBuilder.Add(primaryCtorParam);
 
                 // Data-type positional members are CLR properties (matching
@@ -1377,6 +1380,15 @@ internal sealed partial class DeclarationBinder
                         parameter.Type,
                         structSymbol.IsClass ? Accessibility.Private : Accessibility.Internal,
                         isReadOnly: false);
+
+                    var parameterSyntax = syntax.PrimaryConstructorParameters
+                        .First(candidate => candidate.Identifier.Text == parameter.Name);
+                    var propertyAttributes = BindDataPositionalPropertyAttributes(parameterSyntax);
+                    if (!propertyAttributes.IsDefaultOrEmpty)
+                    {
+                        property.SetAttributes(propertyAttributes);
+                    }
+
                     propertiesBuilder.Add(property);
                     existingNames.Add(parameter.Name);
                 }

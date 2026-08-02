@@ -979,15 +979,25 @@ internal sealed partial class DeclarationBinder
     // attribute silently never reached the emitter. Shared here so every
     // parameter-binding call site gets the same `@Attr` → ParameterSymbol
     // wiring the emitter already expects (AttributeTargetKind.Param).
-    private void BindAndAttachParameterAttributes(ParameterSyntax parameterSyntax, ParameterSymbol parameterSymbol)
+    // Issue #3082: data positional `@property:` annotations are excluded here
+    // and bound to the synthesized property in BindStructProperties.
+    private void BindAndAttachParameterAttributes(
+        ParameterSyntax parameterSyntax,
+        ParameterSymbol parameterSymbol,
+        bool isDataPositionalMember = false)
     {
         if (parameterSyntax.Annotations.IsDefaultOrEmpty)
         {
             return;
         }
 
+        var annotations = isDataPositionalMember
+            ? parameterSyntax.Annotations
+                .Where(annotation => !HasAttributeTarget(annotation, AttributeTargetKind.Property))
+                .ToImmutableArray()
+            : parameterSyntax.Annotations;
         var paramAttrs = BindAttributes(
-            parameterSyntax.Annotations,
+            annotations,
             AttributeTargetKind.Param,
             Binder.ParameterAllowedTargets,
             "a parameter declaration",
@@ -998,4 +1008,22 @@ internal sealed partial class DeclarationBinder
             parameterSymbol.SetAttributes(paramAttrs);
         }
     }
+
+    private ImmutableArray<BoundAttribute> BindDataPositionalPropertyAttributes(ParameterSyntax parameterSyntax)
+    {
+        var annotations = parameterSyntax.Annotations
+            .Where(annotation => HasAttributeTarget(annotation, AttributeTargetKind.Property))
+            .ToImmutableArray();
+        return BindAttributes(
+            annotations,
+            AttributeTargetKind.Property,
+            Binder.PropertyDeclarationAllowedTargets,
+            "a data positional property",
+            System.AttributeTargets.Property);
+    }
+
+    private static bool HasAttributeTarget(AnnotationSyntax annotation, AttributeTargetKind target)
+        => annotation.Target != null
+            && TryParseTargetKind(annotation.Target.KindIdentifier.Text, out var parsedTarget)
+            && parsedTarget == target;
 }
