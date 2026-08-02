@@ -1695,7 +1695,7 @@ internal sealed class TypeDefEmitter
         var firstCtorParamHandle = this.AddRefKindAwareParameterRows(function.Parameters, out var ctorParamHandles);
 
         var ctorHandle = this.emitCtx.Metadata.AddMethodDefinition(
-            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+            attributes: AccessibilityMap.ToMethodVisibility(function.Accessibility) | MethodAttributes.HideBySig | MethodAttributes.SpecialName
                 | MethodAttributes.RTSpecialName,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
