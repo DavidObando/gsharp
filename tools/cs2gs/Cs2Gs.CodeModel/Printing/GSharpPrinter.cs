@@ -826,7 +826,14 @@ public static class GSharpPrinter
             return sb.ToString();
         }
 
-        return $"{asyncPrefix}({parameters}) -> {RenderExpression(lambda.ExpressionBody, indent)}";
+        var expressionBody = RenderExpression(lambda.ExpressionBody, indent);
+        if (lambda.ExpressionBody is WithExpression)
+        {
+            // Keep the low-precedence `with` tail inside the lambda body.
+            expressionBody = $"({expressionBody})";
+        }
+
+        return $"{asyncPrefix}({parameters}) -> {expressionBody}";
     }
 
     private static string RenderSwitchExpression(SwitchExpression switchExpression, int indent)

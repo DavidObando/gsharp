@@ -2639,6 +2639,14 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
 
+            if (targetSymbol is { IsReferenceType: true }
+                && cast.Expression.IsKind(SyntaxKind.NullLiteralExpression))
+            {
+                // Typed null keeps overload selection without an unparseable
+                // array conversion such as `[]char(nil)`.
+                return new DefaultValueExpression(targetType);
+            }
+
             GExpression operand = this.TranslateExpression(cast.Expression);
 
             // Issue #914 (oblivious sink): an oblivious promoted-`T?` operand cast
