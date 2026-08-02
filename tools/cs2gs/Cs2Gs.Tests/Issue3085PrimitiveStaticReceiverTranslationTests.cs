@@ -26,6 +26,7 @@ public class Issue3085PrimitiveStaticReceiverTranslationTests
         using System;
 
         Console.WriteLine(int.Parse("314159"));
+        Console.WriteLine(string.Join(",", new[] { 10, 20, 30 }));
         """;
 
     [Theory]
@@ -66,7 +67,7 @@ public class Issue3085PrimitiveStaticReceiverTranslationTests
     }
 
     [Fact]
-    public async Task IntParseFixture_EmitsCanonicalReceiver_RoundTripsCompilesAndRuns()
+    public async Task PrimitiveStaticReceiverFixture_EmitsCanonicalReceiver_RoundTripsCompilesAndRuns()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -92,7 +93,7 @@ public class Issue3085PrimitiveStaticReceiverTranslationTests
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), IntParseSource);
         string stdoutGolden = Path.Combine(projectDirectory, "baseline.stdout.golden");
-        File.WriteAllText(stdoutGolden, "314159\n");
+        File.WriteAllText(stdoutGolden, "314159\n10,20,30\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var pipeline = new MigrationPipeline(
@@ -113,7 +114,9 @@ public class Issue3085PrimitiveStaticReceiverTranslationTests
             "*.gs",
             SearchOption.AllDirectories)));
         Assert.Contains("int32.Parse(\"314159\")", emitted, StringComparison.Ordinal);
+        Assert.Contains("string.Join(", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("Int32.Parse", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("String.Join", emitted, StringComparison.Ordinal);
         AssertRoundTrip(emitted);
         Assert.True(
             app.Succeeded,
