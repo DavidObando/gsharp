@@ -675,7 +675,7 @@ public sealed partial class Evaluator
                     node.StructType,
                     ImmutableArray<BoundExpression>.Empty,
                     constructor))
-            : new StructValue(node.StructType);
+            : CreateStructValue(node.StructType);
 
         // Primary-constructor literals use default construction before applying
         // named initializers, matching the emitter's newobj/stfld sequence.
@@ -1009,7 +1009,7 @@ public sealed partial class Evaluator
 
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
     {
-        var sv = new StructValue(node.StructType);
+        var sv = CreateStructValue(node.StructType);
 
         // Default-initialize all fields first (including inherited), then bind primary-ctor args.
         for (var t = node.StructType; t != null; t = t.BaseClass)
@@ -1906,7 +1906,7 @@ public sealed partial class Evaluator
 
         var current = ResolveReceiverValue(node.ReceiverExpression, node.Receiver);
 
-        var sv = current as StructValue ?? new StructValue(node.StructType);
+        var sv = current as StructValue ?? CreateStructValue(node.StructType);
 
         // Class types are reference types: mutate the existing instance in
         // place so other references observe the write. Structs preserve
@@ -2071,7 +2071,7 @@ public sealed partial class Evaluator
                     ? GetGlobal(receiverVar)
                     : Locals.Peek()[receiverVar];
 
-                var sv = current as StructValue ?? new StructValue(node.StructType);
+                var sv = current as StructValue ?? CreateStructValue(node.StructType);
 
                 if (node.StructType.IsClass)
                 {
@@ -2112,13 +2112,13 @@ public sealed partial class Evaluator
         return value;
     }
 
-    private static object DefaultValue(Symbols.TypeSymbol type)
+    private object DefaultValue(Symbols.TypeSymbol type)
         => GetDefaultValue(type, useLanguageStringZero: true);
 
-    private static object ClrDefaultValue(Symbols.TypeSymbol type)
+    private object ClrDefaultValue(Symbols.TypeSymbol type)
         => GetDefaultValue(type, useLanguageStringZero: false);
 
-    private static object GetDefaultValue(Symbols.TypeSymbol type, bool useLanguageStringZero)
+    private object GetDefaultValue(Symbols.TypeSymbol type, bool useLanguageStringZero)
     {
         // Issue #504/#1652: NullableTypeSymbol.ClrType aliases the underlying
         // type's ClrType (e.g. `int?` reports `typeof(int)`), so it must be
@@ -2156,7 +2156,7 @@ public sealed partial class Evaluator
                 return null;
             }
 
-            var sv = new StructValue(s);
+            var sv = CreateStructValue(s);
             foreach (var f in s.Fields)
             {
                 sv.Fields[f.Name] = GetDefaultValue(f.Type, useLanguageStringZero);

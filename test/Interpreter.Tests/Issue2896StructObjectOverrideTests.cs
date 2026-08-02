@@ -21,6 +21,7 @@ namespace GSharp.Interpreter.Tests;
 /// Issue #2896: plain structs may override Object virtual methods, including
 /// calls dispatched through an object-typed receiver. The evaluator's shared
 /// user-type dispatch path also preserves most-derived class overrides.
+/// Issue #3116 extends that dispatch to Object virtuals invoked by the BCL.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2896StructObjectOverrideTests
@@ -94,6 +95,44 @@ public class Issue2896StructObjectOverrideTests
         var source = BuildClassOverrideChainSource(insideFunction, suffix);
 
         Assert.Equal("L0-11\nL1-22\nL2-33\n", await RunDriverAsync(source, suffix, driver));
+    }
+
+    [Theory]
+    [MemberData(nameof(ImplicitBclOverrideCases))]
+    public async Task ImplicitBclCalls_DispatchStructObjectOverridesAcrossDrivers(
+        string surface,
+        bool insideFunction,
+        string driver)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = BuildImplicitBclOverrideSource(surface, insideFunction, suffix);
+
+        var expected = surface switch
+        {
+            "dictionary" => "DICT-1\n",
+            "hashSet" => "HASHSET-1\n",
+            "listContains" => "LIST-True\n",
+            "format" => "FORMAT-TOSTRING-33\nINTERP-TOSTRING-33\n",
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
+        };
+        Assert.Equal(expected, await RunDriverAsync(source, suffix, driver));
+    }
+
+    [Theory]
+    [InlineData(false, "gsc-evaluate")]
+    [InlineData(false, "gsc-emit")]
+    [InlineData(false, "gsi")]
+    [InlineData(true, "gsc-evaluate")]
+    [InlineData(true, "gsc-emit")]
+    [InlineData(true, "gsi")]
+    public async Task ImplicitBclToString_DepthFourOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
+        bool insideFunction,
+        string driver)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = BuildDepthFourBclOverrideSource(insideFunction, suffix);
+
+        Assert.Equal("FORMAT-LEVEL-44\nINTERP-LEVEL-44\n", await RunDriverAsync(source, suffix, driver));
     }
 
     [Fact]
@@ -287,6 +326,104 @@ public class Issue2896StructObjectOverrideTests
             : declarations + "\n" + calls;
     }
 
+    /// <summary>Gets all four implicit-BCL surfaces across both source positions and all drivers.</summary>
+    public static IEnumerable<object[]> ImplicitBclOverrideCases()
+    {
+        var surfaces = new[] { "dictionary", "hashSet", "listContains", "format" };
+        var drivers = new[] { "gsc-evaluate", "gsc-emit", "gsi" };
+        foreach (var surface in surfaces)
+        {
+            foreach (var insideFunction in new[] { false, true })
+            {
+                foreach (var driver in drivers)
+                {
+                    yield return new object[] { surface, insideFunction, driver };
+                }
+            }
+        }
+    }
+
+    private static string BuildImplicitBclOverrideSource(string surface, bool insideFunction, string suffix)
+    {
+        var declarations = $$"""
+            package Issue3116{{suffix}}
+            import System
+            import System.Collections.Generic
+
+            struct Value{{suffix}} {
+                var Number int32
+                override func ToString() string -> "TOSTRING-33"
+                override func Equals(value object) bool -> true
+                override func GetHashCode() int32 -> 7
+            }
+            """;
+        var calls = surface switch
+        {
+            "dictionary" => $$"""
+                let values = Dictionary[Value{{suffix}}, string]()
+                values[Value{{suffix}}{Number: 11}] = "first"
+                values[Value{{suffix}}{Number: 22}] = "second"
+                Console.WriteLine(String.Format("DICT-{0}", values.Count))
+                """,
+            "hashSet" => $$"""
+                let values = HashSet[Value{{suffix}}]()
+                values.Add(Value{{suffix}}{Number: 11})
+                values.Add(Value{{suffix}}{Number: 22})
+                Console.WriteLine(String.Format("HASHSET-{0}", values.Count))
+                """,
+            "listContains" => $$"""
+                let values = List[Value{{suffix}}]()
+                values.Add(Value{{suffix}}{Number: 11})
+                Console.WriteLine(String.Format(
+                    "LIST-{0}",
+                    values.Contains(Value{{suffix}}{Number: 22})))
+                """,
+            "format" => $$"""
+                let value = Value{{suffix}}{Number: 11}
+                Console.WriteLine(String.Format("FORMAT-{0}", value))
+                Console.WriteLine("INTERP-$value")
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
+        };
+
+        return insideFunction
+            ? declarations + "\nfunc Run" + suffix + "() {\n" + calls + "\n}\nRun" + suffix + "()\n"
+            : declarations + "\n" + calls;
+    }
+
+    private static string BuildDepthFourBclOverrideSource(bool insideFunction, string suffix)
+    {
+        var declarations = $$"""
+            package Issue3116Depth{{suffix}}
+            import System
+
+            open class L0{{suffix}} {
+                open override func ToString() string -> "LEVEL-11"
+            }
+
+            open class L1{{suffix}} : L0{{suffix}} {
+                open override func ToString() string -> "LEVEL-22"
+            }
+
+            open class L2{{suffix}} : L1{{suffix}} {
+                open override func ToString() string -> "LEVEL-33"
+            }
+
+            class L3{{suffix}} : L2{{suffix}} {
+                override func ToString() string -> "LEVEL-44"
+            }
+            """;
+        var calls = $$"""
+            let value object = L3{{suffix}}()
+            Console.WriteLine(String.Format("FORMAT-{0}", value))
+            Console.WriteLine("INTERP-$value")
+            """;
+
+        return insideFunction
+            ? declarations + "\nfunc Run" + suffix + "() {\n" + calls + "\n}\nRun" + suffix + "()\n"
+            : declarations + "\n" + calls;
+    }
+
     private static async Task<string> RunDriverAsync(string source, string suffix, string driver)
     {
         var directory = Path.Combine(
@@ -324,7 +461,9 @@ public class Issue2896StructObjectOverrideTests
     private static string RunCompilerEvaluation(string sourcePath)
     {
         var result = CaptureConsole(() => CompilerProgram.Main(new[] { sourcePath }));
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(
+            result.ExitCode == 0,
+            $"gsc evaluation failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
         Assert.Equal(string.Empty, result.StandardError);
         Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
         return result.StandardOutput[..^"Success.\n".Length];
@@ -333,7 +472,9 @@ public class Issue2896StructObjectOverrideTests
     private static string RunInterpreter(string sourcePath)
     {
         var result = CaptureConsole(() => GSharp.Repl.Program.Main(new[] { sourcePath }));
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(
+            result.ExitCode == 0,
+            $"gsi failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
         Assert.Equal(string.Empty, result.StandardError);
         return result.StandardOutput;
     }
@@ -350,7 +491,9 @@ public class Issue2896StructObjectOverrideTests
             "/targetframework:net10.0",
             sourcePath,
         }));
-        Assert.Equal(0, compile.ExitCode);
+        Assert.True(
+            compile.ExitCode == 0,
+            $"gsc emit failed ({compile.ExitCode})\nstdout:\n{compile.StandardOutput}\nstderr:\n{compile.StandardError}");
         Assert.Equal(string.Empty, compile.StandardError);
 
         var assembly = Assembly.Load(File.ReadAllBytes(outputPath));

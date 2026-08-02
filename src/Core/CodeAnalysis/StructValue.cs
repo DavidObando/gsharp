@@ -24,31 +24,52 @@ namespace GSharp.Core.CodeAnalysis;
 /// </summary>
 public sealed class StructValue
 {
+    private static readonly MethodInfo ObjectEqualsMethod = typeof(object).GetMethod(
+        nameof(object.Equals),
+        [typeof(object)]);
+
+    private static readonly MethodInfo ObjectGetHashCodeMethod = typeof(object).GetMethod(
+        nameof(object.GetHashCode),
+        Type.EmptyTypes);
+
+    private static readonly MethodInfo ObjectToStringMethod = typeof(object).GetMethod(
+        nameof(object.ToString),
+        Type.EmptyTypes);
+
+    private readonly ObjectOverrideDispatcher objectOverrideDispatcher;
     private readonly LayoutRuntime explicitLayout;
     private object explicitLayoutValue;
 
     /// <summary>Initializes a new instance of the <see cref="StructValue"/> class.</summary>
     /// <param name="structType">The struct type symbol.</param>
     public StructValue(StructSymbol structType)
+        : this(structType, (ObjectOverrideDispatcher)null)
+    {
+    }
+
+    internal StructValue(StructSymbol structType, ObjectOverrideDispatcher objectOverrideDispatcher)
     {
         StructType = structType;
+        this.objectOverrideDispatcher = objectOverrideDispatcher;
         Fields = new FieldCollection(this);
 
         if (structType.LayoutMetadata?.Layout == LayoutKind.Explicit)
         {
             explicitLayout = LayoutRuntime.Get(structType);
             explicitLayoutValue = explicitLayout.CreateDefault();
-            explicitLayout.ReadFields(explicitLayoutValue, Fields);
+            explicitLayout.ReadFields(explicitLayoutValue, Fields, objectOverrideDispatcher);
         }
     }
 
     private StructValue(
         StructSymbol structType,
         ConcurrentDictionary<string, object> fields,
+        ObjectOverrideDispatcher objectOverrideDispatcher,
         LayoutRuntime explicitLayout = null,
         object explicitLayoutValue = null)
     {
         StructType = structType;
+        this.objectOverrideDispatcher = objectOverrideDispatcher;
         Fields = new FieldCollection(this);
         foreach (var field in fields)
         {
@@ -58,6 +79,12 @@ public sealed class StructValue
         this.explicitLayout = explicitLayout;
         this.explicitLayoutValue = explicitLayoutValue;
     }
+
+    internal delegate bool ObjectOverrideDispatcher(
+        StructValue receiver,
+        MethodInfo method,
+        object[] arguments,
+        out object result);
 
     /// <summary>Gets the struct type.</summary>
     public StructSymbol StructType { get; }
@@ -99,8 +126,13 @@ public sealed class StructValue
             }
 
             var fieldsCopy = new ConcurrentDictionary<string, object>();
-            explicitLayout.ReadFields(layoutCopy, fieldsCopy);
-            return new StructValue(StructType, fieldsCopy, explicitLayout, layoutCopy)
+            explicitLayout.ReadFields(layoutCopy, fieldsCopy, objectOverrideDispatcher);
+            return new StructValue(
+                StructType,
+                fieldsCopy,
+                objectOverrideDispatcher,
+                explicitLayout,
+                layoutCopy)
             {
                 ClrBacking = this.ClrBacking,
             };
@@ -112,7 +144,7 @@ public sealed class StructValue
             copy[kvp.Key] = kvp.Value is StructValue inner ? inner.Copy() : kvp.Value;
         }
 
-        return new StructValue(StructType, copy)
+        return new StructValue(StructType, copy, objectOverrideDispatcher)
         {
             // Issue #319: copy carries the same CLR backing reference. A copy is
             // only ever created for value-type structs (Evaluator.Assign skips it
@@ -125,6 +157,11 @@ public sealed class StructValue
     /// <inheritdoc/>
     public override bool Equals(object obj)
     {
+        if (TryInvokeObjectOverride(ObjectEqualsMethod, [obj], out var result))
+        {
+            return (bool)result;
+        }
+
         if (obj is not StructValue other)
         {
             return false;
@@ -151,6 +188,11 @@ public sealed class StructValue
     /// <inheritdoc/>
     public override int GetHashCode()
     {
+        if (TryInvokeObjectOverride(ObjectGetHashCodeMethod, [], out var result))
+        {
+            return (int)result;
+        }
+
         var hash = default(HashCode);
         hash.Add(StructType);
         foreach (var (_, storageKey) in GetDisplayMembers(StructType))
@@ -165,6 +207,11 @@ public sealed class StructValue
     /// <inheritdoc/>
     public override string ToString()
     {
+        if (TryInvokeObjectOverride(ObjectToStringMethod, [], out var result))
+        {
+            return (string)result;
+        }
+
         var sb = new StringBuilder();
         sb.Append(StructType.Name).Append('(');
         var first = true;
@@ -185,6 +232,17 @@ public sealed class StructValue
         return sb.ToString();
     }
 
+    private bool TryInvokeObjectOverride(MethodInfo method, object[] arguments, out object result)
+    {
+        if (objectOverrideDispatcher == null)
+        {
+            result = null;
+            return false;
+        }
+
+        return objectOverrideDispatcher(this, method, arguments, out result);
+    }
+
     private void SetField(string name, object value)
     {
         if (explicitLayout != null)
@@ -193,7 +251,7 @@ public sealed class StructValue
             {
                 if (explicitLayout.TrySetField(explicitLayoutValue, name, value))
                 {
-                    explicitLayout.ReadFields(explicitLayoutValue, Fields);
+                    explicitLayout.ReadFields(explicitLayoutValue, Fields, objectOverrideDispatcher);
                     return;
                 }
             }
@@ -304,24 +362,38 @@ public sealed class StructValue
             return true;
         }
 
-        public void ReadFields(object source, FieldCollection destination)
+        public void ReadFields(
+            object source,
+            FieldCollection destination,
+            ObjectOverrideDispatcher objectOverrideDispatcher)
         {
             foreach (var field in symbol.Fields)
             {
                 if (fields.TryGetValue(field.Name, out var runtimeField))
                 {
-                    destination.SetRaw(field.Name, ToInterpreterValue(field.Type, runtimeField.GetValue(source)));
+                    destination.SetRaw(
+                        field.Name,
+                        ToInterpreterValue(
+                            field.Type,
+                            runtimeField.GetValue(source),
+                            objectOverrideDispatcher));
                 }
             }
         }
 
-        public void ReadFields(object source, ConcurrentDictionary<string, object> destination)
+        public void ReadFields(
+            object source,
+            ConcurrentDictionary<string, object> destination,
+            ObjectOverrideDispatcher objectOverrideDispatcher)
         {
             foreach (var field in symbol.Fields)
             {
                 if (fields.TryGetValue(field.Name, out var runtimeField))
                 {
-                    destination[field.Name] = ToInterpreterValue(field.Type, runtimeField.GetValue(source));
+                    destination[field.Name] = ToInterpreterValue(
+                        field.Type,
+                        runtimeField.GetValue(source),
+                        objectOverrideDispatcher);
                 }
             }
         }
@@ -425,7 +497,10 @@ public sealed class StructValue
             return value;
         }
 
-        private static object ToInterpreterValue(TypeSymbol type, object value)
+        private static object ToInterpreterValue(
+            TypeSymbol type,
+            object value,
+            ObjectOverrideDispatcher objectOverrideDispatcher)
         {
             if (type is StructSymbol nested
                 && !nested.IsClass
@@ -433,11 +508,12 @@ public sealed class StructValue
             {
                 var runtime = Get(nested);
                 var fields = new ConcurrentDictionary<string, object>();
-                runtime.ReadFields(value, fields);
+                runtime.ReadFields(value, fields, objectOverrideDispatcher);
                 var keepBacking = nested.LayoutMetadata?.Layout == LayoutKind.Explicit;
                 return new StructValue(
                     nested,
                     fields,
+                    objectOverrideDispatcher,
                     keepBacking ? runtime : null,
                     keepBacking ? RuntimeHelpers.GetObjectValue(value) : null);
             }
