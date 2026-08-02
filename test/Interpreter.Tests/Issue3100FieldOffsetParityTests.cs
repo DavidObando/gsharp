@@ -1,0 +1,273 @@
+// <copyright file="Issue3100FieldOffsetParityTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using Xunit;
+
+namespace GSharp.Interpreter.Tests;
+
+/// <summary>Issue #3100: explicit field overlap must match emitted CLR layout.</summary>
+[Collection("ConsoleIo")]
+public class Issue3100FieldOffsetParityTests
+{
+    public static TheoryData<string> LayoutCases => new()
+    {
+        "FullOverlap",
+        "PartialOverlap",
+        "DefaultNoOverlap",
+        "Sequential",
+        "ExplicitNoOverlap",
+    };
+
+    [Theory]
+    [MemberData(nameof(LayoutCases))]
+    public void FieldLayout_EmitEvaluateAndGsiAgree(string layoutCase)
+    {
+        var source = SourceFor(layoutCase);
+        var root = CreateEmptyDirectory(layoutCase);
+        try
+        {
+            var bare = RunBareGsc(source, CreateEmptyDirectory(root, "bare"));
+            var emitted = RunEmitted(source, layoutCase, CreateEmptyDirectory(root, "emit"));
+            var interpreted = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
+
+            var expected = layoutCase is "FullOverlap" or "PartialOverlap"
+                ? "2\n11\n22\n33\n44\n44"
+                : "1\n11\n22\n33\n33\n44";
+            Assert.Equal(expected, emitted);
+            Assert.Equal(emitted, bare);
+            Assert.Equal(emitted, interpreted);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string RunBareGsc(string source, string directory)
+    {
+        var sourcePath = Path.Combine(directory, "probe.gs");
+        File.WriteAllText(sourcePath, source);
+        var (exitCode, stdout, stderr) = CaptureConsole(
+            () => GSharp.Compiler.Program.Main([sourcePath]));
+
+        Assert.True(exitCode == 0, $"bare gsc failed ({exitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        return NormalizeValues(stdout);
+    }
+
+    private static string RunGsi(string source, string directory)
+    {
+        var sourcePath = Path.Combine(directory, "probe.gs");
+        File.WriteAllText(sourcePath, source);
+        var (exitCode, stdout, stderr) = CaptureConsole(
+            () => GSharp.Repl.Program.Main([sourcePath]));
+
+        Assert.True(exitCode == 0, $"gsi failed ({exitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        return NormalizeValues(stdout);
+    }
+
+    private static string RunEmitted(string source, string layoutCase, string directory)
+    {
+        var sourcePath = Path.Combine(directory, "probe.gs");
+        var outputPath = Path.Combine(directory, $"Issue3100{layoutCase}{Guid.NewGuid():N}.dll");
+        File.WriteAllText(sourcePath, source);
+
+        var (compileExit, stdout, stderr) = CaptureConsole(
+            () => GSharp.Compiler.Program.Main(
+                ["/out:" + outputPath, "/target:exe", "/targetframework:net10.0", sourcePath]));
+        Assert.True(compileExit == 0, $"emit failed ({compileExit})\nstdout:\n{stdout}\nstderr:\n{stderr}");
+
+        VerifyMetadata(outputPath, layoutCase);
+
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(outputPath);
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var runOut = process.StandardOutput.ReadToEnd();
+        var runErr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"emitted program failed ({process.ExitCode})\nstdout:\n{runOut}\nstderr:\n{runErr}");
+        return NormalizeValues(runOut);
+    }
+
+    private static void VerifyMetadata(string assemblyPath, string layoutCase)
+    {
+        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+        var types = assembly.GetTypes();
+        var cell = types.Single(t => t.Name == "Cell");
+        var wrapper = types.Single(t => t.Name == "Wrapper");
+
+        var expectedLayout = layoutCase is "FullOverlap" or "PartialOverlap" or "ExplicitNoOverlap"
+            ? LayoutKind.Explicit
+            : LayoutKind.Sequential;
+        Assert.Equal(expectedLayout, cell.StructLayoutAttribute?.Value);
+        Assert.Equal(LayoutKind.Sequential, wrapper.StructLayoutAttribute?.Value);
+        Assert.Equal(0, Marshal.OffsetOf(wrapper, "Value").ToInt32());
+        Assert.Equal(0, Marshal.OffsetOf(cell, "Nested").ToInt32());
+        Assert.Equal(
+            layoutCase switch
+            {
+                "FullOverlap" => 0,
+                "PartialOverlap" => 1,
+                _ => 4,
+            },
+            Marshal.OffsetOf(cell, "Alias").ToInt32());
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        try
+        {
+            return (action(), stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+    }
+
+    private static string NormalizeValues(string output) =>
+        string.Join(
+            "\n",
+            output.Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line != "Success."));
+
+    private static string CreateEmptyDirectory(string name)
+    {
+        var parent = Path.Combine(AppContext.BaseDirectory, "issue3100-probes");
+        return CreateEmptyDirectory(parent, $"{name}-{Guid.NewGuid():N}");
+    }
+
+    private static string CreateEmptyDirectory(string parent, string name)
+    {
+        var path = Path.Combine(parent, name);
+        Directory.CreateDirectory(path);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(path));
+        return path;
+    }
+
+    private static string SourceFor(string layoutCase)
+    {
+        var package = $"Issue3100{layoutCase}";
+        return layoutCase switch
+        {
+            "FullOverlap" => $$$"""
+                package {{{package}}}
+                import System
+                import System.Runtime.InteropServices
+
+                struct Payload { var Value int32 }
+                @StructLayout(LayoutKind.Explicit, Size: 4)
+                struct Cell {
+                    @FieldOffset(0) var Nested Payload
+                    @FieldOffset(0) var Alias int32
+                }
+                struct Wrapper { var Value Cell }
+                func setAlias(ref value int32) { value = 44 }
+
+                var cell = Cell{Nested: Payload{Value: 1}, Alias: 2}
+                Console.WriteLine(cell.Nested.Value)
+                cell.Nested.Value = 11
+                Console.WriteLine(cell.Alias)
+                cell.Alias = 22
+                Console.WriteLine(cell.Nested.Value)
+                var wrapper = Wrapper{Value: Cell{Nested: Payload{Value: 3}, Alias: 4}}
+                wrapper.Value.Nested.Value = 33
+                Console.WriteLine(wrapper.Value.Alias)
+                setAlias(ref wrapper.Value.Alias)
+                Console.WriteLine(wrapper.Value.Nested.Value)
+                Console.WriteLine(wrapper.Value.Alias)
+                """,
+            "PartialOverlap" => $$$"""
+                package {{{package}}}
+                import System
+                import System.Runtime.InteropServices
+
+                struct Payload { var Head uint8 var Value uint8 var Tail uint8 }
+                @StructLayout(LayoutKind.Explicit, Size: 4)
+                struct Cell {
+                    @FieldOffset(0) var Nested Payload
+                    @FieldOffset(1) var Alias uint16
+                }
+                struct Wrapper { var Value Cell }
+                func setAlias(ref value uint16) { value = 44 }
+
+                var cell = Cell{Nested: Payload{Head: 0, Value: 1, Tail: 0}, Alias: 2}
+                Console.WriteLine(cell.Nested.Value)
+                cell.Nested.Value = 11
+                Console.WriteLine(cell.Alias)
+                cell.Alias = 22
+                Console.WriteLine(cell.Nested.Value)
+                var wrapper = Wrapper{Value: Cell{Nested: Payload{Head: 0, Value: 3, Tail: 0}, Alias: 4}}
+                wrapper.Value.Nested.Value = 33
+                Console.WriteLine(wrapper.Value.Alias)
+                setAlias(ref wrapper.Value.Alias)
+                Console.WriteLine(wrapper.Value.Nested.Value)
+                Console.WriteLine(wrapper.Value.Alias)
+                """,
+            "DefaultNoOverlap" => NonOverlappingSource(package, null),
+            "Sequential" => NonOverlappingSource(package, "@StructLayout(LayoutKind.Sequential)"),
+            "ExplicitNoOverlap" => NonOverlappingSource(package, "@StructLayout(LayoutKind.Explicit, Size: 8)"),
+            _ => throw new ArgumentOutOfRangeException(nameof(layoutCase)),
+        };
+    }
+
+    private static string NonOverlappingSource(string package, string layoutAttribute)
+    {
+        var fields = layoutAttribute?.Contains("Explicit", StringComparison.Ordinal) == true
+            ? """
+                    @FieldOffset(0) var Nested Payload
+                    @FieldOffset(4) var Alias int32
+                """
+            : """
+                    var Nested Payload
+                    var Alias int32
+                """;
+        var attribute = layoutAttribute == null ? string.Empty : layoutAttribute + "\n";
+        return $$$"""
+            package {{{package}}}
+            import System
+            import System.Runtime.InteropServices
+
+            struct Payload { var Value int32 }
+            {{{attribute}}}struct Cell {
+            {{{fields}}}
+            }
+            struct Wrapper { var Value Cell }
+            func setAlias(ref value int32) { value = 44 }
+
+            var cell = Cell{Nested: Payload{Value: 1}, Alias: 2}
+            Console.WriteLine(cell.Nested.Value)
+            cell.Nested.Value = 11
+            Console.WriteLine(cell.Nested.Value)
+            cell.Alias = 22
+            Console.WriteLine(cell.Alias)
+            var wrapper = Wrapper{Value: Cell{Nested: Payload{Value: 3}, Alias: 4}}
+            wrapper.Value.Nested.Value = 33
+            Console.WriteLine(wrapper.Value.Nested.Value)
+            setAlias(ref wrapper.Value.Alias)
+            Console.WriteLine(wrapper.Value.Nested.Value)
+            Console.WriteLine(wrapper.Value.Alias)
+            """;
+    }
+}
