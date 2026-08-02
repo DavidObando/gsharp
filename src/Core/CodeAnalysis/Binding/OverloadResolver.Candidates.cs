@@ -466,13 +466,13 @@ internal sealed partial class OverloadResolver
                 }
 
                 var argType = boundArguments[i]?.Type;
-                var paramType = cand.Parameters[slot + parameterOffset].Type;
+                var openParamType = cand.Parameters[slot + parameterOffset].Type;
+                paramTypes[i] = openParamType;
+                var paramType = openParamType;
                 if (candSubstitution != null)
                 {
                     paramType = Binder.SubstituteType(paramType, candSubstitution);
                 }
-
-                paramTypes[i] = paramType;
 
                 // Issue #1531 control: a value-returning delegate/method-group
                 // argument that maps onto a `(...)->void` delegate parameter
