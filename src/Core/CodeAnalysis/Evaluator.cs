@@ -38,6 +38,7 @@ public sealed partial class Evaluator
     private readonly BoundProgram program;
     private readonly Dictionary<VariableSymbol, object> globals;
     private readonly bool evaluateEntryPoint;
+    private readonly bool useEntryPointReturnType;
 
     // Issue #1651: everything below this point used to be an ordinary
     // instance field. That is correct only because the interpreter was
@@ -101,21 +102,24 @@ public sealed partial class Evaluator
     /// <param name="program">The program.</param>
     /// <param name="variables">The variables.</param>
     public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables)
-        : this(program, variables, evaluateEntryPoint: true)
+        : this(
+            program,
+            variables,
+            evaluateEntryPoint: true,
+            useEntryPointReturnType: false)
     {
     }
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="Evaluator"/> class.
-    /// </summary>
-    /// <param name="program">The program.</param>
-    /// <param name="variables">The variables.</param>
-    /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
-    public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables, bool evaluateEntryPoint)
+    internal Evaluator(
+        BoundProgram program,
+        Dictionary<VariableSymbol, object> variables,
+        bool evaluateEntryPoint,
+        bool useEntryPointReturnType)
     {
         this.program = program;
         globals = variables;
         this.evaluateEntryPoint = evaluateEntryPoint;
+        this.useEntryPointReturnType = useEntryPointReturnType;
         Locals.Push(new ConcurrentDictionary<VariableSymbol, object>());
     }
 
@@ -197,6 +201,11 @@ public sealed partial class Evaluator
 
     private object EvaluateEntryPointBody(FunctionSymbol entryPoint, BoundBlockStatement body)
     {
+        if (!useEntryPointReturnType)
+        {
+            return EvaluateFunctionBody(body);
+        }
+
         if (entryPoint.Type != TypeSymbol.Void
             && entryPoint.Type != TypeSymbol.Int32
             && entryPoint.Type != TypeSymbol.UInt32)

@@ -68,6 +68,27 @@ public class Issue2984MainEntryPointInterpreterTests
     }
 
     [Fact]
+    public void CompilationEvaluationPreservesTopLevelExpressionValue()
+    {
+        var result = new Compilation(SyntaxTree.Parse("40 + 2"))
+            .Evaluate(new Dictionary<VariableSymbol, object>());
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void EvaluatorDefaultPreservesTopLevelExpressionValue()
+    {
+        var compilation = new Compilation(SyntaxTree.Parse("40 + 2"));
+        var evaluator = new Evaluator(
+            compilation.BoundProgram,
+            new Dictionary<VariableSymbol, object>());
+
+        Assert.Equal(42, evaluator.Evaluate());
+    }
+
+    [Fact]
     public void ClassScopedSharedMainRuns()
     {
         const string Source = """

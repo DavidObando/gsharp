@@ -290,7 +290,7 @@ public class Compilation
     /// <param name="variables">The symbol table with actual values.</param>
     /// <returns>An evaluation result.</returns>
     public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables) =>
-        Evaluate(variables, evaluateEntryPoint: true);
+        Evaluate(variables, evaluateEntryPoint: true, useEntryPointReturnType: false);
 
     /// <summary>
     /// Evaluates the current compilation provided a symbol table with actual values.
@@ -298,7 +298,20 @@ public class Compilation
     /// <param name="variables">The symbol table with actual values.</param>
     /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
     /// <returns>An evaluation result.</returns>
-    public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables, bool evaluateEntryPoint)
+    public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables, bool evaluateEntryPoint) =>
+        Evaluate(variables, evaluateEntryPoint, useEntryPointReturnType: evaluateEntryPoint);
+
+    /// <summary>
+    /// Evaluates the current compilation provided a symbol table with actual values.
+    /// </summary>
+    /// <param name="variables">The symbol table with actual values.</param>
+    /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
+    /// <param name="useEntryPointReturnType">Whether the declared entry-point return type controls the result.</param>
+    /// <returns>An evaluation result.</returns>
+    public EvaluationResult Evaluate(
+        Dictionary<VariableSymbol, object> variables,
+        bool evaluateEntryPoint,
+        bool useEntryPointReturnType)
     {
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
         var diagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
@@ -342,7 +355,11 @@ public class Compilation
             program,
             (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
 
-        var evaluator = new Evaluator(program, variables, evaluateEntryPoint);
+        var evaluator = new Evaluator(
+            program,
+            variables,
+            evaluateEntryPoint,
+            useEntryPointReturnType);
         try
         {
             var value = evaluator.Evaluate();
