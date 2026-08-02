@@ -140,10 +140,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// excluding ones inside a nested lambda/local function (their own
         /// statement seam) and — for chained links (`a = b = c`) — excluding the
         /// inner links of a chain already captured by the outer node (see
-        /// <see cref="FlattenChainedAssignment"/>). An assignment hidden inside the
-        /// short-circuited operand of `&amp;&amp;`/`||` or a `?:` branch would change
-        /// evaluation COUNT/order if hoisted, so it is flagged unsupported instead
-        /// (issue #1723).
+        /// <see cref="FlattenChainedAssignment"/>). Assignments inside a conditional
+        /// (`?:`) arm are left for that arm's native G# block-expression seam.
+        /// Assignments hidden inside any other short-circuited operand would change
+        /// evaluation COUNT/order if hoisted, so they are flagged unsupported
+        /// instead (issue #1723).
         /// </summary>
         private List<AssignmentExpressionSyntax> CollectEmbeddedAssignments(ExpressionSyntax expression, bool includeSelf)
         {
@@ -212,11 +213,16 @@ public sealed partial class CSharpToGSharpTranslator
             var safe = new List<AssignmentExpressionSyntax>();
             foreach (AssignmentExpressionSyntax candidate in candidates)
             {
-                if (IsInShortCircuitOrConditionalBranch(candidate, expression))
+                if (IsInsideConditionalExpressionBranch(candidate, expression))
+                {
+                    continue;
+                }
+
+                if (IsInShortCircuitedSubexpression(candidate, expression))
                 {
                     this.context.ReportUnsupported(
                         candidate,
-                        "assignment inside a short-circuited '&&'/'||' operand or a conditional ('?:') branch has no side-effect-preserving G# lowering yet (issue #1723).");
+                        "assignment inside a short-circuited '&&'/'||'/'??' operand or a conditional-access branch has no side-effect-preserving G# lowering yet (issue #1723).");
                     continue;
                 }
 
@@ -226,14 +232,30 @@ public sealed partial class CSharpToGSharpTranslator
             return safe;
         }
 
+        // A `?:` arm owns a native G# block-expression seam. An enclosing seam
+        // must not hoist the arm's assignment unconditionally; it leaves the node
+        // for TranslateConditionalBranch to lower inside the selected arm.
+        private static bool IsInsideConditionalExpressionBranch(SyntaxNode node, ExpressionSyntax root)
+        {
+            for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
+            {
+                SyntaxNode parent = current.Parent;
+                if (parent is ConditionalExpressionSyntax conditional &&
+                    (current == conditional.WhenTrue || current == conditional.WhenFalse))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // True when `node` is reached only through a not-always-evaluated operand
-        // inside `root`: the right operand of a `&&`/`||`, either branch of a
-        // `?:`, the right operand of `??`, or the "when not null" side of a
-        // `?.`/`?[...]` conditional-access chain (including any member/element
-        // access further chained off it). Hoisting such an assignment out in
-        // front of `root` would evaluate/mutate it unconditionally, changing C#
-        // semantics.
-        private static bool IsInShortCircuitOrConditionalBranch(SyntaxNode node, ExpressionSyntax root)
+        // inside `root`: the right operand of `&&`/`||`/`??`, or the "when not
+        // null" side of a `?.`/`?[...]` conditional-access chain (including any
+        // member/element access further chained off it). Unlike a `?:` arm, these
+        // positions have no native statement-hosting expression seam.
+        private static bool IsInShortCircuitedSubexpression(SyntaxNode node, ExpressionSyntax root)
         {
             for (SyntaxNode current = node; current != null && current != root; current = current.Parent)
             {
@@ -242,12 +264,6 @@ public sealed partial class CSharpToGSharpTranslator
                     (binary.IsKind(SyntaxKind.LogicalAndExpression) || binary.IsKind(SyntaxKind.LogicalOrExpression) ||
                      binary.IsKind(SyntaxKind.CoalesceExpression)) &&
                     current == binary.Right)
-                {
-                    return true;
-                }
-
-                if (parent is ConditionalExpressionSyntax conditional &&
-                    (current == conditional.WhenTrue || current == conditional.WhenFalse))
                 {
                     return true;
                 }

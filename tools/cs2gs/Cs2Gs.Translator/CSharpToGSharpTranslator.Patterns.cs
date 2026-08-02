@@ -377,9 +377,8 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     // No enclosing seam claimed this node (e.g. it lives inside a
-                    // short-circuited `&&`/`||` operand or a `?:` branch, already
-                    // flagged unsupported at the point of detection): fall back to
-                    // the RHS value so translation still completes.
+                    // short-circuited operand already flagged unsupported): fall
+                    // back to the RHS value so translation still completes.
                     return this.TranslateExpression(nestedAssignment.Right);
 
                 case ThrowExpressionSyntax throwExpression:

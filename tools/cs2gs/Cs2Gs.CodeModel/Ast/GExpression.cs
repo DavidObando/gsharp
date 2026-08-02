@@ -981,11 +981,20 @@ public sealed class IfExpression : GExpression
     /// <param name="condition">The condition expression.</param>
     /// <param name="thenExpression">The value of the then-branch.</param>
     /// <param name="elseExpression">The value of the else-branch.</param>
-    public IfExpression(GExpression condition, GExpression thenExpression, GExpression elseExpression)
+    /// <param name="thenStatements">Statements evaluated before the then-branch value.</param>
+    /// <param name="elseStatements">Statements evaluated before the else-branch value.</param>
+    public IfExpression(
+        GExpression condition,
+        GExpression thenExpression,
+        GExpression elseExpression,
+        IReadOnlyList<GStatement> thenStatements = null,
+        IReadOnlyList<GStatement> elseStatements = null)
     {
         Condition = condition;
         ThenExpression = thenExpression;
         ElseExpression = elseExpression;
+        ThenStatements = thenStatements ?? new List<GStatement>();
+        ElseStatements = elseStatements ?? new List<GStatement>();
     }
 
     /// <summary>Gets the condition expression.</summary>
@@ -996,6 +1005,12 @@ public sealed class IfExpression : GExpression
 
     /// <summary>Gets the else-branch value expression.</summary>
     public GExpression ElseExpression { get; }
+
+    /// <summary>Gets statements evaluated before the then-branch value.</summary>
+    public IReadOnlyList<GStatement> ThenStatements { get; }
+
+    /// <summary>Gets statements evaluated before the else-branch value.</summary>
+    public IReadOnlyList<GStatement> ElseStatements { get; }
 }
 
 /// <summary>
