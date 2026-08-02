@@ -1173,12 +1173,16 @@ internal sealed partial class MethodBodyEmitter
                 // setter MemberRef parent is the constructed symbolic type when
                 // applicable. Falls back to the plain MemberRef path otherwise.
                 this.il.Token(isStatic
-                    ? (EntityHandle)this.outer.memberRefs.GetMethodReference(setter)
+                    ? (assn.StaticContainerType != null
+                        ? this.outer.memberRefs.GetMethodEntityHandle(setter, assn.StaticContainerType)
+                        : (EntityHandle)this.outer.memberRefs.GetMethodReference(setter))
                     : this.outer.memberRefs.GetMethodEntityHandle(setter, assn.Receiver.Type));
                 break;
             case FieldInfo field:
                 this.il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
-                this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+                this.il.Token(assn.StaticContainerType != null
+                    ? this.outer.memberRefs.GetFieldReference(field, assn.StaticContainerType)
+                    : this.outer.memberRefs.GetFieldReference(field));
                 break;
             default:
                 throw new NotSupportedException(

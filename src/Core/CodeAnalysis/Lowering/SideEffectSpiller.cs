@@ -276,6 +276,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             rewritten.Member,
             value,
             rewritten.Type,
+            rewritten.StaticContainerType,
             rewritten.ConstrainedReceiverTypeParameter,
             rewritten.ConstrainedInterfaceType);
 

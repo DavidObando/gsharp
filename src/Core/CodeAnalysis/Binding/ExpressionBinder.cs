@@ -1951,7 +1951,7 @@ internal sealed partial class ExpressionBinder
 
         var value = BindAssignmentRhs(valueSyntax, targetSymbol);
         var converted = conversions.BindConversion(valueSyntax.Location, value, targetSymbol);
-        bound = new BoundClrPropertyAssignmentExpression(null, receiver, member, converted, targetSymbol);
+        bound = new BoundClrPropertyAssignmentExpression(null, receiver, member, converted, targetSymbol, staticContainerType: null);
         return true;
     }
 

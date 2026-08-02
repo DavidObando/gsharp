@@ -26,9 +26,9 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         MemberInfo member,
         BoundExpression value,
         TypeSymbol resultType,
+        TypeSymbol staticContainerType,
         TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
-        TypeSymbol staticContainerType = null)
+        TypeSymbol constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
