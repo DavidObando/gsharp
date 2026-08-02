@@ -400,21 +400,28 @@ internal sealed class MetadataTokenCache
         = new Dictionary<StructSymbol, MethodDefinitionHandle>();
 
     /// <summary>
-    /// Issue #420 (P3-7): structural cache key for MethodSpec rows whose
-    /// generic arguments include user-defined type symbols. Uses reference
-    /// equality on the contained <see cref="TypeSymbol"/> entries (declared
-    /// user types are interned per compilation), combined with structural
-    /// equality on the array.
+    /// Issue #420 / #3065: structural cache key for MethodSpec rows whose
+    /// generic arguments include user-defined type symbols. Includes both
+    /// active generic-remap scopes because the same symbols can encode to
+    /// different VAR/MVAR ordinals. Uses reference equality throughout.
     /// </summary>
     internal readonly struct MethodSpecSymbolKey : IEquatable<MethodSpecSymbolKey>
     {
         private readonly MethodInfo method;
         private readonly ImmutableArray<TypeSymbol> typeArgs;
+        private readonly object classRemap;
+        private readonly object methodRemap;
 
-        public MethodSpecSymbolKey(MethodInfo method, ImmutableArray<TypeSymbol> typeArgs)
+        public MethodSpecSymbolKey(
+            MethodInfo method,
+            ImmutableArray<TypeSymbol> typeArgs,
+            object classRemap,
+            object methodRemap)
         {
             this.method = method;
             this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
+            this.classRemap = classRemap;
+            this.methodRemap = methodRemap;
         }
 
         public bool Equals(MethodSpecSymbolKey other)
@@ -424,7 +431,9 @@ internal sealed class MetadataTokenCache
                 return false;
             }
 
-            if (this.typeArgs.Length != other.typeArgs.Length)
+            if (!ReferenceEquals(this.classRemap, other.classRemap)
+                || !ReferenceEquals(this.methodRemap, other.methodRemap)
+                || this.typeArgs.Length != other.typeArgs.Length)
             {
                 return false;
             }
@@ -445,6 +454,8 @@ internal sealed class MetadataTokenCache
         public override int GetHashCode()
         {
             var hash = RuntimeHelpers.GetHashCode(this.method);
+            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.classRemap));
+            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.methodRemap));
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
                 hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
