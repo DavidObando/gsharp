@@ -1554,6 +1554,15 @@ internal sealed partial class ExpressionBinder
             return typeof(int?);
         }
 
+        if ((typeSymbol is TupleTypeSymbol
+                or NullableTypeSymbol { UnderlyingType: TupleTypeSymbol })
+            && MemberLookup.TryProjectErasedClrType(typeSymbol, out var erasedTuple))
+        {
+            // Issue #3087: imported instance-method applicability still needs
+            // the full erased ValueTuple shape when an element is symbolic.
+            return erasedTuple;
+        }
+
         // Issue #903: a delegate-typed argument (an untyped/typed arrow lambda,
         // a func literal, or a named delegate value) whose parameter or return
         // type is a same-compilation user type has no CLR backing —

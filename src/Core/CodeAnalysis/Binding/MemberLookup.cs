@@ -2019,22 +2019,7 @@ internal sealed class MemberLookup
                         erasedElements[i] = erasedElement;
                     }
 
-                    Type tupleOpenDefinition = erasedElements.Length switch
-                    {
-                        2 => typeof(ValueTuple<,>),
-                        3 => typeof(ValueTuple<,,>),
-                        4 => typeof(ValueTuple<,,,>),
-                        5 => typeof(ValueTuple<,,,,>),
-                        6 => typeof(ValueTuple<,,,,,>),
-                        7 => typeof(ValueTuple<,,,,,,>),
-                        _ => null,
-                    };
-                    if (tupleOpenDefinition == null)
-                    {
-                        return false;
-                    }
-
-                    erased = tupleOpenDefinition.MakeGenericType(erasedElements);
+                    erased = TupleTypeSymbol.BuildClrType(erasedElements);
                     return true;
                 }
 
@@ -4448,21 +4433,38 @@ internal sealed class MemberLookup
     /// <returns>The erased closed tuple CLR type, or <see langword="null"/> when none could be built.</returns>
     private static Type BuildErasedTupleInContext(TupleTypeSymbol tuple, Type contextObject)
     {
-        Type tupleOpenDefinition = ResolveErasedValueTupleOpenDefinition(contextObject, tuple.ElementTypes.Length);
-        if (tupleOpenDefinition == null)
-        {
-            return null;
-        }
-
         var erasedElements = new Type[tuple.ElementTypes.Length];
         for (int i = 0; i < tuple.ElementTypes.Length; i++)
         {
             erasedElements[i] = ProjectSymbolicArgToErasedClr(tuple.ElementTypes[i], contextObject) ?? contextObject;
         }
 
+        return BuildErasedTupleInContext(erasedElements, 0, erasedElements.Length, contextObject);
+    }
+
+    private static Type BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)
+    {
+        var tupleOpenDefinition = ResolveErasedValueTupleOpenDefinition(contextObject, count <= 7 ? count : 8);
+        if (tupleOpenDefinition == null)
+        {
+            return null;
+        }
+
+        var arguments = new Type[Math.Min(count, 8)];
+        var directCount = Math.Min(count, 7);
+        Array.Copy(elementTypes, start, arguments, 0, directCount);
+        if (count > 7)
+        {
+            arguments[7] = BuildErasedTupleInContext(elementTypes, start + 7, count - 7, contextObject);
+            if (arguments[7] == null)
+            {
+                return null;
+            }
+        }
+
         try
         {
-            return tupleOpenDefinition.MakeGenericType(erasedElements);
+            return tupleOpenDefinition.MakeGenericType(arguments);
         }
         catch
         {
@@ -4484,18 +4486,20 @@ internal sealed class MemberLookup
     /// <see cref="ArgumentException"/>).
     /// </summary>
     /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
-    /// <param name="arity">The tuple arity (2–7; the BCL <c>ValueTuple</c> family's generic range).</param>
+    /// <param name="arity">The CLR tuple-node arity (1–8).</param>
     /// <returns>The open <c>ValueTuple`N</c> definition, or <see langword="null"/> when unsupported/unresolvable.</returns>
     private static Type ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
     {
         Type hostOpenDefinition = arity switch
         {
+            1 => typeof(ValueTuple<>),
             2 => typeof(ValueTuple<,>),
             3 => typeof(ValueTuple<,,>),
             4 => typeof(ValueTuple<,,,>),
             5 => typeof(ValueTuple<,,,,>),
             6 => typeof(ValueTuple<,,,,,>),
             7 => typeof(ValueTuple<,,,,,,>),
+            8 => typeof(ValueTuple<,,,,,,,>),
             _ => null,
         };
         if (hostOpenDefinition == null)

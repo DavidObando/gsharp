@@ -1872,35 +1872,36 @@ internal sealed class ImportedMemberRefFactory
     /// are correctly referenced by their TypeDef handles.
     /// </summary>
     private EntityHandle GetTupleTypeSpec(TupleTypeSymbol tupleType)
+        => this.GetTupleTypeSpec(tupleType, 0, tupleType.Arity);
+
+    private EntityHandle GetTupleTypeSpec(TupleTypeSymbol tupleType, int start, int count)
     {
         var sigBlob = new BlobBuilder();
-        this.signatures.EncodeTypeSymbol(new BlobEncoder(sigBlob).TypeSpecificationSignature(), tupleType);
+        this.signatures.EncodeTupleType(
+            new BlobEncoder(sigBlob).TypeSpecificationSignature(),
+            tupleType.ElementTypes,
+            start,
+            count);
         return this.emitCtx.Metadata.AddTypeSpecification(
             this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
     /// <summary>
-    /// Issue #649: Gets a MemberRef for a tuple field (<c>Item1</c>...<c>Item7</c>) when
-    /// the tuple's <see cref="TypeSymbol.ClrType"/> is null (element types include
-    /// G#-defined types). Builds the field MemberRef against the symbolically-constructed
-    /// <c>ValueTuple</c> TypeSpec.
+    /// Issue #649: Gets a MemberRef for a tuple field when the tuple's
+    /// <see cref="TypeSymbol.ClrType"/> is null (element types include
+    /// G#-defined types). Builds the field MemberRef against the appropriate
+    /// symbolically-constructed <c>ValueTuple</c> node TypeSpec.
     /// </summary>
-    internal MemberReferenceHandle GetTupleFieldReference(TupleTypeSymbol tupleType, string fieldName)
+    internal MemberReferenceHandle GetTupleFieldReference(
+        TupleTypeSymbol tupleType,
+        int start,
+        int count,
+        string fieldName)
     {
-        var parent = this.GetTupleTypeSpec(tupleType);
+        var parent = this.GetTupleTypeSpec(tupleType, start, count);
 
         // Get the open field from the BCL ValueTuple generic definition for signature encoding.
-        var openType = tupleType.Arity switch
-        {
-            2 => typeof(ValueTuple<,>),
-            3 => typeof(ValueTuple<,,>),
-            4 => typeof(ValueTuple<,,,>),
-            5 => typeof(ValueTuple<,,,,>),
-            6 => typeof(ValueTuple<,,,,,>),
-            7 => typeof(ValueTuple<,,,,,,>),
-            _ => throw new NotSupportedException(
-                $"Symbolic tuple field ref not supported for arity {tupleType.Arity}."),
-        };
+        var openType = TupleTypeSymbol.GetOpenClrType(count <= 7 ? count : 8);
 
         var openField = openType.GetField(
             fieldName,
@@ -1923,27 +1924,19 @@ internal sealed class ImportedMemberRefFactory
     /// types). Builds the ctor MemberRef against the symbolically-constructed
     /// <c>ValueTuple</c> TypeSpec.
     /// </summary>
-    internal MemberReferenceHandle GetTupleCtorReference(TupleTypeSymbol tupleType)
+    internal MemberReferenceHandle GetTupleCtorReference(
+        TupleTypeSymbol tupleType,
+        int start,
+        int count)
     {
-        var parent = this.GetTupleTypeSpec(tupleType);
-        var arity = tupleType.Arity;
-
-        var openType = arity switch
-        {
-            2 => typeof(ValueTuple<,>),
-            3 => typeof(ValueTuple<,,>),
-            4 => typeof(ValueTuple<,,,>),
-            5 => typeof(ValueTuple<,,,,>),
-            6 => typeof(ValueTuple<,,,,,>),
-            7 => typeof(ValueTuple<,,,,,,>),
-            _ => throw new NotSupportedException(
-                $"Symbolic tuple ctor ref not supported for arity {arity}."),
-        };
+        var parent = this.GetTupleTypeSpec(tupleType, start, count);
+        var physicalArity = count <= 7 ? count : 8;
+        var openType = TupleTypeSymbol.GetOpenClrType(physicalArity);
 
         ConstructorInfo openCtor = null;
         foreach (var c in openType.GetConstructors())
         {
-            if (c.GetParameters().Length == arity)
+            if (c.GetParameters().Length == physicalArity)
             {
                 openCtor = c;
                 break;
@@ -1953,7 +1946,7 @@ internal sealed class ImportedMemberRefFactory
         if (openCtor == null)
         {
             throw new InvalidOperationException(
-                $"Open ValueTuple type of arity {arity} has no matching constructor.");
+                $"Open ValueTuple type of arity {physicalArity} has no matching constructor.");
         }
 
         var sigBlob = new BlobBuilder();
@@ -1985,7 +1978,7 @@ internal sealed class ImportedMemberRefFactory
     /// and the body construction must be parented at this reified TypeSpec so
     /// the value stored into the iterator state machine's reified
     /// <c>Dictionary&lt;…, !0&gt;</c> field verifies. Mirrors
-    /// <see cref="GetTupleTypeSpec"/>.
+    /// <see cref="GetTupleTypeSpec(TupleTypeSymbol)"/>.
     /// </summary>
     private EntityHandle GetMapTypeSpec(MapTypeSymbol mapType)
     {
@@ -2007,7 +2000,7 @@ internal sealed class ImportedMemberRefFactory
     /// <c>Dictionary`2::.ctor()</c> parented at the reified
     /// <see cref="GetMapTypeSpec"/> TypeSpec, for a <c>map[K, V]</c> literal
     /// whose <see cref="TypeSymbol.ClrType"/> is null. Mirrors
-    /// <see cref="GetTupleCtorReference"/>.
+    /// <see cref="GetTupleCtorReference(TupleTypeSymbol, int, int)"/>.
     /// </summary>
     internal MemberReferenceHandle GetMapCtorReference(MapTypeSymbol mapType)
     {

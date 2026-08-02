@@ -937,12 +937,22 @@ internal sealed partial class ExpressionBinder
 
             if (ta.ClrType == null)
             {
-                // Issue #313: in-scope type parameter, or issue #671: G#
-                // user-defined type whose ClrType is null at bind time.
-                // Both project onto System.Object under the type-erased
-                // model; the real symbolic argument is preserved separately.
+                // Issue #3087: retain the erased shape of symbolic tuple
+                // arguments. Flattening the whole argument to object made
+                // List[(...)].Add and LINQ receiver inference see List<object>
+                // instead of List<ValueTuple<...>>.
                 hasSymbolicArg = true;
-                clrArgs[i] = scope.References.GetCoreType("System.Object");
+                if ((ta is TupleTypeSymbol
+                        or NullableTypeSymbol { UnderlyingType: TupleTypeSymbol })
+                    && MemberLookup.TryProjectErasedClrType(ta, out var projected))
+                {
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(projected);
+                }
+                else
+                {
+                    clrArgs[i] = scope.References.GetCoreType("System.Object");
+                }
+
                 continue;
             }
 
