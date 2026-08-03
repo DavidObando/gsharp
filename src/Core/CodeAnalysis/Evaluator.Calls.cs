@@ -30,6 +30,7 @@ public sealed partial class Evaluator
 {
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ConcurrentDictionary<VariableSymbol, object>, Dictionary<TypeParameterSymbol, TypeSymbol>> runtimeTypeArguments = new();
     private readonly ConcurrentDictionary<(System.Reflection.MemberInfo Member, Type RuntimeType), System.Reflection.MemberInfo> runtimeMembers = new();
+    private readonly ConcurrentDictionary<StructSymbol, IReadOnlyDictionary<MethodInfo, FunctionSymbol>> externalOverrides = new();
 
     private object EvaluateCallExpression(BoundCallExpression node)
     {
@@ -1058,8 +1059,11 @@ public sealed partial class Evaluator
         return result;
     }
 
-    private StructValue CreateStructValue(StructSymbol structType) =>
-        new(structType, TryEvaluateExternalOverride);
+    private StructValue CreateStructValue(StructSymbol structType)
+    {
+        var overrides = GetExternalOverrides(structType);
+        return new(structType, overrides.Count == 0 ? null : TryEvaluateExternalOverride);
+    }
 
     private bool TryEvaluateExternalOverride(
         StructValue receiver,
@@ -1101,16 +1105,32 @@ public sealed partial class Evaluator
         }
     }
 
-    private static FunctionSymbol FindExternalOverride(StructSymbol type, MethodInfo externalMethod)
+    private FunctionSymbol FindExternalOverride(StructSymbol type, MethodInfo externalMethod)
     {
-        FunctionSymbol externalOverride = null;
-        for (; type != null && externalOverride == null; type = type.BaseClass)
+        var overrides = GetExternalOverrides(type);
+        return overrides.TryGetValue(externalMethod, out var externalOverride)
+            ? externalOverride
+            : null;
+    }
+
+    private IReadOnlyDictionary<MethodInfo, FunctionSymbol> GetExternalOverrides(StructSymbol type) =>
+        externalOverrides.GetOrAdd(type, static key => BuildExternalOverrides(key));
+
+    private static IReadOnlyDictionary<MethodInfo, FunctionSymbol> BuildExternalOverrides(StructSymbol type)
+    {
+        var overrides = new Dictionary<MethodInfo, FunctionSymbol>();
+        for (; type != null; type = type.BaseClass)
         {
-            externalOverride = type.Methods.FirstOrDefault(method =>
-                method.IsOverride && FindExternalOverrideRoot(method)?.Equals(externalMethod) == true);
+            foreach (var method in type.Methods)
+            {
+                if (method.IsOverride && FindExternalOverrideRoot(method) is MethodInfo root)
+                {
+                    overrides.TryAdd(root, method);
+                }
+            }
         }
 
-        return externalOverride;
+        return overrides;
     }
 
     private static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
