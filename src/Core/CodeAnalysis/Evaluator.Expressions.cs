@@ -1581,6 +1581,19 @@ public sealed partial class Evaluator
             return nullableResult;
         }
 
+        return EvaluateClrMemberAccess(
+            node.Member,
+            receiver,
+            node.Receiver?.Type ?? node.StaticContainerType,
+            node);
+    }
+
+    private object EvaluateClrMemberAccess(
+        System.Reflection.MemberInfo sourceMember,
+        object receiver,
+        TypeSymbol symbolicReceiverType,
+        BoundNode node)
+    {
         receiver = UnwrapClrReceiver(receiver);
 
         // Issue #608: when the receiver is a StructValue (a G# class instance)
@@ -1588,7 +1601,7 @@ public sealed partial class Evaluator
         // field (the #573/#606 field-satisfies-property contract), reflection
         // cannot invoke the interface property on the StructValue. Route the
         // read through the struct's field dictionary instead.
-        if (receiver is StructValue sv && TryReadStructFieldForClrMember(sv, node.Member, out var fieldValue))
+        if (receiver is StructValue sv && TryReadStructFieldForClrMember(sv, sourceMember, out var fieldValue))
         {
             return fieldValue;
         }
@@ -1599,8 +1612,8 @@ public sealed partial class Evaluator
         // from `int[].GetEnumerator()`) fails because the receiver doesn't
         // implement `IEnumerator<object>`. Route through the matching
         // closed-generic interface on the receiver's runtime type.
-        var runtimeType = ResolveRuntimeClrType(node.Receiver?.Type ?? node.StaticContainerType);
-        var member = ResolvePropertyOrFieldForReceiver(node.Member, receiver, runtimeType);
+        var runtimeType = ResolveRuntimeClrType(symbolicReceiverType);
+        var member = ResolvePropertyOrFieldForReceiver(sourceMember, receiver, runtimeType);
 
         // concurrency: see TryGetInterpreterMapLock — routes `m.Count`,
         // `m.Keys`, `m.Values`, etc. through the same per-map lock as
@@ -2073,14 +2086,18 @@ public sealed partial class Evaluator
         }
 
         var receiverValue = EvaluateExpression(node.Receiver);
+        return EvaluateUserPropertyValue(node.Property, receiverValue);
+    }
 
+    private object EvaluateUserPropertyValue(PropertySymbol sourceProperty, object receiverValue)
+    {
         // Issue #1235 / issue #1068: when the statically-bound property is
         // declared on an interface (or, for a constrained type parameter, on the
         // constraint type), resolve the concrete property implementation from
         // the receiver's runtime type so the read dispatches virtually — the
         // interpreter analogue of `callvirt get_X`. Walking the base chain also
         // honours property overrides.
-        var property = node.Property;
+        var property = sourceProperty;
         if (receiverValue is StructValue concreteSv && concreteSv.StructType != null)
         {
             for (var t = concreteSv.StructType; t != null; t = t.BaseClass)

@@ -329,26 +329,60 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitPropertyPattern(BoundPropertyPattern pp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
     {
-        // Property patterns apply to GSharp struct/class discriminants.
-        // Fields are accessed via ldfld on the value (struct: ldfld on
-        // value, class: ldfld through ref).
-        //
-        // Issue #1923: a nullable CLASS-typed subject (`Address?`) is
-        // accepted by the binder (PatternBinder.BindPropertyPattern) on the
-        // understanding that `null` never matches `{ ... }` — mirroring C#'s
-        // recursive-pattern rule. Emit that guard here: load the value once
-        // and branch to failLabel when it is null (empty stack on the
-        // failure path, matching every other pattern's contract), then
-        // continue field emission against the underlying reference type.
-        if (valueType is NullableTypeSymbol nullableValueType
-            && !ReflectionMetadataEmitter.IsValueTypeSymbol(nullableValueType.UnderlyingType))
+        var inputSlot = this.locals[pp.InputVariable];
+        loadValue();
+        this.il.StoreLocal(inputSlot);
+
+        var receiverSlot = inputSlot;
+        var receiverType = valueType;
+        if (valueType is NullableTypeSymbol nullableValueType)
         {
-            loadValue();
+            if (NullableLifting.IsAnyValueTypeNullable(nullableValueType))
+            {
+                this.il.LoadLocal(inputSlot);
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(nullableValueType));
+                this.il.Branch(ILOpCode.Brfalse, failLabel);
+
+                receiverSlot = this.locals[pp.UnwrappedVariable];
+                this.il.LoadLocalAddress(inputSlot);
+                if (NullableLifting.RequiresSymbolicNullableGetValue(nullableValueType))
+                {
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullableValueType));
+                }
+                else
+                {
+                    var underlyingClr = nullableValueType.UnderlyingType.ClrType
+                        ?? throw new InvalidOperationException(
+                            $"Nullable property-pattern input '{nullableValueType}' has no CLR underlying type.");
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(this.outer.wellKnown.GetNullableGetValueOrDefaultReference(underlyingClr));
+                }
+
+                this.il.StoreLocal(receiverSlot);
+            }
+            else
+            {
+                this.il.LoadLocal(inputSlot);
+                this.il.Branch(ILOpCode.Brfalse, failLabel);
+            }
+
+            receiverType = nullableValueType.UnderlyingType;
+        }
+        else if (!ReflectionMetadataEmitter.IsValueTypeSymbol(valueType))
+        {
+            // Recursive patterns reject null even when the source annotation is
+            // non-nullable; runtime values can still arrive from oblivious code.
+            this.il.LoadLocal(inputSlot);
             this.il.Branch(ILOpCode.Brfalse, failLabel);
-            valueType = nullableValueType.UnderlyingType;
         }
 
-        if (valueType is TupleTypeSymbol tupleType)
+        Action loadReceiver = ReflectionMetadataEmitter.IsValueTypeSymbol(receiverType)
+            ? () => this.il.LoadLocalAddress(receiverSlot)
+            : () => this.il.LoadLocal(receiverSlot);
+
+        if (receiverType is TupleTypeSymbol tupleType)
         {
             // Issue #1887: cs2gs lowers a C# positional pattern over a raw
             // tuple to a G# property pattern keyed on the tuple's Item1..ItemN
@@ -358,100 +392,151 @@ internal sealed partial class MethodBodyEmitter
             foreach (var field in pp.Fields)
             {
                 var fieldName = field.Field.Name;
-                Action loadTupleChild = () =>
+                if (tupleClr == null)
                 {
-                    if (tupleClr == null)
+                    var index = int.Parse(
+                        fieldName.AsSpan("Item".Length),
+                        System.Globalization.CultureInfo.InvariantCulture) - 1;
+                    this.EmitSymbolicTupleElementAccess(
+                        tupleType,
+                        index,
+                        loadReceiver,
+                        takeRestAddress: false);
+                }
+                else
+                {
+                    loadReceiver();
+                    this.il.OpCode(ILOpCode.Ldfld);
+                    if (tupleClr.IsConstructedGenericType)
                     {
-                        var index = int.Parse(
-                            fieldName.AsSpan("Item".Length),
-                            System.Globalization.CultureInfo.InvariantCulture) - 1;
-                        this.EmitSymbolicTupleElementAccess(
-                            tupleType,
-                            index,
-                            loadValue,
-                            takeRestAddress: false);
+                        this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
                     }
                     else
                     {
-                        loadValue();
-                        this.il.OpCode(ILOpCode.Ldfld);
-                        if (tupleClr.IsConstructedGenericType)
-                        {
-                            this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
-                        }
-                        else
-                        {
-                            var clrField = tupleClr.GetField(fieldName)
-                                ?? throw new InvalidOperationException(
-                                    $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
-                            this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
-                        }
+                        var clrField = tupleClr.GetField(fieldName)
+                            ?? throw new InvalidOperationException(
+                                $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
+                        this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
                     }
-                };
+                }
 
-                this.EmitPattern(field.Pattern, loadTupleChild, field.Field.Type, failLabel);
+                var memberSlot = this.locals[field.ValueVariable];
+                this.il.StoreLocal(memberSlot);
+                this.EmitPattern(field.Pattern, () => this.il.LoadLocal(memberSlot), field.Type, failLabel);
             }
 
-            return;
-        }
-
-        if (valueType is not StructSymbol)
-        {
-            // Defensive: every property-pattern operand should be a
-            // struct/class; the binder rejects others. Branch to fail
-            // rather than emit a verifier-illegal sequence.
-            this.il.Branch(ILOpCode.Br, failLabel);
             return;
         }
 
         foreach (var field in pp.Fields)
         {
-            if (field.Property != null)
-            {
-                if (ReflectionMetadataEmitter.IsValueTypeSymbol(valueType)
-                    && field.Property.BackingField != null
-                    && this.outer.cache.StructFieldDefs.TryGetValue(field.Property.BackingField, out var backingField))
-                {
-                    Action loadBackingField = () =>
-                    {
-                        loadValue();
-                        this.il.OpCode(ILOpCode.Ldfld);
-                        this.il.Token(backingField);
-                    };
-                    this.EmitPattern(field.Pattern, loadBackingField, field.Type, failLabel);
-                    continue;
-                }
+            this.EmitPropertyPatternMember(field, receiverType, loadReceiver);
+            var memberSlot = this.locals[field.ValueVariable];
+            this.il.StoreLocal(memberSlot);
+            this.EmitPattern(field.Pattern, () => this.il.LoadLocal(memberSlot), field.Type, failLabel);
+        }
+    }
 
-                var getter = this.outer.userTokens.ResolveUserPropertyAccessorToken(
-                    valueType as StructSymbol,
+    private void EmitPropertyPatternMember(
+        BoundPropertyPatternField field,
+        TypeSymbol receiverType,
+        Action loadReceiver)
+    {
+        var receiverIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(receiverType);
+        if (field.ClrMember != null)
+        {
+            switch (field.ClrMember)
+            {
+                case PropertyInfo property:
+                    var getter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(
+                        property,
+                        wantSetter: false)
+                        ?? throw new InvalidOperationException(
+                            $"Property '{property.DeclaringType?.FullName}.{property.Name}' has no public getter.");
+                    loadReceiver();
+                    this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+                    this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getter, receiverType));
+                    if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(receiverType, property, out _))
+                    {
+                        this.EmitErasedObjectReturnWidening(
+                            TypeSymbol.FromClrType(getter.ReturnType),
+                            field.Type);
+                    }
+
+                    return;
+                case FieldInfo clrField:
+                    loadReceiver();
+                    this.il.OpCode(ILOpCode.Ldfld);
+                    this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
+                    return;
+                default:
+                    throw new NotSupportedException(
+                        $"CLR property-pattern member '{field.ClrMember.GetType().Name}' is not supported.");
+            }
+        }
+
+        if (field.Property != null)
+        {
+            EntityHandle getterHandle;
+            var declaringStruct = field.DeclaringType as StructSymbol;
+            var receiverStruct = receiverType as StructSymbol;
+            var getterContainer = ResolvePropertyReferenceContainer(
+                declaringStruct,
+                receiverStruct,
+                field.Property);
+            if (getterContainer != null)
+            {
+                getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                    getterContainer,
                     field.Property,
                     wantSetter: false);
-                Action loadProperty = () =>
-                {
-                    loadValue();
-                    this.il.OpCode(ILOpCode.Callvirt);
-                    this.il.Token(getter);
-                };
-                this.EmitPattern(field.Pattern, loadProperty, field.Type, failLabel);
-                continue;
             }
-
-            if (!this.outer.cache.StructFieldDefs.TryGetValue(field.Field, out var fieldHandle))
+            else if (this.outer.cache.PropertyAccessorHandles.TryGetValue(field.Property, out var handles)
+                && handles.Getter.HasValue)
+            {
+                getterHandle = handles.Getter.Value;
+            }
+            else if (declaringStruct?.ClrType != null)
+            {
+                getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                    declaringStruct,
+                    field.Property,
+                    wantSetter: false);
+            }
+            else
             {
                 throw new InvalidOperationException(
-                    $"Property pattern field '{field.Field.Name}' has no emitted FieldDef.");
+                    $"Property pattern property '{field.Property.Name}' has no emitted getter.");
             }
 
-            // Compose: child loader is "load receiver, ldfld FieldHandle".
-            Action loadChild = () =>
-            {
-                loadValue();
-                this.il.OpCode(ILOpCode.Ldfld);
-                this.il.Token(fieldHandle);
-            };
-
-            this.EmitPattern(field.Pattern, loadChild, field.Type, failLabel);
+            loadReceiver();
+            this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
+            this.il.Token(getterHandle);
+            return;
         }
+
+        EntityHandle fieldHandle;
+        var fieldContainer = ResolveFieldReferenceContainer(
+            field.DeclaringType as StructSymbol,
+            receiverType as StructSymbol,
+            field.Field);
+        if (fieldContainer != null)
+        {
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, field.Field);
+        }
+        else if (this.outer.cache.StructFieldDefs.TryGetValue(field.Field, out var fieldDefinition))
+        {
+            fieldHandle = fieldDefinition;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Property pattern field '{field.Field.Name}' has no emitted field token.");
+        }
+
+        loadReceiver();
+        this.il.OpCode(ILOpCode.Ldfld);
+        this.il.Token(fieldHandle);
     }
 
     private void EmitRelationalPattern(BoundRelationalPattern rp, Action loadValue, LabelHandle failLabel)

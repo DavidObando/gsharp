@@ -43,7 +43,7 @@ class User { var Name string }
 let u = User{Name: ""x""}
 let x = switch u { case { Missing: 1 }: 1 default: 0 }
 ");
-        Assert.Contains(diagnostics, d => d.Message.Contains("does not define a field named 'Missing'", System.StringComparison.Ordinal));
+        Assert.Contains(diagnostics, d => d.Message.Contains("does not define a readable instance field or property named 'Missing'", System.StringComparison.Ordinal));
     }
 
     [Fact]

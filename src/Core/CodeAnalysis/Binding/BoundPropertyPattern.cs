@@ -19,6 +19,11 @@ public sealed class BoundPropertyPattern : BoundPattern
         : base(syntax, type)
     {
         Fields = fields;
+        InputVariable = new LocalVariableSymbol("<property-pattern-input>", isReadOnly: true, type);
+        if (type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable))
+        {
+            UnwrappedVariable = new LocalVariableSymbol("<property-pattern-value>", isReadOnly: true, nullable.UnderlyingType);
+        }
     }
 
     /// <inheritdoc/>
@@ -26,4 +31,10 @@ public sealed class BoundPropertyPattern : BoundPattern
 
     /// <summary>Gets the field patterns.</summary>
     public ImmutableArray<BoundPropertyPatternField> Fields { get; }
+
+    /// <summary>Gets the temporary holding the pattern input exactly once.</summary>
+    public LocalVariableSymbol InputVariable { get; }
+
+    /// <summary>Gets the unwrapped nullable value-type temporary, when required.</summary>
+    public LocalVariableSymbol UnwrappedVariable { get; }
 }

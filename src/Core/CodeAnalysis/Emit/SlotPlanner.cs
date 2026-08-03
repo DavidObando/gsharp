@@ -650,8 +650,15 @@ internal sealed class SlotPlanner
 
                     break;
                 case BoundPropertyPattern pp:
+                    AllocatePatternLocal(pp.InputVariable, locals, localTypes);
+                    if (pp.UnwrappedVariable != null)
+                    {
+                        AllocatePatternLocal(pp.UnwrappedVariable, locals, localTypes);
+                    }
+
                     foreach (var field in pp.Fields)
                     {
+                        AllocatePatternLocal(field.ValueVariable, locals, localTypes);
                         AllocatePatternBindings(field.Pattern, locals, localTypes, typePatternScratchSlots);
                     }
 
@@ -686,6 +693,18 @@ internal sealed class SlotPlanner
                 case BoundNotPattern np:
                     AllocatePatternBindings(np.Pattern, locals, localTypes, typePatternScratchSlots);
                     break;
+            }
+        }
+
+        private static void AllocatePatternLocal(
+            LocalVariableSymbol variable,
+            Dictionary<VariableSymbol, int> locals,
+            List<TypeSymbol> localTypes)
+        {
+            if (!locals.ContainsKey(variable))
+            {
+                locals[variable] = localTypes.Count;
+                localTypes.Add(variable.Type);
             }
         }
     }

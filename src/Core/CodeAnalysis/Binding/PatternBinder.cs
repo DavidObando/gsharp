@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Numerics;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -320,12 +321,19 @@ internal sealed class PatternBinder
     {
         var fields = ImmutableArray.CreateBuilder<BoundPropertyPatternField>();
 
+        // Recursive property patterns never match null. Member lookup therefore
+        // runs against the non-null underlying type for both nullable references
+        // and Nullable<T>; emitter/evaluator perform the corresponding guard.
+        var lookupType = discriminantType is NullableTypeSymbol nullableDiscriminant
+            ? nullableDiscriminant.UnderlyingType
+            : discriminantType;
+
         // Issue #1887: cs2gs lowers a C# positional pattern over a raw tuple
         // subject (`(0, 0) => ...`) to a G# property pattern keyed on the
         // tuple's always-present Item1..ItemN fields (`{ Item1: 0, Item2: 0 }`).
         // A ValueTuple is neither a StructSymbol nor a class, so it needs its
         // own lookup path alongside the struct/class one below.
-        if (discriminantType is TupleTypeSymbol tupleType)
+        if (lookupType is TupleTypeSymbol tupleType)
         {
             foreach (var tupleFieldSyntax in syntax.Fields)
             {
@@ -342,20 +350,7 @@ internal sealed class PatternBinder
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
         }
 
-        // Issue #1923: a property pattern against a nullable CLASS-typed
-        // subject (`Address?`) is legal — it implicitly requires the value to
-        // be non-null (mirroring C#'s recursive-pattern rule that `null`
-        // never matches `{ ... }`). Unwrap to the underlying struct/class for
-        // field lookup; the emitter inserts the corresponding null guard
-        // before reading any field. A nullable VALUE-type struct (`Nullable<T>`
-        // CLR boxing) is a different, more involved shape and is not unwrapped
-        // here — it still reports GS0172.
-        var lookupType = discriminantType is NullableTypeSymbol nullableDiscriminant
-            && IsReferenceType(nullableDiscriminant.UnderlyingType)
-            ? nullableDiscriminant.UnderlyingType
-            : discriminantType;
-
-        if (lookupType is not StructSymbol structType)
+        if (!SupportsPropertyPattern(lookupType))
         {
             Diagnostics.ReportPropertyPatternRequiresStructOrClass(syntax.OpenBraceToken.Location, discriminantType);
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
@@ -363,47 +358,181 @@ internal sealed class PatternBinder
 
         foreach (var fieldSyntax in syntax.Fields)
         {
-            if (!TypeMemberModel.TryGetFieldIncludingInherited(structType, fieldSyntax.Identifier.Text, MemberQuery.Instance(MemberKinds.Field), out var field, out _))
+            if (!TryBindPropertyPatternMember(lookupType, fieldSyntax, out var field))
             {
-                if (!TypeMemberModel.TryGetProperty(structType, fieldSyntax.Identifier.Text, out var property)
-                    || property.Declaration is not null
-                    || property.BackingField is null
-                    || !TypeMemberModel.TryGetPrimaryConstructorParameter(structType, property.Name, out _))
-                {
-                    Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
-                    fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
-                    continue;
-                }
-
+                Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
                 fields.Add(new BoundPropertyPatternField(
                     syntax,
-                    property,
-                    BindPattern(fieldSyntax.Pattern, property.Type)));
+                    new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public),
+                    BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
                 continue;
             }
 
-            fields.Add(new BoundPropertyPatternField(syntax, field, BindPattern(fieldSyntax.Pattern, field.Type)));
+            fields.Add(field);
         }
 
         return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
     }
 
+    private bool TryBindPropertyPatternMember(
+        TypeSymbol lookupType,
+        PropertyPatternFieldSyntax syntax,
+        out BoundPropertyPatternField boundField)
+    {
+        var name = syntax.Identifier.Text;
+        if (lookupType is StructSymbol structType)
+        {
+            for (var current = structType; current != null; current = current.BaseClass)
+            {
+                foreach (var field in current.Fields)
+                {
+                    if (field.Name == name)
+                    {
+                        boundField = new BoundPropertyPatternField(
+                            syntax,
+                            field,
+                            current,
+                            BindPattern(syntax.Pattern, field.Type));
+                        return true;
+                    }
+                }
+
+                foreach (var property in current.Properties)
+                {
+                    if (property.Name != name)
+                    {
+                        continue;
+                    }
+
+                    if (property.IsIndexer || property.IsStatic || !property.HasGetter)
+                    {
+                        boundField = null;
+                        return false;
+                    }
+
+                    boundField = new BoundPropertyPatternField(
+                        syntax,
+                        property,
+                        current,
+                        BindPattern(syntax.Pattern, property.Type));
+                    return true;
+                }
+            }
+
+            var importedBase = TypeMemberModel.GetNearestImportedBase(structType);
+            if (importedBase?.ClrType != null
+                && TryBindClrPropertyPatternMember(importedBase, importedBase.ClrType, syntax, out boundField))
+            {
+                return true;
+            }
+        }
+        else if (lookupType is InterfaceSymbol interfaceType)
+        {
+            foreach (var current in interfaceType.SelfAndAllBaseInterfaces())
+            {
+                current.EnsureMembersResolved();
+                foreach (var property in current.Properties)
+                {
+                    if (property.Name != name)
+                    {
+                        continue;
+                    }
+
+                    if (property.IsIndexer || property.IsStatic || !property.HasGetter)
+                    {
+                        boundField = null;
+                        return false;
+                    }
+
+                    boundField = new BoundPropertyPatternField(
+                        syntax,
+                        property,
+                        current,
+                        BindPattern(syntax.Pattern, property.Type));
+                    return true;
+                }
+            }
+
+            foreach (var importedBase in MemberLookup.GetTransitiveClrBaseInterfaces(interfaceType))
+            {
+                var importedBaseType = ImportedTypeSymbol.Get(importedBase);
+                if (TryBindClrPropertyPatternMember(importedBaseType, importedBase, syntax, out boundField))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (lookupType.ClrType is Type clrType
+            && TryBindClrPropertyPatternMember(lookupType, clrType, syntax, out boundField))
+        {
+            return true;
+        }
+
+        boundField = null;
+        return false;
+    }
+
+    private bool TryBindClrPropertyPatternMember(
+        TypeSymbol receiverType,
+        Type clrType,
+        PropertyPatternFieldSyntax syntax,
+        out BoundPropertyPatternField boundField)
+    {
+        var name = syntax.Identifier.Text;
+        var property = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+            clrType,
+            name,
+            BindingFlags.Public | BindingFlags.Instance);
+        if (property != null)
+        {
+            if (property.GetIndexParameters().Length != 0
+                || property.GetGetMethod(nonPublic: false) == null)
+            {
+                boundField = null;
+                return false;
+            }
+
+            var propertyType = MemberLookup.GetClrPropertyTypeSymbol(receiverType, property);
+            boundField = new BoundPropertyPatternField(
+                syntax,
+                property,
+                propertyType,
+                BindPattern(syntax.Pattern, propertyType));
+            return true;
+        }
+
+        var field = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+            clrType,
+            name,
+            BindingFlags.Public | BindingFlags.Instance);
+        if (field != null)
+        {
+            var fieldType = ClrNullability.GetFieldTypeSymbol(field);
+            boundField = new BoundPropertyPatternField(
+                syntax,
+                field,
+                fieldType,
+                BindPattern(syntax.Pattern, fieldType));
+            return true;
+        }
+
+        boundField = null;
+        return false;
+    }
+
+    private static bool SupportsPropertyPattern(TypeSymbol type)
+    {
+        if (type is StructSymbol or InterfaceSymbol or TupleTypeSymbol)
+        {
+            return true;
+        }
+
+        return type.ClrType is Type clrType && !clrType.IsPrimitive && !clrType.IsEnum;
+    }
+
     // Issue #1887: resolve a tuple's synthetic Item1..ItemN field by name so a
     // property/positional pattern (`{ Item1: 0, Item2: 0 }`) binds against a
     // ValueTuple subject the same way it does against a struct's real fields.
-    // Issue #1923: true when `type` is a CLR reference type — either a
-    // user-declared `class` (StructSymbol.IsClass) or an imported/CLR type
-    // whose ClrType reports IsValueType == false. Used to decide whether a
-    // nullable discriminant (`T?`) can be unwrapped for a property pattern
-    // (nullable value-type structs, which box as `Nullable<T>`, are a
-    // different shape and are intentionally excluded).
-    private static bool IsReferenceType(TypeSymbol type) => type switch
-    {
-        StructSymbol s => s.IsClass,
-        { ClrType: { IsValueType: false } } => true,
-        _ => false,
-    };
-
     private static bool TryGetTupleField(TupleTypeSymbol tupleType, string name, out FieldSymbol field)
     {
         field = null;
