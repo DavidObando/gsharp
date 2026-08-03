@@ -453,7 +453,7 @@ public sealed partial class Evaluator
         return BlockOnValueTask(operand);
     }
 
-    private static object EvaluateDefaultExpression(BoundDefaultExpression node)
+    private object EvaluateDefaultExpression(BoundDefaultExpression node)
     {
         // Issue #148: the `await for` lowering uses `default(CancellationToken)`
         // for the `GetAsyncEnumerator` token; more generally, BoundDefaultExpression

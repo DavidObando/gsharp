@@ -985,42 +985,16 @@ public sealed partial class Evaluator
 
         if (receiver is StructValue sv)
         {
-            static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
-            {
-                while (method.OverriddenMethod != null)
-                {
-                    method = method.OverriddenMethod;
-                }
-
-                return method.ExternalOverriddenMethod;
-            }
-
-            FunctionSymbol externalOverride = null;
-            for (var type = sv.StructType; type != null && externalOverride == null; type = type.BaseClass)
-            {
-                externalOverride = type.Methods.FirstOrDefault(method =>
-                    method.IsOverride && FindExternalOverrideRoot(method)?.Equals(node.Method) == true);
-            }
-
+            var externalOverride = FindExternalOverride(sv.StructType, node.Method);
             if (externalOverride != null)
             {
-                var frame = new ConcurrentDictionary<VariableSymbol, object>
-                {
-                    [externalOverride.ThisParameter] = receiver,
-                };
-
-                var parameterOffset = externalOverride.ExplicitReceiverParameter == null ? 0 : 1;
+                var arguments = new object[node.Arguments.Length];
                 for (var i = 0; i < node.Arguments.Length; i++)
                 {
-                    var parameter = externalOverride.Parameters[i + parameterOffset];
-                    frame[parameter] = EvaluateExpression(node.Arguments[i]);
+                    arguments[i] = EvaluateExpression(node.Arguments[i]);
                 }
 
-                using (PushFrame(frame))
-                {
-                    var statement = program.Functions[externalOverride];
-                    return EvaluateUserMethodBody(externalOverride, statement);
-                }
+                return EvaluateExternalOverride(sv, externalOverride, arguments);
             }
         }
 
@@ -1063,6 +1037,71 @@ public sealed partial class Evaluator
         var result = InvokeReflective(method, receiver, args, node);
         WriteBackRefSlots(refSlots, args);
         return result;
+    }
+
+    private StructValue CreateStructValue(StructSymbol structType) =>
+        new(structType, TryEvaluateExternalOverride);
+
+    private bool TryEvaluateExternalOverride(
+        StructValue receiver,
+        MethodInfo method,
+        object[] arguments,
+        out object result)
+    {
+        var externalOverride = FindExternalOverride(receiver.StructType, method);
+        if (externalOverride == null)
+        {
+            result = null;
+            return false;
+        }
+
+        result = EvaluateExternalOverride(receiver, externalOverride, arguments);
+        return true;
+    }
+
+    private object EvaluateExternalOverride(
+        StructValue receiver,
+        FunctionSymbol externalOverride,
+        object[] arguments)
+    {
+        var frame = new ConcurrentDictionary<VariableSymbol, object>
+        {
+            [externalOverride.ThisParameter] = receiver,
+        };
+
+        var parameterOffset = externalOverride.ExplicitReceiverParameter == null ? 0 : 1;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            frame[externalOverride.Parameters[i + parameterOffset]] = arguments[i];
+        }
+
+        using (PushFrame(frame))
+        {
+            var statement = program.Functions[externalOverride];
+            return EvaluateUserMethodBody(externalOverride, statement);
+        }
+    }
+
+    private static FunctionSymbol FindExternalOverride(StructSymbol type, MethodInfo externalMethod)
+    {
+        FunctionSymbol externalOverride = null;
+        for (; type != null && externalOverride == null; type = type.BaseClass)
+        {
+            externalOverride = type.Methods.FirstOrDefault(method =>
+                method.IsOverride && FindExternalOverrideRoot(method)?.Equals(externalMethod) == true);
+        }
+
+        return externalOverride;
+    }
+
+    private static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
+    {
+        while (method.OverriddenMethod != null)
+        {
+            method = method.OverriddenMethod;
+        }
+
+        return method.ExternalOverriddenMethod;
     }
 
     // Issue #814 / ADR-0084 §L5: when an open generic extension method is
