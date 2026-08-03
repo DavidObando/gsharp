@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.Loader;
 using System.Text.RegularExpressions;
 using GSharp.Compiler;
 using Xunit;
@@ -62,6 +63,118 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
                 (item Derived) -> { item.Value = {{expected}} })
             Console.WriteLine(value.Value)
             {{entryPointEnd}}
+            """;
+
+        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+    }
+
+    [Theory]
+    [InlineData("i2857arraytransitive", 1, 77)]
+    [InlineData("i2857arraydepth3", 3, 99)]
+    public void ExplicitGenericTypeArgument_WithDelegateArrayAcrossReference_Runs(
+        string packageName,
+        int inheritanceDepth,
+        int expected)
+    {
+        var baseType = packageName + ".Base";
+        var intermediateDeclarations = string.Join(
+            "\n",
+            Enumerable.Range(1, inheritanceDepth).Select(index =>
+                $"open class Middle{index} : {(index == 1 ? baseType : $"Middle{index - 1}")} {{}}"));
+        var library = $$"""
+            package {{packageName}}
+
+            open class Base {
+                var Value int32
+
+                shared {
+                    func Make[T Base init()](configure []((T) -> void)) T {
+                        let value = T()
+                        for apply in configure {
+                            apply(value)
+                        }
+                        return value
+                    }
+                }
+            }
+            """;
+        var consumer = $$"""
+            package {{packageName}}use
+            import System
+
+            {{intermediateDeclarations}}
+            class Derived : Middle{{inheritanceDepth}} {}
+
+            func Main() {
+                let value = {{baseType}}.Make[Derived](
+                    []((Derived) -> void){
+                        (item Derived) -> { item.Value = {{expected}} }
+                    })
+                Console.WriteLine(value.Value)
+            }
+            """;
+
+        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+    }
+
+    [Theory]
+    [InlineData("i2857arity0", 0, 22)]
+    [InlineData("i2857arity1", 1, 11)]
+    [InlineData("i2857arity2", 2, 33)]
+    [InlineData("i2857arity3", 3, 44)]
+    [InlineData("i2857arity4", 4, 55)]
+    public void ExplicitGenericTypeArgument_WithDelegateArityAcrossReference_Runs(
+        string packageName,
+        int arity,
+        int expected)
+    {
+        var delegateType = arity == 0
+            ? "(() -> T)"
+            : $"((T{string.Concat(Enumerable.Repeat(", int32", arity - 1))}) -> void)";
+        var invocation = arity == 0
+            ? "return callback()"
+            : $$"""
+                let value = T()
+                callback(value{{string.Concat(Enumerable.Repeat(", 0", arity - 1))}})
+                return value
+                """;
+        var lambda = arity == 0
+            ? $$"""
+                () -> {
+                    let value = Derived()
+                    value.Value = {{expected}}
+                    return value
+                }
+                """
+            : $$"""
+                (item Derived{{string.Concat(Enumerable.Range(1, arity - 1).Select(index => $", arg{index} int32"))}}) -> {
+                    item.Value = {{expected}}
+                }
+                """;
+        var library = $$"""
+            package {{packageName}}
+
+            open class Base {
+                var Value int32
+
+                shared {
+                    func Make[T Base init()](callback {{delegateType}}) T {
+                        {{invocation}}
+                    }
+                }
+            }
+            """;
+        var consumer = $$"""
+            package {{packageName}}use
+            import System
+
+            open class Middle : {{packageName}}.Base {}
+            class Derived : Middle {}
+
+            func Main() {
+                let value = {{packageName}}.Base.Make[Derived]({{lambda}})
+                Console.WriteLine(value.Value)
+            }
             """;
 
         Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
@@ -197,6 +310,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             nameof(Issue2857ExplicitGenericLambdaProjectReferenceEmitTests),
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
         try
         {
             var librarySourcePath = Path.Combine(directory, libraryAssemblyName + ".gs");
@@ -223,6 +337,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
                 consumerSourcePath,
             });
             IlVerifier.Verify(consumerPath, additionalReferences: new[] { libraryPath });
+            AssertLoads(libraryPath, consumerPath);
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -265,6 +380,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             nameof(Issue2857ExplicitGenericLambdaProjectReferenceEmitTests),
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(directory));
         try
         {
             var librarySourcePath = Path.Combine(directory, libraryAssemblyName + ".gs");
@@ -302,6 +418,26 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             catch
             {
             }
+        }
+    }
+
+    private static void AssertLoads(string libraryPath, string consumerPath)
+    {
+        var loadContext = new AssemblyLoadContext(
+            nameof(Issue2857ExplicitGenericLambdaProjectReferenceEmitTests)
+            + Guid.NewGuid().ToString("N"),
+            isCollectible: true);
+        try
+        {
+            var library = loadContext.LoadFromAssemblyPath(libraryPath);
+            loadContext.Resolving += (_, name) =>
+                name.Name == library.GetName().Name ? library : null;
+            Assert.NotEmpty(library.GetTypes());
+            Assert.NotEmpty(loadContext.LoadFromAssemblyPath(consumerPath).GetTypes());
+        }
+        finally
+        {
+            loadContext.Unload();
         }
     }
 

@@ -2323,7 +2323,10 @@ internal static class ClrOverloadResolution
                         closed = gmi.MakeGenericMethod(explicitTypeArgsArray);
                         if (gmi.GetParameters().Any(static p =>
                                 p.ParameterType.ContainsGenericParameters
-                                && ClrTypeUtilities.IsDelegateType(p.ParameterType)))
+                                && ClrTypeUtilities.IsDelegateType(
+                                    p.ParameterType.IsArray
+                                        ? p.ParameterType.GetElementType()
+                                        : p.ParameterType)))
                         {
                             var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, false) ?? default;
                             if (TryCloseOverUserReferenceTypePlaceholders(
