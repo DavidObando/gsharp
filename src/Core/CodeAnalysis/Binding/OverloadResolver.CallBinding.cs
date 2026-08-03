@@ -830,29 +830,65 @@ internal sealed partial class OverloadResolver
         // BoundFunctionPointerInvocationExpression.
         if (symbol is VariableSymbol fpVar && fpVar.Type is FunctionPointerTypeSymbol fpSym)
         {
-            if (!argumentNames.IsDefault)
-            {
-                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, fpVar.Name, FirstNamedArgumentName(argumentNames));
-                return new BoundErrorExpression(null);
-            }
-
             if (syntax.Arguments.Count != fpSym.Arity)
             {
                 Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, fpVar.Name, fpSym.Arity, syntax.Arguments.Count);
                 return new BoundErrorExpression(null);
             }
 
+            ExpressionSyntax[] fpParameterSyntax;
+            var fpArguments = boundArguments.ToImmutable();
+            if (!argumentNames.IsDefault)
+            {
+                if (fpVar.CallableParameterNames.IsDefaultOrEmpty ||
+                    fpVar.CallableParameterNames.Length != fpSym.Arity)
+                {
+                    Diagnostics.ReportNamedArgumentParameterNotFound(
+                        syntax.Identifier.Location,
+                        fpVar.Name,
+                        FirstNamedArgumentName(argumentNames));
+                    return new BoundErrorExpression(null);
+                }
+
+                if (!TryReorderUserCallArguments(
+                        syntax.Arguments,
+                        fpArguments,
+                        fpSym.Arity,
+                        p => fpVar.CallableParameterNames[p],
+                        fpVar.Name,
+                        out fpParameterSyntax,
+                        out fpArguments))
+                {
+                    return new BoundErrorExpression(null);
+                }
+            }
+            else
+            {
+                fpParameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+                for (var i = 0; i < syntax.Arguments.Count; i++)
+                {
+                    fpParameterSyntax[i] = syntax.Arguments[i];
+                }
+            }
+
             var fpConvertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(fpSym.Arity);
             for (var i = 0; i < fpSym.Arity; i++)
             {
-                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
-                fpConvertedArgs.Add(conversions.BindConversion(argLoc, boundArguments[i], fpSym.ParameterTypes[i]));
+                var argLoc = i < fpParameterSyntax.Length
+                    ? fpParameterSyntax[i]?.Location ?? syntax.Identifier.Location
+                    : syntax.Identifier.Location;
+                fpConvertedArgs.Add(conversions.BindConversion(argLoc, fpArguments[i], fpSym.ParameterTypes[i]));
             }
+
+            var finalArguments = PreserveNamedArgumentEvaluationOrder(
+                syntax.Arguments,
+                fpConvertedArgs.MoveToImmutable(),
+                p => fpVar.CallableParameterNames[p]);
 
             return new BoundFunctionPointerInvocationExpression(
                 null,
                 new BoundVariableExpression(null, fpVar),
-                fpConvertedArgs.MoveToImmutable(),
+                finalArguments,
                 fpSym);
         }
 
@@ -877,68 +913,23 @@ internal sealed partial class OverloadResolver
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
         if (symbol is VariableSymbol variable && (narrowedCallTargetType ?? variable.Type) is FunctionTypeSymbol fnType)
         {
-            // Issue #343: indirect calls through a function-typed variable have
-            // no preserved parameter names; named arguments are not allowed.
-            if (!argumentNames.IsDefault)
-            {
-                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
-                return new BoundErrorExpression(null);
-            }
-
-            // ADR-0102 follow-up / issue #818: a function-typed variable
-            // whose declared type spells a trailing variadic parameter
-            // (`(T1, ..., ...Tn) -> R`) packs / passes through the trailing
-            // arguments at the call site, mirroring the named-delegate path.
-            var fnIsVariadic = fnType.HasVariadic;
-            var fnFixedCount = fnIsVariadic ? fnType.Arity - 1 : fnType.Arity;
-
-            if (fnIsVariadic)
-            {
-                if (syntax.Arguments.Count < fnFixedCount)
-                {
-                    Diagnostics.ReportTooFewArgumentsForVariadic(syntax.Identifier.Location, variable.Name, fnFixedCount, syntax.Arguments.Count);
-                    return new BoundErrorExpression(null);
-                }
-            }
-            else if (syntax.Arguments.Count != fnType.Arity)
-            {
-                Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, variable.Name, fnType.Arity, syntax.Arguments.Count);
-                return new BoundErrorExpression(null);
-            }
-
-            ImmutableArray<BoundExpression> fnPermutedArgs = boundArguments.ToImmutable();
-            if (fnIsVariadic)
-            {
-                // Issue #1630: pack/pass-through through the canonical helper
-                // (applies #1493 element coercion when packing — this path
-                // used to pack raw, uncoerced elements).
-                var fnSliceType = (SliceTypeSymbol)fnType.ParameterTypes[fnType.Arity - 1];
-                var hasFnElementErrors = false;
-                fnPermutedArgs = PackOrPassThroughVariadicArguments(
-                    conversions,
-                    Diagnostics,
-                    syntax,
-                    fnPermutedArgs,
-                    fnFixedCount,
-                    fnSliceType,
+            if (!TryBindFunctionTypeArguments(
                     variable.Name,
-                    i => syntax.Arguments[i].Location,
-                    ref hasFnElementErrors);
-
-                if (hasFnElementErrors)
-                {
-                    return new BoundErrorExpression(null);
-                }
-            }
-
-            var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(fnPermutedArgs.Length);
-            for (var i = 0; i < fnPermutedArgs.Length; i++)
+                    fnType,
+                    syntax,
+                    boundArguments.ToImmutable(),
+                    variable.CallableParameterNames,
+                    out var convertedArgs))
             {
-                var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
-                convertedArgs.Add(conversions.BindConversion(argLoc, fnPermutedArgs[i], fnType.ParameterTypes[i]));
+                return new BoundErrorExpression(null);
             }
 
-            return BuildIndirectDelegateCall(syntax, variable, fnType, convertedArgs.MoveToImmutable(), narrowedCallTargetType);
+            return BuildIndirectDelegateCall(
+                syntax,
+                variable,
+                fnType,
+                convertedArgs,
+                narrowedCallTargetType);
         }
 
         // ADR-0059 / issue #255: direct call syntax `h(args)` on a variable
@@ -946,14 +937,6 @@ internal sealed partial class OverloadResolver
         // branch below — both end up dispatching through Invoke.
         if (symbol is VariableSymbol namedDelegateVar && (narrowedCallTargetType ?? namedDelegateVar.Type) is DelegateTypeSymbol namedDelegateSym)
         {
-            // Issue #343: named-delegate Invoke parameter names live on the
-            // delegate-type symbol; they are not surfaced to the call site.
-            if (!argumentNames.IsDefault)
-            {
-                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, namedDelegateVar.Name, FirstNamedArgumentName(argumentNames));
-                return new BoundErrorExpression(null);
-            }
-
             if (!TryBindNamedDelegateArguments(
                 namedDelegateVar.Name,
                 namedDelegateSym,
@@ -1169,11 +1152,14 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        // Issue #343: variadic functions and named arguments do not compose:
-        // there is no way to "name" the variadic slot at a call site.
-        if (isVariadic && !argumentNames.IsDefault)
+        if (isVariadic &&
+            !ValidateExpandedVariadicNamedArguments(
+                argumentNames,
+                fixedParamCount,
+                p => function.Parameters[p].Name,
+                function.Name,
+                syntax))
         {
-            Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, function.Name, FirstNamedArgumentName(argumentNames));
             return new BoundErrorExpression(null);
         }
 
@@ -1222,7 +1208,8 @@ internal sealed partial class OverloadResolver
         // BoundLiteralExpression here.
         ExpressionSyntax[] parameterSyntax;
         var hasOptional = function.Parameters.Length > 0 && requiredParamCount < function.Parameters.Length && !isVariadic;
-        if (!argumentNames.IsDefault || (hasOptional && syntax.Arguments.Count < function.Parameters.Length))
+        if ((!argumentNames.IsDefault && !isVariadic) ||
+            (hasOptional && syntax.Arguments.Count < function.Parameters.Length))
         {
             if (!TryReorderUserCallArguments(
                     syntax.Arguments,

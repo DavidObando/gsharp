@@ -1357,6 +1357,7 @@ internal sealed partial class StatementBinder
         variable.HasDefinitelyNonNullValue = isReadOnly
             && variableType is not NullableTypeSymbol
             && IsDefinitelyNonNullValue(convertedInitializer);
+        variable.CallableParameterNames = GetCallableParameterNames(convertedInitializer);
 
         // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
         // or infer function-local escape scope from the initializer (STE data-flow propagation).
@@ -1432,6 +1433,33 @@ internal sealed partial class StatementBinder
         }
 
         return new BoundVariableDeclaration(syntax, variable, convertedInitializer, constValue);
+    }
+
+    private static ImmutableArray<string> GetCallableParameterNames(BoundExpression initializer)
+    {
+        while (initializer is BoundConversionExpression conversion)
+        {
+            initializer = conversion.Expression;
+        }
+
+        ImmutableArray<ParameterSymbol> parameters = initializer switch
+        {
+            BoundFunctionLiteralExpression literal => literal.Function.Parameters,
+            BoundFunctionPointerFromMethodExpression pointer => pointer.Method.Parameters,
+            _ => default,
+        };
+        if (parameters.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var names = ImmutableArray.CreateBuilder<string>(parameters.Length);
+        foreach (ParameterSymbol parameter in parameters)
+        {
+            names.Add(parameter.Name);
+        }
+
+        return names.MoveToImmutable();
     }
 
     /// <summary>

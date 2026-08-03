@@ -187,6 +187,48 @@ public sealed class Issue3090AwaitInvocationArgumentTests
     }
 
     [Fact]
+    public void Mp4aNestedRecordStructNamedConstructor_RoundTripsWithoutNestedColon()
+    {
+        string printed = Translate("""
+            public sealed class Entry
+            {
+                public uint SamplesInFrame { get; }
+            }
+
+            public sealed class SttsBox
+            {
+                public readonly record struct SampleEntry
+                {
+                    public SampleEntry(uint sampleCount, uint sampleDelta)
+                    {
+                        FrameCount = sampleCount;
+                        FrameDelta = sampleDelta;
+                    }
+
+                    public uint FrameCount { get; }
+                    public uint FrameDelta { get; }
+                }
+            }
+
+            public static class Scenario
+            {
+                public static SttsBox.SampleEntry Create(Entry entry) =>
+                    new SttsBox.SampleEntry(
+                        sampleCount: 1,
+                        entry.SamplesInFrame);
+            }
+            """);
+
+        Assert.DoesNotContain("FrameCount: sampleCount:", printed, StringComparison.Ordinal);
+        Assert.Contains("FrameCount: 1", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "FrameDelta: entry.SamplesInFrame",
+            printed,
+            StringComparison.Ordinal);
+        AssertRoundTrip(printed);
+    }
+
+    [Fact]
     public async Task G10AsyncConsole_NativeAwaitArguments_VerifyAndPreserveParity()
     {
         string compiler = FindCompiler();

@@ -240,6 +240,101 @@ public class NamedArgumentEmitTests
         Assert.Equal("BA12", (string)traceField!.GetValue(null)!);
     }
 
+    [Fact]
+    public void UserStaticMethod_NamedArguments_BindAndEvaluate()
+    {
+        var source = """
+            package P
+
+            class Fixture {
+                shared {
+                    func Describe(name string, count int32, loud bool) string {
+                        return "$name:$count:$loud"
+                    }
+                }
+            }
+
+            public var result = Fixture.Describe(
+                name: "cat",
+                count: 2,
+                loud: false)
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("cat:2:False", (string)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void UserStaticVariadic_InPositionNamedThenPositional_BindsAndEvaluates()
+    {
+        var source = """
+            package P
+
+            class Encryptor {
+                shared {
+                    func Merge(additionalCapacity int32, values ...int32) int32 {
+                        return additionalCapacity + values.Length
+                    }
+                }
+            }
+
+            public var result = Encryptor.Merge(
+                additionalCapacity: 5,
+                10,
+                20,
+                30)
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal(8, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void DelegateAndFunctionValues_NamedArguments_BindAndEvaluate()
+    {
+        var source = """
+            package P
+
+            type Operation = delegate func(x int32, y int32) int32
+
+            func subtract(x int32, y int32) int32 {
+                return x - y
+            }
+
+            public var result = 0
+
+            let named Operation = subtract
+            let structural (int32, int32) -> int32 =
+                func(x int32, y int32) int32 {
+                    return x - y
+                }
+
+            result = named(y: 3, x: 10) * 10 +
+                structural(y: 3, x: 10)
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal(77, (int)resultField!.GetValue(null)!);
+    }
+
     private static Assembly CompileToAssembly(string source, string target)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_named_arg_emit_").FullName;

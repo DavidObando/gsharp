@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -2651,9 +2652,8 @@ internal static class OverloadResolution
     /// (e.g. <c>Bar&lt;T&gt;(params T[] items)</c>) by inferring <c>T</c> from
     /// the trailing arguments via the same unification used by
     /// <see cref="TryInferTypeArguments"/>. Honours named arguments that bind to
-    /// a leading fixed parameter (the params parameter itself is never nameable
-    /// from caller-side under G#'s positional-before-named layout); the leftover
-    /// positional surplus is packed into the synthesised array. Mirrors the
+    /// a fixed parameter in its natural source position; later positional
+    /// surplus is packed into the synthesised params array. Mirrors the
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
@@ -2777,68 +2777,33 @@ internal static class OverloadResolution
             return;
         }
 
-        // G#'s positional-before-named rule guarantees the layout
-        //   [positional_0 … positional_{P-1}, named_0 … named_{N-1}].
-        // The leading positionals fill slots 0..min(P, paramsIndex)-1; the
-        // surplus past the params slot (positionals at indices
-        // [paramsIndex..P-1]) is packed into the synthesised array; the named
-        // arguments fill the remaining fixed slots by parameter name. A named
-        // argument that targets the params parameter or a slot already filled
-        // positionally rejects the candidate.
-        var positionalCount = argTypes.Count;
         var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
-        if (hasNamed)
-        {
-            positionalCount = 0;
-            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
-            {
-                positionalCount++;
-            }
-
-            for (var i = positionalCount; i < argTypes.Count; i++)
-            {
-                if (argumentNames[i] == null)
-                {
-                    return;
-                }
-            }
-        }
-
-        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
-        var tailCount = positionalCount > paramsIndex ? positionalCount - paramsIndex : 0;
-
         var mapping = new int[argTypes.Count];
         var filled = new bool[parameters.Length];
-        for (var i = 0; i < fixedFilledByPositional; i++)
+        for (var i = 0; i < argTypes.Count; i++)
         {
-            mapping[i] = i;
-            filled[i] = true;
-        }
-
-        for (var i = fixedFilledByPositional; i < positionalCount; i++)
-        {
-            mapping[i] = paramsIndex;
-        }
-
-        if (tailCount > 0)
-        {
-            filled[paramsIndex] = true;
-        }
-
-        if (hasNamed)
-        {
-            for (var i = positionalCount; i < argTypes.Count; i++)
+            var name = hasNamed ? argumentNames[i] : null;
+            int paramIdx;
+            if (name == null)
             {
-                var name = argumentNames[i];
-                var paramIdx = FindParameterIndex(parameters, name);
-                if (paramIdx < 0 || paramIdx == paramsIndex || filled[paramIdx])
+                paramIdx = i < paramsIndex ? i : paramsIndex;
+            }
+            else
+            {
+                paramIdx = FindParameterIndex(parameters, name);
+                if (paramIdx < 0 || paramIdx == paramsIndex)
                 {
                     return;
                 }
-
-                mapping[i] = paramIdx;
-                filled[paramIdx] = true;
             }
+
+            if (paramIdx != paramsIndex && filled[paramIdx])
+            {
+                return;
+            }
+
+            mapping[i] = paramIdx;
+            filled[paramIdx] = true;
         }
 
         // Every non-params fixed slot left empty must be optional. The params
@@ -2858,7 +2823,7 @@ internal static class OverloadResolution
         {
             var slot = mapping[i];
             Type target;
-            if (slot == paramsIndex && i >= fixedFilledByPositional)
+            if (slot == paramsIndex)
             {
                 target = elementType;
             }
@@ -2928,68 +2893,39 @@ internal static class OverloadResolution
             return false;
         }
 
-        var positionalCount = argTypes.Count;
         var hasNamed = argumentNames != null && HasAnyNamedArgument(argumentNames);
-        if (hasNamed)
-        {
-            positionalCount = 0;
-            while (positionalCount < argTypes.Count && argumentNames[positionalCount] == null)
-            {
-                positionalCount++;
-            }
-        }
-
         var typeParams = openMethod.GetGenericArguments();
         var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
 
-        var fixedFilledByPositional = positionalCount < paramsIndex ? positionalCount : paramsIndex;
-
-        for (var i = 0; i < fixedFilledByPositional; i++)
+        for (var i = 0; i < argTypes.Count; i++)
         {
             if (argTypes[i] == null)
             {
                 continue;
             }
 
-            if (!UnifyForInference(parameters[i].ParameterType, argTypes[i], bounds))
+            var name = hasNamed ? argumentNames[i] : null;
+            Type targetType;
+            if (name == null)
             {
-                return false;
+                targetType = i < paramsIndex
+                    ? parameters[i].ParameterType
+                    : elementType;
             }
-        }
-
-        for (var i = fixedFilledByPositional; i < positionalCount; i++)
-        {
-            if (argTypes[i] == null)
+            else
             {
-                continue;
-            }
-
-            if (!UnifyForInference(elementType, argTypes[i], bounds))
-            {
-                return false;
-            }
-        }
-
-        if (hasNamed)
-        {
-            for (var i = positionalCount; i < argTypes.Count; i++)
-            {
-                var name = argumentNames[i];
                 var paramIdx = FindParameterIndex(parameters, name);
                 if (paramIdx < 0 || paramIdx == paramsIndex)
                 {
                     return false;
                 }
 
-                if (argTypes[i] == null)
-                {
-                    continue;
-                }
+                targetType = parameters[paramIdx].ParameterType;
+            }
 
-                if (!UnifyForInference(parameters[paramIdx].ParameterType, argTypes[i], bounds))
-                {
-                    return false;
-                }
+            if (!UnifyForInference(targetType, argTypes[i], bounds))
+            {
+                return false;
             }
         }
 
@@ -3048,33 +2984,18 @@ internal static class OverloadResolution
         var result = new int[argCount];
         var filled = new bool[parameters.Length];
 
-        // Positional arguments occupy parameter slots [0..positionalCount).
-        var positionalCount = 0;
+        // Positional arguments bind to their source index. Named arguments bind
+        // by parameter name; a later positional is legal only when that natural
+        // slot remains unfilled (C# 7.2 named-then-positional rule).
         for (var i = 0; i < argCount; i++)
         {
-            if (argumentNames[i] != null)
-            {
-                break;
-            }
-
-            result[i] = i;
-            filled[i] = true;
-            positionalCount++;
-        }
-
-        // Each named argument fills the slot whose parameter name matches.
-        // Reject duplicates or slots already filled by positional args.
-        for (var i = positionalCount; i < argCount; i++)
-        {
             var name = argumentNames[i];
-            if (name == null)
-            {
-                // Should not happen: pre-validation forbids positional after named.
-                return false;
-            }
-
-            var paramIndex = FindParameterIndex(parameters, name);
-            if (paramIndex < 0 || filled[paramIndex])
+            var paramIndex = name == null
+                ? i
+                : FindParameterIndex(parameters, name);
+            if (paramIndex < 0 ||
+                paramIndex >= parameters.Length ||
+                filled[paramIndex])
             {
                 return false;
             }
@@ -3096,6 +3017,13 @@ internal static class OverloadResolution
         return true;
     }
 
+    private static bool ParameterNameMatches(
+        string parameterName,
+        string argumentName) =>
+        string.Equals(parameterName, argumentName, StringComparison.Ordinal) ||
+        (SyntaxFacts.GetKeywordKind(parameterName) != SyntaxKind.IdentifierToken &&
+            string.Equals(parameterName + "_", argumentName, StringComparison.Ordinal));
+
     /// <summary>
     /// Issue #343: returns the index of the parameter whose name matches
     /// <paramref name="name"/> (ordinal comparison), or -1 when no parameter
@@ -3105,7 +3033,7 @@ internal static class OverloadResolution
     {
         for (var i = 0; i < parameters.Length; i++)
         {
-            if (string.Equals(parameters[i].Name, name, StringComparison.Ordinal))
+            if (ParameterNameMatches(parameters[i].Name, name))
             {
                 return i;
             }

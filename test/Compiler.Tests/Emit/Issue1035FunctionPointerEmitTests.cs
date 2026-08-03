@@ -58,6 +58,29 @@ public class Issue1035FunctionPointerEmitTests
     }
 
     [Fact]
+    public void FunctionPointer_NamedArguments_UseTargetMethodParameterNames()
+    {
+        const string source = """
+            package Probe
+            import System
+
+            unsafe func subtract(x int32, y int32) int32 {
+                return x - y
+            }
+
+            unsafe func run() {
+                let fp *func(int32, int32) int32 = &subtract
+                Console.WriteLine(fp(y: 3, x: 10))
+            }
+
+            run()
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("7\n", output);
+    }
+
+    [Fact]
     public void FunctionPointer_PassAsParameter_CompilesAndRuns()
     {
         const string source = """

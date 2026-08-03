@@ -1363,7 +1363,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } &&
                 arguments.Count == 1)
             {
-                return arguments[0];
+                return UnwrapNamedArgument(arguments[0]);
             }
 
             return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
@@ -1591,12 +1591,76 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            IReadOnlyList<GExpression> loweredArguments =
+                this.NormalizeLoweredConstructorArguments(
+                    creationNode,
+                    ctorSymbol,
+                    arguments);
             return this.TryInstantiateStructConstructorPlan(
                 plan,
-                arguments,
+                loweredArguments,
                 out fieldInitializers,
                 out unsupportedReason);
         }
+
+        private IReadOnlyList<GExpression> NormalizeLoweredConstructorArguments(
+            BaseObjectCreationExpressionSyntax creationNode,
+            IMethodSymbol constructor,
+            IReadOnlyList<GExpression> arguments)
+        {
+            SeparatedSyntaxList<ArgumentSyntax> syntaxArguments = creationNode switch
+            {
+                ObjectCreationExpressionSyntax explicitCreation =>
+                    explicitCreation.ArgumentList?.Arguments ?? default,
+                ImplicitObjectCreationExpressionSyntax implicitCreation =>
+                    implicitCreation.ArgumentList?.Arguments ?? default,
+                _ => default,
+            };
+            if (syntaxArguments.Count != arguments.Count ||
+                constructor.Parameters.Length < arguments.Count)
+            {
+                return arguments.Select(UnwrapNamedArgument).ToList();
+            }
+
+            var ordered = new GExpression[constructor.Parameters.Length];
+            for (var sourceIndex = 0; sourceIndex < syntaxArguments.Count; sourceIndex++)
+            {
+                if (this.context.SemanticModel.GetOperation(syntaxArguments[sourceIndex])
+                    is not IArgumentOperation { Parameter: { } parameter })
+                {
+                    return arguments.Select(UnwrapNamedArgument).ToList();
+                }
+
+                ordered[parameter.Ordinal] = UnwrapNamedArgument(arguments[sourceIndex]);
+            }
+
+            for (var ordinal = 0; ordinal < ordered.Length; ordinal++)
+            {
+                if (ordered[ordinal] != null)
+                {
+                    continue;
+                }
+
+                IParameterSymbol parameter = constructor.Parameters[ordinal];
+                GTypeReference parameterType = this.typeMapper.Map(
+                    parameter.Type,
+                    this.context,
+                    creationNode.GetLocation());
+                ordered[ordinal] = this.BuildOptionalParameterDefault(
+                    parameter,
+                    parameterType,
+                    creationNode);
+                if (ordered[ordinal] == null)
+                {
+                    return arguments.Select(UnwrapNamedArgument).ToList();
+                }
+            }
+
+            return ordered;
+        }
+
+        private static GExpression UnwrapNamedArgument(GExpression argument) =>
+            argument is NamedArgumentExpression named ? named.Value : argument;
 
         /// <summary>
         /// Builds the canonical G# construction expression for a C# <c>new</c>:

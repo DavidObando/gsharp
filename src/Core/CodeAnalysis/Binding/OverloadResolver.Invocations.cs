@@ -222,13 +222,6 @@ internal sealed partial class OverloadResolver
         }
         else
         {
-            if (!argumentNames.IsDefault)
-            {
-                Diagnostics.ReportNamedArgumentParameterNotFound(syntax.Identifier.Location, variable.Name, FirstNamedArgumentName(argumentNames));
-                result = new BoundErrorExpression(null);
-                return true;
-            }
-
             if (nullable.UnderlyingType is DelegateTypeSymbol namedDelegate)
             {
                 if (!TryBindNamedDelegateArguments(variable.Name, namedDelegate, syntax, boundArguments, out var namedArgs, out var namedRefKinds))
@@ -239,7 +232,13 @@ internal sealed partial class OverloadResolver
 
                 whenNotNull = new BoundIndirectCallExpression(null, captureRef, functionType, namedArgs, namedRefKinds);
             }
-            else if (!TryBindFunctionTypeArguments(variable.Name, functionType, syntax, boundArguments, out var convertedArgs))
+            else if (!TryBindFunctionTypeArguments(
+                variable.Name,
+                functionType,
+                syntax,
+                boundArguments,
+                variable.CallableParameterNames,
+                out var convertedArgs))
             {
                 result = new BoundErrorExpression(null);
                 return true;
@@ -284,11 +283,35 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
+    private static ImmutableArray<string> GetIndirectCallableParameterNames(
+        BoundExpression callee)
+    {
+        if (callee is BoundVariableExpression variable)
+        {
+            return variable.Variable.CallableParameterNames;
+        }
+
+        if (callee is BoundFunctionLiteralExpression literal)
+        {
+            var names = ImmutableArray.CreateBuilder<string>(
+                literal.Function.Parameters.Length);
+            foreach (ParameterSymbol parameter in literal.Function.Parameters)
+            {
+                names.Add(parameter.Name);
+            }
+
+            return names.MoveToImmutable();
+        }
+
+        return default;
+    }
+
     private bool TryBindFunctionTypeArguments(
         string calleeName,
         FunctionTypeSymbol functionType,
         CallExpressionSyntax syntax,
         ImmutableArray<BoundExpression> boundArguments,
+        ImmutableArray<string> parameterNames,
         out ImmutableArray<BoundExpression> convertedArgs)
     {
         convertedArgs = default;
@@ -309,7 +332,63 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
+        ExpressionSyntax[] parameterSyntax;
         var permutedArgs = boundArguments;
+        bool hasNamedArguments =
+            syntax.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
+        if (hasNamedArguments)
+        {
+            if (parameterNames.IsDefaultOrEmpty || parameterNames.Length != functionType.Arity)
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(
+                    syntax.Identifier.Location,
+                    calleeName,
+                    FirstNamedArgumentName(
+                        syntax.Arguments
+                            .Select(argument => (argument as NamedArgumentExpressionSyntax)?.NameToken.Text)
+                            .ToImmutableArray()));
+                return false;
+            }
+
+            if (isVariadic)
+            {
+                if (!TryAnalyzeCallArgumentLayout(
+                        syntax.Arguments,
+                        out _,
+                        out var argumentNames) ||
+                    !ValidateExpandedVariadicNamedArguments(
+                        argumentNames,
+                        fixedCount,
+                        p => parameterNames[p],
+                        calleeName,
+                        syntax))
+                {
+                    return false;
+                }
+
+                parameterSyntax = syntax.Arguments.ToArray();
+            }
+            else if (!TryReorderUserCallArguments(
+                         syntax.Arguments,
+                         boundArguments,
+                         functionType.Arity,
+                         p => parameterNames[p],
+                         calleeName,
+                         out parameterSyntax,
+                         out permutedArgs))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
         if (isVariadic)
         {
             // Issue #1630: pack/pass-through through the canonical helper
@@ -336,9 +415,13 @@ internal sealed partial class OverloadResolver
         var convertedBuilder = ImmutableArray.CreateBuilder<BoundExpression>(permutedArgs.Length);
         for (var i = 0; i < permutedArgs.Length; i++)
         {
-            var argLoc = i < syntax.Arguments.Count ? syntax.Arguments[i].Location : syntax.Identifier.Location;
+            var argLoc = i < parameterSyntax.Length
+                ? parameterSyntax[i]?.Location ?? syntax.Identifier.Location
+                : syntax.Identifier.Location;
             var argument = permutedArgs[i];
-            var argSyntax = i < syntax.Arguments.Count ? UnwrapNamedArgumentValue(syntax.Arguments[i]) : null;
+            var argSyntax = i < parameterSyntax.Length
+                ? UnwrapNamedArgumentValue(parameterSyntax[i])
+                : null;
             if (argSyntax != null
                 && bindLambdaWithTarget != null
                 && IsUntypedArrowLambda(argSyntax)
@@ -350,7 +433,10 @@ internal sealed partial class OverloadResolver
             convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]));
         }
 
-        convertedArgs = convertedBuilder.MoveToImmutable();
+        convertedArgs = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            convertedBuilder.MoveToImmutable(),
+            p => parameterNames[p]);
         return true;
     }
 
@@ -391,7 +477,59 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        if (!TryAnalyzeCallArgumentLayout(
+                syntax.Arguments,
+                out _,
+                out var argumentNames))
+        {
+            return false;
+        }
+
+        ExpressionSyntax[] parameterSyntax;
         var arguments = boundArguments;
+        if (!argumentNames.IsDefault && !isVariadic)
+        {
+            if (!TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments,
+                    parameters.Length,
+                    p => parameters[p].Name,
+                    p => parameters[p].HasExplicitDefaultValue,
+                    calleeName,
+                    out parameterSyntax,
+                    out arguments))
+            {
+                return false;
+            }
+
+            var filled = arguments.ToBuilder();
+            for (var i = 0; i < filled.Count; i++)
+            {
+                filled[i] ??= CreateOptionalUserDefaultArgument(parameters[i]);
+            }
+
+            arguments = filled.MoveToImmutable();
+        }
+        else
+        {
+            if (isVariadic &&
+                !ValidateExpandedVariadicNamedArguments(
+                    argumentNames,
+                    fixedCount,
+                    p => parameters[p].Name,
+                    calleeName,
+                    syntax))
+            {
+                return false;
+            }
+
+            parameterSyntax = new ExpressionSyntax[syntax.Arguments.Count];
+            for (var i = 0; i < syntax.Arguments.Count; i++)
+            {
+                parameterSyntax[i] = syntax.Arguments[i];
+            }
+        }
+
         if (isVariadic)
         {
             var variadicParameter = parameters[parameters.Length - 1];
@@ -434,7 +572,9 @@ internal sealed partial class OverloadResolver
             hasRefKinds |= parameter.RefKind != RefKind.None;
 
             var argument = arguments[i];
-            var argumentSyntax = i < syntax.Arguments.Count ? UnwrapNamedArgumentValue(syntax.Arguments[i]) : null;
+            var argumentSyntax = i < parameterSyntax.Length
+                ? UnwrapNamedArgumentValue(parameterSyntax[i])
+                : null;
             var argumentLocation = argumentSyntax?.Location ?? syntax.Identifier.Location;
             if (parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax)
             {
@@ -519,7 +659,10 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        convertedArgs = converted.MoveToImmutable();
+        convertedArgs = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            converted.MoveToImmutable(),
+            p => parameters[p].Name);
         argumentRefKinds = hasRefKinds ? refKinds.MoveToImmutable() : default;
         return true;
     }
@@ -737,15 +880,8 @@ internal sealed partial class OverloadResolver
                     invocation,
                     invocation.Type);
 
-        // Named args have no meaning without preserved parameter names.
         if (!TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
         {
-            return new BoundErrorExpression(null);
-        }
-
-        if (!argumentNames.IsDefault)
-        {
-            Diagnostics.ReportNamedArgumentParameterNotFound(calleeLocation, calleeName, FirstNamedArgumentName(argumentNames));
             return new BoundErrorExpression(null);
         }
 
@@ -789,7 +925,13 @@ internal sealed partial class OverloadResolver
 
         if (callee.Type is FunctionTypeSymbol fnType)
         {
-            if (!TryBindFunctionTypeArguments(calleeName, fnType, syntax, boundArguments.ToImmutable(), out var convertedArgs))
+            if (!TryBindFunctionTypeArguments(
+                calleeName,
+                fnType,
+                syntax,
+                boundArguments.ToImmutable(),
+                GetIndirectCallableParameterNames(callee),
+                out var convertedArgs))
             {
                 return new BoundErrorExpression(null);
             }
@@ -878,12 +1020,22 @@ internal sealed partial class OverloadResolver
                     arguments,
                     userParamCount,
                     p => extension.Parameters[p + 1].Name,
+                    p => extension.Parameters[p + 1].HasExplicitDefaultValue,
                     extension.Name,
                     out permutedSyntax,
                     out permutedArguments))
             {
                 return new BoundErrorExpression(null);
             }
+
+            var filledArguments = permutedArguments.ToBuilder();
+            for (var i = 0; i < filledArguments.Count; i++)
+            {
+                filledArguments[i] ??= CreateOptionalUserDefaultArgument(
+                    extension.Parameters[i + 1]);
+            }
+
+            permutedArguments = filledArguments.MoveToImmutable();
         }
         else
         {
@@ -1112,10 +1264,14 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        // Issue #343: variadic functions and named arguments do not compose.
-        if (isVariadic && !argumentNames.IsDefault)
+        if (isVariadic &&
+            !ValidateExpandedVariadicNamedArguments(
+                argumentNames,
+                fixedCallableParamCount,
+                p => method.Parameters[p + parameterOffset].Name,
+                method.Name,
+                ce))
         {
-            Diagnostics.ReportNamedArgumentParameterNotFound(ce.Identifier.Location, method.Name, FirstNamedArgumentName(argumentNames));
             return new BoundErrorExpression(null);
         }
 
@@ -1139,19 +1295,29 @@ internal sealed partial class OverloadResolver
         // parameter's captured default value after the reorder below.
         ExpressionSyntax[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
-        if (!argumentNames.IsDefault)
+        if (!argumentNames.IsDefault && !isVariadic)
         {
             if (!TryReorderUserCallArguments(
                     ce.Arguments,
                     arguments,
                     callableParameterCount,
                     p => method.Parameters[p + parameterOffset].Name,
+                    p => method.Parameters[p + parameterOffset].HasExplicitDefaultValue,
                     method.Name,
                     out permutedSyntax,
                     out permutedArguments))
             {
                 return new BoundErrorExpression(null);
             }
+
+            var filledArguments = permutedArguments.ToBuilder();
+            for (var i = 0; i < filledArguments.Count; i++)
+            {
+                filledArguments[i] ??= CreateOptionalUserDefaultArgument(
+                    method.Parameters[i + parameterOffset]);
+            }
+
+            permutedArguments = filledArguments.MoveToImmutable();
         }
         else
         {
