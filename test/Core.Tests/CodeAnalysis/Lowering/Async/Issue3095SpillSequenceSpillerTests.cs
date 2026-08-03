@@ -12,7 +12,7 @@ using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Async;
 
-/// <summary>Verifies that await spilling preserves imported-call emission metadata.</summary>
+/// <summary>Verifies that await spilling preserves call-site emission metadata.</summary>
 public sealed class Issue3095SpillSequenceSpillerTests
 {
     [Fact]
@@ -45,7 +45,7 @@ public sealed class Issue3095SpillSequenceSpillerTests
         var rewritten = RewriteInitializer(call);
 
         var rewrittenCall = Assert.IsType<BoundImportedCallExpression>(rewritten);
-        Assert.Equal(typeArguments, rewrittenCall.TypeArgumentSymbols);
+        AssertImmutableArrayEqual(typeArguments, rewrittenCall.TypeArgumentSymbols);
         Assert.Same(staticContainerType, rewrittenCall.StaticContainerType);
     }
 
@@ -86,10 +86,63 @@ public sealed class Issue3095SpillSequenceSpillerTests
         var rewritten = RewriteInitializer(call);
 
         var rewrittenCall = Assert.IsType<BoundImportedInstanceCallExpression>(rewritten);
-        Assert.Equal(typeArguments, rewrittenCall.TypeArgumentSymbols);
+        AssertImmutableArrayEqual(typeArguments, rewrittenCall.TypeArgumentSymbols);
         Assert.Same(constrainedReceiver, rewrittenCall.ConstrainedReceiverTypeParameter);
         Assert.Same(constrainedInterface, rewrittenCall.ConstrainedInterfaceType);
         Assert.True(rewrittenCall.IsNonVirtualBaseCall);
+    }
+
+    [Fact]
+    public void UserInstanceCall_PreservesGenericAndDispatchMetadata()
+    {
+        var methodTypeParameter = new TypeParameterSymbol(
+            "TMethod",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var method = new FunctionSymbol(
+            "Convert",
+            ImmutableArray.Create(new ParameterSymbol("value", TypeSymbol.Int32)),
+            TypeSymbol.String,
+            declaration: null,
+            package: null,
+            Accessibility.Public,
+            receiverType: TypeSymbol.Object)
+        {
+            TypeParameters = ImmutableArray.Create(methodTypeParameter),
+        };
+        var methodTypeArguments = ImmutableArray.Create<TypeSymbol>(TypeSymbol.String);
+        var constrainedReceiver = new TypeParameterSymbol(
+            "TReceiver",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var constrainedInterface = TypeSymbol.Object;
+        var receiver = new BoundVariableExpression(
+            null,
+            new LocalVariableSymbol("receiver", isReadOnly: true, TypeSymbol.Object));
+        var call = new BoundUserInstanceCallExpression(
+            null,
+            receiver,
+            method,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundAwaitExpression(
+                    null,
+                    new BoundLiteralExpression(null, 0),
+                    TypeSymbol.Int32)),
+            TypeSymbol.String,
+            constrainedReceiver,
+            constrainedInterface)
+        {
+            MethodTypeArguments = methodTypeArguments,
+        };
+
+        var rewritten = RewriteInitializer(call);
+
+        var rewrittenCall = Assert.IsType<BoundUserInstanceCallExpression>(rewritten);
+        AssertImmutableArrayEqual(methodTypeArguments, rewrittenCall.MethodTypeArguments);
+        Assert.Same(constrainedReceiver, rewrittenCall.ConstrainedReceiverTypeParameter);
+        Assert.Same(constrainedInterface, rewrittenCall.ConstrainedInterfaceType);
     }
 
     private static BoundExpression RewriteInitializer(BoundExpression initializer)
@@ -103,5 +156,14 @@ public sealed class Issue3095SpillSequenceSpillerTests
         var rewritten = SpillSequenceSpiller.Rewrite(body);
 
         return Assert.IsType<BoundVariableDeclaration>(rewritten.Statements[^1]).Initializer;
+    }
+
+    private static void AssertImmutableArrayEqual<T>(ImmutableArray<T> expected, ImmutableArray<T> actual)
+    {
+        Assert.Equal(expected.IsDefault, actual.IsDefault);
+        if (!expected.IsDefault)
+        {
+            Assert.Equal(expected.ToArray(), actual.ToArray());
+        }
     }
 }

@@ -77,6 +77,30 @@ public class Issue1635DeferCaptureMetadataEmitTests
         Assert.Equal("body\n1\n2\n3\n", output);
     }
 
+    [Fact]
+    public void Defer_OnUserGenericInstanceCall_PreservesMethodTypeArguments()
+    {
+        var source = """
+            package p
+            import System
+
+            class Marker1635 {
+                func Mark[T](value int32) {
+                    Console.WriteLine(value)
+                }
+            }
+
+            {
+                let marker = Marker1635()
+                defer marker.Mark[string](7)
+                Console.WriteLine("body")
+            }
+            """;
+
+        var output = CompileVerifyAndRun(source);
+        Assert.Equal("body\n7\n", output);
+    }
+
     private static string CompileVerifyAndRun(string source)
     {
         var workDir = Path.Combine(AppContext.BaseDirectory, "issue1635_defer_" + Guid.NewGuid().ToString("N"));

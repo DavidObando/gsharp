@@ -567,7 +567,10 @@ internal sealed partial class StatementBinder
                     CaptureArguments(call.Arguments, prefix),
                     call.Type,
                     call.ConstrainedReceiverTypeParameter,
-                    call.ConstrainedInterfaceType);
+                    call.ConstrainedInterfaceType)
+                {
+                    MethodTypeArguments = call.MethodTypeArguments,
+                };
             case BoundImportedCallExpression call:
                 return new BoundImportedCallExpression(
                     null,

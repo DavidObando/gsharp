@@ -1080,7 +1080,17 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundUserInstanceCallExpression(null, receiver, call.Method, args, call.Type);
+            var value = new BoundUserInstanceCallExpression(
+                null,
+                receiver,
+                call.Method,
+                args,
+                call.Type,
+                call.ConstrainedReceiverTypeParameter,
+                call.ConstrainedInterfaceType)
+            {
+                MethodTypeArguments = call.MethodTypeArguments,
+            };
             return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 

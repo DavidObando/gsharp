@@ -9,7 +9,7 @@ using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
 
-/// <summary>Runtime and ILVerify coverage for issue #3095.</summary>
+/// <summary>Runtime and ILVerify coverage for async call metadata preservation.</summary>
 public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
 {
     [Fact]
@@ -132,6 +132,109 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             """;
 
         Assert.Equal("2\n1\n2\n", CompileVerifyAndRun(source));
+    }
+
+    [Fact]
+    public void UserInstanceCalls_WithoutAwait_RunAndVerify()
+    {
+        const string source = """
+            package Issue3095.UserInstanceControls
+
+            import System
+
+            interface ICmp3095Control[T] {
+                func CompareTo(other T) int32;
+            }
+
+            struct Score3095Control : ICmp3095Control[Score3095Control] {
+                var Value int32
+
+                func CompareTo(other Score3095Control) int32 {
+                    return Value - other.Value
+                }
+            }
+
+            class Marker3095Control {
+                func Mark[T](value int32) string {
+                    return "mark:" + value.ToString()
+                }
+            }
+
+            func CompareDirect[T ICmp3095Control[T]](left T, right T) int32 {
+                return left.CompareTo(right)
+            }
+
+            let left = Score3095Control{Value: 9}
+            let right = Score3095Control{Value: 4}
+            Console.WriteLine(CompareDirect[Score3095Control](left, right))
+            Console.WriteLine(Marker3095Control().Mark[string](3))
+            """;
+
+        Assert.Equal("5\nmark:3\n", CompileVerifyAndRun(source));
+    }
+
+    [Fact]
+    public void AwaitedConstrainedUserInstanceCall_PreservesDispatchMetadata()
+    {
+        const string source = """
+            package Issue3095.AwaitedConstrainedUserInstance
+
+            import System
+            import System.Threading.Tasks
+
+            interface ICmp3095Await[T] {
+                func CompareTo(other T) int32;
+            }
+
+            struct Score3095Await : ICmp3095Await[Score3095Await] {
+                var Value int32
+
+                func CompareTo(other Score3095Await) int32 {
+                    return Value - other.Value
+                }
+            }
+
+            async func CompareAwaited[T ICmp3095Await[T]](left T, right Task[T]) int32 {
+                return left.CompareTo(await right)
+            }
+
+            let left = Score3095Await{Value: 9}
+            let right = Score3095Await{Value: 4}
+            let result = CompareAwaited[Score3095Await](
+                left,
+                Task.FromResult[Score3095Await](right)).GetAwaiter().GetResult()
+            Console.WriteLine(result)
+            """;
+
+        Assert.Equal("5\n", CompileVerifyAndRun(source));
+    }
+
+    [Fact]
+    public void AwaitedGenericUserInstanceCall_PreservesMethodTypeArguments()
+    {
+        const string source = """
+            package Issue3095.AwaitedGenericUserInstance
+
+            import System
+            import System.Threading.Tasks
+
+            class Marker3095Await {
+                func Mark[T](value int32) string {
+                    return "mark:" + value.ToString()
+                }
+            }
+
+            async func MarkAwaited(marker Marker3095Await, value Task[int32]) string {
+                return marker.Mark[string](await value)
+            }
+
+            let result = MarkAwaited(
+                Marker3095Await(),
+                Task.FromResult[int32](7)).GetAwaiter().GetResult()
+            Console.WriteLine(result)
+            """;
+
+        Assert.Equal("mark:7\n", CompileVerifyAndRun(source));
     }
 
     private static string CompileVerifyAndRun(string source)
