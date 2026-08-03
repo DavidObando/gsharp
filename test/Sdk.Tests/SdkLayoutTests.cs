@@ -106,6 +106,7 @@ public class SdkLayoutTests
         Assert.Equal("@(_GsharpCoreCompileResource)", attrs["Resources"]);
         Assert.Equal("$(OutputType)", attrs["OutputType"]);
         Assert.Equal("$(TargetFramework)", attrs["TargetFramework"]);
+        Assert.Equal("$(Optimize)", attrs["Optimization"]);
         Assert.Equal("$(SkipCompilerExecution)", attrs["SkipCompilerExecution"]);
         Assert.Equal("$(ProvideCommandLineArgs)", attrs["ProvideCommandLineArgs"]);
         Assert.Contains(

@@ -46,8 +46,35 @@ public class BuildTaskDesignTimeTests
         var arguments = task.CommandLineArgs.Select(item => item.ItemSpec).ToArray();
         Assert.Contains("/target:library", arguments);
         Assert.Contains("/targetframework:net10.0", arguments);
+        Assert.Contains("/optimize+", arguments);
         Assert.Contains("/r:Reference.dll", arguments);
         Assert.Contains("Program.gs", arguments);
+    }
+
+    [Theory]
+    [InlineData("true", "/optimize+")]
+    [InlineData("false", "/optimize-")]
+    public void Optimization_ForwardsCompilerFlag(string optimization, string expectedArgument)
+    {
+        var task = new BuildTask
+        {
+            GsharpCompilerFullPath = "missing-gsc.dll",
+            OutputPath = ".",
+            OutputName = "Issue2920",
+            TempOutputPath = ".",
+            TargetFramework = "net10.0",
+            BasePath = ".",
+            OutputType = "Library",
+            Optimization = optimization,
+            Compile = new[] { new TaskItem("Program.gs") },
+            References = Array.Empty<TaskItem>(),
+            ResponseFilePath = "issue2920.rsp",
+            SkipCompilerExecution = "true",
+            ProvideCommandLineArgs = "true",
+        };
+
+        Assert.True(task.Execute());
+        Assert.Contains(task.CommandLineArgs, item => item.ItemSpec == expectedArgument);
     }
 
     [Fact]

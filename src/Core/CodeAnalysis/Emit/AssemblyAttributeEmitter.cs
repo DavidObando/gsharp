@@ -43,8 +43,8 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <item><c>EmitGSharpTypeSemantics</c> — the
 /// <c>AssemblyMetadataAttribute</c> type-semantics payload consumed by
 /// <see cref="ImportedAssemblySemantics"/>.</item>
-/// <item><c>EmitDebuggableAttribute</c> — <c>DebuggableAttribute(true, true)</c>
-/// when debug information is present.</item>
+/// <item><c>EmitDebuggableAttribute</c> — stamps optimized or non-optimized
+/// CLR debugging flags independently from PDB presence.</item>
 /// <item><c>EmitNullableContextAttribute</c> — assembly-level
 /// <c>NullableContextAttribute(1)</c>.</item>
 /// </list>
@@ -322,23 +322,23 @@ internal sealed class AssemblyAttributeEmitter
     }
 
     /// <summary>
-    /// Emits <c>System.Diagnostics.DebuggableAttribute(true, true)</c> when
-    /// debug information is present so managed debuggers treat the assembly as
-    /// JIT-tracked and non-optimized.
+    /// Emits the CLR debugging flags for an optimized or non-optimized runtime
+    /// assembly.
     /// </summary>
-    public void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle)
+    public void EmitDebuggableAttribute(AssemblyDefinitionHandle assemblyHandle, bool optimize)
     {
         var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggableAttribute", requireExternalVisibility: false, out var resolved)
             ? resolved
             : typeof(System.Diagnostics.DebuggableAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
+        var modesType = attrType.GetNestedType("DebuggingModes");
+        var modesTypeRef = this.getTypeReference(modesType);
 
         var ctorSig = new BlobBuilder();
         new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
-            .Parameters(2, r => r.Void(), p =>
+            .Parameters(1, r => r.Void(), p =>
             {
-                p.AddParameter().Type().Boolean();
-                p.AddParameter().Type().Boolean();
+                p.AddParameter().Type().Type(modesTypeRef, isValueType: true);
             });
 
         var ctorRef = this.emitCtx.Metadata.AddMemberReference(
@@ -348,8 +348,11 @@ internal sealed class AssemblyAttributeEmitter
 
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001); // Prolog
-        valueBlob.WriteBoolean(true);  // isJITTrackingEnabled
-        valueBlob.WriteBoolean(true);  // isJITOptimizerDisabled
+        var flags = optimize
+            ? System.Diagnostics.DebuggableAttribute.DebuggingModes.IgnoreSymbolStoreSequencePoints
+            : System.Diagnostics.DebuggableAttribute.DebuggingModes.Default
+                | System.Diagnostics.DebuggableAttribute.DebuggingModes.DisableOptimizations;
+        valueBlob.WriteInt32((int)flags);
         valueBlob.WriteUInt16(0);      // NumNamed
 
         this.emitCtx.Metadata.AddCustomAttribute(

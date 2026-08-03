@@ -790,6 +790,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <c>TargetFrameworkAttribute</c>.
     /// </param>
     /// <param name="embeddedResources">Managed resources to embed in runtime assemblies.</param>
+    /// <param name="optimize">Whether the emitted runtime assembly allows JIT optimization.</param>
     public static void Emit(
         BoundProgram program,
         Stream peStream,
@@ -803,11 +804,13 @@ internal sealed class ReflectionMetadataEmitter
         Stream pdbStream = null,
         string assemblyVersion = null,
         string targetFrameworkMoniker = null,
-        IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
+        IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null,
+        bool optimize = true)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly, embeddedResources);
         emitter.emitCtx.AssemblyVersionOverride = assemblyVersion;
         emitter.emitCtx.TargetFrameworkMoniker = targetFrameworkMoniker;
+        emitter.emitCtx.Optimize = optimize;
 
         emitter.emitCtx.DebugInformation = debugInformation ?? new DebugInformationOptions();
         emitter.emitCtx.PdbStream = pdbStream;
@@ -3902,9 +3905,9 @@ internal sealed class ReflectionMetadataEmitter
 
         // Phase 7.7b: emit cross-language interop attributes for NuGet consumability.
         this.assemblyAttrs.EmitAssemblyInteropAttributes(assemblyHandle);
-        if (!this.emitCtx.MetadataOnly && this.emitCtx.Pdb != null)
+        if (!this.emitCtx.MetadataOnly && (this.emitCtx.Pdb != null || !this.emitCtx.Optimize))
         {
-            this.assemblyAttrs.EmitDebuggableAttribute(assemblyHandle);
+            this.assemblyAttrs.EmitDebuggableAttribute(assemblyHandle, this.emitCtx.Optimize);
         }
 
         return mvidFixup;

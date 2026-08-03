@@ -157,6 +157,8 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             args.Add($"/targetframework:{this.TargetFramework}");
         }
 
+        args.Add(ParseBool(this.Optimization) ? "/optimize+" : "/optimize-");
+
         if (!string.IsNullOrEmpty(this.DebugType))
         {
             args.Add($"/debug:{this.DebugType}");

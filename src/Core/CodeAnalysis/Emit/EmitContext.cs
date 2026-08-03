@@ -97,6 +97,12 @@ internal sealed class EmitContext
     public bool MetadataOnly { get; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the emitted runtime assembly
+    /// allows JIT optimization.
+    /// </summary>
+    public bool Optimize { get; set; } = true;
+
+    /// <summary>
     /// Gets the ECMA-335 metadata builder used to assemble the PE's metadata
     /// tables for this emit.
     /// </summary>
