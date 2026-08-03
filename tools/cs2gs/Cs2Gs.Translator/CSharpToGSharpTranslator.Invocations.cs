@@ -135,7 +135,9 @@ public sealed partial class CSharpToGSharpTranslator
                     out IArgumentOperation staticExtReceiverArgument))
             {
                 GExpression staticExtReceiver = this.TranslateStaticExtensionReceiver(staticExtReceiverArgument);
-                var staticExtRest = this.TranslateStaticExtensionTrailingArguments(invocation);
+                var staticExtRest = this.TranslateStaticExtensionTrailingArguments(
+                    invocation,
+                    (ArgumentSyntax)staticExtReceiverArgument.Syntax);
                 IReadOnlyList<GTypeReference> staticExtTypeArgs =
                     staticExtMember.Name is GenericNameSyntax staticExtGeneric
                         ? this.MapTypeArguments(staticExtGeneric)
@@ -176,7 +178,9 @@ public sealed partial class CSharpToGSharpTranslator
                     out IArgumentOperation bareExtReceiverArgument))
             {
                 GExpression bareExtReceiver = this.TranslateStaticExtensionReceiver(bareExtReceiverArgument);
-                var bareExtRest = this.TranslateStaticExtensionTrailingArguments(invocation);
+                var bareExtRest = this.TranslateStaticExtensionTrailingArguments(
+                    invocation,
+                    (ArgumentSyntax)bareExtReceiverArgument.Syntax);
                 IReadOnlyList<GTypeReference> bareExtTypeArgs =
                     bareExtName is GenericNameSyntax bareExtGeneric
                         ? this.MapTypeArguments(bareExtGeneric)
@@ -314,14 +318,16 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private List<GExpression> TranslateStaticExtensionTrailingArguments(
-            InvocationExpressionSyntax invocation)
+            InvocationExpressionSyntax invocation,
+            ArgumentSyntax receiverArgument)
         {
             List<GExpression> translated = this.TranslateCallArguments(
                 invocation,
                 invocation.ArgumentList.Arguments);
-            if (translated.Count != 0)
+            int receiverIndex = invocation.ArgumentList.Arguments.IndexOf(receiverArgument);
+            if (receiverIndex >= 0 && receiverIndex < translated.Count)
             {
-                translated.RemoveAt(0);
+                translated.RemoveAt(receiverIndex);
             }
 
             return translated;
@@ -852,23 +858,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// the address-of form <c>&amp;x</c>, an inline <c>out var x</c> maps to
         /// <c>out var x</c>, and an <c>out _</c> discard maps to <c>out _</c>.
         /// </summary>
-        // Issue #1727: G# has no named-argument call syntax, so a C# argument list
-        // that uses `name:` must be translated into pure declaration-order
-        // positional form. `Foo(b: 2, a: 1)` was previously emitted in SYNTAX order
-        // (`Foo(2, 1)`) — silently swapping the arguments — and a skipped optional
-        // parameter (`Foo(c: 5)` skipping `a`/`b`) bound the value to the FIRST
-        // parameter instead of `c`. The fast path (no named arguments) is
-        // untouched: it is the overwhelming majority of call sites and must not
-        // change behavior or cost.
-        private List<GExpression> TranslateArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
-        {
-            if (!arguments.Any(a => a.NameColon != null))
-            {
-                return arguments.Select(a => this.TranslateArgument(a)).ToList();
-            }
-
-            return this.TranslateNamedArguments(arguments);
-        }
+        private List<GExpression> TranslateArguments(SeparatedSyntaxList<ArgumentSyntax> arguments) =>
+            arguments.Select(a => this.TranslateArgument(a)).ToList();
 
         /// <summary>
         /// Translates an argument list at a call site that may need lowering
@@ -975,7 +966,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     callSyntax,
                     "a named argument alongside an expanded 'params' collection call has no canonical G# lowering yet.");
-                return this.TranslateNamedArguments(arguments);
+                return this.TranslateArguments(arguments);
             }
 
             int paramsOrdinal = paramsCollectionArg.Parameter.Ordinal;
@@ -1090,257 +1081,17 @@ public sealed partial class CSharpToGSharpTranslator
             return result;
         }
 
-        // Reorders a named/mixed argument list into parameter DECLARATION order
-        // (the only order a positional G# call can express), filling any optional
-        // parameter skipped by the named arguments with its default value.
-        //
-        // C# evaluates call-site arguments in LEXICAL (source) order and binds by
-        // name only afterward. Reordering into declaration order therefore changes
-        // observable evaluation order when a moved argument may have a side effect
-        // (a method call, object creation, assignment, increment, or await) — so
-        // that case is reported unsupported instead of silently reordering side
-        // effects (a source-order fallback is emitted so translation still
-        // produces compiling, if diagnostically-flagged, output).
-        // Resolves the method (or constructor) a mixed/named argument list is
-        // being passed to, so an EXPANDED `params` element — which has no
-        // per-argument IArgumentOperation of its own — can still be mapped to the
-        // params parameter it feeds. Returns null when the enclosing call cannot
-        // be resolved (the caller then falls back to source-order emission).
-        private IMethodSymbol ResolveInvokedMethodForArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
-        {
-            SyntaxNode callSyntax = arguments.FirstOrDefault()?.Parent?.Parent;
-            if (callSyntax == null)
-            {
-                return null;
-            }
-
-            if (this.context.SemanticModel.GetSymbolInfo(callSyntax).Symbol is IMethodSymbol symbolMethod)
-            {
-                return symbolMethod;
-            }
-
-            return this.context.SemanticModel.GetOperation(callSyntax) switch
-            {
-                IInvocationOperation invocation => invocation.TargetMethod,
-                IObjectCreationOperation creation => creation.Constructor,
-                _ => null,
-            };
-        }
-
-        private List<GExpression> TranslateNamedArguments(SeparatedSyntaxList<ArgumentSyntax> arguments)
-        {
-            var resolved = new List<(ArgumentSyntax Syntax, IParameterSymbol Parameter)>();
-            IMethodSymbol invokedForArguments = this.ResolveInvokedMethodForArguments(arguments);
-            foreach (ArgumentSyntax argument in arguments)
-            {
-                IParameterSymbol parameter = null;
-                if (this.context.SemanticModel.GetOperation(argument) is IArgumentOperation operation &&
-                    operation.Parameter != null)
-                {
-                    parameter = operation.Parameter;
-                }
-                else if (invokedForArguments != null)
-                {
-                    // An EXPANDED `params` element (e.g. the trailing positional
-                    // arguments in `Merge(additionalCapacity: 8, a, b, c)`) has no
-                    // per-argument IArgumentOperation: Roslyn folds every expanded
-                    // element into a single array-creation argument bound to the
-                    // params parameter, so `GetOperation` on the individual syntax
-                    // returns null. Resolve it directly to that params parameter
-                    // (they share its ordinal) instead of gapping — source order
-                    // among same-ordinal params elements is already correct.
-                    parameter = invokedForArguments.Parameters.FirstOrDefault(p => p.IsParams);
-                }
-
-                if (parameter == null)
-                {
-                    string message = "a named argument could not be resolved to a parameter via the semantic " +
-                        "model; emitted in source order, which may mis-bind (issue #1727).";
-                    this.context.ReportUnsupported(argument, message);
-                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
-                }
-
-                resolved.Add((argument, parameter));
-            }
-
-            for (int i = 0; i < resolved.Count; i++)
-            {
-                for (int j = i + 1; j < resolved.Count; j++)
-                {
-                    // resolved is in lexical (source) order by construction, so i < j
-                    // is "before" lexically; declaration order disagrees whenever the
-                    // ordinals decrease. Equal ordinals (multiple EXPANDED `params`
-                    // elements) keep their source order, so they already agree.
-                    bool declarationOrderAgrees = resolved[i].Parameter.Ordinal <= resolved[j].Parameter.Ordinal;
-                    if (!declarationOrderAgrees &&
-                        (IsPotentiallySideEffecting(resolved[i].Syntax.Expression) ||
-                            IsPotentiallySideEffecting(resolved[j].Syntax.Expression)))
-                    {
-                        string message = "named arguments reorder potentially side-effecting expressions " +
-                            "relative to C#'s lexical evaluation order; no side-effect-preserving G# lowering " +
-                            "yet (issue #1727).";
-                        this.context.ReportUnsupported(resolved[i].Syntax, message);
-                        return arguments.Select(a => this.TranslateArgument(a)).ToList();
-                    }
-                }
-            }
-
-            // A `params` parameter used in EXPANDED form (e.g. `Foo(x: 0, 1, 2, 3)`
-            // for `Foo(int x, params int[] rest)`) makes several arguments share
-            // the SAME `Parameter.Ordinal` (the params parameter's), which a plain
-            // `ToDictionary` throws on. Source order already agrees with
-            // declaration order whenever ordinals are non-decreasing in source
-            // order (the common/legal case, since C# forbids a positional
-            // argument from following a named one that skipped ahead) — that
-            // needs no reordering at all, so just pass it through. Anything else
-            // sharing an ordinal cannot be faithfully expressed as a dense
-            // ordinal->argument map; report unsupported instead of crashing.
-            bool ordinalsNonDecreasing = true;
-            for (int i = 1; i < resolved.Count; i++)
-            {
-                if (resolved[i].Parameter.Ordinal < resolved[i - 1].Parameter.Ordinal)
-                {
-                    ordinalsNonDecreasing = false;
-                    break;
-                }
-            }
-
-            bool hasDuplicateOrdinal = resolved.Select(r => r.Parameter.Ordinal).Distinct().Count() != resolved.Count;
-            if (hasDuplicateOrdinal)
-            {
-                if (ordinalsNonDecreasing)
-                {
-                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
-                }
-
-                string message = "named arguments combined with a params argument in expanded form cannot be " +
-                    "faithfully reordered (issue #1727).";
-                this.context.ReportUnsupported(resolved[0].Syntax, message);
-                return arguments.Select(a => this.TranslateArgument(a)).ToList();
-            }
-
-            Dictionary<int, ArgumentSyntax> byOrdinal = resolved.ToDictionary(r => r.Parameter.Ordinal, r => r.Syntax);
-            int maxOrdinal = resolved.Max(r => r.Parameter.Ordinal);
-            IMethodSymbol invokedMethod = resolved[0].Parameter.ContainingSymbol as IMethodSymbol;
-
-            // Issue #2260: `operation.Parameter` (and hence every ordinal in
-            // `resolved`/`invokedMethod.Parameters`) is always resolved against the
-            // UNREDUCED extension-method definition — e.g. `AddBoldColumn(this
-            // Table table, string header, Align align = Align.Left, bool noWrap =
-            // false)` — even when the call is written in reduced/dot form
-            // (`table.AddBoldColumn("Length", noWrap: true)`), where the receiver
-            // is bound implicitly and never appears in `arguments` at all. Without
-            // this adjustment, ordinal 0 (the receiver parameter, which has no
-            // default and is not itself skippable) is mistaken for a skipped
-            // OPTIONAL parameter and the fill fails immediately — before ever
-            // reaching the real skipped parameter (`align`) — silently dropping it
-            // from the emitted call instead of filling it. Any gap between the
-            // unreduced arity and the reduced arity the call was actually bound
-            // through is exactly the receiver's parameter count, so those leading
-            // ordinals must be skipped entirely rather than treated as fillable.
-            int ordinalOffset = invokedMethod != null && invokedForArguments?.ReducedFrom != null
-                ? Math.Max(0, invokedMethod.Parameters.Length - invokedForArguments.Parameters.Length)
-                : 0;
-
-            var result = new List<GExpression>();
-            for (int ordinal = ordinalOffset; ordinal <= maxOrdinal; ordinal++)
-            {
-                if (byOrdinal.TryGetValue(ordinal, out ArgumentSyntax explicitArgument))
-                {
-                    result.Add(this.TranslateArgument(explicitArgument));
-                    continue;
-                }
-
-                IParameterSymbol skippedParameter = invokedMethod != null && ordinal < invokedMethod.Parameters.Length
-                    ? invokedMethod.Parameters[ordinal]
-                    : null;
-                GExpression fillerDefault = this.BuildSkippedNamedArgumentDefault(skippedParameter, arguments);
-                if (fillerDefault == null)
-                {
-                    return arguments.Select(a => this.TranslateArgument(a)).ToList();
-                }
-
-                result.Add(fillerDefault);
-            }
-
-            return result;
-        }
-
-        // Computes the positional filler for an optional parameter that a named
-        // argument list skipped, or `null` (after reporting Unsupported) when no
-        // faithful G# value can be emitted: a caller-info parameter
-        // ([CallerMemberName]/[CallerLineNumber]/[CallerFilePath]/
-        // [CallerArgumentExpression]) needs the value the C# compiler substitutes
-        // at THIS call site, which the parameter's own default does not carry, and
-        // a non-literal default (a `const` field, an enum member, etc.) has no
-        // simple literal form (mirrors the declaration-side limitation already
-        // accepted in BuildOptionalParameterDefault).
-        private GExpression BuildSkippedNamedArgumentDefault(IParameterSymbol skippedParameter, SeparatedSyntaxList<ArgumentSyntax> arguments)
-        {
-            if (skippedParameter == null)
-            {
-                string message = "a named argument list skips a parameter that could not be resolved via the " +
-                    "semantic model (issue #1727).";
-                this.context.ReportUnsupported(arguments.First(), message);
-                return null;
-            }
-
-            bool hasCallerInfo = skippedParameter.GetAttributes().Any(a => a.AttributeClass?.Name is
-                "CallerMemberNameAttribute" or "CallerLineNumberAttribute" or
-                "CallerFilePathAttribute" or "CallerArgumentExpressionAttribute");
-            if (hasCallerInfo)
-            {
-                string message = $"named argument list skips caller-info parameter '{skippedParameter.Name}'; " +
-                    "its call-site-substituted value has no faithful G# positional form yet (issue #1727).";
-                this.context.ReportUnsupported(arguments.First(), message);
-                return null;
-            }
-
-            GTypeReference parameterType = this.typeMapper.Map(
-                skippedParameter.Type,
-                this.context,
-                skippedParameter.Locations.FirstOrDefault());
-            GExpression fillerDefault = this.BuildOptionalParameterDefault(skippedParameter, parameterType, arguments.First());
-            if (fillerDefault == null)
-            {
-                string message = $"named argument list skips parameter '{skippedParameter.Name}' whose default " +
-                    "value is not a simple literal; no faithful G# positional form yet (issue #1727).";
-                this.context.ReportUnsupported(arguments.First(), message);
-            }
-
-            return fillerDefault;
-        }
-
-        // Conservative "no observable side effect" check used only to decide
-        // whether reordering a named argument into declaration position is safe
-        // (issue #1727). A bare literal or a plain identifier/member-access chain
-        // that never invokes anything reads state without changing it; everything
-        // else (calls, object creation, assignment, increment/decrement, await,
-        // and — conservatively — any operator, since it may be an overloaded
-        // operator with side effects) is treated as potentially side-effecting.
-        private static bool IsPotentiallySideEffecting(ExpressionSyntax expression)
-        {
-            switch (expression)
-            {
-                case null:
-                case LiteralExpressionSyntax:
-                case IdentifierNameSyntax:
-                case ThisExpressionSyntax:
-                case PredefinedTypeSyntax:
-                    return false;
-                case ParenthesizedExpressionSyntax parenthesized:
-                    return IsPotentiallySideEffecting(parenthesized.Expression);
-                case MemberAccessExpressionSyntax memberAccess:
-                    return IsPotentiallySideEffecting(memberAccess.Expression);
-                case PrefixUnaryExpressionSyntax prefixUnary
-                    when prefixUnary.IsKind(SyntaxKind.UnaryMinusExpression) || prefixUnary.IsKind(SyntaxKind.UnaryPlusExpression):
-                    return IsPotentiallySideEffecting(prefixUnary.Operand);
-                default:
-                    return true;
-            }
-        }
-
         private GExpression TranslateArgument(ArgumentSyntax argument)
+        {
+            GExpression value = this.TranslateArgumentValue(argument);
+            return argument.NameColon == null
+                ? value
+                : new NamedArgumentExpression(
+                    SanitizeIdentifier(argument.NameColon.Name.Identifier.Text),
+                    value);
+        }
+
+        private GExpression TranslateArgumentValue(ArgumentSyntax argument)
         {
             SyntaxKind refKind = argument.RefKindKeyword.Kind();
             if (refKind == SyntaxKind.OutKeyword)
@@ -1612,7 +1363,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } &&
                 arguments.Count == 1)
             {
-                return arguments[0];
+                return UnwrapNamedArgument(arguments[0]);
             }
 
             return this.BuildObjectCreationCore(creation, typeSymbol, type, arguments, creation.Initializer);
@@ -1840,12 +1591,96 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            IReadOnlyList<(int ParameterOrdinal, GExpression Value)> loweredArguments =
+                this.NormalizeLoweredConstructorArguments(
+                    creationNode,
+                    ctorSymbol,
+                    arguments);
             return this.TryInstantiateStructConstructorPlan(
                 plan,
-                arguments,
+                loweredArguments,
                 out fieldInitializers,
                 out unsupportedReason);
         }
+
+        private IReadOnlyList<(int ParameterOrdinal, GExpression Value)> NormalizeLoweredConstructorArguments(
+            BaseObjectCreationExpressionSyntax creationNode,
+            IMethodSymbol constructor,
+            IReadOnlyList<GExpression> arguments)
+        {
+            SeparatedSyntaxList<ArgumentSyntax> syntaxArguments = creationNode switch
+            {
+                ObjectCreationExpressionSyntax explicitCreation =>
+                    explicitCreation.ArgumentList?.Arguments ?? default,
+                ImplicitObjectCreationExpressionSyntax implicitCreation =>
+                    implicitCreation.ArgumentList?.Arguments ?? default,
+                _ => default,
+            };
+            if (syntaxArguments.Count != arguments.Count ||
+                constructor.Parameters.Length < arguments.Count)
+            {
+                return BuildPositionalLoweredArguments(arguments);
+            }
+
+            var lowered = new List<(int ParameterOrdinal, GExpression Value)>(
+                constructor.Parameters.Length);
+            var suppliedOrdinals = new HashSet<int>();
+            for (var sourceIndex = 0; sourceIndex < syntaxArguments.Count; sourceIndex++)
+            {
+                if (this.context.SemanticModel.GetOperation(syntaxArguments[sourceIndex])
+                    is not IArgumentOperation { Parameter: { } parameter })
+                {
+                    return BuildPositionalLoweredArguments(arguments);
+                }
+
+                lowered.Add((
+                    parameter.Ordinal,
+                    UnwrapNamedArgument(arguments[sourceIndex])));
+                suppliedOrdinals.Add(parameter.Ordinal);
+            }
+
+            for (var ordinal = 0; ordinal < constructor.Parameters.Length; ordinal++)
+            {
+                if (suppliedOrdinals.Contains(ordinal))
+                {
+                    continue;
+                }
+
+                IParameterSymbol parameter = constructor.Parameters[ordinal];
+                GTypeReference parameterType = this.typeMapper.Map(
+                    parameter.Type,
+                    this.context,
+                    creationNode.GetLocation());
+                GExpression defaultValue = this.BuildOptionalParameterDefault(
+                    parameter,
+                    parameterType,
+                    creationNode);
+                if (defaultValue == null)
+                {
+                    return BuildPositionalLoweredArguments(arguments);
+                }
+
+                lowered.Add((ordinal, defaultValue));
+            }
+
+            return lowered;
+        }
+
+        private static IReadOnlyList<(int ParameterOrdinal, GExpression Value)>
+            BuildPositionalLoweredArguments(IReadOnlyList<GExpression> arguments)
+        {
+            var lowered = new List<(int ParameterOrdinal, GExpression Value)>(
+                arguments.Count);
+            for (var index = 0; index < arguments.Count; index++)
+            {
+                lowered.Add((index, UnwrapNamedArgument(arguments[index])));
+            }
+
+            return lowered;
+        }
+
+        private static GExpression UnwrapNamedArgument(GExpression argument) =>
+            argument is NamedArgumentExpression named ? named.Value : argument;
 
         /// <summary>
         /// Builds the canonical G# construction expression for a C# <c>new</c>:
@@ -2556,7 +2391,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool TryInstantiateStructConstructorPlan(
             StructConstructorPlan plan,
-            IReadOnlyList<GExpression> arguments,
+            IReadOnlyList<(int ParameterOrdinal, GExpression Value)> arguments,
             out List<FieldInitializer> fieldInitializers,
             out string unsupportedReason)
         {
@@ -2568,34 +2403,47 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            var byParameterOrdinal = plan.Initializations
+                .Where(initialization => initialization.ParameterOrdinal != null)
+                .ToDictionary(
+                    initialization => initialization.ParameterOrdinal.Value);
+            foreach ((int parameterOrdinal, GExpression argumentValue) in arguments)
+            {
+                if (!byParameterOrdinal.TryGetValue(
+                        parameterOrdinal,
+                        out StructMemberInitialization initialization))
+                {
+                    unsupportedReason =
+                        "struct constructor argument could not be matched to its initialized member; " +
+                        "a G# struct literal cannot be built safely (issue #2435).";
+                    fieldInitializers = null;
+                    return false;
+                }
+
+                fieldInitializers.Add(new FieldInitializer(
+                    SanitizeIdentifier(initialization.MemberName),
+                    argumentValue));
+            }
+
             foreach (StructMemberInitialization initialization in plan.Initializations)
             {
-                if (initialization.ParameterOrdinal == null &&
+                if (initialization.ParameterOrdinal != null ||
                     plan.FixedInitializersAreDeclaredOnType)
                 {
                     continue;
                 }
 
-                GExpression value;
-                if (initialization.ParameterOrdinal is int ordinal)
+                ExpressionSyntax fixedExpression = initialization.FixedExpression;
+                if (!this.context.Compilation.ContainsSyntaxTree(fixedExpression.SyntaxTree))
                 {
-                    value = arguments[ordinal];
-                }
-                else
-                {
-                    ExpressionSyntax fixedExpression = initialization.FixedExpression;
-                    if (!this.context.Compilation.ContainsSyntaxTree(fixedExpression.SyntaxTree))
-                    {
-                        unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
-                            "expression; that expression cannot yet be rebound safely at this call site (issue #2435).";
-                        fieldInitializers = null;
-                        return false;
-                    }
-
-                    using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
-                    value = this.TranslateExpression(fixedExpression);
+                    unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
+                        "expression; that expression cannot yet be rebound safely at this call site (issue #2435).";
+                    fieldInitializers = null;
+                    return false;
                 }
 
+                using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
+                GExpression value = this.TranslateExpression(fixedExpression);
                 fieldInitializers.Add(new FieldInitializer(
                     SanitizeIdentifier(initialization.MemberName),
                     value));

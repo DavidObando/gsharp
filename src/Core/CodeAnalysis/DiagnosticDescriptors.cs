@@ -157,7 +157,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RefKindOnVariadicParameter = new("GS0241", DiagnosticSeverity.Error, "'ref'/'out'/'in' is not a legal modifier on a variadic parameter '{0}'.");
     internal static readonly DiagnosticDescriptor InArgumentMissingInModifier = new("GS0242", DiagnosticSeverity.Warning, "Argument {0} (parameter '{1}') is an 'in' parameter but the call does not use the 'in' modifier; pass 'in <lvalue>' or change the parameter to by-value.");
     internal static readonly DiagnosticDescriptor PointerTypeCannotBeParameterType = new("GS0243", DiagnosticSeverity.Error, "Managed-pointer type '*{0}' is not a legal parameter type; use 'ref {1} {2}', 'out {3} {4}', or 'in {5} {6}' instead.");
-    internal static readonly DiagnosticDescriptor PositionalArgumentAfterNamedArgument = new("GS0244", DiagnosticSeverity.Error, "Positional argument cannot follow a named argument.");
+    internal static readonly DiagnosticDescriptor PositionalArgumentAfterNamedArgument = new("GS0244", DiagnosticSeverity.Error, "Positional argument cannot follow an out-of-position named argument.");
     internal static readonly DiagnosticDescriptor DuplicateNamedArgument = new("GS0245", DiagnosticSeverity.Error, "Named argument '{0}' specified more than once.");
     internal static readonly DiagnosticDescriptor NamedArgumentParameterNotFound = new("GS0246", DiagnosticSeverity.Error, "Named argument '{0}' does not match any parameter of '{1}'.");
     internal static readonly DiagnosticDescriptor NamedArgumentAlsoSpecifiedPositionally = new("GS0247", DiagnosticSeverity.Error, "Named argument '{0}' specifies a value for parameter '{1}' which was already given a positional value.");

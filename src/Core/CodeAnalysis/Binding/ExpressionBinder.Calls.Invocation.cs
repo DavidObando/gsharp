@@ -1192,7 +1192,14 @@ internal sealed partial class ExpressionBinder
             // sites already pass the flag, so an interpolated-string argument
             // sharing a call with a deferred lambda still resolves/rebinds
             // correctly overall.
-            var resolution = OverloadResolution.Resolve(methods, argTypes, explicitTypeArgs, scope.References.MapClrTypeToReferences);
+            IReadOnlyList<string> deferredArgumentNames =
+                BuildDeferredArgumentNames(ce, offset);
+            var resolution = OverloadResolution.Resolve(
+                methods,
+                argTypes,
+                explicitTypeArgs,
+                scope.References.MapClrTypeToReferences,
+                argumentNames: deferredArgumentNames);
             if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
             {
                 continue;
@@ -1203,8 +1210,12 @@ internal sealed partial class ExpressionBinder
             var allMapped = true;
             foreach (var idx in deferredIndices)
             {
-                var paramIndex = idx + offset;
-                if (paramIndex >= parameters.Length)
+                var paramIndex = MapSourceArgumentToParameter(
+                    parameters,
+                    ce,
+                    idx,
+                    offset);
+                if (paramIndex < 0 || paramIndex >= parameters.Length)
                 {
                     allMapped = false;
                     break;
@@ -1265,6 +1276,60 @@ internal sealed partial class ExpressionBinder
                 return;
             }
         }
+    }
+
+    private static IReadOnlyList<string> BuildDeferredArgumentNames(
+        CallExpressionSyntax call,
+        int offset)
+    {
+        string[] names = null;
+        for (var sourceIndex = 0; sourceIndex < call.Arguments.Count; sourceIndex++)
+        {
+            if (call.Arguments[sourceIndex] is not NamedArgumentExpressionSyntax named)
+            {
+                continue;
+            }
+
+            names ??= new string[call.Arguments.Count + offset];
+            names[sourceIndex + offset] = named.NameToken.Text;
+        }
+
+        return names;
+    }
+
+    private static int MapSourceArgumentToParameter(
+        ParameterInfo[] parameters,
+        CallExpressionSyntax call,
+        int sourceIndex,
+        int offset)
+    {
+        if (call.Arguments[sourceIndex] is NamedArgumentExpressionSyntax named)
+        {
+            for (var parameterIndex = 0;
+                 parameterIndex < parameters.Length;
+                 parameterIndex++)
+            {
+                string parameterName = parameters[parameterIndex].Name;
+                string argumentName = named.NameToken.Text;
+                if (string.Equals(
+                        parameterName,
+                        argumentName,
+                        StringComparison.Ordinal) ||
+                    (SyntaxFacts.GetKeywordKind(parameterName) !=
+                        SyntaxKind.IdentifierToken &&
+                        string.Equals(
+                            parameterName + "_",
+                            argumentName,
+                            StringComparison.Ordinal)))
+                {
+                    return parameterIndex;
+                }
+            }
+
+            return -1;
+        }
+
+        return sourceIndex + offset;
     }
 
     /// <summary>
@@ -1492,7 +1557,6 @@ internal sealed partial class ExpressionBinder
             symbolicArgs[i + offset] = deferred.Contains(i) ? null : boundArgs[i]?.Type;
         }
 
-        var symbolicArgVector = ImmutableArray.Create(symbolicArgs);
         var receiverOpenDefinition = (receiverType as ImportedTypeSymbol)?.OpenDefinition;
         var receiverTypeArguments = (receiverType as ImportedTypeSymbol)?.TypeArguments
             ?? ImmutableArray<TypeSymbol>.Empty;
@@ -1555,10 +1619,46 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
+            var mappedSymbolicArgs = new TypeSymbol[openParameters.Length];
+            if (offset == 1)
+            {
+                mappedSymbolicArgs[0] = receiverType;
+            }
+
+            var mappingValid = true;
+            for (var sourceIndex = 0;
+                 sourceIndex < boundArgs.Length;
+                 sourceIndex++)
+            {
+                var parameterIndex = MapSourceArgumentToParameter(
+                    openParameters,
+                    ce,
+                    sourceIndex,
+                    offset);
+                if (parameterIndex < 0 ||
+                    parameterIndex >= mappedSymbolicArgs.Length ||
+                    mappedSymbolicArgs[parameterIndex] != null)
+                {
+                    mappingValid = false;
+                    break;
+                }
+
+                mappedSymbolicArgs[parameterIndex] = deferred.Contains(sourceIndex)
+                    ? null
+                    : boundArgs[sourceIndex]?.Type;
+            }
+
+            if (!mappingValid)
+            {
+                continue;
+            }
+
             var inferred = !explicitTypeArgSymbols.IsDefaultOrEmpty
                 && openMethod.GetGenericArguments().Length == explicitTypeArgSymbols.Length
                     ? explicitTypeArgSymbols.ToArray()
-                    : MemberLookup.InferSymbolicMethodTypeArguments(openMethod, symbolicArgVector);
+                    : MemberLookup.InferSymbolicMethodTypeArguments(
+                        openMethod,
+                        ImmutableArray.Create(mappedSymbolicArgs));
             var methodTypeArgs = ImmutableArray.Create(inferred);
 
             var slotTargets = new Dictionary<int, (TypeSymbol DelegateType, ImmutableArray<TypeSymbol> ParameterTypes)>();
@@ -1568,8 +1668,12 @@ internal sealed partial class ExpressionBinder
 
             foreach (var idx in deferredIndices)
             {
-                var paramIndex = idx + offset;
-                if (paramIndex >= openParameters.Length)
+                var paramIndex = MapSourceArgumentToParameter(
+                    openParameters,
+                    ce,
+                    idx,
+                    offset);
+                if (paramIndex < 0 || paramIndex >= openParameters.Length)
                 {
                     candidateUsable = false;
                     break;
@@ -2077,7 +2181,7 @@ internal sealed partial class ExpressionBinder
             {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
             }
-            else if (argumentNames.IsDefault && IsUntypedArrowLambda(inner))
+            else if (IsUntypedArrowLambda(inner))
             {
                 // Issue #891: defer binding of an un-typed arrow lambda until
                 // the target delegate type is known. Binding it now would emit
@@ -2118,8 +2222,7 @@ internal sealed partial class ExpressionBinder
                 var argName = argumentNames.IsDefault ? null : argumentNames[argSlot];
                 var symbolicReceiver = receiver?.Type as ImportedTypeSymbol
                     ?? classSymbol?.SymbolicReceiver;
-                if (argumentNames.IsDefault
-                    && symbolicReceiver != null
+                if (symbolicReceiver != null
                     && !symbolicReceiver.TypeArguments.IsDefaultOrEmpty
                     && symbolicReceiver.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
                 {
@@ -2166,7 +2269,6 @@ internal sealed partial class ExpressionBinder
                     // unaffected — only return-type inference depends on the
                     // target).
                     if (inner is LambdaExpressionSyntax { Body: BlockExpressionSyntax } blockLambda
-                        && argumentNames.IsDefault
                         && !TryResolveDelegateTargetFromCandidates(delegateTargetCandidateParams, paramOffset: 0, sourceArgIndex: argSlot, argName: argName, target: out _, blockedByOpenGenericParameter: out var blocked)
                         && blocked)
                     {

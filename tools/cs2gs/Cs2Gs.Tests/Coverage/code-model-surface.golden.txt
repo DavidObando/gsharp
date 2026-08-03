@@ -26,6 +26,7 @@ InvocationExpression
 LambdaExpression
 LiteralExpression
 MemberAccessExpression
+NamedArgumentExpression
 NonNullAssertionExpression
 ObjectCreationInitializerExpression
 OutArgumentExpression

@@ -512,7 +512,11 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(syntax);
             }
 
-            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+            var optionalFinalArguments = PreserveNamedArgumentEvaluationOrder(
+                syntax.Arguments,
+                boundArguments.ToImmutable(),
+                p => parameters[p].Name);
+            return new BoundConstructorCallExpression(syntax, classType, optionalFinalArguments);
         }
 
         if (syntax.Arguments.Count != parameters.Length)
@@ -687,9 +691,14 @@ internal sealed partial class OverloadResolver
             return new BoundErrorExpression(syntax);
         }
 
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            boundArguments.ToImmutable(),
+            p => parameters[p].Name);
+
         if (classType.IsInline)
         {
-            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+            return new BoundConstructorCallExpression(syntax, classType, finalArguments);
         }
 
         if (!classType.IsClass)
@@ -699,7 +708,7 @@ internal sealed partial class OverloadResolver
             {
                 if (classType.TryGetField(parameters[i].Name, out var field))
                 {
-                    fieldInitializers.Add(new BoundFieldInitializer(field, boundArguments[i]));
+                    fieldInitializers.Add(new BoundFieldInitializer(field, finalArguments[i]));
                     continue;
                 }
 
@@ -708,14 +717,14 @@ internal sealed partial class OverloadResolver
                 // to a settable property with the same name.
                 if (TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) && property.HasSetter)
                 {
-                    fieldInitializers.Add(new BoundFieldInitializer(property, boundArguments[i]));
+                    fieldInitializers.Add(new BoundFieldInitializer(property, finalArguments[i]));
                 }
             }
 
             return new BoundStructLiteralExpression(syntax, classType, fieldInitializers.ToImmutable());
         }
 
-        return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+        return new BoundConstructorCallExpression(syntax, classType, finalArguments);
     }
 
     /// <summary>
@@ -1123,7 +1132,11 @@ internal sealed partial class OverloadResolver
             Diagnostics.ReportMemberInaccessible(syntax.Identifier.Location, "init", ctorDeclaringType.Name, selectedCtor.Function.Accessibility);
         }
 
-        return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable(), selectedCtor);
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            convertedArguments.ToImmutable(),
+            p => parameters[p].Name);
+        return new BoundConstructorCallExpression(syntax, classType, finalArguments, selectedCtor);
     }
 
     /// <summary>
@@ -1585,38 +1598,22 @@ internal sealed partial class OverloadResolver
         var slotted = new BoundExpression[parameters.Length];
         var filled = new bool[parameters.Length];
 
-        var firstNamedIndex = -1;
         for (var i = 0; i < rawArguments.Count; i++)
-        {
-            if (rawArguments[i] is NamedArgumentExpressionSyntax)
-            {
-                firstNamedIndex = i;
-                break;
-            }
-        }
-
-        var positionalCount = firstNamedIndex >= 0 ? firstNamedIndex : rawArguments.Count;
-        if (positionalCount > parameters.Length)
-        {
-            Diagnostics.ReportWrongArgumentCount(diagnosticLocation, callableName, parameters.Length, rawArguments.Count);
-            permutedBound = ImmutableArray<BoundExpression>.Empty;
-            return false;
-        }
-
-        for (var i = 0; i < positionalCount; i++)
-        {
-            slotted[i] = boundPositionalAndNamed[i];
-            filled[i] = true;
-            parameterSyntax[i] = rawArguments[i];
-        }
-
-        for (var i = positionalCount; i < rawArguments.Count; i++)
         {
             if (rawArguments[i] is not NamedArgumentExpressionSyntax named)
             {
-                Diagnostics.ReportPositionalArgumentAfterNamedArgument(rawArguments[i].Location);
-                permutedBound = ImmutableArray<BoundExpression>.Empty;
-                return false;
+                if (i >= parameters.Length || filled[i])
+                {
+                    Diagnostics.ReportPositionalArgumentAfterNamedArgument(
+                        rawArguments[i].Location);
+                    permutedBound = ImmutableArray<BoundExpression>.Empty;
+                    return false;
+                }
+
+                slotted[i] = boundPositionalAndNamed[i];
+                filled[i] = true;
+                parameterSyntax[i] = rawArguments[i];
+                continue;
             }
 
             var name = named.NameToken.Text;

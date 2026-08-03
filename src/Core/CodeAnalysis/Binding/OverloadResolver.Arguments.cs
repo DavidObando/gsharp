@@ -546,13 +546,10 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #343: pre-validates the layout of call arguments — positional
-    /// arguments must precede all named arguments, and no two named arguments
-    /// may share the same name. Reports the corresponding diagnostic
-    /// (<see cref="DiagnosticBag.ReportPositionalArgumentAfterNamedArgument"/>
-    /// or <see cref="DiagnosticBag.ReportDuplicateNamedArgument"/>) on each
-    /// violation, then returns <see langword="false"/> so the surrounding call
-    /// binder can fall back to a <see cref="BoundErrorExpression"/>.
+    /// Issue #343/#3090: pre-validates duplicate names and records each source
+    /// argument's optional name. Positional arguments may follow a named
+    /// argument when that name occupies its natural parameter position (C# 7.2);
+    /// candidate-specific mapping validates that rule later.
     /// </summary>
     /// <param name="arguments">The call's argument syntax list.</param>
     /// <param name="positionalCount">On return, the number of leading positional arguments.</param>
@@ -572,7 +569,6 @@ internal sealed partial class OverloadResolver
         }
 
         var ok = true;
-        var seenNamed = false;
         HashSet<string> seenNames = null;
         string[] names = null;
 
@@ -582,7 +578,6 @@ internal sealed partial class OverloadResolver
             {
                 names ??= new string[arguments.Count];
                 seenNames ??= new HashSet<string>(StringComparer.Ordinal);
-                seenNamed = true;
                 names[i] = named.NameToken.Text;
                 if (!seenNames.Add(named.NameToken.Text))
                 {
@@ -592,12 +587,7 @@ internal sealed partial class OverloadResolver
             }
             else
             {
-                if (seenNamed)
-                {
-                    Diagnostics.ReportPositionalArgumentAfterNamedArgument(arguments[i].Location);
-                    ok = false;
-                }
-                else
+                if (names == null)
                 {
                     positionalCount++;
                 }
@@ -648,7 +638,125 @@ internal sealed partial class OverloadResolver
             ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]);
         }
 
-        return ImmutableArray.Create(ordered);
+        return PreserveMappedArgumentEvaluationOrder(
+            ImmutableArray.Create(ordered),
+            parameterMapping);
+    }
+
+    // Named binding stores arguments in parameter order, but evaluation remains
+    // lexical. Capture converted argument values in source order inside the
+    // first emitted parameter slot, then load those temps in parameter order.
+    internal ImmutableArray<BoundExpression> PreserveNamedArgumentEvaluationOrder(
+        SeparatedSyntaxList<ExpressionSyntax> sourceArguments,
+        ImmutableArray<BoundExpression> parameterOrderedArguments,
+        System.Func<int, string> parameterNameAt,
+        int parameterOffset = 0)
+    {
+        if (sourceArguments.Count == 0 ||
+            !sourceArguments.Any(argument => argument is NamedArgumentExpressionSyntax))
+        {
+            return parameterOrderedArguments;
+        }
+
+        var mapping = ImmutableArray.CreateBuilder<int>(sourceArguments.Count);
+        for (var sourceIndex = 0; sourceIndex < sourceArguments.Count; sourceIndex++)
+        {
+            if (sourceArguments[sourceIndex] is not NamedArgumentExpressionSyntax named)
+            {
+                mapping.Add(sourceIndex);
+                continue;
+            }
+
+            var parameterIndex = -1;
+            for (var candidate = 0;
+                 candidate < parameterOrderedArguments.Length - parameterOffset;
+                 candidate++)
+            {
+                if (string.Equals(
+                        parameterNameAt(candidate),
+                        named.NameToken.Text,
+                        StringComparison.Ordinal))
+                {
+                    parameterIndex = candidate;
+                    break;
+                }
+            }
+
+            if (parameterIndex < 0)
+            {
+                return parameterOrderedArguments;
+            }
+
+            mapping.Add(parameterIndex);
+        }
+
+        return PreserveMappedArgumentEvaluationOrder(
+            parameterOrderedArguments,
+            mapping.MoveToImmutable(),
+            parameterOffset);
+    }
+
+    private static ImmutableArray<BoundExpression> PreserveMappedArgumentEvaluationOrder(
+        ImmutableArray<BoundExpression> parameterOrderedArguments,
+        ImmutableArray<int> sourceToParameterMapping,
+        int parameterOffset = 0)
+    {
+        if (sourceToParameterMapping.IsDefaultOrEmpty ||
+            parameterOffset < 0 ||
+            parameterOffset >= parameterOrderedArguments.Length)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var seenSlots = new HashSet<int>();
+        var reordered = false;
+        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var parameterIndex = sourceToParameterMapping[sourceIndex];
+            var slot = parameterOffset + parameterIndex;
+            if (parameterIndex < 0 ||
+                slot >= parameterOrderedArguments.Length ||
+                !seenSlots.Add(slot))
+            {
+                return parameterOrderedArguments;
+            }
+
+            reordered |= parameterIndex != sourceIndex;
+            BoundExpression argument = parameterOrderedArguments[slot];
+            if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression)
+            {
+                // Preserve the existing ref/out/in call path. Managed pointers
+                // cannot be materialized into ordinary value temps.
+                return parameterOrderedArguments;
+            }
+        }
+
+        if (!reordered)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var replacements = parameterOrderedArguments.ToArray();
+        var evaluations = ImmutableArray.CreateBuilder<BoundStatement>(
+            sourceToParameterMapping.Length);
+        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
+            BoundExpression argument = parameterOrderedArguments[slot];
+            var temp = new LocalVariableSymbol(
+                $"<>namedArg{sourceIndex}",
+                isReadOnly: true,
+                argument.Type);
+            evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
+            replacements[slot] = new BoundVariableExpression(argument.Syntax, temp);
+        }
+
+        var carrier = parameterOffset;
+        replacements[carrier] = new BoundBlockExpression(
+            parameterOrderedArguments[carrier].Syntax,
+            evaluations.MoveToImmutable(),
+            replacements[carrier]);
+        return ImmutableArray.Create(replacements);
     }
 
     /// <summary>
@@ -672,7 +780,7 @@ internal sealed partial class OverloadResolver
     /// <param name="permutedSyntax">On true, an array of length <paramref name="parameterCount"/> giving the argument syntax slotted at each parameter position.</param>
     /// <param name="permutedBound">On true, an <see cref="ImmutableArray{T}"/> of length <paramref name="parameterCount"/> giving the bound arguments in parameter order.</param>
     /// <returns><see langword="true"/> when reordering succeeds.</returns>
-    private bool TryReorderUserCallArguments(
+    internal bool TryReorderUserCallArguments(
         SeparatedSyntaxList<ExpressionSyntax> sourceArguments,
         ImmutableArray<BoundExpression> sourceBound,
         int parameterCount,
@@ -696,7 +804,7 @@ internal sealed partial class OverloadResolver
     /// are left as <see langword="null"/> in the result for callers to fill with
     /// default-value substitutions.
     /// </summary>
-    private bool TryReorderUserCallArguments(
+    internal bool TryReorderUserCallArguments(
         SeparatedSyntaxList<ExpressionSyntax> sourceArguments,
         ImmutableArray<BoundExpression> sourceBound,
         int parameterCount,
@@ -761,6 +869,17 @@ internal sealed partial class OverloadResolver
             var name = argumentNames[i];
             if (name == null)
             {
+                var positionalSlot = i;
+                if (positionalSlot >= parameterCount ||
+                    slotSyntax[positionalSlot] != null)
+                {
+                    Diagnostics.ReportPositionalArgumentAfterNamedArgument(sourceArguments[i].Location);
+                    ok = false;
+                    continue;
+                }
+
+                slotSyntax[positionalSlot] = sourceArguments[i];
+                slotBound[positionalSlot] = sourceBound[i];
                 continue;
             }
 
@@ -854,6 +973,45 @@ internal sealed partial class OverloadResolver
         return string.Empty;
     }
 
+    internal bool ValidateExpandedVariadicNamedArguments(
+        ImmutableArray<string> argumentNames,
+        int fixedParameterCount,
+        System.Func<int, string> parameterNameAt,
+        string calleeName,
+        CallExpressionSyntax syntax)
+    {
+        if (argumentNames.IsDefault)
+        {
+            return true;
+        }
+
+        for (var sourceIndex = 0;
+             sourceIndex < argumentNames.Length;
+             sourceIndex++)
+        {
+            string name = argumentNames[sourceIndex];
+            if (name == null)
+            {
+                continue;
+            }
+
+            if (sourceIndex >= fixedParameterCount ||
+                !string.Equals(
+                    parameterNameAt(sourceIndex),
+                    name,
+                    StringComparison.Ordinal))
+            {
+                Diagnostics.ReportNamedArgumentParameterNotFound(
+                    syntax.Arguments[sourceIndex].Location,
+                    calleeName,
+                    name);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Issue #343: when overload resolution fails for a CLR call site that
     /// supplied named arguments, surface the first unknown parameter name as a
@@ -885,7 +1043,8 @@ internal sealed partial class OverloadResolver
             }
 
             knownNames ??= MemberLookup.CollectClrParameterNames(receiverClrType, methodName, bindingFlags);
-            if (!knownNames.Contains(name))
+            if (!knownNames.Any(parameterName =>
+                    ClrParameterNameMatches(parameterName, name)))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
                 Diagnostics.ReportNamedArgumentParameterNotFound(location, methodName, name);
@@ -922,7 +1081,8 @@ internal sealed partial class OverloadResolver
             }
 
             knownNames ??= MemberLookup.CollectClrConstructorParameterNames(clrType);
-            if (!knownNames.Contains(name))
+            if (!knownNames.Any(parameterName =>
+                    ClrParameterNameMatches(parameterName, name)))
             {
                 var location = ce.Arguments[i] is NamedArgumentExpressionSyntax named ? named.NameToken.Location : ce.Arguments[i].Location;
                 Diagnostics.ReportNamedArgumentParameterNotFound(location, clrType.Name, name);
@@ -932,6 +1092,13 @@ internal sealed partial class OverloadResolver
 
         return false;
     }
+
+    private static bool ClrParameterNameMatches(
+        string parameterName,
+        string argumentName) =>
+        string.Equals(parameterName, argumentName, StringComparison.Ordinal) ||
+        (SyntaxFacts.GetKeywordKind(parameterName) != SyntaxKind.IdentifierToken &&
+            string.Equals(parameterName + "_", argumentName, StringComparison.Ordinal));
 
     public void ValidateRefArguments(
         ImmutableArray<BoundExpression> arguments,

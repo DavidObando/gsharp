@@ -13,34 +13,17 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #2260: a named-argument call invoked in reduced/dot EXTENSION-METHOD
-/// form (e.g. <c>table.AddBoldColumn("Length", noWrap: true)</c> against
-/// <c>AddBoldColumn(this Table table, string header, Align align = Align.Left,
-/// bool noWrap = false)</c>) that skips an earlier optional parameter whose
-/// default is NON-LITERAL (e.g. an enum member or <c>default(T)</c>) mis-fired
-/// the "not a simple literal" gap and silently dropped the skipped argument
-/// from the emitted call.
+/// Issue #2260/#3090: reduced extension calls preserve their named arguments;
+/// gsc maps them after the implicit receiver and supplies skipped defaults.
 /// </summary>
 /// <remarks>
-/// Root cause: <c>TranslateNamedArguments</c> resolves every argument's
-/// <c>Ordinal</c> via <c>IArgumentOperation.Parameter</c>, which is always
-/// bound against the extension method's UNREDUCED definition — i.e. the
-/// receiver ("this") parameter occupies ordinal 0 — even though the call was
-/// written in reduced/dot form, where the receiver is bound implicitly and
-/// never appears as a syntactic argument at all. The gap-filling loop started
-/// at ordinal 0 unconditionally, so it always tried to fill the (non-optional,
-/// no-default) receiver parameter FIRST, failed immediately, and gave up
-/// before ever reaching the real skipped optional parameter — dropping it
-/// from the emitted call instead of reporting or filling it. The fix computes
-/// how many leading ordinals the reduced call's receiver consumes (the
-/// difference between the unreduced and reduced parameter counts) and starts
-/// the gap-filling loop after them, so the loop only ever considers ordinals
-/// that correspond to real syntactic argument positions.
+/// Native named-argument binding eliminates translator-side ordinal filling,
+/// including the former reduced-extension receiver offset special case.
 /// </remarks>
 public class Issue2260NamedArgumentSkipExtensionReceiverTests
 {
     [Fact]
-    public void NamedArgument_SkipsExtensionOptionalParameterWithEnumMemberDefault_FillsDefaultPositionally()
+    public void NamedArgument_SkipsExtensionOptionalParameterWithEnumMemberDefault_PreservesName()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -65,11 +48,11 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("AddBoldColumn(\"Length\", Align.Left, true)", printed, StringComparison.Ordinal);
+        Assert.Contains("AddBoldColumn(\"Length\", noWrap: true)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NamedArgument_SkipsExtensionOptionalParameterWithDefaultKeywordDefault_FillsDefaultPositionally()
+    public void NamedArgument_SkipsExtensionOptionalParameterWithDefaultKeywordDefault_PreservesName()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -94,7 +77,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("AddOptions(\"Length\", default(Options), true)", printed, StringComparison.Ordinal);
+        Assert.Contains("AddOptions(\"Length\", noWrap: true)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -123,7 +106,10 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("AddColumn(\"Length\", true)", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddColumn(header: \"Length\", noWrap: true)",
+            printed,
+            StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)

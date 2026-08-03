@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -56,4 +57,11 @@ public abstract class VariableSymbol : Symbol
     /// initializer was proven non-null from its bound expression.
     /// </summary>
     internal bool HasDefinitelyNonNullValue { get; set; }
+
+    /// <summary>
+    /// Gets or sets callable parameter names captured from a function literal
+    /// or function-pointer initializer. Empty when the variable's callable
+    /// shape carries types only.
+    /// </summary>
+    internal ImmutableArray<string> CallableParameterNames { get; set; }
 }

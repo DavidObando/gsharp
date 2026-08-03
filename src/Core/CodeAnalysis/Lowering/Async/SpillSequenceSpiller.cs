@@ -218,15 +218,21 @@ public static class SpillSequenceSpiller
                 return false;
             }
 
-            // If the expression is already a top-level await, no spilling needed.
-            if (exprStmt.Expression is BoundAwaitExpression)
+            // A direct await is already in the shape MoveNext consumes only when
+            // its operand contains no nested await. `await F(await G())` still
+            // needs its inner call argument spilled before the outer await.
+            if (exprStmt.Expression is BoundAwaitExpression topLevelAwait &&
+                !HasAwait(topLevelAwait.Expression))
             {
                 builder.Add(exprStmt);
                 return false;
             }
 
-            // If it's an assignment where the RHS is a direct await, no spilling needed.
-            if (exprStmt.Expression is BoundAssignmentExpression assign && assign.Expression is BoundAwaitExpression)
+            // Same rule for `x = await ...`: a nested await in the awaited
+            // operand still requires recursive spilling.
+            if (exprStmt.Expression is BoundAssignmentExpression assign &&
+                assign.Expression is BoundAwaitExpression assignedAwait &&
+                !HasAwait(assignedAwait.Expression))
             {
                 builder.Add(exprStmt);
                 return false;

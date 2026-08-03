@@ -2981,25 +2981,31 @@ internal sealed partial class ExpressionBinder
 
         var methodName = ce.Identifier.Text;
 
+        if (!overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
         List<int> deferredStaticLambdaIndices = null;
         var staticArgIndex = 0;
         foreach (var argument in ce.Arguments)
         {
-            if (argument is RefArgumentExpressionSyntax refArg)
+            var inner = OverloadResolver.UnwrapNamedArgumentValue(argument);
+            if (inner is RefArgumentExpressionSyntax refArg)
             {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
             }
-            else if (IsUntypedArrowLambda(OverloadResolver.UnwrapNamedArgumentValue(argument)))
+            else if (IsUntypedArrowLambda(inner))
             {
                 // Issue #951: defer un-typed arrow lambdas until the static
                 // method overload (and its delegate-typed parameters) is known.
                 (deferredStaticLambdaIndices ??= new List<int>()).Add(staticArgIndex);
-                boundArguments.Add(new BoundErrorExpression(OverloadResolver.UnwrapNamedArgumentValue(argument)));
+                boundArguments.Add(new BoundErrorExpression(inner));
             }
             else
             {
-                boundArguments.Add(BindExpression(argument));
+                boundArguments.Add(BindExpression(inner));
             }
 
             staticArgIndex++;
@@ -3024,7 +3030,12 @@ internal sealed partial class ExpressionBinder
         if (!staticMethodGroup.IsDefaultOrEmpty)
         {
             var selectionGroup = BuildConstructedStaticOverloadGroup(structSym, staticMethodGroup, out var originalMethods);
-            var method = overloads.SelectInstanceOverloadOrReport(selectionGroup, arguments, ce, methodName, argumentNames: default);
+            var method = overloads.SelectInstanceOverloadOrReport(
+                selectionGroup,
+                arguments,
+                ce,
+                methodName,
+                argumentNames);
             if (method == null)
             {
                 return new BoundErrorExpression(null);
@@ -3129,6 +3140,51 @@ internal sealed partial class ExpressionBinder
             {
                 Diagnostics.ReportWrongArgumentCount(ce.Location, method.Name, method.Parameters.Length, arguments.Length);
                 return new BoundErrorExpression(null);
+            }
+
+            if (isVariadic &&
+                !overloads.ValidateExpandedVariadicNamedArguments(
+                    argumentNames,
+                    fixedParamCount,
+                    p => method.Parameters[p].Name,
+                    method.Name,
+                    ce))
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            ExpressionSyntax[] parameterSyntax;
+            if (!argumentNames.IsDefault && !isVariadic)
+            {
+                if (!overloads.TryReorderUserCallArguments(
+                        ce.Arguments,
+                        arguments,
+                        method.Parameters.Length,
+                        p => method.Parameters[p].Name,
+                        p => method.Parameters[p].HasExplicitDefaultValue,
+                        method.Name,
+                        out parameterSyntax,
+                        out arguments))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                var filledArguments = arguments.ToBuilder();
+                for (var i = 0; i < filledArguments.Count; i++)
+                {
+                    filledArguments[i] ??= OverloadResolver.CreateOptionalUserDefaultArgument(
+                        method.Parameters[i]);
+                }
+
+                arguments = filledArguments.MoveToImmutable();
+            }
+            else
+            {
+                parameterSyntax = new ExpressionSyntax[ce.Arguments.Count];
+                for (var i = 0; i < ce.Arguments.Count; i++)
+                {
+                    parameterSyntax[i] = ce.Arguments[i];
+                }
             }
 
             // Issue #1379: a `shared` (static) method on a generic user type may
@@ -3315,7 +3371,7 @@ internal sealed partial class ExpressionBinder
                 // method.Parameters[i] line up. This must run BEFORE the
                 // open-type-parameter shortcut so generic static out-parameters
                 // (`func G[T](out r T)`) are handled too.
-                var slotSyntax = i < ce.Arguments.Count ? ce.Arguments[i] : null;
+                var slotSyntax = i < parameterSyntax.Length ? parameterSyntax[i] : null;
                 var substitutedPointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution, scope.References.MapClrTypeToReferences) : paramType;
                 var reboundOutVar = TryRebindInlineOutVarPlaceholder(permutedArgs[i], slotSyntax, method.Parameters[i], substitutedPointeeType);
                 if (reboundOutVar != null)
@@ -3355,7 +3411,9 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var expectedType = substitution != null ? Binder.SubstituteType(paramType, substitution, scope.References.MapClrTypeToReferences) : paramType;
-                var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+                var argLoc = i < parameterSyntax.Length
+                    ? parameterSyntax[i]?.Location ?? ce.Location
+                    : ce.Location;
                 convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
             }
 
@@ -3388,9 +3446,14 @@ internal sealed partial class ExpressionBinder
                 methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
             }
 
+            var finalArguments = overloads.PreserveNamedArgumentEvaluationOrder(
+                ce.Arguments,
+                convertedArgs.ToImmutable(),
+                p => method.Parameters[p].Name);
+
             BoundCallExpression MakeStaticGenericCall(TypeSymbol substitutedReturnOverride)
             {
-                var result = new BoundCallExpression(null, method, convertedArgs.ToImmutable(), substitutedReturnOverride)
+                var result = new BoundCallExpression(null, method, finalArguments, substitutedReturnOverride)
                 {
                     StaticGenericOwnerType = staticGenericOwner,
                     StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,

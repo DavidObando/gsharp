@@ -13,32 +13,13 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #2236: a named-argument call that SKIPS an optional parameter reports
-/// "no faithful G# positional form yet (issue #1727)" whenever
-/// <c>BuildOptionalParameterDefault</c> cannot express the skipped parameter's
-/// own default. Investigation found that <c>default</c>/<c>default(T)</c>,
-/// <c>new T()</c> (value type), and a referenced <c>const</c> field were ALL
-/// already handled correctly — Roslyn's <c>IParameterSymbol.ExplicitDefaultValue</c>
-/// resolves each of those to a plain constant (or <c>null</c> for the zero
-/// value), which <see cref="M:Cs2Gs.Translator.CSharpToGSharpTranslator"/>'s
-/// existing constant-mapping switch already covered for every numeric kind
-/// EXCEPT <c>decimal</c> — a <c>decimal</c> default fell through to the
-/// "not a simple literal" diagnostic and was dropped, which (since the
-/// dropped default also makes the DECLARATION itself wrongly require the
-/// argument) breaks both the named-argument-skip path AND a plain declaration
-/// with a <c>decimal</c> default. The fix adds the missing <c>decimal</c> arm
-/// to the shared constant-mapping switch (<c>MapConstantValue</c>) rather than
-/// add native named-argument call syntax to gsc (see the PR description for
-/// the full engineering-judgment reasoning): every other "non-literal" shape
-/// the issue calls out was already a faithful reconstruction via the existing
-/// call path, so only the one missing numeric kind needed a fix, and doing so
-/// in the single shared method used by both call sites (declaration defaults
-/// and named-argument-skip filler defaults) fixes both root causes at once.
+/// Issue #2236/#3090: optional declarations retain their defaults and named
+/// call sites retain names. Native gsc binding supplies skipped defaults.
 /// </summary>
 public class Issue2236NamedArgumentSkipNonLiteralDefaultTests
 {
     [Fact]
-    public void NamedArgument_SkipsParameterWithDecimalDefault_FillsDefaultPositionally()
+    public void NamedArgument_SkipsParameterWithDecimalDefault_PreservesNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -53,7 +34,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 1.5, 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -80,7 +61,7 @@ namespace Demo
     }
 
     [Fact]
-    public void NamedArgument_SkipsParameterWithDefaultKeyword_FillsDefaultPositionally()
+    public void NamedArgument_SkipsParameterWithDefaultKeyword_PreservesNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -97,11 +78,11 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, default(Options), 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NamedArgument_SkipsParameterWithNewValueTypeDefault_FillsDefaultPositionally()
+    public void NamedArgument_SkipsParameterWithNewValueTypeDefault_PreservesNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -118,11 +99,11 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, default(Options), 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NamedArgument_SkipsParameterWithReferencedConstantDefault_FillsDefaultPositionally()
+    public void NamedArgument_SkipsParameterWithReferencedConstantDefault_PreservesNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -139,7 +120,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, \"users\", 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -159,7 +140,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 42, 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)
