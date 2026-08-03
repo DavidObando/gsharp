@@ -79,6 +79,9 @@ This option list was checked against `dotnet out\bin\Release\Compiler\gsc.dll --
 | `/warnaserror:<ids>` | Promote the listed warning IDs to errors. |
 | `/warnaserror+:<ids>` | Alias for promoting the listed warning IDs to errors. |
 | `/warnaserror-:<ids>` | Keep the listed IDs as warnings even when global `/warnaserror` is set. |
+| `/optimize`, `/optimize+` | Enable JIT optimization for emitted assemblies. This is the default. |
+| `/optimize-` | Disable JIT optimization for emitted assemblies. |
+| `/optimize:true`, `/optimize:false` | Enable or disable JIT optimization. Also accepts `1`, `0`, `on`, `off`, `yes`, and `no`. |
 | `/debug` | Emit a sidecar Portable PDB. Equivalent to `/debug:portable`. |
 | `/debug+` | Emit a sidecar Portable PDB. |
 | `/debug-` | Disable debug information. |
