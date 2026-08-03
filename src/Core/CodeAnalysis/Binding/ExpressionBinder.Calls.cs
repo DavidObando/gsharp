@@ -1754,105 +1754,43 @@ internal sealed partial class ExpressionBinder
     {
         var inner = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax);
         if (inner is LambdaExpressionSyntax lambdaSyntax
-            && TryResolveDelegateTargetFromCandidates(candidateParameterLists, paramOffset, sourceArgIndex, argName, out var target))
-        {
-            var literal = lambdas.BindLambdaExpression(lambdaSyntax, target);
-            var nominalTarget = TryResolveUniqueNominalDelegateTarget(
+            && TryResolveDelegateTargetFromCandidates(
                 candidateParameterLists,
                 paramOffset,
                 sourceArgIndex,
-                argName);
-            return nominalTarget != null && ShouldConvertToNominalDelegate(nominalTarget)
-                ? conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
-                : literal;
+                argName,
+                out var target,
+                out var nominalTarget,
+                out _,
+                out _))
+        {
+            return BindLambdaWithDelegateTarget(
+                argumentSyntax,
+                lambdaSyntax,
+                target,
+                nominalTarget);
         }
 
         return BindExpression(inner);
     }
 
-    /// <summary>
-    /// Issue #3149: preserves a named delegate's identity when all matching
-    /// delegate parameters agree. Binding only to their shared function shape
-    /// erases the literal to Func/Action before overload resolution.
-    /// </summary>
-    private static TypeSymbol TryResolveUniqueNominalDelegateTarget(
-        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
-        int paramOffset,
-        int sourceArgIndex,
-        string argName)
+    private BoundExpression BindLambdaWithDelegateTarget(
+        ExpressionSyntax argumentSyntax,
+        LambdaExpressionSyntax lambdaSyntax,
+        FunctionTypeSymbol target,
+        TypeSymbol nominalTarget)
     {
-        TypeSymbol target = null;
-        foreach (var parameters in candidateParameterLists)
-        {
-            var paramIndex = string.IsNullOrEmpty(argName)
-                ? sourceArgIndex + paramOffset
-                : Array.FindIndex(
-                    parameters,
-                    parameter => string.Equals(parameter.Name, argName, StringComparison.Ordinal));
-            if (paramIndex < 0 || paramIndex >= parameters.Length)
-            {
-                continue;
-            }
-
-            var parameterType = parameters[paramIndex].ParameterType;
-            if (parameterType == null)
-            {
-                continue;
-            }
-
-            if (parameterType.ContainsGenericParameters)
-            {
-                return null;
-            }
-
-            if (!MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out _))
-            {
-                continue;
-            }
-
-            var candidate = TypeSymbol.FromClrType(parameterType);
-            if (target == null)
-            {
-                target = candidate;
-            }
-            else if (!SameDelegateIdentity(target, candidate))
-            {
-                return null;
-            }
-        }
-
-        return target;
+        var literal = lambdas.BindLambdaExpression(lambdaSyntax, target);
+        return nominalTarget != null && ShouldConvertToNominalDelegate(nominalTarget)
+            ? conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
+            : literal;
     }
 
     /// <summary>
-    /// Issue #891: discovers the (non-generic) delegate function type that a
-    /// given argument position maps to across all candidate parameter lists.
-    /// Named arguments are matched by parameter name; positional arguments by
-    /// index (after <paramref name="paramOffset"/>, e.g. an extension method's
-    /// receiver). Returns false when no candidate exposes a closed delegate
-    /// parameter there, or when candidates disagree on the delegate shape.
-    /// </summary>
-    private static bool TryResolveDelegateTargetFromCandidates(
-        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
-        int paramOffset,
-        int sourceArgIndex,
-        string argName,
-        out FunctionTypeSymbol target)
-        => TryResolveDelegateTargetFromCandidates(candidateParameterLists, paramOffset, sourceArgIndex, argName, out target, out _);
-
-    /// <summary>
-    /// Issue #2345: overload of <see cref="TryResolveDelegateTargetFromCandidates(IReadOnlyList{ParameterInfo[]}, int, int, string, out FunctionTypeSymbol)"/>
-    /// that also reports whether resolution failed specifically because every
-    /// matching candidate parameter at this slot is an <em>open</em> generic
-    /// delegate (<c>ParameterType.ContainsGenericParameters</c>) — e.g. an
-    /// imported generic method's <c>Action&lt;Builder&lt;TColumns&gt;&gt;</c>
-    /// parameter whose <c>TColumns</c> is only closed once the method's type
-    /// arguments are inferred from the call's other arguments. Callers use
-    /// this signal to defer such a lambda (mirroring the existing untyped-
-    /// arrow-lambda deferral) instead of binding it immediately with no
-    /// target, which is what previously produced a wrong (non-void) inferred
-    /// delegate shape for a block-bodied lambda whose trailing statement calls
-    /// a fluent/self-returning method.
+    /// Issue #891 / #2345 / #3149: discovers the closed delegate function shape
+    /// and nominal identity shared by a lambda argument's candidate parameters.
+    /// Open generic candidates are reported separately so all-open block lambdas
+    /// and mixed open/closed sets can wait for overload resolution.
     /// </summary>
     private static bool TryResolveDelegateTargetFromCandidates(
         IReadOnlyList<ParameterInfo[]> candidateParameterLists,
@@ -1860,10 +1798,15 @@ internal sealed partial class ExpressionBinder
         int sourceArgIndex,
         string argName,
         out FunctionTypeSymbol target,
-        out bool blockedByOpenGenericParameter)
+        out TypeSymbol nominalTarget,
+        out bool blockedByOpenGenericParameter,
+        out bool sawOpenGenericParameter)
     {
         target = null;
+        nominalTarget = null;
         blockedByOpenGenericParameter = false;
+        sawOpenGenericParameter = false;
+        var nominalTargetsAgree = true;
         var sawAnyMatchingSlot = false;
         foreach (var parameters in candidateParameterLists)
         {
@@ -1906,6 +1849,7 @@ internal sealed partial class ExpressionBinder
                 // Open generic delegate parameters are resolved later, once the
                 // generic method's type arguments have been inferred.
                 blockedByOpenGenericParameter = true;
+                sawOpenGenericParameter = true;
                 continue;
             }
 
@@ -1918,7 +1862,9 @@ internal sealed partial class ExpressionBinder
                 || string.Equals(parameterFullName, "System.MulticastDelegate", StringComparison.Ordinal))
             {
                 target = null;
+                nominalTarget = null;
                 blockedByOpenGenericParameter = false;
+                sawOpenGenericParameter = false;
                 return false;
             }
 
@@ -1936,8 +1882,24 @@ internal sealed partial class ExpressionBinder
                 // Candidates disagree on the delegate shape — leave the lambda
                 // to be bound without a target (overload resolution decides).
                 target = null;
+                nominalTarget = null;
                 blockedByOpenGenericParameter = false;
+                sawOpenGenericParameter = false;
                 return false;
+            }
+
+            var nominalCandidate = TypeSymbol.FromClrType(parameterType);
+            if (nominalTargetsAgree)
+            {
+                if (nominalTarget == null)
+                {
+                    nominalTarget = nominalCandidate;
+                }
+                else if (!SameDelegateIdentity(nominalTarget, nominalCandidate))
+                {
+                    nominalTarget = null;
+                    nominalTargetsAgree = false;
+                }
             }
         }
 
@@ -1945,6 +1907,10 @@ internal sealed partial class ExpressionBinder
         // if some candidate produced a usable closed target, that target wins
         // and there is nothing left to defer.
         blockedByOpenGenericParameter = blockedByOpenGenericParameter && target == null && sawAnyMatchingSlot;
+        if (sawOpenGenericParameter)
+        {
+            nominalTarget = null;
+        }
 
         return target != null;
     }

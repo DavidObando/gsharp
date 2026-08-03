@@ -21,6 +21,24 @@ public delegate int Issue3149Greeter(string value);
 /// <typeparam name="T">Delegate argument type.</typeparam>
 public delegate int Issue3149Mapper<T>(T value);
 
+/// <summary>Open generic extension candidate mixed with <see cref="List{T}.Add(T)"/>.</summary>
+public static class Issue3149MixedDelegateExtensions
+{
+    /// <summary>Must lose to the closed instance <c>Add</c> candidate.</summary>
+    public static void Add<T>(this List<Issue3149Greeter> callbacks, Func<T, int> callback) =>
+        throw new InvalidOperationException("Open generic extension candidate was selected.");
+}
+
+/// <summary>Mixed overloads whose second parameter selects open or closed candidate.</summary>
+public static class Issue3149MixedDelegateOverloads
+{
+    /// <summary>Returns the closed named delegate.</summary>
+    public static Issue3149Greeter Choose(Issue3149Greeter callback, string marker) => callback;
+
+    /// <summary>Returns the inferred open-generic delegate.</summary>
+    public static Func<T, int> Choose<T>(Func<T, int> callback, int marker) => callback;
+}
+
 /// <summary>Imported type argument for <see cref="Issue3149Mapper{T}"/>.</summary>
 public sealed class Issue3149Item
 {
@@ -39,6 +57,79 @@ public sealed class Issue3149Item
 [Collection("ConsoleIo")]
 public sealed class Issue3149NamedDelegateReificationDriverTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MixedOpenAndClosedCandidates_ReifySelectedDelegateAcrossDrivers(bool selectOpen)
+    {
+        var suffix = selectOpen ? "Open" : "Closed";
+        var consumerPackage = "Issue3149Mixed" + suffix;
+        var directory = CreateEmptyTestDirectory("Mixed" + suffix);
+        try
+        {
+            var referencePath = typeof(Issue3149Greeter).Assembly.Location;
+            File.Copy(referencePath, Path.Combine(directory, Path.GetFileName(referencePath)));
+            var statements = selectOpen
+                ? """
+                    let callback = Issue3149MixedDelegateOverloads.Choose((value string) -> value.Length + 50, 1)
+                    Console.WriteLine(callback.GetType().FullName)
+                    Console.WriteLine(callback!!("abc"))
+                    """
+                : """
+                    let callbacks = List[Issue3149Greeter]()
+                    callbacks.Add((value string) -> value.Length + 40)
+                    let callback = callbacks[0]
+                    Console.WriteLine(callback.GetType().FullName)
+                    Console.WriteLine(callback("abc"))
+                    """;
+            var sourcePath = WriteSource(
+                directory,
+                "consumer.gs",
+                $$"""
+                package {{consumerPackage}}
+                import System
+                import System.Collections.Generic
+                import GSharp.Interpreter.Tests
+
+                public class Probe {
+                    shared {
+                        public func Run() {
+                            {{statements}}
+                        }
+                    }
+                }
+
+                Probe.Run()
+                """);
+            var expectedOutput = selectOpen
+                ? $"{typeof(Func<string, int>).FullName}\n53\n"
+                : $"{typeof(Issue3149Greeter).FullName}\n43\n";
+
+            var bare = RunCompiler("/nowarn:GS9100", "/r:" + referencePath, sourcePath);
+            var assemblyPath = Path.Combine(directory, consumerPackage + ".dll");
+            var emitCompile = RunCompiler(
+                "/target:exe",
+                "/nowarn:GS9100",
+                "/out:" + assemblyPath,
+                "/r:" + referencePath,
+                sourcePath);
+            var emitted = emitCompile.ExitCode == 0
+                ? await RunAssemblyAsync(directory, assemblyPath)
+                : emitCompile;
+            var interpreted = RunInterpreter(sourcePath);
+
+            var failures = new List<string>();
+            CheckBareDriver(bare, expectedOutput, failures);
+            CheckDriver("gsc /out:", emitted, expectedOutput, failures);
+            CheckDriver("gsi", interpreted, expectedOutput, failures);
+            Assert.True(failures.Count == 0, string.Join("\n\n", failures));
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -234,7 +325,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         bool generic)
     {
         var failures = new List<string>();
-        CheckBareDriverBoundary(bare, failures);
+        CheckBareDriver(bare, expectedOutput, failures);
         CheckDriver("gsc /out:", emitted, expectedOutput, failures);
         CheckDriver("gsi", interpreted, expectedOutput, failures);
 
@@ -263,23 +354,32 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         Assert.True(failures.Count == 0, string.Join("\n\n", failures));
     }
 
-    private static void CheckBareDriverBoundary(DriverResult result, List<string> failures)
+    private static void CheckBareDriver(
+        DriverResult result,
+        string expectedOutput,
+        List<string> failures)
     {
-        // Issue #3130: bare evaluation has a reference but cannot execute the
-        // MetadataLoadContext-backed List<T> constructor. Keep this column
-        // explicit while emit and gsi execute the delegate-producing path.
-        if (result.ExitCode != 1
-            || !result.StandardOutput.Contains(
+        // Bare evaluation currently hits an unrelated MetadataLoadContext
+        // invocation boundary. Accept that GS9999 or the expected successful
+        // result when the boundary is removed.
+        var normalizedOutput = Normalize(result.StandardOutput);
+        var succeeded = result.ExitCode == 0
+            && string.Equals(normalizedOutput, expectedOutput + "Success.\n", StringComparison.Ordinal)
+            && result.StandardError.Length == 0;
+        var hitBoundary = result.ExitCode == 1
+            && normalizedOutput.Contains(
                 "GS9999: Cannot invoke a method on objects loaded by a MetadataLoadContext.",
                 StringComparison.Ordinal)
-            || result.StandardOutput.Contains("ArgumentException", StringComparison.Ordinal)
-            || result.StandardOutput.Contains("System.Func", StringComparison.Ordinal)
-            || !string.Equals(Normalize(result.StandardError), "Failed.\n", StringComparison.Ordinal))
+            && !normalizedOutput.Contains("ArgumentException", StringComparison.Ordinal)
+            && (expectedOutput.Contains("System.Func", StringComparison.Ordinal)
+                || !normalizedOutput.Contains("System.Func", StringComparison.Ordinal))
+            && string.Equals(Normalize(result.StandardError), "Failed.\n", StringComparison.Ordinal);
+        if (!succeeded && !hitBoundary)
         {
             failures.Add(
-                "gsc boundary changed:"
+                "gsc failed:"
                 + $"\n  exit: {result.ExitCode}"
-                + $"\n  stdout:\n{Normalize(result.StandardOutput)}"
+                + $"\n  stdout:\n{normalizedOutput}"
                 + $"\n  stderr:\n{result.StandardError}");
         }
     }
