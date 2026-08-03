@@ -512,7 +512,11 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(syntax);
             }
 
-            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+            var optionalFinalArguments = PreserveNamedArgumentEvaluationOrder(
+                syntax.Arguments,
+                boundArguments.ToImmutable(),
+                p => parameters[p].Name);
+            return new BoundConstructorCallExpression(syntax, classType, optionalFinalArguments);
         }
 
         if (syntax.Arguments.Count != parameters.Length)
@@ -687,9 +691,14 @@ internal sealed partial class OverloadResolver
             return new BoundErrorExpression(syntax);
         }
 
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            boundArguments.ToImmutable(),
+            p => parameters[p].Name);
+
         if (classType.IsInline)
         {
-            return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+            return new BoundConstructorCallExpression(syntax, classType, finalArguments);
         }
 
         if (!classType.IsClass)
@@ -699,7 +708,7 @@ internal sealed partial class OverloadResolver
             {
                 if (classType.TryGetField(parameters[i].Name, out var field))
                 {
-                    fieldInitializers.Add(new BoundFieldInitializer(field, boundArguments[i]));
+                    fieldInitializers.Add(new BoundFieldInitializer(field, finalArguments[i]));
                     continue;
                 }
 
@@ -708,14 +717,14 @@ internal sealed partial class OverloadResolver
                 // to a settable property with the same name.
                 if (TypeMemberModel.TryGetProperty(classType, parameters[i].Name, out var property) && property.HasSetter)
                 {
-                    fieldInitializers.Add(new BoundFieldInitializer(property, boundArguments[i]));
+                    fieldInitializers.Add(new BoundFieldInitializer(property, finalArguments[i]));
                 }
             }
 
             return new BoundStructLiteralExpression(syntax, classType, fieldInitializers.ToImmutable());
         }
 
-        return new BoundConstructorCallExpression(syntax, classType, boundArguments.ToImmutable());
+        return new BoundConstructorCallExpression(syntax, classType, finalArguments);
     }
 
     /// <summary>
@@ -1123,7 +1132,11 @@ internal sealed partial class OverloadResolver
             Diagnostics.ReportMemberInaccessible(syntax.Identifier.Location, "init", ctorDeclaringType.Name, selectedCtor.Function.Accessibility);
         }
 
-        return new BoundConstructorCallExpression(syntax, classType, convertedArguments.ToImmutable(), selectedCtor);
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            convertedArguments.ToImmutable(),
+            p => parameters[p].Name);
+        return new BoundConstructorCallExpression(syntax, classType, finalArguments, selectedCtor);
     }
 
     /// <summary>

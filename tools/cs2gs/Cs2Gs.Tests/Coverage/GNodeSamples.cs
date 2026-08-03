@@ -62,6 +62,9 @@ public static class GNodeSamples
                     body: Block(new ReturnStatement(new ThisExpression())))))),
             [typeof(MemberAccessExpression)] = () => Expr(new MemberAccessExpression(Id("a"), "B")),
             [typeof(InvocationExpression)] = () => Expr(new InvocationExpression(Id("f"), List<GExpression>(Id("v")))),
+            [typeof(NamedArgumentExpression)] = () => Expr(new InvocationExpression(
+                Id("f"),
+                List<GExpression>(new NamedArgumentExpression("value", Int("1"))))),
             [typeof(IndexExpression)] = () => Expr(new IndexExpression(Id("a"), Int("0"))),
             [typeof(FromEndIndexExpression)] = () => Expr(new IndexExpression(Id("a"), new FromEndIndexExpression(Int("1")))),
             [typeof(RangeIndexExpression)] = () => Expr(new IndexExpression(

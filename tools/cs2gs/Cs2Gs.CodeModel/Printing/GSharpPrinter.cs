@@ -490,6 +490,9 @@ public static class GSharpPrinter
                 var args = string.Join(", ", invocation.Arguments.Select(a => RenderExpression(a, indent)));
                 return $"{RenderExpression(invocation.Target, indent)}{typeArgs}({args})";
 
+            case NamedArgumentExpression namedArgument:
+                return $"{namedArgument.Name}: {RenderExpression(namedArgument.Value, indent)}";
+
             case IndexExpression index:
                 return $"{RenderExpression(index.Target, indent)}[{RenderExpression(index.Index, indent)}]";
 

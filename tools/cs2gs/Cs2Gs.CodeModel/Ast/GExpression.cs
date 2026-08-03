@@ -155,6 +155,29 @@ public sealed class InvocationExpression : GExpression
 }
 
 /// <summary>
+/// A canonical named call argument <c>name: value</c>.
+/// </summary>
+public sealed class NamedArgumentExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NamedArgumentExpression"/> class.
+    /// </summary>
+    /// <param name="name">The target parameter name.</param>
+    /// <param name="value">The argument value.</param>
+    public NamedArgumentExpression(string name, GExpression value)
+    {
+        Name = name;
+        Value = value;
+    }
+
+    /// <summary>Gets the target parameter name.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the argument value.</summary>
+    public GExpression Value { get; }
+}
+
+/// <summary>
 /// An element-access expression <c>target[index]</c>.
 /// </summary>
 public sealed class IndexExpression : GExpression

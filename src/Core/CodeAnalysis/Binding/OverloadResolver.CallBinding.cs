@@ -177,7 +177,11 @@ internal sealed partial class OverloadResolver
             convertedArgs.Add(conversions.BindConversion(permutedSyntax[ai].Location, permutedArguments[ai], method.Parameters[ai].Type));
         }
 
-        return new BoundCallExpression(null, method, convertedArgs.MoveToImmutable());
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            convertedArgs.MoveToImmutable(),
+            p => method.Parameters[p].Name);
+        return new BoundCallExpression(null, method, finalArguments);
     }
 
     /// <summary>
@@ -1796,6 +1800,11 @@ internal sealed partial class OverloadResolver
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
         }
 
+        var finalBoundArguments = PreserveNamedArgumentEvaluationOrder(
+            syntax.Arguments,
+            boundArguments.ToImmutable(),
+            p => function.Parameters[p].Name);
+
         if (substitution != null)
         {
             var returnType = substituteType(function.Type, substitution);
@@ -1804,16 +1813,16 @@ internal sealed partial class OverloadResolver
                 returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask);
             }
 
-            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType, methodTypeArguments);
+            return CreatePossiblyElidedCall(function, finalBoundArguments, returnType, methodTypeArguments);
         }
 
         if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask);
-            return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), asyncReturn, methodTypeArguments);
+            return CreatePossiblyElidedCall(function, finalBoundArguments, asyncReturn, methodTypeArguments);
         }
 
-        return CreatePossiblyElidedCall(function, boundArguments.ToImmutable(), returnType: null, methodTypeArguments);
+        return CreatePossiblyElidedCall(function, finalBoundArguments, returnType: null, methodTypeArguments);
     }
 
     /// <summary>

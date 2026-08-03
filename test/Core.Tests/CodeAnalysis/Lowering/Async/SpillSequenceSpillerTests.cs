@@ -287,6 +287,39 @@ public class SpillSequenceSpillerTests
     }
 
     [Fact]
+    public void TopLevelAwait_WithAwaitInCallArgument_SpillsInnerAwait()
+    {
+        var taskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task));
+        var innerAwait = new BoundAwaitExpression(
+            null,
+            new BoundLiteralExpression(null, 0),
+            TypeSymbol.Int32);
+        var call = new BoundCallExpression(
+            null,
+            MakeFunction("consumeAsync", taskType, TypeSymbol.Int32),
+            ImmutableArray.Create<BoundExpression>(innerAwait));
+        var outerAwait = new BoundAwaitExpression(null, call, TypeSymbol.Void);
+        var body = new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, outerAwait)));
+
+        var result = SpillSequenceSpiller.Rewrite(body);
+
+        Assert.NotSame(body, result);
+        Assert.Contains(
+            result.Statements,
+            statement => statement is BoundVariableDeclaration
+            {
+                Initializer: BoundAwaitExpression,
+            });
+        var finalAwait = Assert.IsType<BoundAwaitExpression>(
+            Assert.IsType<BoundExpressionStatement>(result.Statements[^1]).Expression);
+        var finalCall = Assert.IsType<BoundCallExpression>(finalAwait.Expression);
+        Assert.IsType<BoundVariableExpression>(Assert.Single(finalCall.Arguments));
+    }
+
+    [Fact]
     public void NonAsync_Function_NotProcessed()
     {
         // Arrange: a body without any await

@@ -163,16 +163,10 @@ namespace Corpus.Issue1733
         Assert.Contains("negInf float32 = System.Single.NegativeInfinity", rendered, StringComparison.Ordinal);
     }
 
-    // N3: a parameter symbol declared in a REFERENCED (metadata) assembly has no
-    // `DeclaringSyntaxReferences`, so the old code (using that alone as the
-    // diagnostic anchor) silently dropped the default with NO diagnostic. Here,
-    // `ExternalLib.Service.Configure`'s `level` parameter is compiled into a
-    // separate metadata assembly with a default that matches no `Level` member;
-    // a named-argument call that skips it must still resolve `MapConstantDefault`
-    // to a non-null fallback node (the call-site argument list) so the
-    // Unsupported diagnostic fires instead of being swallowed.
+    // Native named arguments leave skipped metadata defaults to gsc's CLR
+    // binder; cs2gs no longer reconstructs the unmatched enum value.
     [Fact]
-    public void MetadataEnumParameterDefault_WithNoMatchingMember_StillReportsUnsupported()
+    public void MetadataEnumParameterDefault_WithNoMatchingMember_PreservesNamedCall()
     {
         MetadataReference libraryReference = CompileExternalLibraryReference();
 
@@ -200,11 +194,11 @@ namespace Corpus.Issue1733.Caller
 
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.IsUnsupported && d.Message.Contains("'99'", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Diagnostics, diagnostic => diagnostic.IsUnsupported);
+        Assert.Contains("Service.Configure(extra: 5)", printed, StringComparison.Ordinal);
     }
 
     private static MetadataReference CompileExternalLibraryReference()

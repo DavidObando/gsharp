@@ -13,22 +13,14 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1727: <c>TranslateArgument</c> never read <c>ArgumentSyntax.NameColon</c>,
-/// and every call site emitted <c>invocation.ArgumentList.Arguments</c> in SYNTAX
-/// order. G# has no named-argument call syntax, so <c>Foo(b: 2, a: 1)</c> was
-/// silently emitted as <c>Foo(2, 1)</c> — the arguments swapped — and
-/// <c>Foo(c: 5)</c> against a method with leading optional parameters bound
-/// <c>5</c> to the FIRST parameter. The fix reorders named/mixed argument lists
-/// into parameter DECLARATION order using the semantic model
-/// (<c>IArgumentOperation.Parameter</c>), filling any skipped optional parameter
-/// with its default value, and refuses to reorder (reporting Unsupported instead)
-/// when doing so would change the observable evaluation order of a
-/// potentially side-effecting argument.
+/// Issue #1727/#3090: cs2gs preserves C# named arguments in canonical G#
+/// <c>name: value</c> form. Native gsc binding maps names to parameter slots
+/// while evaluating argument expressions in lexical source order.
 /// </summary>
 public class Issue1727NamedArgumentReorderTranslationTests
 {
     [Fact]
-    public void NamedArguments_OutOfDeclarationOrder_AreReorderedPositionally()
+    public void NamedArguments_OutOfDeclarationOrder_PreserveNamesAndSourceOrder()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -43,12 +35,11 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 2)", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Foo(2, 1)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(b: 2, a: 1)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void NamedArgument_SkipsLeadingOptionalParameters_FillsDefaults()
+    public void NamedArgument_SkipsLeadingOptionalParameters_PreservesName()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -63,7 +54,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 2, 5)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(c: 5)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -82,11 +73,11 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 2)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, b: 2)", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void MixedPositionalAndNamedArguments_ReorderCorrectly()
+    public void MixedPositionalAndNamedArguments_PreserveSourceForm()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -101,17 +92,15 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 2, 3)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(1, c: 3, b: 2)", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Reordering named arguments that carry a method call (a potential side
-    /// effect) relative to declaration order must not silently change C#'s
-    /// lexical evaluation order: the translator reports Unsupported rather than
-    /// emit a reordered call that could observably differ from the source.
+    /// Side-effecting named arguments stay in source order; native gsc lowering
+    /// preserves that evaluation order while binding by name.
     /// </summary>
     [Fact]
-    public void NamedArguments_ReorderingSideEffectingCalls_ReportsUnsupported()
+    public void NamedArguments_ReorderingSideEffectingCalls_PreserveSourceOrder()
     {
         (CompilationUnit unit, TranslationContext context) = Translate(@"
 namespace Demo
@@ -130,9 +119,10 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported
-            && d.Message.Contains("issue #1727", StringComparison.OrdinalIgnoreCase));
-        Assert.NotNull(unit);
+        string printed = GSharpPrinter.Print(unit);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("Foo(b: NextB(), a: NextA())", printed, StringComparison.Ordinal);
+        AssertRoundTrip(printed);
     }
 
     /// <summary>
@@ -160,7 +150,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(0, 1, 2, 3)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(x: 0, 1, 2, 3)", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -168,7 +158,7 @@ namespace Demo
     /// still dense-fill the gap from the parameter's own default.
     /// </summary>
     [Fact]
-    public void NamedArgument_SkipsMiddleOptionalParameter_FillsDefault()
+    public void NamedArgument_SkipsMiddleOptionalParameter_PreservesNames()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -183,7 +173,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Foo(1, 2, 5)", printed, StringComparison.Ordinal);
+        Assert.Contains("Foo(a: 1, c: 5)", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -235,7 +225,7 @@ namespace Demo
         }
     }
 }");
-        Assert.Contains("Merge(8, a, b)", printed, StringComparison.Ordinal);
+        Assert.Contains("Merge(additionalCapacity: 8, a, b)", printed, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)
@@ -248,6 +238,15 @@ namespace Demo
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static void AssertRoundTrip(string printed)
+    {
+        RoundTripResult result = GSharpRoundTrip.Validate(printed);
+        Assert.True(
+            result.Success,
+            "Translated G# must round-trip. Errors:\n" +
+                string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
     }
 
     private static (CompilationUnit Unit, TranslationContext Context) Translate(string source)

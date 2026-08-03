@@ -4,6 +4,22 @@ AwaitExpression: nested=21
 AwaitExpression: interpolated=16
 AwaitExpression: task-returning helper ran
 AwaitExpression: viaArg=8
+AwaitExpression: positional-receiver
+AwaitExpression: positional-before
+AwaitExpression: positional-inner
+AwaitExpression: positional-after
+AwaitExpression: positional-outer=1,2,3
+AwaitExpression: named-receiver
+AwaitExpression: named-after
+AwaitExpression: named-inner
+AwaitExpression: named-before
+AwaitExpression: named-outer=4,5,6
+AwaitExpression: static-extension-receiver
+AwaitExpression: static-extension-inner
+AwaitExpression: static-extension-outer=7
+AwaitExpression: bare-extension-receiver
+AwaitExpression: bare-extension-inner
+AwaitExpression: bare-extension-outer=8
 AwaitExpressionConfigureAwait: value=11
 AwaitExpressionConfigureAwait: void-task awaited
 AwaitExpressionConfigureAwait: chained=42

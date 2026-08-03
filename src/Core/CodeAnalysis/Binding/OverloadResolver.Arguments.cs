@@ -648,7 +648,125 @@ internal sealed partial class OverloadResolver
             ordered[i] ??= ConversionClassifier.CreateOptionalDefaultArgument(parameters[i]);
         }
 
-        return ImmutableArray.Create(ordered);
+        return PreserveMappedArgumentEvaluationOrder(
+            ImmutableArray.Create(ordered),
+            parameterMapping);
+    }
+
+    // Named binding stores arguments in parameter order, but evaluation remains
+    // lexical. Capture converted argument values in source order inside the
+    // first emitted parameter slot, then load those temps in parameter order.
+    private ImmutableArray<BoundExpression> PreserveNamedArgumentEvaluationOrder(
+        SeparatedSyntaxList<ExpressionSyntax> sourceArguments,
+        ImmutableArray<BoundExpression> parameterOrderedArguments,
+        System.Func<int, string> parameterNameAt,
+        int parameterOffset = 0)
+    {
+        if (sourceArguments.Count == 0 ||
+            !sourceArguments.Any(argument => argument is NamedArgumentExpressionSyntax))
+        {
+            return parameterOrderedArguments;
+        }
+
+        var mapping = ImmutableArray.CreateBuilder<int>(sourceArguments.Count);
+        for (var sourceIndex = 0; sourceIndex < sourceArguments.Count; sourceIndex++)
+        {
+            if (sourceArguments[sourceIndex] is not NamedArgumentExpressionSyntax named)
+            {
+                mapping.Add(sourceIndex);
+                continue;
+            }
+
+            var parameterIndex = -1;
+            for (var candidate = 0;
+                 candidate < parameterOrderedArguments.Length - parameterOffset;
+                 candidate++)
+            {
+                if (string.Equals(
+                        parameterNameAt(candidate),
+                        named.NameToken.Text,
+                        StringComparison.Ordinal))
+                {
+                    parameterIndex = candidate;
+                    break;
+                }
+            }
+
+            if (parameterIndex < 0)
+            {
+                return parameterOrderedArguments;
+            }
+
+            mapping.Add(parameterIndex);
+        }
+
+        return PreserveMappedArgumentEvaluationOrder(
+            parameterOrderedArguments,
+            mapping.MoveToImmutable(),
+            parameterOffset);
+    }
+
+    private static ImmutableArray<BoundExpression> PreserveMappedArgumentEvaluationOrder(
+        ImmutableArray<BoundExpression> parameterOrderedArguments,
+        ImmutableArray<int> sourceToParameterMapping,
+        int parameterOffset = 0)
+    {
+        if (sourceToParameterMapping.IsDefaultOrEmpty ||
+            parameterOffset < 0 ||
+            parameterOffset >= parameterOrderedArguments.Length)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var seenSlots = new HashSet<int>();
+        var reordered = false;
+        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var parameterIndex = sourceToParameterMapping[sourceIndex];
+            var slot = parameterOffset + parameterIndex;
+            if (parameterIndex < 0 ||
+                slot >= parameterOrderedArguments.Length ||
+                !seenSlots.Add(slot))
+            {
+                return parameterOrderedArguments;
+            }
+
+            reordered |= parameterIndex != sourceIndex;
+            BoundExpression argument = parameterOrderedArguments[slot];
+            if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression)
+            {
+                // Preserve the existing ref/out/in call path. Managed pointers
+                // cannot be materialized into ordinary value temps.
+                return parameterOrderedArguments;
+            }
+        }
+
+        if (!reordered)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var replacements = parameterOrderedArguments.ToArray();
+        var evaluations = ImmutableArray.CreateBuilder<BoundStatement>(
+            sourceToParameterMapping.Length);
+        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
+            BoundExpression argument = parameterOrderedArguments[slot];
+            var temp = new LocalVariableSymbol(
+                $"<>namedArg{sourceIndex}",
+                isReadOnly: true,
+                argument.Type);
+            evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
+            replacements[slot] = new BoundVariableExpression(argument.Syntax, temp);
+        }
+
+        var carrier = parameterOffset;
+        replacements[carrier] = new BoundBlockExpression(
+            parameterOrderedArguments[carrier].Syntax,
+            evaluations.MoveToImmutable(),
+            replacements[carrier]);
+        return ImmutableArray.Create(replacements);
     }
 
     /// <summary>

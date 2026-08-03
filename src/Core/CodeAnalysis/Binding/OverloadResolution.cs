@@ -629,8 +629,8 @@ internal static class OverloadResolution
     /// a distinct parameter on that candidate, no positional slot is overwritten
     /// by a named slot, and every unfilled non-trailing slot is optional. The
     /// returned <see cref="Result{T}.ParameterMapping"/> records, for each source
-    /// argument index, the resolved parameter position so the binder can reorder
-    /// the bound arguments into parameter order before emit.
+    /// argument index, the resolved parameter position so binding can preserve
+    /// source evaluation order while presenting values in parameter order.
     /// </param>
     /// <returns>The resolution result.</returns>
     /// <param name="recoverTypeArgSymbols">

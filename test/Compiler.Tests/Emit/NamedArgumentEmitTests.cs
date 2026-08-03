@@ -13,9 +13,9 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #343 emit tests. Compiles GSharp programs that use named arguments
 /// at call sites and verifies the resulting PE executes with the same
-/// observable behavior as the equivalent positional form. The bound call
-/// reorders arguments into parameter order before lowering, so the emitted
-/// IL must push values onto the stack in parameter (not source) order.
+/// observable behavior as the equivalent positional form. Binding maps values
+/// to parameter slots while preserving lexical source evaluation through
+/// ordered temporary captures.
 /// </summary>
 public class NamedArgumentEmitTests
 {
@@ -53,6 +53,72 @@ public class NamedArgumentEmitTests
     }
 
     [Fact]
+    public void UserFunction_ReorderedNamedArguments_EvaluateInSourceOrder()
+    {
+        var source = """
+            package P
+
+            public var trace = ""
+
+            func mark(label string, value int32) int32 {
+                trace = trace + label
+                return value
+            }
+
+            func consume(a int32, b int32) {
+                trace = trace + "$a$b"
+            }
+
+            consume(b: mark("B", 2), a: mark("A", 1))
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("BA12", (string)traceField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void ClrInstance_ReorderedNamedArguments_EvaluateInSourceOrder()
+    {
+        var source = """
+            package P
+
+            public var trace = ""
+            public var result = -1
+
+            func markInt(label string, value int32) int32 {
+                trace = trace + label
+                return value
+            }
+
+            func markString(label string, value string) string {
+                trace = trace + label
+                return value
+            }
+
+            result = "hello".IndexOf(
+                startIndex: markInt("S", 0),
+                value: markString("V", "h"))
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("SV", (string)traceField!.GetValue(null)!);
+        Assert.Equal(0, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
     public void UserClassPrimaryCtor_NamedArguments_ReorderFields()
     {
         var source = """
@@ -82,6 +148,39 @@ public class NamedArgumentEmitTests
     }
 
     [Fact]
+    public void UserClassPrimaryCtor_NamedArguments_EvaluateInSourceOrder()
+    {
+        var source = """
+            package P
+
+            class Point(X int32, Y int32) {
+            }
+
+            public var trace = ""
+            public var result = 0
+
+            func mark(label string, value int32) int32 {
+                trace = trace + label
+                return value
+            }
+
+            let p = Point(Y: mark("Y", 7), X: mark("X", 3))
+            result = p.X * 10 + p.Y
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("YX", (string)traceField!.GetValue(null)!);
+        Assert.Equal(37, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
     public void ClrInstance_StringIndexOf_NamedArguments_ReorderedCorrectly()
     {
         var source = """
@@ -105,6 +204,40 @@ public class NamedArgumentEmitTests
         entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
 
         Assert.Equal(6, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void UserExtension_NamedArguments_EvaluateInSourceOrder()
+    {
+        var source = """
+            package P
+
+            class Box {
+            }
+
+            public var trace = ""
+
+            func mark(label string, value int32) int32 {
+                trace = trace + label
+                return value
+            }
+
+            func (box Box) Consume(a int32, b int32) {
+                trace = trace + "$a$b"
+            }
+
+            let box = Box()
+            box.Consume(b: mark("B", 2), a: mark("A", 1))
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("BA12", (string)traceField!.GetValue(null)!);
     }
 
     private static Assembly CompileToAssembly(string source, string target)

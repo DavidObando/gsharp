@@ -1037,6 +1037,12 @@ internal sealed partial class OverloadResolver
             extensionMethodTypeArguments = extensionMethodTypeArgsBuilder.MoveToImmutable();
         }
 
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            ce.Arguments,
+            convertedArgs.MoveToImmutable(),
+            p => extension.Parameters[p + 1].Name,
+            parameterOffset: 1);
+
         if (substitution != null)
         {
             var returnType = substituteType(extension.Type, substitution);
@@ -1045,7 +1051,7 @@ internal sealed partial class OverloadResolver
                 returnType = wrapAsTask(returnType, extension.AsyncReturnsValueTask);
             }
 
-            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), returnType) { MethodTypeArguments = extensionMethodTypeArguments };
+            return new BoundCallExpression(null, extension, finalArguments, returnType) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
         // Issue #1376: an async receiver-clause (extension) function's call-site
@@ -1055,10 +1061,10 @@ internal sealed partial class OverloadResolver
         if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
         {
             var asyncReturn = wrapAsTask(extension.Type, extension.AsyncReturnsValueTask);
-            return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable(), asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
+            return new BoundCallExpression(null, extension, finalArguments, asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
         }
 
-        return new BoundCallExpression(null, extension, convertedArgs.MoveToImmutable()) { MethodTypeArguments = extensionMethodTypeArguments };
+        return new BoundCallExpression(null, extension, finalArguments) { MethodTypeArguments = extensionMethodTypeArguments };
     }
 
     public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol constrainedReceiverTypeParameter = null)
@@ -1430,9 +1436,14 @@ internal sealed partial class OverloadResolver
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
         }
 
+        var finalArguments = PreserveNamedArgumentEvaluationOrder(
+            ce.Arguments,
+            convertedArgs.ToImmutable(),
+            p => method.Parameters[p + parameterOffset].Name);
+
         BoundUserInstanceCallExpression MakeCall(TypeSymbol returnTypeOverride)
         {
-            var result = new BoundUserInstanceCallExpression(null, receiver, method, convertedArgs.ToImmutable(), returnTypeOverride, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
+            var result = new BoundUserInstanceCallExpression(null, receiver, method, finalArguments, returnTypeOverride, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
             result.MethodTypeArguments = methodTypeArguments;
             return result;
         }
