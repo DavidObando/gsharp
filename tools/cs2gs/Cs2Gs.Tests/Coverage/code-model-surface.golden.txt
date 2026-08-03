@@ -32,6 +32,7 @@ ObjectCreationInitializerExpression
 OutArgumentExpression
 ParenthesizedExpression
 RangeIndexExpression
+SpreadElementExpression
 StackAllocExpression
 SwitchExpression
 ThisExpression

@@ -7,7 +7,9 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// <summary>
 /// Issue #479 / ADR-0117: a bare element of a sequence/set collection
 /// initializer, e.g. the <c>1</c> in <c>List[int32]{1, 2, 3}</c>. Lowers to a
-/// <c>Add(expr)</c> call on the constructed collection.
+/// <c>Add(expr)</c> call on the constructed collection. When
+/// <see cref="Expression"/> is a <see cref="SpreadElementExpressionSyntax"/>,
+/// each source element is added in order.
 /// </summary>
 public sealed class ExpressionCollectionElementSyntax : CollectionElementSyntax
 {

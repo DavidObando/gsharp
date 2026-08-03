@@ -504,6 +504,9 @@ public static class GSharpPrinter
                 var rangeEnd = range.End != null ? RenderExpression(range.End, indent) : string.Empty;
                 return $"{rangeStart}..{rangeEnd}";
 
+            case SpreadElementExpression spread:
+                return $"...{RenderExpression(spread.Source, indent)}";
+
             case CompositeLiteralExpression composite:
                 var inits = string.Join(", ", composite.FieldInitializers.Select(f => $"{f.Name}: {RenderExpression(f.Value, indent)}"));
                 return $"{RenderType(composite.Type)}{{{inits}}}";
@@ -756,7 +759,8 @@ public static class GSharpPrinter
         }
         else if (collection.Target is InvocationExpression invocation
             && invocation.Arguments.Count == 0
-            && invocation.TypeArguments.Count > 0)
+            && invocation.TypeArguments.Count > 0
+            && !collection.Elements.Any(element => element.Value is SpreadElementExpression))
         {
             var typeArgs = $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
             target = $"{RenderExpression(invocation.Target, indent)}{typeArgs}";

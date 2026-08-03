@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -63,6 +64,12 @@ public sealed partial class Evaluator
     private readonly Dictionary<Symbols.FunctionSymbol, bool> iteratorFunctionCache = [];
     private readonly ConcurrentDictionary<FunctionSymbol, BoundBlockStatement> localFunctionBodies = [];
     private readonly Dictionary<(Symbols.StructSymbol, Symbols.FieldSymbol), object> staticFields = [];
+
+    // Issue #3096: mirror CLR .cctor once-only semantics so static field
+    // initializers execute in declaration order under the interpreter too.
+    private readonly HashSet<Symbols.TypeSymbol> initializedStaticTypes = [];
+    private readonly Dictionary<Symbols.TypeSymbol, int> initializingStaticTypes = [];
+    private readonly Dictionary<Symbols.TypeSymbol, ExceptionDispatchInfo> failedStaticTypes = [];
 
     // ADR-0089 / issue #1030: interface static-field storage. Keyed by the
     // owning interface symbol so each closed construction of a generic interface
@@ -260,6 +267,115 @@ public sealed partial class Evaluator
         lock (globalsLock)
         {
             staticFields[(structType, field)] = value;
+        }
+    }
+
+    private void EnsureStaticTypeInitialized(Symbols.StructSymbol structType)
+        => EnsureStaticTypeInitialized(
+            structType,
+            structType?.StaticFields ?? ImmutableArray<Symbols.FieldSymbol>.Empty,
+            structType?.StaticFieldInitializers ?? ImmutableDictionary<Symbols.FieldSymbol, BoundExpression>.Empty,
+            structType?.StaticInitializerStatements ?? ImmutableArray<BoundStatement>.Empty);
+
+    private void EnsureStaticTypeInitialized(Symbols.InterfaceSymbol interfaceType)
+        => EnsureStaticTypeInitialized(
+            interfaceType,
+            interfaceType?.StaticFields ?? ImmutableArray<Symbols.FieldSymbol>.Empty,
+            interfaceType?.StaticFieldInitializers ?? ImmutableDictionary<Symbols.FieldSymbol, BoundExpression>.Empty,
+            ImmutableArray<BoundStatement>.Empty);
+
+    private void EnsureStaticTypeInitialized(
+        Symbols.TypeSymbol type,
+        ImmutableArray<Symbols.FieldSymbol> fields,
+        ImmutableDictionary<Symbols.FieldSymbol, BoundExpression> initializers,
+        ImmutableArray<BoundStatement> initializerStatements)
+    {
+        if (type == null || (initializers.IsEmpty && initializerStatements.IsDefaultOrEmpty))
+        {
+            return;
+        }
+
+        var threadId = Environment.CurrentManagedThreadId;
+        ExceptionDispatchInfo priorFailure = null;
+        lock (globalsLock)
+        {
+            while (initializingStaticTypes.TryGetValue(type, out var ownerThread) &&
+                   ownerThread != threadId)
+            {
+                Monitor.Wait(globalsLock);
+            }
+
+            if (!failedStaticTypes.TryGetValue(type, out priorFailure))
+            {
+                if (initializedStaticTypes.Contains(type) ||
+                    (initializingStaticTypes.TryGetValue(type, out var reentrantOwner) &&
+                     reentrantOwner == threadId))
+                {
+                    return;
+                }
+
+                initializingStaticTypes[type] = threadId;
+            }
+        }
+
+        if (priorFailure != null)
+        {
+            priorFailure.Throw();
+            return;
+        }
+
+        var succeeded = false;
+        ExceptionDispatchInfo failure = null;
+        try
+        {
+            var frame = new ConcurrentDictionary<Symbols.VariableSymbol, object>();
+            using (PushFrame(frame))
+            {
+                foreach (var field in fields)
+                {
+                    if (initializers.TryGetValue(field, out var initializer))
+                    {
+                        var value = EvaluateExpression(initializer);
+                        if (type is Symbols.StructSymbol structType)
+                        {
+                            SetStaticField(structType, field, value);
+                        }
+                        else
+                        {
+                            SetInterfaceStaticField((Symbols.InterfaceSymbol)type, field, value);
+                        }
+                    }
+                }
+
+                if (!initializerStatements.IsDefaultOrEmpty)
+                {
+                    EvaluateStatement(new BoundBlockStatement(null, initializerStatements));
+                }
+            }
+
+            succeeded = true;
+        }
+        catch (Exception ex)
+        {
+            failure = ExceptionDispatchInfo.Capture(ex);
+            throw;
+        }
+        finally
+        {
+            lock (globalsLock)
+            {
+                initializingStaticTypes.Remove(type);
+                if (succeeded)
+                {
+                    initializedStaticTypes.Add(type);
+                }
+                else if (failure != null)
+                {
+                    failedStaticTypes[type] = failure;
+                }
+
+                Monitor.PulseAll(globalsLock);
+            }
         }
     }
 
