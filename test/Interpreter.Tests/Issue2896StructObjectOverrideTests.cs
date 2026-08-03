@@ -154,6 +154,87 @@ public class Issue2896StructObjectOverrideTests
     }
 
     [Fact]
+    public async Task Issue3135_OverrideCacheSeparatesTypesMethodsAndInheritedSlots()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = $$"""
+            package Issue3135{{suffix}}
+            import System
+            import System.Collections.Generic
+
+            struct Plain{{suffix}} {
+                var Number int32
+            }
+
+            struct Direct{{suffix}} {
+                var Number int32
+                override func Equals(value object) bool -> true
+                override func GetHashCode() int32 -> 313511
+                override func ToString() string -> "DIRECT-11"
+            }
+
+            open class Base{{suffix}} {
+                open override func Equals(value object) bool -> true
+                open override func GetHashCode() int32 -> 313533
+                open override func ToString() string -> "BASE-33"
+            }
+
+            class Inherited{{suffix}} : Base{{suffix}} {
+            }
+
+            class MostDerived{{suffix}} : Base{{suffix}} {
+                override func Equals(value object) bool -> false
+                override func GetHashCode() int32 -> 313544
+                override func ToString() string -> "DERIVED-44"
+            }
+
+            let plainA = Plain{{suffix}}{Number: 11}
+            let plainB = Plain{{suffix}}{Number: 22}
+            let plainValues = Dictionary[Plain{{suffix}}, int32]()
+            plainValues[plainA] = 11
+            plainValues[plainB] = 22
+            Console.WriteLine(String.Format("PLAIN-22-{0}-{1}", plainValues.Count, plainA.Equals(plainB)))
+
+            let directA = Direct{{suffix}}{Number: 11}
+            let directB = Direct{{suffix}}{Number: 22}
+            let directValues = Dictionary[Direct{{suffix}}, int32]()
+            directValues[directA] = 11
+            directValues[directB] = 22
+            Console.WriteLine(String.Format("DIRECT-11-{0}-{1}-{2}", directValues.Count, directA.Equals(directB), directA))
+
+            let inheritedA = Inherited{{suffix}}()
+            let inheritedB = Inherited{{suffix}}()
+            let inheritedValues = Dictionary[Inherited{{suffix}}, int32]()
+            inheritedValues[inheritedA] = 11
+            inheritedValues[inheritedB] = 33
+            Console.WriteLine(String.Format("INHERITED-33-{0}-{1}-{2}", inheritedValues.Count, inheritedA.Equals(inheritedB), inheritedA))
+
+            let derivedA = MostDerived{{suffix}}()
+            let derivedB = MostDerived{{suffix}}()
+            let derivedValues = Dictionary[MostDerived{{suffix}}, int32]()
+            derivedValues[derivedA] = 11
+            derivedValues[derivedB] = 44
+            Console.WriteLine(String.Format("DERIVED-44-{0}-{1}-{2}", derivedValues.Count, derivedA.Equals(derivedB), derivedA))
+
+            Console.WriteLine(String.Format("PLAIN-22-AGAIN-{0}", plainA.Equals(plainB)))
+            """;
+
+        var emitted = await RunDriverAsync(source, suffix + "Emit", "gsc-emit");
+        Assert.Equal(
+            """
+            PLAIN-22-2-False
+            DIRECT-11-1-True-DIRECT-11
+            INHERITED-33-1-True-BASE-33
+            DERIVED-44-2-False-DERIVED-44
+            PLAIN-22-AGAIN-False
+            """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+            emitted);
+        Assert.Equal(emitted, Evaluate(source));
+        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Evaluate", "gsc-evaluate"));
+        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Gsi", "gsi"));
+    }
+
+    [Fact]
     public void GenericInterfaceOperatorNestedAndSharedShapes_DispatchOverrides()
     {
         const string Source = """
