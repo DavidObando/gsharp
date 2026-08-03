@@ -119,6 +119,23 @@ public class Issue2896StructObjectOverrideTests
     }
 
     [Theory]
+    [InlineData("dictionary")]
+    [InlineData("hashSet")]
+    [InlineData("listContains")]
+    [InlineData("equals")]
+    [InlineData("getHashCode")]
+    public async Task Issue3134_ClassIdentityAndStructValueEqualityMatchEmitter(string surface)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = BuildIssue3134Source(surface, suffix);
+        var emitted = await RunDriverAsync(source, suffix + "Emit", "gsc-emit");
+
+        AssertIssue3134EmittedSemantics(surface, emitted);
+        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Evaluate", "gsc-evaluate"));
+        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Gsi", "gsi"));
+    }
+
+    [Theory]
     [InlineData(false, "gsc-evaluate")]
     [InlineData(false, "gsc-emit")]
     [InlineData(false, "gsi")]
@@ -292,6 +309,216 @@ public class Issue2896StructObjectOverrideTests
         }
 
         return outWriter.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static string BuildIssue3134Source(string surface, string suffix)
+    {
+        var declarations = $$"""
+            package Issue3134{{suffix}}
+            import System
+            import System.Collections.Generic
+
+            class ClassWithOverrides{{suffix}} {
+                var Number int32
+                override func Equals(value object) bool -> true
+                override func GetHashCode() int32 -> 313401
+            }
+
+            class ClassWithoutOverrides{{suffix}} {
+                var Number int32
+            }
+
+            data class DataClass{{suffix}}(Number int32) {
+            }
+
+            struct StructWithOverrides{{suffix}} {
+                var Number int32
+                override func Equals(value object) bool -> true
+                override func GetHashCode() int32 -> 313402
+            }
+
+            struct StructWithoutOverrides{{suffix}} {
+                var Number int32
+            }
+            """;
+
+        return declarations + "\n"
+            + BuildIssue3134TypeProbe(
+                surface,
+                "ClassWithOverrides",
+                "cwo",
+                "ClassWithOverrides" + suffix,
+                isClass: true,
+                secondNumber: 22)
+            + BuildIssue3134TypeProbe(
+                surface,
+                "ClassWithoutOverrides",
+                "cno",
+                "ClassWithoutOverrides" + suffix,
+                isClass: true,
+                secondNumber: 11)
+            + BuildIssue3134TypeProbe(
+                surface,
+                "DataClass",
+                "data",
+                "DataClass" + suffix,
+                isClass: true,
+                secondNumber: 11,
+                usePrimaryConstructor: true)
+            + BuildIssue3134TypeProbe(
+                surface,
+                "StructWithOverrides",
+                "swo",
+                "StructWithOverrides" + suffix,
+                isClass: false,
+                secondNumber: 22)
+            + BuildIssue3134TypeProbe(
+                surface,
+                "StructWithoutOverrides",
+                "sno",
+                "StructWithoutOverrides" + suffix,
+                isClass: false,
+                secondNumber: 11);
+    }
+
+    private static string BuildIssue3134TypeProbe(
+        string surface,
+        string label,
+        string prefix,
+        string typeName,
+        bool isClass,
+        int secondNumber,
+        bool usePrimaryConstructor = false)
+    {
+        var setup = usePrimaryConstructor
+            ? $$"""
+                let {{prefix}}A = {{typeName}}(11)
+                let {{prefix}}B = {{typeName}}({{secondNumber}})
+                let {{prefix}}C = {{prefix}}A
+                let {{prefix}}Other = {{typeName}}(33)
+                """
+            : isClass
+            ? $$"""
+                let {{prefix}}A = {{typeName}}()
+                {{prefix}}A.Number = 11
+                let {{prefix}}B = {{typeName}}()
+                {{prefix}}B.Number = {{secondNumber}}
+                let {{prefix}}C = {{prefix}}A
+                let {{prefix}}Other = {{typeName}}()
+                {{prefix}}Other.Number = 33
+                """
+            : $$"""
+                let {{prefix}}A = {{typeName}}{Number: 11}
+                let {{prefix}}B = {{typeName}}{Number: {{secondNumber}}}
+                let {{prefix}}C = {{prefix}}A
+                let {{prefix}}Other = {{typeName}}{Number: 33}
+                """;
+
+        var probe = surface switch
+        {
+            "dictionary" => $$"""
+                let {{prefix}}Values = Dictionary[{{typeName}}, string]()
+                {{prefix}}Values[{{prefix}}A] = "A-11"
+                {{prefix}}Values[{{prefix}}B] = "B-{{secondNumber}}"
+                {{prefix}}Values[{{prefix}}C] = "C-11"
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}|{2}|{3}",
+                    {{prefix}}Values.Count,
+                    {{prefix}}Values[{{prefix}}A],
+                    {{prefix}}Values[{{prefix}}B],
+                    {{prefix}}Values.ContainsKey({{prefix}}Other)))
+                """,
+            "hashSet" => $$"""
+                let {{prefix}}Values = HashSet[{{typeName}}]()
+                let {{prefix}}AddedA = {{prefix}}Values.Add({{prefix}}A)
+                let {{prefix}}AddedB = {{prefix}}Values.Add({{prefix}}B)
+                let {{prefix}}AddedC = {{prefix}}Values.Add({{prefix}}C)
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}|{2}|{3}|{4}",
+                    {{prefix}}Values.Count,
+                    {{prefix}}AddedA,
+                    {{prefix}}AddedB,
+                    {{prefix}}AddedC,
+                    {{prefix}}Values.Contains({{prefix}}Other)))
+                """,
+            "listContains" => $$"""
+                let {{prefix}}Values = List[{{typeName}}]()
+                {{prefix}}Values.Add({{prefix}}A)
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}|{2}|{3}|{4}",
+                    {{prefix}}Values.Count,
+                    {{prefix}}Values[0].Number,
+                    {{prefix}}Values.Contains({{prefix}}A),
+                    {{prefix}}Values.Contains({{prefix}}B),
+                    {{prefix}}Values.Contains({{prefix}}Other)))
+                """,
+            "equals" => $$"""
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}|{2}",
+                    {{prefix}}A.Equals({{prefix}}B),
+                    {{prefix}}A.Equals({{prefix}}C),
+                    {{prefix}}A.Equals({{prefix}}Other)))
+                """,
+            "getHashCode" => $$"""
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}",
+                    {{prefix}}A.GetHashCode() == {{prefix}}B.GetHashCode(),
+                    {{prefix}}A.GetHashCode() == {{prefix}}C.GetHashCode()))
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
+        };
+
+        return setup + "\n" + probe + "\n";
+    }
+
+    private static void AssertIssue3134EmittedSemantics(string surface, string output)
+    {
+        var expected = surface switch
+        {
+            "dictionary" => new[]
+            {
+                "ClassWithOverrides|1|C-11|C-11|True",
+                "ClassWithoutOverrides|2|C-11|B-11|False",
+                "DataClass|1|C-11|C-11|False",
+                "StructWithOverrides|1|C-11|C-11|True",
+                "StructWithoutOverrides|1|C-11|C-11|False",
+            },
+            "hashSet" => new[]
+            {
+                "ClassWithOverrides|1|True|False|False|True",
+                "ClassWithoutOverrides|2|True|True|False|False",
+                "DataClass|1|True|False|False|False",
+                "StructWithOverrides|1|True|False|False|True",
+                "StructWithoutOverrides|1|True|False|False|False",
+            },
+            "listContains" => new[]
+            {
+                "ClassWithOverrides|1|11|True|True|True",
+                "ClassWithoutOverrides|1|11|True|False|False",
+                "DataClass|1|11|True|True|False",
+                "StructWithOverrides|1|11|True|True|True",
+                "StructWithoutOverrides|1|11|True|True|False",
+            },
+            "equals" => new[]
+            {
+                "ClassWithOverrides|True|True|True",
+                "ClassWithoutOverrides|False|True|False",
+                "DataClass|True|True|False",
+                "StructWithOverrides|True|True|True",
+                "StructWithoutOverrides|True|True|False",
+            },
+            "getHashCode" => new[]
+            {
+                "ClassWithOverrides|True|True",
+                "ClassWithoutOverrides|False|True",
+                "DataClass|True|True",
+                "StructWithOverrides|True|True",
+                "StructWithoutOverrides|True|True",
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
+        };
+
+        Assert.Equal(expected, output.Split('\n', StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static string BuildClassOverrideChainSource(bool insideFunction, string suffix)
