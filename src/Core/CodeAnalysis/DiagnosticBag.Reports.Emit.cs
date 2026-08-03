@@ -572,6 +572,26 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.FieldOffsetInvalidValue, value);
 
     /// <summary>
+    /// Issue #3115: GS0518 — an explicit layout overlaps a reference-typed
+    /// field with non-reference storage, which the CLR loader rejects.
+    /// </summary>
+    /// <param name="location">The non-reference field identifier location.</param>
+    /// <param name="typeName">The owning type name.</param>
+    /// <param name="referenceFieldName">The reference-typed field name.</param>
+    /// <param name="nonReferenceFieldName">The overlapping non-reference field name.</param>
+    public void ReportExplicitLayoutReferenceOverlap(
+        TextLocation location,
+        string typeName,
+        string referenceFieldName,
+        string nonReferenceFieldName)
+    => Report(
+        location,
+        DiagnosticDescriptors.ExplicitLayoutReferenceOverlap,
+        typeName,
+        referenceFieldName,
+        nonReferenceFieldName);
+
+    /// <summary>
     /// ADR-0093 / issue #759: GS0351 — a class type is used as the return
     /// type of a P/Invoke function. v1 supports class types only as
     /// parameters (passed by reference); the return-value ownership /

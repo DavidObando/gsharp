@@ -38,7 +38,7 @@ public sealed class StructValue
 
     private readonly ObjectOverrideDispatcher objectOverrideDispatcher;
     private readonly LayoutRuntime explicitLayout;
-    private object explicitLayoutValue;
+    private readonly object explicitLayoutValue;
 
     /// <summary>Initializes a new instance of the <see cref="StructValue"/> class.</summary>
     /// <param name="structType">The struct type symbol.</param>
@@ -99,7 +99,7 @@ public sealed class StructValue
     // concurrent-write safety as an interpreter locals frame. Plain
     // Dictionary&lt;,&gt; is not thread-safe under concurrent writes.
 
-    /// <summary>Gets the mutable field dictionary backing this instance.</summary>
+    /// <summary>Gets the mutable field storage backing this instance.</summary>
     public FieldCollection Fields { get; }
 
     /// <summary>
@@ -243,6 +243,28 @@ public sealed class StructValue
         return objectOverrideDispatcher(this, method, arguments, out result);
     }
 
+    internal static bool TryGetStorageSize(StructSymbol structType, out int size)
+    {
+        size = 0;
+        try
+        {
+            size = LayoutRuntime.Get(structType).Size;
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (TargetInvocationException)
+        {
+            return false;
+        }
+        catch (TypeLoadException)
+        {
+            return false;
+        }
+    }
+
     private void SetField(string name, object value)
     {
         if (explicitLayout != null)
@@ -290,8 +312,9 @@ public sealed class StructValue
     /// Field storage that routes indexer writes through the owning value so
     /// explicit-layout aliases stay synchronized.
     /// </summary>
-    public sealed class FieldCollection : ConcurrentDictionary<string, object>
+    public sealed class FieldCollection : IEnumerable<KeyValuePair<string, object>>
     {
+        private readonly ConcurrentDictionary<string, object> fields = new();
         private readonly StructValue owner;
 
         internal FieldCollection(StructValue owner)
@@ -302,13 +325,31 @@ public sealed class StructValue
         /// <summary>Gets or sets a field value.</summary>
         /// <param name="key">Field name.</param>
         /// <returns>Stored field value.</returns>
-        public new object this[string key]
+        public object this[string key]
         {
-            get => base[key];
+            get => fields[key];
             set => owner.SetField(key, value);
         }
 
-        internal void SetRaw(string key, object value) => base[key] = value;
+        /// <summary>Tests whether storage contains a field name.</summary>
+        /// <param name="key">Field name.</param>
+        /// <returns><see langword="true"/> when the field exists.</returns>
+        public bool ContainsKey(string key) => fields.ContainsKey(key);
+
+        /// <summary>Gets a field value when present.</summary>
+        /// <param name="key">Field name.</param>
+        /// <param name="value">Stored value when found.</param>
+        /// <returns><see langword="true"/> when the field exists.</returns>
+        public bool TryGetValue(string key, out object value) => fields.TryGetValue(key, out value);
+
+        /// <summary>Enumerates stored fields.</summary>
+        /// <returns>Field enumerator.</returns>
+        public IEnumerator<KeyValuePair<string, object>> GetEnumerator() => fields.GetEnumerator();
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        internal void SetRaw(string key, object value) => fields[key] = value;
     }
 
     private sealed class LayoutRuntime
@@ -319,19 +360,26 @@ public sealed class StructValue
             .DefineDynamicAssembly(new AssemblyName("GSharp.Interpreter.Layouts"), AssemblyBuilderAccess.Run)
             .DefineDynamicModule("Layouts");
 
+        private static readonly MethodInfo ManagedSizeOfMethod = typeof(LayoutRuntime).GetMethod(
+            nameof(ManagedSizeOf),
+            BindingFlags.Static | BindingFlags.NonPublic);
+
         private static int nextId;
 
         private readonly StructSymbol symbol;
         private readonly Dictionary<string, FieldInfo> fields;
 
-        private LayoutRuntime(StructSymbol symbol, Type type, Dictionary<string, FieldInfo> fields)
+        private LayoutRuntime(StructSymbol symbol, Type type, Dictionary<string, FieldInfo> fields, int size)
         {
             this.symbol = symbol;
             Type = type;
             this.fields = fields;
+            Size = size;
         }
 
         public Type Type { get; }
+
+        public int Size { get; }
 
         public static LayoutRuntime Get(StructSymbol symbol)
         {
@@ -462,8 +510,11 @@ public sealed class StructValue
                 }
             }
 
-            return new LayoutRuntime(symbol, type, fields);
+            var size = (int)ManagedSizeOfMethod.MakeGenericMethod(type).Invoke(null, null);
+            return new LayoutRuntime(symbol, type, fields, size);
         }
+
+        private static int ManagedSizeOf<T>() => Unsafe.SizeOf<T>();
 
         private static Type ResolveRuntimeType(TypeSymbol type)
         {

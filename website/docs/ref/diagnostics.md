@@ -1781,6 +1781,12 @@ The interpreter has no emitted class with a CLR `Finalize` override and does
 not invent deterministic scope-exit cleanup. Compile with `gsc` when program
 behavior depends on GC finalization.
 
+## Explicit-layout reference overlap (GS0518)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0518 | Error | An explicit-layout type overlaps a reference-typed field with a non-reference field. The CLR rejects layouts that overlap reference and non-reference storage; move one field to a non-overlapping offset. |
+
 ## Additional current and reserved diagnostics
 
 These entries complete the current compiler catalogue. Older topic sections

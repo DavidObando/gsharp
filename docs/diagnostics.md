@@ -1165,6 +1165,12 @@ This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
 `gsi` cannot create a valid callable value for direct or indirect use.
 
+## Explicit-layout reference overlap (GS0518)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0518 | Error | An explicit-layout type overlaps a reference-typed field with a non-reference field. The CLR rejects layouts that overlap reference and non-reference storage; move one field to a non-overlapping offset. |
+
 ## Stack-only CLR values in the interpreter (GS0511)
 
 | ID | Severity | Description |

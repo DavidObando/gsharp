@@ -981,6 +981,9 @@ public sealed class Binder
             RunWithPackage(owningPackage, structSyntax.SyntaxTree, () => binder.declarations.BindStructDeclarationBody(structSyntax, owningPackage, structSymbol));
         }
 
+        binder.declarations.ReportExplicitLayoutReferenceOverlaps(
+            declaredStructs.Select(declaration => declaration.Symbol));
+
         // Issue #1085 / #1194: base-constructor-initializer and field-initializer
         // argument binding is deferred until AFTER all top-level functions are
         // declared (below), so those expressions can resolve unqualified

@@ -8,11 +8,12 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using GSharp.Core.CodeAnalysis;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issue #3100: explicit field overlap must match emitted CLR layout.</summary>
+/// <summary>Issues #3100 and #3115: explicit field layout must match the CLR.</summary>
 [Collection("ConsoleIo")]
 public class Issue3100FieldOffsetParityTests
 {
@@ -50,6 +51,84 @@ public class Issue3100FieldOffsetParityTests
         }
     }
 
+    [Theory]
+    [InlineData(0, "int64")]
+    [InlineData(4, "int32")]
+    public void ReferenceAndPrimitiveOverlapReportsGs0518AcrossDrivers(
+        int primitiveOffset,
+        string primitiveType)
+    {
+        var source = $$"""
+            package Issue3115Invalid
+            import System
+            import System.Runtime.InteropServices
+
+            @StructLayout(LayoutKind.Explicit, Size: 8)
+            struct Bad {
+                @FieldOffset(0) var Text string
+                @FieldOffset({{primitiveOffset}}) var Bits {{primitiveType}}
+            }
+
+            var value = Bad{Text: "x", Bits: 0}
+            Console.WriteLine(value.Bits)
+            """;
+        AssertGs0518AcrossDrivers(source, "ReferencePrimitiveOverlap");
+    }
+
+    [Fact]
+    public void ForwardDeclaredValueTypeOverlapReportsGs0518AcrossDrivers()
+    {
+        const string Source = """
+            package Issue3115ForwardOverlap
+            import System
+            import System.Runtime.InteropServices
+
+            @StructLayout(LayoutKind.Explicit, Size: 16)
+            struct Bad {
+                @FieldOffset(4) var Text string
+                @FieldOffset(0) var Bits Payload
+            }
+            struct Payload { var Value int64 }
+
+            var value = Bad{Text: "x", Bits: Payload{Value: 0}}
+            Console.WriteLine(value.Bits.Value)
+            """;
+
+        AssertGs0518AcrossDrivers(Source, "ForwardValueOverlap");
+    }
+
+    [Fact]
+    public void WorkingReferenceLayoutsRemainValidAcrossDrivers()
+    {
+        var source = ReferenceLayoutCorpusSource();
+        var root = CreateEmptyDirectory("ReferenceLayoutCorpus");
+        try
+        {
+            var bare = RunBareGsc(source, CreateEmptyDirectory(root, "bare"));
+            var emitted = RunEmitted(source, CreateEmptyDirectory(root, "emit"));
+            var interpreted = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
+
+            Assert.Equal("A\n11\nC\nD\n22\n44\nE\n55", emitted);
+            Assert.Equal(emitted, bare);
+            Assert.Equal(emitted, interpreted);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExplicitLayoutStorageInvariantCannotBeBypassed()
+    {
+        Assert.Equal(typeof(object), typeof(StructValue.FieldCollection).BaseType);
+        var backing = typeof(StructValue).GetField(
+            "explicitLayoutValue",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(backing);
+        Assert.True(backing.IsInitOnly);
+    }
+
     private static string RunBareGsc(string source, string directory)
     {
         var sourcePath = Path.Combine(directory, "probe.gs");
@@ -74,8 +153,19 @@ public class Issue3100FieldOffsetParityTests
 
     private static string RunEmitted(string source, string layoutCase, string directory)
     {
+        return RunEmitted(
+            source,
+            directory,
+            assemblyPath => VerifyMetadata(assemblyPath, layoutCase));
+    }
+
+    private static string RunEmitted(
+        string source,
+        string directory,
+        Action<string> verifyAssembly = null)
+    {
         var sourcePath = Path.Combine(directory, "probe.gs");
-        var outputPath = Path.Combine(directory, $"Issue3100{layoutCase}{Guid.NewGuid():N}.dll");
+        var outputPath = Path.Combine(directory, $"Issue3100{Guid.NewGuid():N}.dll");
         File.WriteAllText(sourcePath, source);
 
         var (compileExit, stdout, stderr) = CaptureConsole(
@@ -83,7 +173,7 @@ public class Issue3100FieldOffsetParityTests
                 ["/out:" + outputPath, "/target:exe", "/targetframework:net10.0", sourcePath]));
         Assert.True(compileExit == 0, $"emit failed ({compileExit})\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        VerifyMetadata(outputPath, layoutCase);
+        verifyAssembly?.Invoke(outputPath);
 
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -100,6 +190,58 @@ public class Issue3100FieldOffsetParityTests
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, $"emitted program failed ({process.ExitCode})\nstdout:\n{runOut}\nstderr:\n{runErr}");
         return NormalizeValues(runOut);
+    }
+
+    private static (string SourcePath, string Output) RunDiagnostic(
+        string source,
+        string directory,
+        Func<string, int> run)
+    {
+        var sourcePath = Path.Combine(directory, "probe.gs");
+        File.WriteAllText(sourcePath, source);
+        var (exitCode, stdout, stderr) = CaptureConsole(() => run(sourcePath));
+
+        Assert.True(exitCode == 1, $"expected diagnostic exit 1, got {exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        return (sourcePath, stdout + stderr);
+    }
+
+    private static void AssertGs0518AcrossDrivers(string source, string name)
+    {
+        var root = CreateEmptyDirectory(name);
+        try
+        {
+            var bare = RunDiagnostic(
+                source,
+                CreateEmptyDirectory(root, "bare"),
+                path => GSharp.Compiler.Program.Main([path]));
+            var emitted = RunDiagnostic(
+                source,
+                CreateEmptyDirectory(root, "emit"),
+                path => GSharp.Compiler.Program.Main(
+                    ["/out:" + Path.Combine(root, "emit", "probe.dll"), path]));
+            var interpreted = RunDiagnostic(
+                source,
+                CreateEmptyDirectory(root, "gsi"),
+                path => GSharp.Repl.Program.Main([path]));
+
+            AssertGs0518(bare.SourcePath, bare.Output);
+            AssertGs0518(emitted.SourcePath, emitted.Output);
+            AssertGs0518(interpreted.SourcePath, interpreted.Output);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void AssertGs0518(string sourcePath, string output)
+    {
+        Assert.Contains($"{sourcePath}(8,25,8,29)", output, StringComparison.Ordinal);
+        Assert.Contains("GS0518", output, StringComparison.Ordinal);
+        Assert.Contains("reference-typed field 'Text'", output, StringComparison.Ordinal);
+        Assert.Contains("non-reference field 'Bits'", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GSharpLayout_", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("GSharp.Interpreter.Layouts", output, StringComparison.Ordinal);
     }
 
     private static void VerifyMetadata(string assemblyPath, string layoutCase)
@@ -270,4 +412,57 @@ public class Issue3100FieldOffsetParityTests
             Console.WriteLine(wrapper.Value.Alias)
             """;
     }
+
+    private static string ReferenceLayoutCorpusSource() =>
+        """
+        package Issue3115Corpus
+        import System
+        import System.Runtime.InteropServices
+
+        @StructLayout(LayoutKind.Explicit, Size: 16)
+        struct RefAndPrimitive {
+            @FieldOffset(0) var Text string
+            @FieldOffset(8) var Bits int64
+        }
+
+        @StructLayout(LayoutKind.Explicit, Size: 8)
+        struct RefAlias {
+            @FieldOffset(0) var Text string
+            @FieldOffset(0) var Any object
+        }
+
+        @StructLayout(LayoutKind.Sequential)
+        struct SequentialControl {
+            var Text string
+            var Bits int64
+        }
+
+        @StructLayout(LayoutKind.Explicit, Size: 8)
+        struct PrimitiveUnion {
+            @FieldOffset(0) var Low int32
+            @FieldOffset(0) var Wide int64
+        }
+
+        @StructLayout(LayoutKind.Explicit, Size: 16)
+        struct RefAndValue {
+            @FieldOffset(8) var Text string
+            @FieldOffset(0) var Value Payload
+        }
+        struct Payload { var Value int64 }
+
+        var separated = RefAndPrimitive{Text: "A", Bits: 11L}
+        Console.WriteLine(separated.Text)
+        Console.WriteLine(separated.Bits)
+        var references = RefAlias{Text: "B", Any: "C"}
+        Console.WriteLine(references.Text)
+        var sequential = SequentialControl{Text: "D", Bits: 22L}
+        Console.WriteLine(sequential.Text)
+        Console.WriteLine(sequential.Bits)
+        var primitive = PrimitiveUnion{Low: 0, Wide: 33L}
+        primitive.Low = 44
+        Console.WriteLine(primitive.Wide)
+        var nested = RefAndValue{Text: "E", Value: Payload{Value: 55L}}
+        Console.WriteLine(nested.Text)
+        Console.WriteLine(nested.Value.Value)
+        """;
 }
