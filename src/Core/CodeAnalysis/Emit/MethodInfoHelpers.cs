@@ -115,19 +115,6 @@ internal static class MethodInfoHelpers
 
         if (!structSym.ImplementedClrInterfaces.IsDefaultOrEmpty)
         {
-            var callable = CallableParameters(method);
-
-            // Issue #2380: use the effective (runtime-shape) CLR type, not the
-            // raw `ClrType` — `NullableTypeSymbol.ClrType` deliberately returns
-            // the *underlying* (unwrapped) type for a value-typed `T?` (see
-            // `NullableLifting.GetEffectiveClrType`'s remarks), so a struct
-            // method whose return or parameter type is `Nullable<T>` never
-            // matched an imported interface method of the same shape and was
-            // never promoted to Virtual|NewSlot via `RequiresVirtualOnValueType`
-            // (ILVerify: "Class implements interface but not method"). The
-            // binder-side `MemberLookup.ClrParamTypeMatchesGenericMethodParam`
-            // already gets this right; this brings the emitter in line with it.
-            var returnClr = NullableLifting.GetEffectiveClrType(method.Type);
             foreach (var ifaceSym in structSym.ImplementedClrInterfaces)
             {
                 // Issue #949: a CLR generic interface closed over a user G# type
@@ -167,43 +154,7 @@ internal static class MethodInfoHelpers
                         continue;
                     }
 
-                    var clrParams = clrMethod.GetParameters();
-                    if (clrParams.Length != callable.Length)
-                    {
-                        continue;
-                    }
-
-                    // Issue #1071: an `async func` implementing a CLR interface
-                    // method declared with an explicit `Task` / `Task[T]` return
-                    // type has a declared (awaited) CLR return of void / T.
-                    // Compare the contract's unwrapped awaited result.
-                    if (method.IsAsync
-                        && AsyncReturnTypeNormalizer.TryUnwrapTaskClrType(clrMethod.ReturnType, out var awaitedClr))
-                    {
-                        if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, awaitedClr))
-                        {
-                            continue;
-                        }
-                    }
-                    else if (returnClr != null && !ClrTypeUtilities.AreSame(returnClr, clrMethod.ReturnType))
-                    {
-                        continue;
-                    }
-
-                    var allMatch = true;
-                    for (var i = 0; i < clrParams.Length; i++)
-                    {
-                        // Issue #2380: same effective-CLR-type fix as `returnClr`
-                        // above, applied per-parameter (e.g. `Find(Guid? id)`).
-                        var paramClr = NullableLifting.GetEffectiveClrType(callable[i].Type);
-                        if (paramClr == null || !ClrTypeUtilities.AreSame(paramClr, clrParams[i].ParameterType))
-                        {
-                            allMatch = false;
-                            break;
-                        }
-                    }
-
-                    if (allMatch)
+                    if (MemberLookup.MethodMatchesClrSignature(method, clrMethod))
                     {
                         return true;
                     }
@@ -223,7 +174,12 @@ internal static class MethodInfoHelpers
     /// <returns>True if the signatures are equivalent.</returns>
     public static bool MethodSignaturesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
     {
-        if (interfaceMethod.Name != implementationMethod.Name || !ReturnTypesMatch(interfaceMethod, implementationMethod))
+        var typeParameterMap = DeclarationBinder.TryBuildMethodTypeParameterMap(
+            interfaceMethod,
+            implementationMethod);
+        if (typeParameterMap == null
+            || interfaceMethod.Name != implementationMethod.Name
+            || !ReturnTypesMatch(interfaceMethod, implementationMethod, typeParameterMap))
         {
             return false;
         }
@@ -237,7 +193,10 @@ internal static class MethodInfoHelpers
 
         for (var i = 0; i < interfaceParameters.Length; i++)
         {
-            if (interfaceParameters[i].Type != implementationParameters[i].Type)
+            if (!DeclarationBinder.TypeSignaturesEquivalent(
+                interfaceParameters[i].Type,
+                implementationParameters[i].Type,
+                typeParameterMap))
             {
                 return false;
             }
@@ -265,32 +224,38 @@ internal static class MethodInfoHelpers
     /// the implementing async method is promoted to a virtual interface slot at
     /// emit time.
     /// </summary>
-    private static bool ReturnTypesMatch(FunctionSymbol interfaceMethod, FunctionSymbol implementationMethod)
+    private static bool ReturnTypesMatch(
+        FunctionSymbol interfaceMethod,
+        FunctionSymbol implementationMethod,
+        System.Collections.Generic.IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
         if (AsyncIteratorDetection.IsAsyncIteratorReturnType(interfaceMethod.Type)
             && AsyncIteratorDetection.IsAsyncIteratorReturnType(implementationMethod.Type))
         {
-            return AwaitedTypesMatch(interfaceMethod.Type, implementationMethod.Type);
+            return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);
         }
 
         if (interfaceMethod.IsAsync == implementationMethod.IsAsync)
         {
-            return ReferenceEquals(interfaceMethod.Type, implementationMethod.Type);
+            return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);
         }
 
         if (implementationMethod.IsAsync)
         {
             return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(interfaceMethod.Type, out var awaited)
-                && AwaitedTypesMatch(awaited, implementationMethod.Type);
+                && TypesMatch(awaited, implementationMethod.Type, typeParameterMap);
         }
 
         return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(implementationMethod.Type, out var awaited2)
-            && AwaitedTypesMatch(interfaceMethod.Type, awaited2);
+            && TypesMatch(interfaceMethod.Type, awaited2, typeParameterMap);
     }
 
-    private static bool AwaitedTypesMatch(TypeSymbol a, TypeSymbol b)
+    private static bool TypesMatch(
+        TypeSymbol a,
+        TypeSymbol b,
+        System.Collections.Generic.IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
-        if (ReferenceEquals(a, b))
+        if (DeclarationBinder.TypeSignaturesEquivalent(a, b, typeParameterMap))
         {
             return true;
         }

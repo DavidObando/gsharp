@@ -1642,7 +1642,7 @@ internal sealed partial class DeclarationBinder
     /// viable generic match (mismatched arity) so the caller treats it as no
     /// match; returns an empty map when neither method is generic.
     /// </summary>
-    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> TryBuildMethodTypeParameterMap(
+    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> TryBuildMethodTypeParameterMap(
         FunctionSymbol baseMethod,
         FunctionSymbol candidate)
     {
@@ -2412,7 +2412,9 @@ internal sealed partial class DeclarationBinder
     /// arguments. Reference identity is honoured first (covering plain type
     /// parameters, primitives and cached imported types); constructed generics
     /// are then compared by definition and ordered type arguments, recursing
-    /// through slice / array / nullable wrappers. The comparison stays strict —
+    /// through slice / array / nullable wrappers. Issue #3093 also projects
+    /// <c>sequence[T]</c> and <c>async sequence[T]</c> onto their matching CLR
+    /// enumerable interface shapes. The comparison stays strict —
     /// distinct type arguments (e.g. <c>IEnumerator[int32]</c> vs
     /// <c>IEnumerator[T]</c>) are not equated — so genuinely mismatched
     /// signatures are still rejected with GS0187.
@@ -2453,6 +2455,22 @@ internal sealed partial class DeclarationBinder
         if (a == null || b == null)
         {
             return false;
+        }
+
+        var aIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            a,
+            out var aSequenceDefinition,
+            out var aSequenceElement);
+        var bIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            b,
+            out var bSequenceDefinition,
+            out var bSequenceElement);
+        if (aIsSequence || bIsSequence)
+        {
+            return aIsSequence
+                && bIsSequence
+                && ClrTypeUtilities.AreSame(aSequenceDefinition, bSequenceDefinition)
+                && TypeSignaturesEquivalent(aSequenceElement, bSequenceElement, typeParamMap);
         }
 
         if (a is StructSymbol sa && b is StructSymbol sb)

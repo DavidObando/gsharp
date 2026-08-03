@@ -725,6 +725,24 @@ public class TypeSymbol : Symbol
             return false;
         }
 
+        var leftIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            left,
+            out var leftSequenceDefinition,
+            out var leftSequenceElement);
+        var rightIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            right,
+            out var rightSequenceDefinition,
+            out var rightSequenceElement);
+        if (leftIsSequence || rightIsSequence)
+        {
+            return leftIsSequence
+                && rightIsSequence
+                && ClrTypeUtilities.AreSame(leftSequenceDefinition, rightSequenceDefinition)
+                && AreRuntimeEquivalentIgnoringReferenceNullability(
+                    leftSequenceElement,
+                    rightSequenceElement);
+        }
+
         if (left is NullableTypeSymbol || right is NullableTypeSymbol)
         {
             var leftNullable = left as NullableTypeSymbol;

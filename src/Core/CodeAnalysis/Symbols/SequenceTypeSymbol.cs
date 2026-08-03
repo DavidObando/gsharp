@@ -47,6 +47,58 @@ public sealed class SequenceTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
+    /// <summary>
+    /// Issue #3093: projects the G# sequence aliases and their CLR interface
+    /// spellings onto one common generic-interface shape.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <param name="openDefinition">
+    /// The matching <c>IEnumerable&lt;&gt;</c> or
+    /// <c>IAsyncEnumerable&lt;&gt;</c> definition.
+    /// </param>
+    /// <param name="elementType">The symbolic element type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> has a sequence-interface shape.</returns>
+    internal static bool TryGetEnumerableInterfaceShape(
+        TypeSymbol type,
+        out Type openDefinition,
+        out TypeSymbol elementType)
+    {
+        switch (type)
+        {
+            case SequenceTypeSymbol sequence:
+                openDefinition = typeof(IEnumerable<>);
+                elementType = sequence.ElementType;
+                return true;
+            case AsyncSequenceTypeSymbol sequence:
+                openDefinition = typeof(IAsyncEnumerable<>);
+                elementType = sequence.ElementType;
+                return true;
+            case ImportedTypeSymbol imported
+                when imported.OpenDefinition != null
+                    && imported.TypeArguments.Length == 1
+                    && IsEnumerableInterfaceDefinition(imported.OpenDefinition):
+                openDefinition = imported.OpenDefinition;
+                elementType = imported.TypeArguments[0];
+                return true;
+        }
+
+        var clrType = type?.ClrType;
+        if (clrType != null && clrType.IsGenericType && !clrType.IsGenericTypeDefinition)
+        {
+            var definition = clrType.GetGenericTypeDefinition();
+            if (IsEnumerableInterfaceDefinition(definition))
+            {
+                openDefinition = definition;
+                elementType = TypeSymbol.FromClrType(clrType.GetGenericArguments()[0]);
+                return true;
+            }
+        }
+
+        openDefinition = null;
+        elementType = null;
+        return false;
+    }
+
     private static Type MakeClrType(TypeSymbol elementType)
     {
         var elementClrType = NullableTypeSymbol.GetEffectiveClrType(elementType);
@@ -57,4 +109,8 @@ public sealed class SequenceTypeSymbol : TypeSymbol
 
         return typeof(IEnumerable<>).MakeGenericType(elementClrType);
     }
+
+    private static bool IsEnumerableInterfaceDefinition(Type type)
+        => type?.FullName == "System.Collections.Generic.IEnumerable`1"
+            || type?.FullName == "System.Collections.Generic.IAsyncEnumerable`1";
 }

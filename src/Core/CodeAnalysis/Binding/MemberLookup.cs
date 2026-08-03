@@ -4564,19 +4564,20 @@ internal sealed class MemberLookup
         // with the symbolic arguments at each nested position (mirrors the
         // #974 `InterfaceSymbol.SubstituteType` recursion on the G# path).
         if (openType.IsConstructedGenericType
-            && candidate is ImportedTypeSymbol importedCandidate
-            && importedCandidate.OpenDefinition != null
-            && !importedCandidate.TypeArguments.IsDefaultOrEmpty)
+            && TryGetSymbolicConstructedGenericShape(
+                candidate,
+                out var candidateOpenDefinition,
+                out var candidateTypeArguments))
         {
             var openDefinition = openType.GetGenericTypeDefinition();
-            if (importedCandidate.OpenDefinition.IsSameAs(openDefinition))
+            if (candidateOpenDefinition.IsSameAs(openDefinition))
             {
                 var openArgs = openType.GetGenericArguments();
-                if (openArgs.Length == importedCandidate.TypeArguments.Length)
+                if (openArgs.Length == candidateTypeArguments.Length)
                 {
                     for (var i = 0; i < openArgs.Length; i++)
                     {
-                        if (!ParameterTypeMatchesSubstituted(importedCandidate.TypeArguments[i], openArgs[i], symbolicArgs))
+                        if (!ParameterTypeMatchesSubstituted(candidateTypeArguments[i], openArgs[i], symbolicArgs))
                         {
                             return false;
                         }
@@ -4592,6 +4593,34 @@ internal sealed class MemberLookup
         // Non-generic contract position — compare against the CLR-projected
         // effective type, exactly as the erased path does.
         return ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(candidate), openType);
+    }
+
+    private static bool TryGetSymbolicConstructedGenericShape(
+        TypeSymbol candidate,
+        out Type openDefinition,
+        out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (candidate is ImportedTypeSymbol imported
+            && imported.OpenDefinition != null
+            && !imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            openDefinition = imported.OpenDefinition;
+            typeArguments = imported.TypeArguments;
+            return true;
+        }
+
+        if (SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
+            candidate,
+            out openDefinition,
+            out var elementType))
+        {
+            typeArguments = ImmutableArray.Create(elementType);
+            return true;
+        }
+
+        openDefinition = null;
+        typeArguments = default;
+        return false;
     }
 
     private static bool SameTypeSymbol(TypeSymbol a, TypeSymbol b)
@@ -5527,20 +5556,21 @@ internal sealed class MemberLookup
         // delegate-Invoke-shape branch above, generalized to any generic
         // type rather than just delegates.
         if (openType.IsConstructedGenericType
-            && candidate is ImportedTypeSymbol named
-            && named.OpenDefinition != null
-            && !named.TypeArguments.IsDefaultOrEmpty
-            && ClrTypeUtilities.AreSame(openType.GetGenericTypeDefinition(), named.OpenDefinition))
+            && TryGetSymbolicConstructedGenericShape(
+                candidate,
+                out var candidateOpenDefinition,
+                out var candidateTypeArguments)
+            && ClrTypeUtilities.AreSame(openType.GetGenericTypeDefinition(), candidateOpenDefinition))
         {
             var openArgs = openType.GetGenericArguments();
-            if (openArgs.Length != named.TypeArguments.Length)
+            if (openArgs.Length != candidateTypeArguments.Length)
             {
                 return false;
             }
 
             for (var i = 0; i < openArgs.Length; i++)
             {
-                if (!ClrParamTypeMatchesGenericMethodParam(named.TypeArguments[i], openArgs[i], methodGenericParams, candidateTypeParams))
+                if (!ClrParamTypeMatchesGenericMethodParam(candidateTypeArguments[i], openArgs[i], methodGenericParams, candidateTypeParams))
                 {
                     return false;
                 }
