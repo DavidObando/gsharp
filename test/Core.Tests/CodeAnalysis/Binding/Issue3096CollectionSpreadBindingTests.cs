@@ -27,6 +27,38 @@ public sealed class Issue3096CollectionSpreadBindingTests
     }
 
     [Fact]
+    public void Spread_UserDefinedImplicitConversion_BindsBeforeAdd()
+    {
+        var program = BindProgram("""
+            import System.Collections.Generic
+
+            class Celsius {
+                prop Degrees float64 { get; init; }
+
+                init(degrees float64) {
+                    Degrees = degrees
+                }
+            }
+
+            func operator implicit(value Celsius) float64 {
+                return value.Degrees
+            }
+
+            let source = []Celsius{
+                Celsius(2.5),
+                Celsius(3.5),
+            }
+            let array = []float64{ 1.0, ...source, 9.0 }
+            let list = List[float64](){ ...source }
+            """);
+
+        Assert.Empty(program.Diagnostics);
+        var conversions = new UserDefinedConversionCollector();
+        conversions.Visit(program.Statement);
+        Assert.Equal(2, conversions.Count);
+    }
+
+    [Fact]
     public void CollectionSpread_UsesTargetAddContract()
     {
         var diagnostics = Bind("""
@@ -111,5 +143,38 @@ public sealed class Issue3096CollectionSpreadBindingTests
         }
 
         return Binder.BindProgram(globalScope).Diagnostics.ToImmutableArray();
+    }
+
+    private static BoundProgram BindProgram(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var globalScope = Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree));
+        return Binder.BindProgram(globalScope);
+    }
+
+    private sealed class UserDefinedConversionCollector : BoundTreeWalker
+    {
+        public int Count { get; private set; }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                VisitStatement(literal.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
+        }
+
+        protected override void VisitCallExpression(BoundCallExpression node)
+        {
+            if (node.Function.Name == "op_Implicit")
+            {
+                Count++;
+            }
+
+            base.VisitCallExpression(node);
+        }
     }
 }

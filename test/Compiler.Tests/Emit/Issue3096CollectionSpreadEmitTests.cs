@@ -145,6 +145,43 @@ public sealed class Issue3096CollectionSpreadEmitTests
         Assert.Equal("True\nTrue\n1\n", CompileVerifyAndRun(Source));
     }
 
+    [Fact]
+    public void UserDefinedSpreadConversions_ArrayAndCollection_RunAndVerify()
+    {
+        const string Source = """
+            package Issue3096.Conversions
+
+            import System
+            import System.Collections.Generic
+
+            struct Celsius {
+                var Degrees float64
+            }
+
+            func operator implicit(value Celsius) float64 {
+                return value.Degrees
+            }
+
+            let source = []Celsius{
+                Celsius{ Degrees: 2.5 },
+                Celsius{ Degrees: 3.5 },
+            }
+            let array = []float64{ 1.0, ...source, 9.0 }
+            let list = List[float64](){ ...source }
+
+            Console.WriteLine(array.Length)
+            Console.WriteLine(array[1])
+            Console.WriteLine(array[2])
+            Console.WriteLine(list.Count)
+            Console.WriteLine(list[0])
+            Console.WriteLine(list[1])
+            """;
+
+        Assert.Equal(
+            "4\n2.5\n3.5\n2\n2.5\n3.5\n",
+            CompileVerifyAndRun(Source));
+    }
+
     private static string CompileVerifyAndRun(string source)
     {
         var directory = Directory.CreateTempSubdirectory("gs_issue3096_").FullName;

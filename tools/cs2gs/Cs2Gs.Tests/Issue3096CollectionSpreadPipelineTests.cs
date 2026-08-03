@@ -47,6 +47,18 @@ public sealed class Issue3096CollectionSpreadPipelineTests
             using System.Collections.Generic;
             using System.Linq;
 
+            public sealed class Celsius
+            {
+                public Celsius(double degrees)
+                {
+                    Degrees = degrees;
+                }
+
+                public double Degrees { get; }
+
+                public static implicit operator double(Celsius value) => value.Degrees;
+            }
+
             public sealed class Holder
             {
                 public static int Calls;
@@ -59,6 +71,12 @@ public sealed class Issue3096CollectionSpreadPipelineTests
                 public static readonly string[] Empty = [.. Array.Empty<string>()];
                 public static readonly string[] Mixed = ["before", .. Filtered, .. Empty, "after"];
                 public static readonly List<string> ListTarget = ["list-head", .. Filtered, "list-tail"];
+                private static readonly Celsius[] Temperatures =
+                    [new Celsius(2.5), new Celsius(3.5)];
+                public static readonly double[] Converted =
+                    [1.0, .. Temperatures, 9.0];
+                public static readonly List<double> ConvertedList =
+                    [.. Temperatures];
 
                 public string[] Property { get; } =
                     ["property-head", .. All.Where(x => x != "skip"), "property-tail"];
@@ -104,13 +122,19 @@ public sealed class Issue3096CollectionSpreadPipelineTests
                     Console.WriteLine(holder.Property.Length);
                     Console.WriteLine(holder.Property[0]);
                     Console.WriteLine(holder.Property[3]);
+                    Console.WriteLine(Holder.Converted.Length);
+                    Console.WriteLine(Holder.Converted[1]);
+                    Console.WriteLine(Holder.Converted[2]);
+                    Console.WriteLine(Holder.ConvertedList.Count);
+                    Console.WriteLine(Holder.ConvertedList[0]);
+                    Console.WriteLine(Holder.ConvertedList[1]);
                 }
             }
             """);
         string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
         File.WriteAllText(
             goldenPath,
-            "2\na\nb\n4\nhead\nmiddle-1\nmiddle-2\ntail\nABC\n1\n0\n4\n4\nb\n4\nproperty-head\nproperty-tail\n");
+            "2\na\nb\n4\nhead\nmiddle-1\nmiddle-2\ntail\nABC\n1\n0\n4\n4\nb\n4\nproperty-head\nproperty-tail\n4\n2.5\n3.5\n2\n2.5\n3.5\n");
 
         string outputRoot = NewDirectory("pipeline-tests");
         var app = new CorpusApp(
@@ -150,6 +174,9 @@ public sealed class Issue3096CollectionSpreadPipelineTests
         Assert.Contains("Filtered, ...", translated, StringComparison.Ordinal);
         Assert.Contains("Empty, \"after\"}", translated, StringComparison.Ordinal);
         Assert.Contains("List[string](){", translated, StringComparison.Ordinal);
+        Assert.Contains("[]float64{1", translated, StringComparison.Ordinal);
+        Assert.Contains("List[float64](){", translated, StringComparison.Ordinal);
+        Assert.Contains("...Holder.Temperatures", translated, StringComparison.Ordinal);
         Assert.Contains("Property = []string{\"property-head\", ...", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("__spread", translated, StringComparison.Ordinal);
         Assert.DoesNotContain(".AddRange(", translated, StringComparison.Ordinal);

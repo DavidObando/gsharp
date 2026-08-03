@@ -372,6 +372,7 @@ internal sealed partial class ExpressionBinder
 
         var sourceLocal = new LocalVariableSymbol(sourceName, isReadOnly: true, source.Type);
         scope.TryDeclareVariable(sourceLocal);
+        _ = TryGetCollectionSpreadElementType(collectionLocal.Type, out var targetElementType);
         if (function?.IsStaticInitializer == true &&
             function.StaticOwnerType is InterfaceSymbol)
         {
@@ -380,7 +381,8 @@ internal sealed partial class ExpressionBinder
                 spread,
                 sourceLocal,
                 sourceToken,
-                source);
+                source,
+                targetElementType);
         }
 
         var targetName = "$spreadtarget" +
@@ -444,7 +446,13 @@ internal sealed partial class ExpressionBinder
         var functionType = FunctionTypeSymbol.Get(
             ImmutableArray.Create(collectionLocal.Type, source.Type),
             collectionLocal.Type);
-        var boundLambda = lambdas.BindLambdaExpression(lambda, functionType);
+        BoundExpression boundLambda = lambdas.BindLambdaExpression(lambda, functionType);
+        if (targetElementType != null &&
+            boundLambda is BoundFunctionLiteralExpression literal)
+        {
+            boundLambda = RewriteCollectionSpreadLambda(literal, targetElementType, spread);
+        }
+
         var invocation = new BoundIndirectCallExpression(
             spread,
             boundLambda,
@@ -464,7 +472,8 @@ internal sealed partial class ExpressionBinder
         SpreadElementExpressionSyntax spread,
         LocalVariableSymbol sourceLocal,
         SyntaxToken sourceToken,
-        BoundExpression source)
+        BoundExpression source,
+        TypeSymbol targetElementType)
     {
         var tree = spread.SyntaxTree;
         var position = spread.Span.Start;
@@ -500,13 +509,248 @@ internal sealed partial class ExpressionBinder
                             null)),
                     new SyntaxToken(tree, SyntaxKind.DotToken, position, ".", null),
                     addCall)));
-        var bound = bindStatementList(
+        BoundStatement bound = bindStatementList(
             ImmutableArray.Create<StatementSyntax>(loop),
-            null);
+            null).Single();
+        if (targetElementType != null)
+        {
+            bound = new CollectionSpreadLoopRewriter(
+                this,
+                collectionLocal,
+                targetElementType,
+                spread).Rewrite(bound);
+        }
 
         return ImmutableArray.Create<BoundStatement>(
             new BoundVariableDeclaration(spread, sourceLocal, source),
-            Lowerer.Lower(bound.Single()));
+            Lowerer.Lower(bound));
+    }
+
+    private BoundFunctionLiteralExpression RewriteCollectionSpreadLambda(
+        BoundFunctionLiteralExpression literal,
+        TypeSymbol targetElementType,
+        SpreadElementExpressionSyntax spread)
+    {
+        var body = (BoundBlockStatement)new CollectionSpreadLoopRewriter(
+            this,
+            literal.Function.Parameters[0],
+            targetElementType,
+            spread).Rewrite(literal.Body);
+        return new BoundFunctionLiteralExpression(
+            literal.Syntax,
+            literal.Function,
+            literal.FunctionType,
+            body,
+            literal.CapturedVariables);
+    }
+
+    private BoundExpression BindConvertedCollectionAddCall(
+        VariableSymbol receiverVariable,
+        VariableSymbol itemVariable,
+        TypeSymbol targetElementType,
+        SpreadElementExpressionSyntax spread)
+    {
+        var placeholderName = "$spreadconverted" +
+            System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var placeholderToken = new SyntaxToken(
+            spread.SyntaxTree,
+            SyntaxKind.IdentifierToken,
+            spread.Span.Start,
+            placeholderName,
+            null);
+        var placeholder = new LocalVariableSymbol(
+            placeholderName,
+            isReadOnly: true,
+            targetElementType);
+
+        BoundExpression add;
+        var previousScope = scope;
+        scope = new BoundScope(scope);
+        try
+        {
+            scope.TryDeclareVariable(receiverVariable);
+            scope.TryDeclareVariable(placeholder);
+            add = BindCollectionAddCall(
+                receiverVariable,
+                spread,
+                ImmutableArray.Create<ExpressionSyntax>(
+                    new NameExpressionSyntax(spread.SyntaxTree, placeholderToken)));
+        }
+        finally
+        {
+            scope = previousScope;
+        }
+
+        var convertedItem = conversions.BindConversion(
+            spread.Location,
+            new BoundVariableExpression(spread, itemVariable),
+            targetElementType);
+        return new CollectionSpreadItemSubstitutionRewriter(
+            placeholder,
+            convertedItem).Rewrite(add);
+    }
+
+    private static bool TryGetCollectionSpreadElementType(
+        TypeSymbol collectionType,
+        out TypeSymbol elementType)
+    {
+        switch (collectionType)
+        {
+            case SliceTypeSymbol slice:
+                elementType = slice.ElementType;
+                return true;
+            case ArrayTypeSymbol array:
+                elementType = array.ElementType;
+                return true;
+            case SequenceTypeSymbol sequence:
+                elementType = sequence.ElementType;
+                return true;
+            case ImportedTypeSymbol imported
+                when imported.OpenDefinition != null &&
+                     MemberLookup.TryGetClrEnumerableElementType(
+                         imported.OpenDefinition,
+                         out var openElement):
+                elementType = MemberLookup.MapOpenClrTypeToSymbolic(
+                    openElement,
+                    imported);
+                return true;
+            case NullabilityAnnotatedTypeSymbol annotated
+                when annotated.ClrType != null &&
+                     MemberLookup.TryGetClrEnumerableElementType(
+                         annotated.ClrType,
+                         out var annotatedElement):
+                elementType = annotated.GetTypeArgumentSymbolForClrType(
+                    annotatedElement);
+                return true;
+            case ImportedTypeSymbol imported
+                when imported.ClrType != null &&
+                     MemberLookup.TryGetClrEnumerableElementType(
+                         imported.ClrType,
+                         out var importedElement):
+                elementType = TypeSymbol.FromClrType(importedElement);
+                return true;
+            case StructSymbol user
+                when MemberLookup.TryGetUserPatternEnumerableElementType(
+                    user,
+                    out var userElement):
+                elementType = userElement;
+                return true;
+        }
+
+        var userParameterTypes = TypeMemberModel
+            .GetMethods(
+                collectionType,
+                "Add",
+                MemberQuery.Instance(MemberKinds.Method))
+            .Where(method => method.Parameters.Length == 1)
+            .Select(method => method.Parameters[0].Type)
+            .Distinct()
+            .ToArray();
+        if (userParameterTypes.Length == 1)
+        {
+            elementType = userParameterTypes[0];
+            return true;
+        }
+
+        elementType = null;
+        if (collectionType?.ClrType == null)
+        {
+            return false;
+        }
+
+        Type clrElement = null;
+        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+            collectionType.ClrType,
+            "Add"))
+        {
+            var parameters = method.GetParameters();
+            if (parameters.Length != 1)
+            {
+                continue;
+            }
+
+            if (clrElement != null &&
+                !clrElement.IsSameAs(parameters[0].ParameterType))
+            {
+                return false;
+            }
+
+            clrElement = parameters[0].ParameterType;
+        }
+
+        if (clrElement == null)
+        {
+            return false;
+        }
+
+        elementType = TypeSymbol.FromClrType(clrElement);
+        return true;
+    }
+
+    private sealed class CollectionSpreadLoopRewriter : BoundTreeRewriter
+    {
+        private readonly ExpressionBinder binder;
+        private readonly VariableSymbol receiver;
+        private readonly TypeSymbol targetElementType;
+        private readonly SpreadElementExpressionSyntax spread;
+
+        public CollectionSpreadLoopRewriter(
+            ExpressionBinder binder,
+            VariableSymbol receiver,
+            TypeSymbol targetElementType,
+            SpreadElementExpressionSyntax spread)
+        {
+            this.binder = binder;
+            this.receiver = receiver;
+            this.targetElementType = targetElementType;
+            this.spread = spread;
+        }
+
+        public BoundStatement Rewrite(BoundStatement statement)
+            => RewriteStatement(statement);
+
+        protected override BoundStatement RewriteForRangeStatement(
+            BoundForRangeStatement node)
+        {
+            var add = binder.BindConvertedCollectionAddCall(
+                receiver,
+                node.ValueVariable,
+                targetElementType,
+                spread);
+            return new BoundForRangeStatement(
+                node.Syntax,
+                node.KeyVariable,
+                node.ValueVariable,
+                node.Collection,
+                node.IterationKind,
+                new BoundExpressionStatement(spread, add),
+                node.BreakLabel,
+                node.ContinueLabel);
+        }
+    }
+
+    private sealed class CollectionSpreadItemSubstitutionRewriter : BoundTreeRewriter
+    {
+        private readonly VariableSymbol placeholder;
+        private readonly BoundExpression replacement;
+
+        public CollectionSpreadItemSubstitutionRewriter(
+            VariableSymbol placeholder,
+            BoundExpression replacement)
+        {
+            this.placeholder = placeholder;
+            this.replacement = replacement;
+        }
+
+        public BoundExpression Rewrite(BoundExpression expression)
+            => RewriteExpression(expression);
+
+        protected override BoundExpression RewriteVariableExpression(
+            BoundVariableExpression node)
+            => ReferenceEquals(node.Variable, placeholder)
+                ? replacement
+                : node;
     }
 
     /// <summary>
@@ -616,7 +860,7 @@ internal sealed partial class ExpressionBinder
     /// inference, and parameter conversions all match a hand-written
     /// <c>coll.Add(...)</c>.
     /// </summary>
-    private BoundExpression BindCollectionAddCall(LocalVariableSymbol receiverLocal, SyntaxNode anchor, ImmutableArray<ExpressionSyntax> arguments)
+    private BoundExpression BindCollectionAddCall(VariableSymbol receiverLocal, SyntaxNode anchor, ImmutableArray<ExpressionSyntax> arguments)
     {
         var receiver = new BoundVariableExpression(anchor, receiverLocal);
         var addCall = SynthesizeInstanceCall(anchor, "Add", arguments);
