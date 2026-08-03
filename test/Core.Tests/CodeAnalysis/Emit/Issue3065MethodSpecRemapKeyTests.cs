@@ -70,23 +70,19 @@ public class Issue3065MethodSpecRemapKeyTests
         var key = new MetadataTokenCache.MethodSpecSymbolKey(
             method,
             typeArguments,
-            classRemap,
-            methodRemap);
+            new RemapScope(classRemap, methodRemap));
         var sameScopes = new MetadataTokenCache.MethodSpecSymbolKey(
             method,
             typeArguments,
-            classRemap,
-            methodRemap);
+            new RemapScope(classRemap, methodRemap));
         var differentClassScope = new MetadataTokenCache.MethodSpecSymbolKey(
             method,
             typeArguments,
-            new Dictionary<TypeParameterSymbol, int>(),
-            methodRemap);
+            new RemapScope(new Dictionary<TypeParameterSymbol, int>(), methodRemap));
         var differentMethodScope = new MetadataTokenCache.MethodSpecSymbolKey(
             method,
             typeArguments,
-            classRemap,
-            new Dictionary<TypeParameterSymbol, int>());
+            new RemapScope(classRemap, new Dictionary<TypeParameterSymbol, int>()));
 
         Assert.Equal(key, sameScopes);
         Assert.NotEqual(key, differentClassScope);
