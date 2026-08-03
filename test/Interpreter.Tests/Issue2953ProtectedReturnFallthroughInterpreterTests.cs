@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -40,9 +41,7 @@ public class Issue2953ProtectedReturnFallthroughInterpreterTests
 
         var diagnostic = Assert.Single(result.Diagnostics);
         Assert.Equal("GS0100", diagnostic.Id);
-        Assert.Equal(
-            "Compiler-generated guard reached: non-void function fell through without returning a value.",
-            diagnostic.Message);
+        Assert.Equal(DiagnosticDescriptors.NonVoidFallthroughGuardMessage, diagnostic.Message);
         Assert.Null(result.Value);
     }
 }

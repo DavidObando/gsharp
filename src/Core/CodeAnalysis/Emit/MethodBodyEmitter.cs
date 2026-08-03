@@ -266,9 +266,9 @@ internal sealed partial class MethodBodyEmitter
         }
         else if (emitFallthroughGuard)
         {
-            const string Message = "Compiler-generated guard reached: non-void function fell through without returning a value.";
             var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
-            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message));
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(
+                DiagnosticDescriptors.NonVoidFallthroughGuardMessage));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
             this.il.OpCode(ILOpCode.Throw);

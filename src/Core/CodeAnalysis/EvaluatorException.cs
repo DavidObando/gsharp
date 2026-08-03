@@ -4,6 +4,7 @@
 
 using System;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis;
 
@@ -67,6 +68,11 @@ public class EvaluatorException : Exception
     public BoundNode Node { get; }
 
     /// <summary>
+    /// Gets the source location associated with the exception, when available.
+    /// </summary>
+    internal TextLocation? Location { get; private set; }
+
+    /// <summary>
     /// Gets the stable diagnostic identifier.
     /// </summary>
     internal string DiagnosticId { get; private set; } = "GS9999";
@@ -102,16 +108,19 @@ public class EvaluatorException : Exception
     /// <param name="descriptor">The diagnostic descriptor.</param>
     /// <param name="innerException">The evaluated exception.</param>
     /// <param name="node">The bound node associated with the exception.</param>
+    /// <param name="location">The source location associated with the exception.</param>
     /// <returns>The evaluator exception.</returns>
     internal static EvaluatorException CreateDiagnostic(
         DiagnosticDescriptor descriptor,
         Exception innerException,
-        BoundNode node)
+        BoundNode node,
+        TextLocation? location = null)
     {
         return new EvaluatorException(innerException.Message, innerException, node)
         {
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,
+            Location = location,
         };
     }
 }

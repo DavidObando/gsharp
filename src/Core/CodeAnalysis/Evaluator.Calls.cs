@@ -80,20 +80,12 @@ public sealed partial class Evaluator
             var statement = program.Functions.TryGetValue(node.Function, out var functionBody)
                 ? functionBody
                 : localFunctionBodies[node.Function];
-            var isIterator = IsIteratorFunction(node.Function, statement);
             object result;
             RegisterRuntimeTypeArguments(locals, node.Function.TypeParameters, node.MethodTypeArguments);
             RegisterRuntimeTypeArguments(locals, node.StaticGenericOwnerType);
             using (PushFrame(locals))
             {
-                if (isIterator)
-                {
-                    result = EvaluateIteratorFunction(node.Function, statement);
-                }
-                else
-                {
-                    result = EvaluateFunctionBody(statement);
-                }
+                result = EvaluateUserMethodBody(node.Function, statement);
             }
 
             // ADR-0060 item #7: write the final parameter slot value back to
@@ -106,16 +98,6 @@ public sealed partial class Evaluator
                     var finalValue = locals.TryGetValue(parameter, out var v) ? v : null;
                     WriteBackToOperand(operand, finalValue);
                 }
-            }
-
-            if (isIterator)
-            {
-                return result;
-            }
-
-            if (node.Function.IsAsync)
-            {
-                return WrapAsyncResult(node.Function.Type, result);
             }
 
             return result;
@@ -173,7 +155,7 @@ public sealed partial class Evaluator
             return EvaluateIteratorFunction(function, body);
         }
 
-        var result = EvaluateFunctionBody(body);
+        var result = EvaluateFunctionBody(body, function.Type, function.Declaration?.Identifier.Location);
         return function.IsAsync ? WrapAsyncResult(function.Type, result) : result;
     }
 

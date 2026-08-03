@@ -383,12 +383,8 @@ public class Compilation
         }
         catch (EvaluatorException ex)
         {
-            TextLocation location;
-            if (ex.Node?.Syntax != null)
-            {
-                location = ex.Node.Syntax.Location;
-            }
-            else
+            var location = ex.Location ?? ex.Node?.Syntax?.Location;
+            if (location == null)
             {
                 using var textWriter = new StringWriter();
                 ex.Node?.WriteTo(textWriter);
@@ -397,7 +393,7 @@ public class Compilation
             }
 
             var message = Evaluator.UnwrapDiagnosticException(ex).Message;
-            var diagnostic = new Diagnostic(location, ex.DiagnosticId, ex.Severity, message);
+            var diagnostic = new Diagnostic(location.Value, ex.DiagnosticId, ex.Severity, message);
             return new EvaluationResult(allWarnings.Add(diagnostic), null);
         }
     }

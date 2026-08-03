@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -276,13 +277,13 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             try {
                 F(E(99))
             } catch (ex InvalidOperationException) {
-                result = ex.Message == "Compiler-generated guard reached: non-void function fell through without returning a value."
+                result = ex.Message == "__NON_VOID_FALLTHROUGH_GUARD__"
                     ? 7
                     : -1
             }
             """;
 
-        var assembly = CompileVerifyLoadAndRun("Unnamed", Source);
+        var assembly = CompileVerifyLoadAndRun("Unnamed", WithGuardMessage(Source));
         Assert.Equal(7, GetField(assembly, "result"));
     }
 
@@ -309,7 +310,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             try {
                 F(DateTimeKind(99), []int32{7})
             } catch (ex InvalidOperationException) {
-                result = ex.Message == "Compiler-generated guard reached: non-void function fell through without returning a value."
+                result = ex.Message == "__NON_VOID_FALLTHROUGH_GUARD__"
                     ? 7
                     : -1
             }
@@ -317,7 +318,7 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
 
         var assembly = CompileVerifyLoadAndRun(
             "UnnamedFixed",
-            Source,
+            WithGuardMessage(Source),
             ignoredVerificationErrors: new[] { "UnmanagedPointer", "StackByRef" },
             ignoredVerificationScope: @"<Program>\.F$");
         Assert.Equal(7, GetField(assembly, "result"));
@@ -325,6 +326,12 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
 
     private static object[] Case(string name, int expected, string body)
         => new object[] { name, expected, $"package Issue2906.Emit{name}{Environment.NewLine}{body}" };
+
+    private static string WithGuardMessage(string source)
+        => source.Replace(
+            "__NON_VOID_FALLTHROUGH_GUARD__",
+            DiagnosticDescriptors.NonVoidFallthroughGuardMessage,
+            StringComparison.Ordinal);
 
     private static Assembly CompileVerifyLoadAndRun(
         string name,
