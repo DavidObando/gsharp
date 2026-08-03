@@ -1283,6 +1283,7 @@ public sealed partial class Evaluator
         var module = CreateClrBackingModule();
         var definition = structType.Definition ?? structType;
         var arity = definition.TypeParameters.Length;
+        var reifiedTypeParameters = new Dictionary<TypeParameterSymbol, Type>();
         var enclosingTypes = new Stack<StructSymbol>();
         for (var containing = definition.ContainingType as StructSymbol;
              containing != null;
@@ -1331,7 +1332,27 @@ public sealed partial class Evaluator
                 clrBase);
         if (arity > 0)
         {
-            typeBuilder.DefineGenericParameters(definition.TypeParameters.Select(static parameter => parameter.Name).ToArray());
+            var parameters = typeBuilder.DefineGenericParameters(
+                definition.TypeParameters.Select(static parameter => parameter.Name).ToArray());
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                reifiedTypeParameters[definition.TypeParameters[i]] = parameters[i];
+            }
+        }
+
+        // Issue #3137: reified type arguments must expose the same instance-field shape as emitted types.
+        foreach (var field in definition.Fields)
+        {
+            var fieldAttributes = Emit.AccessibilityMap.MapFieldAccessibility(field.Accessibility);
+            if (field.IsReadOnly)
+            {
+                fieldAttributes |= FieldAttributes.InitOnly;
+            }
+
+            typeBuilder.DefineField(
+                field.Name,
+                ResolveClrBackingTypeArgument(field.Type, reifiedTypeParameters),
+                fieldAttributes);
         }
 
         if (emitBaseConstructors)
@@ -1380,8 +1401,16 @@ public sealed partial class Evaluator
         return backingType.MakeGenericType(typeArguments);
     }
 
-    private static Type ResolveClrBackingTypeArgument(TypeSymbol argument)
+    private static Type ResolveClrBackingTypeArgument(
+        TypeSymbol argument,
+        IReadOnlyDictionary<TypeParameterSymbol, Type> reifiedTypeParameters = null)
     {
+        if (argument is TypeParameterSymbol typeParameter
+            && reifiedTypeParameters?.TryGetValue(typeParameter, out var reifiedTypeParameter) == true)
+        {
+            return reifiedTypeParameter;
+        }
+
         if (argument is NullableTypeSymbol nullable)
         {
             var underlying = ResolveClrBackingTypeArgument(nullable.UnderlyingType);
@@ -1397,7 +1426,9 @@ public sealed partial class Evaluator
             try
             {
                 return openDefinition.MakeGenericType(
-                    imported.TypeArguments.Select(ResolveClrBackingTypeArgument).ToArray());
+                    imported.TypeArguments
+                        .Select(typeArgument => ResolveClrBackingTypeArgument(typeArgument, reifiedTypeParameters))
+                        .ToArray());
             }
             catch (ArgumentException)
             {
@@ -1407,12 +1438,12 @@ public sealed partial class Evaluator
 
         if (argument is SliceTypeSymbol slice)
         {
-            return ResolveClrBackingTypeArgument(slice.ElementType).MakeArrayType();
+            return ResolveClrBackingTypeArgument(slice.ElementType, reifiedTypeParameters).MakeArrayType();
         }
 
         if (argument is ArrayTypeSymbol array)
         {
-            return ResolveClrBackingTypeArgument(array.ElementType).MakeArrayType();
+            return ResolveClrBackingTypeArgument(array.ElementType, reifiedTypeParameters).MakeArrayType();
         }
 
         if (argument.ClrType is Type clrType)

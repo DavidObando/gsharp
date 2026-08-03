@@ -16,23 +16,24 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Issue #3099: interpreter-created generic backing types must preserve every
 /// G# type-argument kind instead of erasing value types to <see cref="object"/>.
+/// Issue #3137 extends the same emit-oracle matrix to reflected field shape.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
 {
     public static IEnumerable<object[]> TypeArgumentCases()
     {
-        yield return ["class", "class Payload {\n}", "Payload"];
-        yield return ["struct", "struct Payload {\n    var Value int32\n}", "Payload"];
+        yield return ["class", "class Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload"];
+        yield return ["struct", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload"];
         yield return ["enum", "enum Payload {\n    Eleven = 11,\n    TwentyTwo = 22,\n    ThirtyThree = 33,\n}", "Payload"];
         yield return ["string", string.Empty, "string"];
-        yield return ["nested-class", "class Owner {\n    class Payload {\n    }\n}", "Owner.Payload"];
-        yield return ["nested-struct", "class Owner {\n    struct Payload {\n        var Value int32\n    }\n}", "Owner.Payload"];
-        yield return ["gsharp-generic", "struct Payload[T] {\n    var Value T\n}", "Payload[int32]"];
-        yield return ["imported-generic", "struct Payload {\n    var Value int32\n}", "List[Payload]"];
-        yield return ["nullable", "struct Payload {\n    var Value int32\n}", "Payload?"];
-        yield return ["slice", "struct Payload {\n    var Value int32\n}", "[]Payload"];
-        yield return ["array", "struct Payload {\n    var Value int32\n}", "[3]Payload"];
+        yield return ["nested-class", "class Owner {\n    class Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
+        yield return ["nested-struct", "class Owner {\n    struct Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
+        yield return ["gsharp-generic", "struct Payload[T] {\n    let Value T\n    var Imported List[T]\n    var Slice []T\n    var Array [3]T\n}", "Payload[int32]"];
+        yield return ["imported-generic", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "List[Payload]"];
+        yield return ["nullable", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload?"];
+        yield return ["slice", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "[]Payload"];
+        yield return ["array", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "[3]Payload"];
     }
 
     [Theory]
@@ -89,6 +90,7 @@ public class Issue3099TypeArgumentReificationTests
             });
 
             var expected = NormalizeGenericTypeNames(emitted);
+            Assert.Matches(@"44\n[1-9][0-9]*\|", expected);
             Assert.Equal(expected, NormalizeGenericTypeNames(compilerEvaluation));
             Assert.Equal(expected, NormalizeGenericTypeNames(interpreter));
             Assert.Contains("11\n", expected);
@@ -119,20 +121,35 @@ public class Issue3099TypeArgumentReificationTests
             class Pair[TFirst, TSecond] : EventArgs {
             }
 
+            func FieldShape(t Type) string {
+                var shape = t.GetFields().Length.ToString()
+                for field in t.GetFields() {
+                    shape = shape + "|" + field.Name + ":" + field.FieldType.FullName + ":" + field.IsInitOnly.ToString()
+                }
+                return shape
+            }
+
             var single = Box[__TYPE__]()
             Console.WriteLine(11)
             Console.WriteLine(single.GetType().FullName)
             Console.WriteLine(single.GetType().GenericTypeArguments[0].IsValueType)
             Console.WriteLine(single.GetType().GenericTypeArguments[0].IsEnum)
             Console.WriteLine(single.GetType().GenericTypeArguments[0].IsLayoutSequential)
+            Console.WriteLine(FieldShape(single.GetType().GenericTypeArguments[0]))
             var multiple = Pair[__TYPE__, int32]()
             Console.WriteLine(22)
             Console.WriteLine(multiple.GetType().FullName)
             Console.WriteLine(Object.ReferenceEquals(
                 single.GetType().GenericTypeArguments[0],
                 multiple.GetType().GenericTypeArguments[0]))
+            Console.WriteLine(FieldShape(multiple.GetType().GenericTypeArguments[0]))
             Console.WriteLine(33)
-            Console.WriteLine(Box[Box[__TYPE__]]().GetType().FullName)
+            var nested = Box[Box[__TYPE__]]()
+            Console.WriteLine(nested.GetType().FullName)
+            Console.WriteLine(FieldShape(nested.GetType().GenericTypeArguments[0].GenericTypeArguments[0]))
+            var control = Box[ConsoleColor]()
+            Console.WriteLine(44)
+            Console.WriteLine(FieldShape(control.GetType().GenericTypeArguments[0]))
             """;
 
         return Template
