@@ -154,7 +154,7 @@ public class Issue3010EntryPointDriverMatrixTests
         Assert.Equal(string.Empty, result.StandardError);
     }
 
-    private static (int ExitCode, string StandardOutput, string StandardError) Run(
+    internal static (int ExitCode, string StandardOutput, string StandardError) Run(
         string name,
         string source,
         Driver driver)

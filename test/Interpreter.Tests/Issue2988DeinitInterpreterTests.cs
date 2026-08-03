@@ -14,6 +14,7 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Interpreter boundary coverage for CLR GC finalizers declared with <c>deinit</c>.
 /// </summary>
+[Collection("ConsoleIo")]
 public class Issue2988DeinitInterpreterTests
 {
     [Fact]
@@ -63,10 +64,14 @@ public class Issue2988DeinitInterpreterTests
         Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
     }
 
-    [Fact]
-    public void InheritedDeinitializersWarnOncePerDeclaringClass()
+    [Theory]
+    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation)]
+    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission)]
+    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.Interpreter)]
+    public void InheritedDeinitializersWarnOncePerDeclaringClass(
+        Issue3010EntryPointDriverMatrixTests.Driver driver)
     {
-        var source = """
+        const string Source = """
             import System
 
             open class Resource(Tag string) {
@@ -89,18 +94,48 @@ public class Issue2988DeinitInterpreterTests
             GC.KeepAlive(resource)
             """;
 
-        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+        var emitted = Issue3010EntryPointDriverMatrixTests.Run(
+            "inherited-deinit-emitted",
+            Source,
+            Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission);
+        Assert.Equal(0, emitted.ExitCode);
+        Assert.NotEmpty(emitted.StandardOutput);
+        Assert.Equal(string.Empty, emitted.StandardError);
 
-        Assert.False(cell.HasError);
-        Assert.Equal("body-44\n", cell.Output);
-        var warnings = cell.Diagnostics
-            .Where(diagnostic => diagnostic.Id == "GS0510")
-            .OrderBy(diagnostic => diagnostic.Message)
-            .ToArray();
-        Assert.Collection(
-            warnings,
-            warning => AssertWarning(warning, "CachedResource"),
-            warning => AssertWarning(warning, "Resource"));
+        var result = driver == Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission
+            ? emitted
+            : Issue3010EntryPointDriverMatrixTests.Run(
+                "inherited-deinit-" + driver,
+                Source,
+                driver);
+        Assert.Equal(0, result.ExitCode);
+
+        string warningOutput;
+        switch (driver)
+        {
+            case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation:
+                Assert.StartsWith(emitted.StandardOutput + "\n", result.StandardOutput, StringComparison.Ordinal);
+                Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
+                warningOutput = result.StandardOutput[emitted.StandardOutput.Length..];
+                break;
+            case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission:
+                Assert.Equal(emitted.StandardOutput, result.StandardOutput);
+                Assert.Equal(string.Empty, result.StandardError);
+                return;
+            case Issue3010EntryPointDriverMatrixTests.Driver.Interpreter:
+                Assert.Equal(emitted.StandardOutput, result.StandardOutput);
+                warningOutput = result.StandardError;
+                break;
+            default:
+                throw new InvalidOperationException($"Unexpected driver {driver}.");
+        }
+
+        Assert.Equal(
+            2,
+            warningOutput.Split('\n')
+                .Count(line => line.Contains("warning GS0510", StringComparison.Ordinal)));
+        Assert.Contains("class 'CachedResource'", warningOutput, StringComparison.Ordinal);
+        Assert.Contains("class 'Resource'", warningOutput, StringComparison.Ordinal);
     }
 
     [Fact]
