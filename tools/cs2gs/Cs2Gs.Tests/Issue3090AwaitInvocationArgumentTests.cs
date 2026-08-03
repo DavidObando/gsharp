@@ -229,6 +229,125 @@ public sealed class Issue3090AwaitInvocationArgumentTests
     }
 
     [Fact]
+    public async Task RecordStructNamedConstructor_PreservesLexicalEvaluationAndFieldBinding()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null || !IlVerifyToolAvailable())
+        {
+            return;
+        }
+
+        const string Source = """
+            using System;
+
+            public readonly record struct RPoint
+            {
+                public RPoint(int x = 0, int y = 0, int z = 9)
+                {
+                    X = x;
+                    Y = y;
+                    Z = z;
+                }
+
+                public int X { get; }
+                public int Y { get; }
+                public int Z { get; }
+            }
+
+            public static class Side
+            {
+                public static int Log(string label, int value)
+                {
+                    Console.WriteLine(label);
+                    return value;
+                }
+            }
+
+            public static class Program
+            {
+                public static void Main()
+                {
+                    var reversed = new RPoint(
+                        y: Side.Log("Y", 2),
+                        x: Side.Log("X", 1));
+                    Console.WriteLine($"{reversed.X},{reversed.Y},{reversed.Z}");
+
+                    var mixed = new RPoint(
+                        x: Side.Log("A", 3),
+                        Side.Log("B", 4));
+                    Console.WriteLine($"{mixed.X},{mixed.Y},{mixed.Z}");
+                }
+            }
+            """;
+
+        string sourceRoot = NewOutputRoot();
+        File.WriteAllText(
+            Path.Combine(sourceRoot, "Directory.Build.props"),
+            "<Project></Project>");
+        string projectDirectory = Path.Combine(sourceRoot, "RecordStruct");
+        Directory.CreateDirectory(projectDirectory);
+        string projectPath = Path.Combine(projectDirectory, "RecordStruct.csproj");
+        File.WriteAllText(projectPath, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), Source);
+        string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
+        File.WriteAllText(
+            goldenPath,
+            "Y\nX\n1,2,9\nA\nB\n3,4,9\n");
+
+        string outputRoot = NewOutputRoot();
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions
+            {
+                CompileViaSdk = false,
+                GscPath = compiler,
+                OutputRoot = outputRoot,
+                SourceRoot = sourceRoot,
+            });
+        var app = new CorpusApp(
+            "test/Issue3090RecordStruct",
+            projectPath,
+            TargetKind.Exe,
+            goldenPath);
+        RunResult result = await pipeline.RunAsync(new[] { app });
+        AppResult appResult = Assert.Single(result.Apps);
+        string emitted = string.Join(
+            Environment.NewLine,
+            Directory.GetFiles(
+                    Path.Combine(
+                        outputRoot,
+                        result.RunId,
+                        MigrationPipeline.SanitizeAppId(app.Id)),
+                    "*.gs",
+                    SearchOption.AllDirectories)
+                .Select(File.ReadAllText));
+
+        AssertInOrder(
+            emitted,
+            "Y: Side.Log(\"Y\", 2)",
+            "X: Side.Log(\"X\", 1)",
+            "Z: 9");
+        AssertInOrder(
+            emitted,
+            "X: Side.Log(\"A\", 3)",
+            "Y: Side.Log(\"B\", 4)",
+            "Z: 9");
+        Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
+        Assert.True(
+            appResult.Succeeded,
+            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+        Assert.Equal(
+            new[] { "passed", "passed", "passed", "passed" },
+            appResult.Stages.Select(stage => stage.Status).ToArray());
+    }
+
+    [Fact]
     public async Task G10AsyncConsole_NativeAwaitArguments_VerifyAndPreserveParity()
     {
         string compiler = FindCompiler();

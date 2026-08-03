@@ -1591,7 +1591,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            IReadOnlyList<GExpression> loweredArguments =
+            IReadOnlyList<(int ParameterOrdinal, GExpression Value)> loweredArguments =
                 this.NormalizeLoweredConstructorArguments(
                     creationNode,
                     ctorSymbol,
@@ -1603,7 +1603,7 @@ public sealed partial class CSharpToGSharpTranslator
                 out unsupportedReason);
         }
 
-        private IReadOnlyList<GExpression> NormalizeLoweredConstructorArguments(
+        private IReadOnlyList<(int ParameterOrdinal, GExpression Value)> NormalizeLoweredConstructorArguments(
             BaseObjectCreationExpressionSyntax creationNode,
             IMethodSymbol constructor,
             IReadOnlyList<GExpression> arguments)
@@ -1619,24 +1619,29 @@ public sealed partial class CSharpToGSharpTranslator
             if (syntaxArguments.Count != arguments.Count ||
                 constructor.Parameters.Length < arguments.Count)
             {
-                return arguments.Select(UnwrapNamedArgument).ToList();
+                return BuildPositionalLoweredArguments(arguments);
             }
 
-            var ordered = new GExpression[constructor.Parameters.Length];
+            var lowered = new List<(int ParameterOrdinal, GExpression Value)>(
+                constructor.Parameters.Length);
+            var suppliedOrdinals = new HashSet<int>();
             for (var sourceIndex = 0; sourceIndex < syntaxArguments.Count; sourceIndex++)
             {
                 if (this.context.SemanticModel.GetOperation(syntaxArguments[sourceIndex])
                     is not IArgumentOperation { Parameter: { } parameter })
                 {
-                    return arguments.Select(UnwrapNamedArgument).ToList();
+                    return BuildPositionalLoweredArguments(arguments);
                 }
 
-                ordered[parameter.Ordinal] = UnwrapNamedArgument(arguments[sourceIndex]);
+                lowered.Add((
+                    parameter.Ordinal,
+                    UnwrapNamedArgument(arguments[sourceIndex])));
+                suppliedOrdinals.Add(parameter.Ordinal);
             }
 
-            for (var ordinal = 0; ordinal < ordered.Length; ordinal++)
+            for (var ordinal = 0; ordinal < constructor.Parameters.Length; ordinal++)
             {
-                if (ordered[ordinal] != null)
+                if (suppliedOrdinals.Contains(ordinal))
                 {
                     continue;
                 }
@@ -1646,17 +1651,32 @@ public sealed partial class CSharpToGSharpTranslator
                     parameter.Type,
                     this.context,
                     creationNode.GetLocation());
-                ordered[ordinal] = this.BuildOptionalParameterDefault(
+                GExpression defaultValue = this.BuildOptionalParameterDefault(
                     parameter,
                     parameterType,
                     creationNode);
-                if (ordered[ordinal] == null)
+                if (defaultValue == null)
                 {
-                    return arguments.Select(UnwrapNamedArgument).ToList();
+                    return BuildPositionalLoweredArguments(arguments);
                 }
+
+                lowered.Add((ordinal, defaultValue));
             }
 
-            return ordered;
+            return lowered;
+        }
+
+        private static IReadOnlyList<(int ParameterOrdinal, GExpression Value)>
+            BuildPositionalLoweredArguments(IReadOnlyList<GExpression> arguments)
+        {
+            var lowered = new List<(int ParameterOrdinal, GExpression Value)>(
+                arguments.Count);
+            for (var index = 0; index < arguments.Count; index++)
+            {
+                lowered.Add((index, UnwrapNamedArgument(arguments[index])));
+            }
+
+            return lowered;
         }
 
         private static GExpression UnwrapNamedArgument(GExpression argument) =>
@@ -2371,7 +2391,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool TryInstantiateStructConstructorPlan(
             StructConstructorPlan plan,
-            IReadOnlyList<GExpression> arguments,
+            IReadOnlyList<(int ParameterOrdinal, GExpression Value)> arguments,
             out List<FieldInitializer> fieldInitializers,
             out string unsupportedReason)
         {
@@ -2383,34 +2403,47 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            var byParameterOrdinal = plan.Initializations
+                .Where(initialization => initialization.ParameterOrdinal != null)
+                .ToDictionary(
+                    initialization => initialization.ParameterOrdinal.Value);
+            foreach ((int parameterOrdinal, GExpression argumentValue) in arguments)
+            {
+                if (!byParameterOrdinal.TryGetValue(
+                        parameterOrdinal,
+                        out StructMemberInitialization initialization))
+                {
+                    unsupportedReason =
+                        "struct constructor argument could not be matched to its initialized member; " +
+                        "a G# struct literal cannot be built safely (issue #2435).";
+                    fieldInitializers = null;
+                    return false;
+                }
+
+                fieldInitializers.Add(new FieldInitializer(
+                    SanitizeIdentifier(initialization.MemberName),
+                    argumentValue));
+            }
+
             foreach (StructMemberInitialization initialization in plan.Initializations)
             {
-                if (initialization.ParameterOrdinal == null &&
+                if (initialization.ParameterOrdinal != null ||
                     plan.FixedInitializersAreDeclaredOnType)
                 {
                     continue;
                 }
 
-                GExpression value;
-                if (initialization.ParameterOrdinal is int ordinal)
+                ExpressionSyntax fixedExpression = initialization.FixedExpression;
+                if (!this.context.Compilation.ContainsSyntaxTree(fixedExpression.SyntaxTree))
                 {
-                    value = arguments[ordinal];
-                }
-                else
-                {
-                    ExpressionSyntax fixedExpression = initialization.FixedExpression;
-                    if (!this.context.Compilation.ContainsSyntaxTree(fixedExpression.SyntaxTree))
-                    {
-                        unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
-                            "expression; that expression cannot yet be rebound safely at this call site (issue #2435).";
-                        fieldInitializers = null;
-                        return false;
-                    }
-
-                    using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
-                    value = this.TranslateExpression(fixedExpression);
+                    unsupportedReason = "a source struct constructor in another compilation contains a fixed initializer " +
+                        "expression; that expression cannot yet be rebound safely at this call site (issue #2435).";
+                    fieldInitializers = null;
+                    return false;
                 }
 
+                using IDisposable modelScope = this.context.UseSemanticModelFor(fixedExpression.SyntaxTree);
+                GExpression value = this.TranslateExpression(fixedExpression);
                 fieldInitializers.Add(new FieldInitializer(
                     SanitizeIdentifier(initialization.MemberName),
                     value));
