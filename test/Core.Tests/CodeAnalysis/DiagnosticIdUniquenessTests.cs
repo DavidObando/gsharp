@@ -78,7 +78,8 @@ public class DiagnosticIdUniquenessTests
     [Fact]
     public void Every_Report_Uses_A_Descriptor_And_Every_Descriptor_Is_Used()
     {
-        var reportDirectory = Path.Combine(FindRepoRoot(), "src", "Core", "CodeAnalysis");
+        var repoRoot = FindRepoRoot();
+        var reportDirectory = Path.Combine(repoRoot, "src", "Core", "CodeAnalysis");
         var descriptorNames = GetDescriptorFields()
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
@@ -118,6 +119,23 @@ public class DiagnosticIdUniquenessTests
                     .Any(invocation => GetSimpleName(invocation.Expression)
                         .StartsWith("Report", StringComparison.Ordinal));
                 Assert.True(routesToDiagnostic, $"{method.Identifier.ValueText} does not route to a diagnostic descriptor.");
+            }
+        }
+
+        foreach (var file in Directory.EnumerateFiles(
+                     Path.Combine(repoRoot, "src"),
+                     "*.cs",
+                     SearchOption.AllDirectories))
+        {
+            var root = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file)
+                .GetCompilationUnitRoot();
+            foreach (var access in root.DescendantNodes().OfType<MemberAccessExpressionSyntax>()
+                         .Where(access => access.Expression.ToString() == "DiagnosticDescriptors"))
+            {
+                if (descriptorNames.Contains(access.Name.Identifier.ValueText))
+                {
+                    referencedDescriptors.Add(access.Name.Identifier.ValueText);
+                }
             }
         }
 
@@ -173,7 +191,7 @@ public class DiagnosticIdUniquenessTests
             // Emitted directly for unexpected emit failures.
             ["GS9998"] = "Error",
 
-            // Emitted directly for fatal compiler and evaluator failures.
+            // Emitted directly for unexpected evaluator failures.
             ["GS9999"] = "Error",
         };
 
@@ -183,12 +201,22 @@ public class DiagnosticIdUniquenessTests
         }
 
         var repoRoot = FindRepoRoot();
-        AssertDocumentationMatches(
-            Path.Combine(repoRoot, "docs", "diagnostics.md"),
-            expectedSeverities);
-        AssertDocumentationMatches(
-            Path.Combine(repoRoot, "website", "docs", "ref", "diagnostics.md"),
-            expectedSeverities);
+        var primaryPath = Path.Combine(repoRoot, "docs", "diagnostics.md");
+        var websitePath = Path.Combine(repoRoot, "website", "docs", "ref", "diagnostics.md");
+        var primaryRows = AssertDocumentationMatches(primaryPath, expectedSeverities);
+        var websiteRows = AssertDocumentationMatches(websitePath, expectedSeverities);
+        var differingRows = expectedSeverities.Keys
+            .Where(id => primaryRows[id] != websiteRows[id])
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Select(id =>
+                $"{id}:\n" +
+                $"  docs/diagnostics.md: {primaryRows[id]}\n" +
+                $"  website/docs/ref/diagnostics.md: {websiteRows[id]}")
+            .ToArray();
+
+        Assert.True(
+            differingRows.Length == 0,
+            "Diagnostic reference rows differ:\n" + string.Join("\n", differingRows));
     }
 
     private static FieldInfo[] GetDescriptorFields() =>
@@ -197,18 +225,30 @@ public class DiagnosticIdUniquenessTests
             .Where(field => field.FieldType == typeof(CoreDiagnosticDescriptor))
             .ToArray();
 
-    private static void AssertDocumentationMatches(
+    private static IReadOnlyDictionary<string, string> AssertDocumentationMatches(
         string path,
         IReadOnlyDictionary<string, string> expectedSeverities)
     {
         var referencePath = Path.GetRelativePath(FindRepoRoot(), path);
-        var documentedSeverityGroups = Regex.Matches(
+        var documentedRows = Regex.Matches(
                 File.ReadAllText(path),
-                @"^\|\s*(GS\d{4})\s*\|\s*([^|]+?)\s*\|",
+                @"^\|\s*(GS\d{4})\s*\|\s*([^|]+?)\s*\|(.*?)\|\s*$",
                 RegexOptions.Multiline)
             .Cast<Match>()
+            .ToArray();
+        var documentedSeverityGroups = documentedRows
             .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal)
             .ToArray();
+        var duplicateRows = documentedSeverityGroups
+            .Where(group => group.Count() != 1)
+            .Select(group => $"{group.Key}: {group.Count()} rows")
+            .ToArray();
+
+        Assert.True(
+            documentedRows.Length == documentedSeverityGroups.Length,
+            $"{referencePath} contains duplicate diagnostic rows:\n" +
+            string.Join("\n", duplicateRows));
+
         var conflictingSeverities = documentedSeverityGroups
             .Select(group => (
                 Id: group.Key,
@@ -251,6 +291,26 @@ public class DiagnosticIdUniquenessTests
             $"Missing from {referencePath}: {string.Join(", ", missing)}\n" +
             $"Unexpected in {referencePath}: {string.Join(", ", unexpected)}\n" +
             $"Severity mismatches in {referencePath}:\n{string.Join("\n", mismatched)}");
+
+        return documentedSeverityGroups.ToDictionary(
+            group => group.Key,
+            group => NormalizeDocumentedRow(group.Single()),
+            StringComparer.Ordinal);
+    }
+
+    private static string NormalizeDocumentedRow(Match match)
+    {
+        var remainingColumns = Regex.Split(match.Groups[3].Value.Trim(), @"\s*\|\s*")
+            .Select(column => column.Trim())
+            .ToList();
+        while (remainingColumns.Count > 0 && remainingColumns[^1].Length == 0)
+        {
+            remainingColumns.RemoveAt(remainingColumns.Count - 1);
+        }
+
+        return string.Join(
+            " | ",
+            new[] { match.Groups[2].Value.Trim() }.Concat(remainingColumns));
     }
 
     private static string NormalizeDocumentedSeverity(Match match)

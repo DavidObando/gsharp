@@ -17,6 +17,7 @@
     <InternalsVisibleTo Include="GSharp.Compiler.Tests" />
     <InternalsVisibleTo Include="GSharp.Interpreter.Tests" />
     <InternalsVisibleTo Include="GSharp.LanguageServer" />
+    <InternalsVisibleTo Include="gsc" />
   </ItemGroup>
 
   <ItemGroup>
