@@ -29,6 +29,9 @@ public static class Constants
     /// <summary>Decimal constant, encoded through DecimalConstantAttribute metadata.</summary>
     public const decimal Decimal = 405.5m;
 
+    /// <summary>Nullable-annotated string constant.</summary>
+    public const string? NullableConst = "nullable-const-414";
+
     /// <summary>Top-level enum-typed constant.</summary>
     public const TopLevelEnum TopLevelEnumValue = TopLevelEnum.Value406;
 
