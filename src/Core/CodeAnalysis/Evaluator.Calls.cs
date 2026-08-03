@@ -357,20 +357,19 @@ public sealed partial class Evaluator
         };
 
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
-        for (int i = 0; i < node.Arguments.Length; i++)
-        {
-            var parameter = method.Parameters[i + parameterOffset];
-            var value = EvaluateExpression(node.Arguments[i]);
-            frame[parameter] = value;
-        }
+        var args = PopulateUserCallFrame(node.Arguments, method, parameterOffset, frame, out var refSlots);
 
         RegisterRuntimeTypeArguments(frame, method.TypeParameters, node.MethodTypeArguments);
         RegisterRuntimeTypeArguments(frame, node.Receiver.Type);
+        object result;
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateUserMethodBody(method, statement);
+            result = EvaluateUserMethodBody(method, statement);
         }
+
+        WriteBackUserCallFrame(refSlots, args, method, parameterOffset, frame);
+        return result;
     }
 
     /// <summary>
@@ -458,18 +457,17 @@ public sealed partial class Evaluator
         };
 
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
-        for (int i = 0; i < node.Arguments.Length; i++)
-        {
-            var parameter = method.Parameters[i + parameterOffset];
-            var value = EvaluateExpression(node.Arguments[i]);
-            frame[parameter] = value;
-        }
+        var args = PopulateUserCallFrame(node.Arguments, method, parameterOffset, frame, out var refSlots);
 
+        object result;
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateUserMethodBody(method, statement);
+            result = EvaluateUserMethodBody(method, statement);
         }
+
+        WriteBackUserCallFrame(refSlots, args, method, parameterOffset, frame);
+        return result;
     }
 
     /// <summary>
@@ -1495,6 +1493,55 @@ public sealed partial class Evaluator
         }
 
         return refSlots;
+    }
+
+    private object[] PopulateUserCallFrame(
+        ImmutableArray<BoundExpression> arguments,
+        FunctionSymbol function,
+        int parameterOffset,
+        ConcurrentDictionary<VariableSymbol, object> frame,
+        out List<(int Index, BoundExpression Operand)> refSlots)
+    {
+        var refKinds = function.Parameters
+            .Skip(parameterOffset)
+            .Take(arguments.Length)
+            .Select(parameter => parameter.RefKind)
+            .ToImmutableArray();
+        var args = refKinds.Any(refKind => refKind != RefKind.None)
+            ? new object[arguments.Length]
+            : null;
+        refSlots = args == null
+            ? null
+            : BuildRefSlots(arguments, refKinds, args, method: null);
+
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            frame[function.Parameters[i + parameterOffset]] = args == null
+                ? EvaluateExpression(arguments[i])
+                : args[i];
+        }
+
+        return args;
+    }
+
+    private void WriteBackUserCallFrame(
+        List<(int Index, BoundExpression Operand)> refSlots,
+        object[] args,
+        FunctionSymbol function,
+        int parameterOffset,
+        ConcurrentDictionary<VariableSymbol, object> frame)
+    {
+        if (refSlots == null)
+        {
+            return;
+        }
+
+        foreach (var (index, _) in refSlots)
+        {
+            args[index] = frame[function.Parameters[index + parameterOffset]];
+        }
+
+        WriteBackRefSlots(refSlots, args);
     }
 
     private bool IsBoundLvalue(BoundExpression operand)
