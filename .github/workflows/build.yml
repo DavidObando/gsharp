@@ -25,7 +25,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
         # Brings in `dotnet-ilverify`, which Compiler.Tests invokes via
@@ -102,7 +102,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
@@ -154,7 +154,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Install netcoredbg
         env:
@@ -183,7 +183,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
         # dotnet-ilverify for the pipeline's stage 3.
@@ -235,7 +235,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore
