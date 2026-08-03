@@ -1343,6 +1343,7 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
+            // Keep inherited-field resolution aligned pending imported generic-record support.
             var fieldHandle = init.FieldDeclaringType != null
                 ? this.ResolveStructLiteralFieldToken(literal, init)
                 : this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
