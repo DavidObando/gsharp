@@ -77,6 +77,18 @@ public sealed partial class Evaluator
                     : args[i];
             }
 
+            if (node.Function.IsStatic)
+            {
+                if (node.Function.StaticOwnerType is StructSymbol staticOwner)
+                {
+                    EnsureStaticTypeInitialized(staticOwner);
+                }
+                else if (node.Function.StaticOwnerType is InterfaceSymbol staticInterface)
+                {
+                    EnsureStaticTypeInitialized(staticInterface);
+                }
+            }
+
             var statement = program.Functions.TryGetValue(node.Function, out var functionBody)
                 ? functionBody
                 : localFunctionBodies[node.Function];
@@ -592,6 +604,15 @@ public sealed partial class Evaluator
         {
             throw new InvalidOperationException(
                 $"Static-virtual interface call '{node.InterfaceMethod.Name}' has no runtime body (no implementer found and no default).");
+        }
+
+        if (target.StaticOwnerType is StructSymbol staticOwner)
+        {
+            EnsureStaticTypeInitialized(staticOwner);
+        }
+        else if (target.StaticOwnerType is InterfaceSymbol staticInterface)
+        {
+            EnsureStaticTypeInitialized(staticInterface);
         }
 
         var frame2 = new ConcurrentDictionary<VariableSymbol, object>();

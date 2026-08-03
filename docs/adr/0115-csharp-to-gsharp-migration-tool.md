@@ -508,7 +508,11 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   canonical G# slice literal `[]T{ a, b, c }`, with the element type taken from
   the converted target type. Bare numeric literals are coerced to the element
   type (`byte[] = [0, 1]` → `[]uint8{ uint8(0), uint8(1) }`) to pin each element's
-  type at the slice-literal boundary (§B.12).
+  type at the slice-literal boundary (§B.12). Issue #3096 maps C# spread
+  elements directly to native G# ellipsis spreads:
+  `[before, ..source, after]` → `[]T{ before, ...source, after }`. This form is
+  expression-native and therefore works unchanged in field/property
+  initializers; cs2gs emits no statement-hosted build/append spill.
 - **Throw-expression `x ?? throw e` / `c ? v : throw e` → value-position throw
   lowering.** G# `throw` is **statement-only**; a C# `ThrowExpression` used in a
   value position is lowered to the uniform form `if true { throw e\n default(T) }

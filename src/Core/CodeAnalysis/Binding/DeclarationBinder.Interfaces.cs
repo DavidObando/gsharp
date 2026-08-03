@@ -774,6 +774,23 @@ internal sealed partial class DeclarationBinder
             // reference them through a TypeSpec for the closed construction, so
             // each construction (`IBox[int32]` vs `IBox[string]`) owns
             // independent storage — matching CLR static-field semantics.
+            var previousFunction = getCurrentFunction();
+
+            // Issue #3096: identify this bind as an interface .cctor context
+            // so native spread lowering keeps its loop directly in the
+            // stack-empty initializer instead of synthesizing a helper method
+            // that an interface cannot own in this path.
+            var initializerContext = new FunctionSymbol(
+                "<field-initializer>",
+                ImmutableArray<ParameterSymbol>.Empty,
+                TypeSymbol.Void)
+            {
+                IsStatic = true,
+                IsStaticInitializer = true,
+                StaticOwnerType = interfaceSymbol,
+            };
+            setCurrentFunction(initializerContext);
+            try
             {
                 var staticFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
                 var constFieldsBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
@@ -858,6 +875,10 @@ internal sealed partial class DeclarationBinder
                 {
                     interfaceSymbol.SetStaticFieldInitializers(initializersBuilder.ToImmutable());
                 }
+            }
+            finally
+            {
+                setCurrentFunction(previousFunction);
             }
         }
     }

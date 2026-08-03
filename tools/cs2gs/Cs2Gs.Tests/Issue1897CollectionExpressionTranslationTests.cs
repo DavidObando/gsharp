@@ -16,11 +16,8 @@ namespace Cs2Gs.Tests;
 /// grid corpus, each fixed independently:
 /// <list type="bullet">
 /// <item>a collection-expression spread element (<c>[0, ..rest, 9]</c>) —
-/// was CS2GS-GAP "SpreadElement ... has no canonical G# composite-literal
-/// form yet"; lowers to a build-and-append <c>List[T]</c> temporary
-/// (<c>Add</c>/<c>AddRange</c> calls hoisted into the enclosing statement's
-/// prologue), converted back via <c>.ToArray()</c> for an array/span
-/// target.</item>
+/// maps to native G# ellipsis spread syntax
+/// (<c>[]T{0, ...rest, 9}</c>).</item>
 /// <item>a <c>List&lt;T&gt;</c>-targeted collection expression
 /// (<c>List&lt;int&gt; l = [10, 20];</c>) — previously mistranslated to a
 /// G# array literal (<c>[]int32{10, 20}</c>) that does not convert to
@@ -39,7 +36,7 @@ namespace Cs2Gs.Tests;
 public class Issue1897CollectionExpressionTranslationTests
 {
     [Fact]
-    public void SpreadElement_LowersToBuildAndAppendTemporary()
+    public void SpreadElement_UsesNativeArrayLiteralSyntax()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1897
@@ -55,20 +52,17 @@ namespace Corpus.Issue1897
 }
 ");
 
-        Assert.Contains("List[int32]()", rendered, StringComparison.Ordinal);
-        Assert.Contains(".Add(0)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".AddRange(rest)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".Add(9)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        Assert.Contains("[]int32{0, ...rest, 9}", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spread", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(".AddRange(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SpreadElement_CoercesMismatchedElementTypeBeforeAddRange()
+    public void SpreadElement_CoercesMismatchedElementTypeNatively()
     {
-        // Issue #1985: spreading `int[]` into a `long[]` target must project
-        // through the implicit `int -> long` conversion before `AddRange`,
-        // since `List[int64].AddRange(IEnumerable[int32])` does not bind in gsc.
+        // Issue #1985 / #3096: gsc's native spread binder applies the ordinary
+        // implicit element conversion while adding each source element.
         string rendered = Render(@"
 namespace Corpus.Issue1985
 {
@@ -83,12 +77,13 @@ namespace Corpus.Issue1985
 }
 ");
 
-        Assert.Contains(".AddRange(rest.Select((__x int32) -> int64(__x)))", rendered, StringComparison.Ordinal);
+        Assert.Contains("[]int64{...rest}", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Select(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SpreadElement_SpanTarget_LowersViaToArray()
+    public void SpreadElement_SpanTarget_UsesNativeArrayLiteral()
     {
         string rendered = Render(@"
 using System;
@@ -106,14 +101,12 @@ namespace Corpus.Issue1985
 }
 ");
 
-        Assert.Contains("List[int32]()", rendered, StringComparison.Ordinal);
-        Assert.Contains(".AddRange(rest)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        Assert.Contains("[]int32{0, ...rest, 9}", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SpreadElement_EmptySpread_LowersToEmptyListThenToArray()
+    public void SpreadElement_EmptySpread_UsesNativeArrayLiteral()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1985
@@ -129,14 +122,12 @@ namespace Corpus.Issue1985
 }
 ");
 
-        Assert.Contains("List[int32]()", rendered, StringComparison.Ordinal);
-        Assert.Contains(".AddRange(empty)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        Assert.Contains("[]int32{...empty}", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
     [Fact]
-    public void SpreadElement_NestedSpreads_LowerToSequentialAddRangeCalls()
+    public void SpreadElement_NestedSpreads_StayInLexicalOrder()
     {
         string rendered = Render(@"
 namespace Corpus.Issue1985
@@ -152,9 +143,30 @@ namespace Corpus.Issue1985
 }
 ");
 
-        Assert.Contains(".AddRange(a)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".AddRange(b)", rendered, StringComparison.Ordinal);
-        Assert.Contains(".ToArray()", rendered, StringComparison.Ordinal);
+        Assert.Contains("[]int32{...a, ...b}", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void SpreadElement_ListTarget_UsesExplicitCtorCollectionInitializer()
+    {
+        string rendered = Render(@"
+using System.Collections.Generic;
+
+namespace Corpus.Issue3096
+{
+    public class Holder
+    {
+        public List<int> Combine(int[] rest)
+        {
+            List<int> values = [0, .. rest, 9];
+            return values;
+        }
+    }
+}
+");
+
+        Assert.Contains("List[int32](){ 0, ...rest, 9 }", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

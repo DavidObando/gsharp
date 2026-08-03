@@ -49,6 +49,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // from-end index and ranges
         "package p\nfunc F(a []int32) {\n  let b = a[^1]\n  let c = a[1..^1]\n  let d = a[..2]\n}\n",
 
+        // issue #3096: native array spread element
+        "package p\nfunc F(a []int32) {\n  let b = []int32{0, ...a, 9}\n}\n",
+
         // generic static receiver
         "package p\nstruct Box[T] { shared { func Make(x int32) int32 { return x } } }\nclass C { func F() int32 { return Box[int32?].Make(5) } }\n",
 
