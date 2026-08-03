@@ -263,7 +263,9 @@ public sealed partial class Evaluator
         }
 
         public override string ToString()
-            => $"System.{(IsReadOnly ? "ReadOnlySpan" : "Span")}<{this.array.GetType().GetElementType().Name}>[{Length}]";
+            => this.array is char[] chars
+                ? new string(chars, this.start, Length)
+                : $"System.{(IsReadOnly ? "ReadOnlySpan" : "Span")}<{this.array.GetType().GetElementType().Name}>[{Length}]";
 
         private int CheckedIndex(int index)
         {

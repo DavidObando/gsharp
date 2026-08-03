@@ -99,11 +99,17 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 writable[1] = 44
                 var tail = readOnly.Slice(1)
                 var window = tail.Slice(0, 2)
+                var letters = []char{'a', 'b', 'c'}
+                var writableChars Span[char] = letters
+                var readOnlyChars ReadOnlySpan[char] = writableChars
                 Console.WriteLine(readOnly.Length)
                 Console.WriteLine(readOnly[1])
                 Console.WriteLine(window[1])
                 Console.WriteLine(writable.ToString())
                 Console.WriteLine(readOnly.ToString())
+                Console.WriteLine(window.ToString())
+                Console.WriteLine(writableChars.ToString())
+                Console.WriteLine(readOnlyChars.ToString())
             }
             """;
 
@@ -128,8 +134,8 @@ public class Issue3114ReadOnlySpanInterpreterTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEvaluation
-                    ? "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSuccess.\n"
-                    : "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\n",
+                    ? "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabc\nabc\nSuccess.\n"
+                    : "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabc\nabc\n",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
