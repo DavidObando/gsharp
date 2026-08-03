@@ -21,37 +21,44 @@ namespace GSharp.Compiler.Tests.Binding;
 public class Issue3034NullableNarrowingDiagnosticTests
 {
     private const string NullableReceiverMessage =
-        "Cannot call function M because receiver 'c' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.";
+        "Cannot call function M because receiver 'c' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.";
 
     [Theory]
-    [InlineData("function")]
-    [InlineData("top-level")]
-    public void NullableReceiver_ExplainsMissingNarrowing(string scope)
+    [MemberData(nameof(ReceiverKindCases))]
+    public void NullableReceiverGuidance_MatchesReceiverNarrowability(
+        string receiverKind,
+        string state,
+        string scope,
+        bool expectDiagnostic)
     {
-        var source = scope == "top-level"
-            ? """
-            class C { func M() { } }
+        var source = CreateReceiverKindSource(receiverKind, state, scope);
+        var diagnostics = GetDiagnostics(
+            source,
+            isLibrary: scope != "top-level" && receiverKind != "global");
+        if (!expectDiagnostic)
+        {
+            Assert.Empty(diagnostics);
+            return;
+        }
 
-            var c C? = nil
-            c.M()
-            """
-            : """
-            class C { func M() { } }
+        if (receiverKind == "parameter" && state == "narrowed-before-call")
+        {
+            Assert.Equal(2, diagnostics.Length);
+            Assert.Contains(
+                diagnostics,
+                diagnostic => diagnostic.Message == "Variable 'c' is read-only and cannot be assigned to.");
+        }
+        else
+        {
+            Assert.Single(diagnostics);
+        }
 
-            func Run() {
-                var c C? = nil
-                c.M()
-            }
-            """;
-        var diagnostic = GetGs0159(source, isLibrary: scope != "top-level");
-
-        Assert.Equal(NullableReceiverMessage, diagnostic.Message);
-        AssertDiagnosticSpan(
-            diagnostic,
-            line: scope == "top-level" ? 3 : 4,
-            startCharacter: scope == "top-level" ? 2 : 6,
-            endCharacter: scope == "top-level" ? 5 : 9,
-            text: "M()");
+        var diagnostic = Assert.Single(diagnostics, diagnostic => diagnostic.Id == "GS0159");
+        var receiver = receiverKind == "field" ? "b.Inner" : "c";
+        Assert.Equal(
+            $"Cannot call function M because receiver '{receiver}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            diagnostic.Message);
+        Assert.DoesNotContain("re-narrow", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -167,7 +174,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function M because receiver 's' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function M because receiver 's' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
     }
 
@@ -184,7 +191,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function M because receiver 'value' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function M because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
     }
 
@@ -201,7 +208,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function ToString because receiver 'value' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function ToString because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
     }
 
@@ -217,7 +224,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function M because receiver 'value' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function M because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
     }
 
@@ -260,7 +267,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function M because receiver 'b.Inner' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function M because receiver 'b.Inner' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
     }
 
@@ -278,7 +285,7 @@ public class Issue3034NullableNarrowingDiagnosticTests
             """);
 
         Assert.Equal(
-            "Cannot call function M because receiver 'b. Inner' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.",
+            "Cannot call function M because receiver 'b. Inner' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
             diagnostic.Message);
         Assert.DoesNotContain('\n', diagnostic.Message);
         AssertDiagnosticSpan(diagnostic, line: 5, startCharacter: 14, endCharacter: 17, text: "M()");
@@ -359,6 +366,92 @@ public class Issue3034NullableNarrowingDiagnosticTests
         using var peStream = new MemoryStream();
         var result = compilation.Emit(peStream, refStream: null);
         return result.Diagnostics.ToArray();
+    }
+
+    public static TheoryData<string, string, string, bool> ReceiverKindCases => new()
+    {
+        { "local", "never-narrowed", "function", true },
+        { "local", "narrowed-before-call", "function", false },
+        { "parameter", "never-narrowed", "function", true },
+        { "parameter", "narrowed-before-call", "function", true },
+        { "field", "never-narrowed", "top-level", true },
+        { "field", "narrowed-before-call", "top-level", true },
+        { "field", "never-narrowed", "function", true },
+        { "field", "narrowed-before-call", "function", true },
+        { "global", "never-narrowed", "top-level", true },
+        { "global", "narrowed-before-call", "top-level", false },
+        { "global", "never-narrowed", "function", true },
+        { "global", "narrowed-before-call", "function", false },
+        { "let", "never-narrowed", "top-level", true },
+        { "let", "narrowed-before-call", "top-level", true },
+        { "let", "never-narrowed", "function", true },
+        { "let", "narrowed-before-call", "function", true },
+    };
+
+    private static string CreateReceiverKindSource(string receiverKind, string state, string scope)
+    {
+        var setNonNull = state == "narrowed-before-call";
+        return (receiverKind, scope) switch
+        {
+            ("local", "function") => $$"""
+                class C { func M() { } }
+                func Run() {
+                    var c C? = nil
+                    {{(setNonNull ? "c = C()" : string.Empty)}}
+                    c.M()
+                }
+                """,
+            ("parameter", "function") => $$"""
+                class C { func M() { } }
+                func Run(c C?) {
+                    {{(setNonNull ? "c = C()" : string.Empty)}}
+                    c.M()
+                }
+                """,
+            ("field", "top-level") => $$"""
+                class C { func M() { } }
+                class Box { var Inner C? }
+                var b Box = Box()
+                {{(setNonNull ? "b.Inner = C()" : string.Empty)}}
+                b.Inner.M()
+                """,
+            ("field", "function") => $$"""
+                class C { func M() { } }
+                class Box { var Inner C? }
+                func Run() {
+                    var b Box = Box()
+                    {{(setNonNull ? "b.Inner = C()" : string.Empty)}}
+                    b.Inner.M()
+                }
+                """,
+            ("global", "top-level") => $$"""
+                class C { func M() { } }
+                var c C? = nil
+                {{(setNonNull ? "c = C()" : string.Empty)}}
+                c.M()
+                """,
+            ("global", "function") => $$"""
+                class C { func M() { } }
+                var c C? = nil
+                func Run() {
+                    {{(setNonNull ? "c = C()" : string.Empty)}}
+                    c.M()
+                }
+                """,
+            ("let", "top-level") => $$"""
+                class C { func M() { } }
+                let c C? = {{(setNonNull ? "C()" : "nil")}}
+                c.M()
+                """,
+            ("let", "function") => $$"""
+                class C { func M() { } }
+                func Run() {
+                    let c C? = {{(setNonNull ? "C()" : "nil")}}
+                    c.M()
+                }
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(receiverKind)),
+        };
     }
 
     private static void AssertDiagnosticSpan(

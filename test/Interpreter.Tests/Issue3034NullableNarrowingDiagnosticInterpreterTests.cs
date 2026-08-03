@@ -16,7 +16,7 @@ namespace GSharp.Interpreter.Tests;
 public class Issue3034NullableNarrowingDiagnosticInterpreterTests
 {
     private const string NullableReceiverMessage =
-        "Cannot call function M because receiver 'c' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.";
+        "Cannot call function M because receiver 'c' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.";
 
     [Theory]
     [InlineData("function", "M()", NullableReceiverMessage, null)]

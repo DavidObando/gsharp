@@ -330,7 +330,7 @@ public sealed partial class DiagnosticBag
     => Report(
         location,
         DiagnosticDescriptors.UnableToFindFunction,
-        $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call, bind it with 'if let', or re-narrow it before calling.");
+        $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
 
     /// <summary>
     /// Reports that an overloaded call (constructor, static method, or
