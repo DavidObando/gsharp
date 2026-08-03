@@ -129,6 +129,15 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #3093: sequence[T] is an identity alias, not merely a
+        // reference conversion, for the matching enumerable interface.
+        if (SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out _, out _)
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(to, out _, out _)
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to))
+        {
+            return Conversion.Identity;
+        }
+
         // Issue #2290: a referenced (cross-assembly) type can be independently
         // re-minted into TWO non-reference-equal TypeSymbol wrappers for the
         // SAME underlying CLR type — e.g. an imported `data class`/`data
