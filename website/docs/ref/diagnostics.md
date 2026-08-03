@@ -1771,6 +1771,16 @@ This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
 `gsi` cannot create a valid callable value for direct or indirect use.
 
+## Interpreter deinitializer boundary (GS0510)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0510 | Warning | A class declares a CLR GC finalizer with `deinit`, which does not run under interpreted execution. |
+
+The interpreter has no emitted class with a CLR `Finalize` override and does
+not invent deterministic scope-exit cleanup. Compile with `gsc` when program
+behavior depends on GC finalization.
+
 ## Additional current and reserved diagnostics
 
 These entries complete the current compiler catalogue. Older topic sections

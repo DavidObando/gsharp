@@ -104,6 +104,34 @@ The compiler does **not** auto-generate either side of this pattern. It does not
 
 The `deinit` member is not a callable name. There is no `obj.deinit()`, no `this.deinit()`, and no `init(args)`-style delegation form. The synthesized `Finalize` method exists in metadata so the CLR runtime can invoke it, but the user-facing G# binder does not surface `deinit` as a member lookup name. Attempting `obj.deinit()` produces the standard "member not found" diagnostic.
 
+### Interpreter boundary
+
+`deinit` requires CLR GC finalization and therefore runs only in emitted code.
+The interpreter has no emitted class with a `Finalize` override, and running
+the body at scope exit would incorrectly finalize objects that remain
+reachable. Interpreted execution reports warning **GS0510** once for each
+declaring class and skips its deinitializer. Compile with `gsc` when program
+behavior depends on finalization.
+
+Measurements against emitted CLR behavior establish the boundary:
+
+| Probe | `gsc` | `gsi` |
+|---|---|---|
+| Object dies in a function; collection forced | `made-22` / `deinit-11` / `body-33` | `made-22` / `body-33` |
+| Object dies in a function; no forced collection | `made-22` / `body-33` | `made-22` / `body-33` |
+| Object remains reachable at exit | no `deinit` | no `deinit` |
+
+Scope-exit and shutdown execution are therefore both wrong. Matching CLR
+behavior requires tying finalization to `StructValue` lifetime and re-entering
+`Evaluator` from a finalizer thread, risking shutdown deadlock and
+timing-dependent output that golden-sample comparison cannot pin.
+
+GS0510 is a warning because the CLR does not guarantee that a finalizer runs;
+the interpreted program can still complete with an omitted GC-scheduled side
+effect. In contrast, unsafe storage and P/Invoke boundaries are errors because
+interpreted execution cannot proceed correctly without emitted storage or
+would fabricate a deterministic native return value.
+
 ## Considered alternatives
 
 - **C#-style `~Type()` syntax** — rejected. The G# member-introducer convention (ADR-0067) is "every member kind is announced by a one-token keyword" (`var`, `let`, `func`, `prop`, `event`, `init`). A leading `~` would be the only operator-introduced member in the language and would break that pattern just to save four characters.
