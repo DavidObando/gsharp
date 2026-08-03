@@ -174,9 +174,9 @@ public sealed partial class Evaluator
         switch (b.Op.Kind)
         {
             case BoundBinaryOperatorKind.Equals:
-                return NumericEquals(left, right);
+                return b.Op.IsReferenceEquality ? ReferenceEquals(left, right) : NumericEquals(left, right);
             case BoundBinaryOperatorKind.NotEquals:
-                return !NumericEquals(left, right);
+                return b.Op.IsReferenceEquality ? !ReferenceEquals(left, right) : !NumericEquals(left, right);
             case BoundBinaryOperatorKind.LogicalAnd:
                 return (bool)left && (bool)right;
             case BoundBinaryOperatorKind.LogicalOr:

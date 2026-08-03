@@ -122,6 +122,7 @@ public class Issue2896StructObjectOverrideTests
     [InlineData("dictionary")]
     [InlineData("hashSet")]
     [InlineData("listContains")]
+    [InlineData("operatorEquals")]
     [InlineData("equals")]
     [InlineData("getHashCode")]
     public async Task Issue3134_ClassIdentityAndStructValueEqualityMatchEmitter(string surface)
@@ -452,6 +453,19 @@ public class Issue2896StructObjectOverrideTests
                     {{prefix}}Values.Contains({{prefix}}B),
                     {{prefix}}Values.Contains({{prefix}}Other)))
                 """,
+            "operatorEquals" when isClass => $$"""
+                Console.WriteLine(String.Format(
+                    "{{label}}|{0}|{1}|{2}|{3}|{4}|{5}",
+                    {{prefix}}A == {{prefix}}B,
+                    {{prefix}}A == {{prefix}}C,
+                    {{prefix}}A == {{prefix}}Other,
+                    {{prefix}}A != {{prefix}}B,
+                    {{prefix}}A != {{prefix}}C,
+                    {{prefix}}A != {{prefix}}Other))
+                """,
+            "operatorEquals" => $$"""
+                Console.WriteLine("{{label}}|N/A")
+                """,
             "equals" => $$"""
                 Console.WriteLine(String.Format(
                     "{{label}}|{0}|{1}|{2}",
@@ -498,6 +512,14 @@ public class Issue2896StructObjectOverrideTests
                 "DataClass|1|11|True|True|False",
                 "StructWithOverrides|1|11|True|True|True",
                 "StructWithoutOverrides|1|11|True|True|False",
+            },
+            "operatorEquals" => new[]
+            {
+                "ClassWithOverrides|False|True|False|True|False|True",
+                "ClassWithoutOverrides|False|True|False|True|False|True",
+                "DataClass|True|True|False|False|False|True",
+                "StructWithOverrides|N/A",
+                "StructWithoutOverrides|N/A",
             },
             "equals" => new[]
             {
