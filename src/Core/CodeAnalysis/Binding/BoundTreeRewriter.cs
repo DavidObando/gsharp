@@ -828,9 +828,11 @@ public abstract class BoundTreeRewriter
                         }
                     }
 
-                    fieldsBuilder?.Add(field.Property is null
-                        ? new BoundPropertyPatternField(null, field.Field, pattern)
-                        : new BoundPropertyPatternField(null, field.Property, pattern));
+                    fieldsBuilder?.Add(field.ClrMember != null
+                        ? new BoundPropertyPatternField(null, field.ClrMember, field.Type, pattern)
+                        : field.Property != null
+                            ? new BoundPropertyPatternField(null, field.Property, field.DeclaringType, pattern)
+                            : new BoundPropertyPatternField(null, field.Field, field.DeclaringType, pattern));
                 }
 
                 return fieldsBuilder == null ? node : new BoundPropertyPattern(null, node.Type, fieldsBuilder.MoveToImmutable());

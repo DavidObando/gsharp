@@ -804,7 +804,7 @@ public static class BoundNodePrinter
                         writer.WriteSpace();
                     }
 
-                    writer.WriteIdentifier(property.Fields[i].Field.Name);
+                    writer.WriteIdentifier(property.Fields[i].Name);
                     writer.WritePunctuation(SyntaxKind.ColonToken);
                     writer.WriteSpace();
                     WritePattern(property.Fields[i].Pattern, writer);

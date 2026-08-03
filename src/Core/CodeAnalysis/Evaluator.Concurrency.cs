@@ -137,31 +137,38 @@ public sealed partial class Evaluator
                 return true;
             case BoundNodeKind.PropertyPattern:
                 var property = (BoundPropertyPattern)pattern;
-                if (value is not StructValue sv)
+                if (value == null)
                 {
-                    // Issue #1887: a positional pattern over a raw tuple lowers
-                    // to a property pattern keyed on Item1..ItemN. Tuple values
-                    // are CLR ValueTuple instances (arity 2-7) or object[].
-                    if (value != null && property.Type is TupleTypeSymbol)
-                    {
-                        foreach (var tupleField in property.Fields)
-                        {
-                            var tupleFieldValue = GetTupleFieldValue(value, tupleField.Field.Name);
-                            if (!TryMatchPattern(tupleField.Pattern, tupleFieldValue, outBindings))
-                            {
-                                return false;
-                            }
-                        }
+                    return false;
+                }
 
-                        return true;
+                // Issue #1887: a positional pattern over a raw tuple lowers
+                // to a property pattern keyed on Item1..ItemN. Tuple values
+                // are CLR ValueTuple instances (arity 2-7) or object[].
+                var propertyType = property.Type is NullableTypeSymbol nullablePropertyType
+                    ? nullablePropertyType.UnderlyingType
+                    : property.Type;
+                if (propertyType is TupleTypeSymbol)
+                {
+                    foreach (var tupleField in property.Fields)
+                    {
+                        var tupleFieldValue = GetTupleFieldValue(value, tupleField.Field.Name);
+                        if (!TryMatchPattern(tupleField.Pattern, tupleFieldValue, outBindings))
+                        {
+                            return false;
+                        }
                     }
 
-                    return false;
+                    return true;
                 }
 
                 foreach (var field in property.Fields)
                 {
-                    sv.Fields.TryGetValue(field.Property?.Name ?? field.Field.Name, out var fieldValue);
+                    if (!TryEvaluatePropertyPatternMember(property, field, value, out var fieldValue))
+                    {
+                        return false;
+                    }
+
                     if (!TryMatchPattern(field.Pattern, fieldValue, outBindings))
                     {
                         return false;
@@ -274,6 +281,65 @@ public sealed partial class Evaluator
             default:
                 throw new EvaluatorException($"Unexpected pattern node {pattern.Kind}.", pattern);
         }
+    }
+
+    private bool TryEvaluatePropertyPatternMember(
+        BoundPropertyPattern pattern,
+        BoundPropertyPatternField field,
+        object receiver,
+        out object value)
+    {
+        var receiverType = pattern.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : pattern.Type;
+
+        if (field.ClrMember != null)
+        {
+            value = EvaluateClrMemberAccess(field.ClrMember, receiver, receiverType, field);
+            return true;
+        }
+
+        if (field.Property != null)
+        {
+            if (receiver is not StructValue
+                && field.DeclaringType is StructSymbol { ClrType: Type clrType })
+            {
+                var clrProperty = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    clrType,
+                    field.Property.Name,
+                    BindingFlags.Public | BindingFlags.Instance);
+                if (clrProperty != null)
+                {
+                    value = EvaluateClrMemberAccess(clrProperty, receiver, field.DeclaringType, field);
+                    return true;
+                }
+            }
+
+            value = EvaluateUserPropertyValue(field.Property, receiver);
+            return true;
+        }
+
+        if (receiver is StructValue structValue)
+        {
+            structValue.Fields.TryGetValue(field.Field.Name, out value);
+            return true;
+        }
+
+        if (field.DeclaringType is StructSymbol { ClrType: Type fieldClrType })
+        {
+            var clrField = ClrTypeUtilities.SafeGetFieldIncludingInterfaces(
+                fieldClrType,
+                field.Field.Name,
+                BindingFlags.Public | BindingFlags.Instance);
+            if (clrField != null)
+            {
+                value = EvaluateClrMemberAccess(clrField, receiver, field.DeclaringType, field);
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
     }
 
     private static bool MatchesType(TypeSymbol targetType, object value)

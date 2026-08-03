@@ -89,7 +89,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor SwitchCaseValueNotConstant = new("GS0170", DiagnosticSeverity.Error, "Switch case value must be a constant expression.");
     internal static readonly DiagnosticDescriptor SwitchCaseTypeMismatch = new("GS0171", DiagnosticSeverity.Error, "Switch case value of type '{0}' is incompatible with switch expression of type '{1}'.");
     internal static readonly DiagnosticDescriptor PropertyPatternRequiresStructOrClass = new("GS0172", DiagnosticSeverity.Error, "Property pattern requires a struct or class value, not '{0}'.");
-    internal static readonly DiagnosticDescriptor UndefinedFieldOnType = new("GS0173", DiagnosticSeverity.Error, "Type '{0}' does not define a field named '{1}'.");
+    internal static readonly DiagnosticDescriptor UndefinedFieldOnType = new("GS0173", DiagnosticSeverity.Error, "Type '{0}' does not define a readable instance field or property named '{1}'.");
     internal static readonly DiagnosticDescriptor RelationalPatternOperatorUndefined = new("GS0174", DiagnosticSeverity.Error, "Relational pattern operator '{0}' is not defined for type '{1}'.");
     internal static readonly DiagnosticDescriptor ListPatternRequiresArrayOrSlice = new("GS0175", DiagnosticSeverity.Error, "List pattern requires an array or slice value, not '{0}'.");
     internal static readonly DiagnosticDescriptor SwitchExpressionMissingDefault = new("GS0176", DiagnosticSeverity.Error, "Switch expression must have a 'default' arm.");
