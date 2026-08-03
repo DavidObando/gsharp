@@ -262,6 +262,9 @@ public sealed partial class Evaluator
             return new InterpretedSpanValue(this.array, this.start + start, length, IsReadOnly);
         }
 
+        public override string ToString()
+            => $"System.{(IsReadOnly ? "ReadOnlySpan" : "Span")}<{this.array.GetType().GetElementType().Name}>[{Length}]";
+
         private int CheckedIndex(int index)
         {
             if ((uint)index >= (uint)Length)

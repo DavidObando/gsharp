@@ -46,6 +46,12 @@ public class Issue3114ReadOnlySpanInterpreterTests
         }
     }
 
+    public static IEnumerable<object[]> InterpretingDrivers()
+    {
+        yield return new object[] { Driver.CompilerEvaluation };
+        yield return new object[] { Driver.Interpreter };
+    }
+
     [Theory]
     [MemberData(nameof(SampleDriverCases))]
     public void ShippedSpanSample_MatchesGoldenAcrossDrivers(string sample, string expected, Driver driver)
@@ -96,6 +102,8 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 Console.WriteLine(readOnly.Length)
                 Console.WriteLine(readOnly[1])
                 Console.WriteLine(window[1])
+                Console.WriteLine(writable.ToString())
+                Console.WriteLine(readOnly.ToString())
             }
             """;
 
@@ -119,7 +127,56 @@ public class Issue3114ReadOnlySpanInterpreterTests
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
-                driver == Driver.CompilerEvaluation ? "3\n44\n33\nSuccess.\n" : "3\n44\n33\n",
+                driver == Driver.CompilerEvaluation
+                    ? "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSuccess.\n"
+                    : "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\n",
+                result.StandardOutput);
+            Assert.Equal(string.Empty, result.StandardError);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(InterpretingDrivers))]
+    public void SpanInterpolation_UsesPublicSpanName(Driver driver)
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                var values = []int32{11, 22, 33}
+                var writable Span[int32] = values
+                var readOnly ReadOnlySpan[int32] = writable
+                Console.WriteLine("writable=${writable}")
+                Console.WriteLine("readonly=${readOnly}")
+            }
+            """;
+
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3114-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var sourcePath = Path.Combine(root, "span-interpolation.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = driver switch
+            {
+                Driver.CompilerEvaluation => CaptureConsole(
+                    () => GSharp.Compiler.Program.Main([sourcePath])),
+                Driver.Interpreter => CaptureConsole(
+                    () => GSharp.Repl.Program.Main([sourcePath])),
+                _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
+            };
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(
+                driver == Driver.CompilerEvaluation
+                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nSuccess.\n"
+                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\n",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }

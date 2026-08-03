@@ -1177,11 +1177,12 @@ compiler error. It applies even when the declaration is not called because
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0511 | Error | The interpreter cannot represent a stack-only (`ByRefLike`) CLR value such as `Span[T]` or `ReadOnlySpan[T]`. |
+| GS0511 | Error | The interpreter cannot represent this stack-only (`ByRefLike`) CLR value. Array-backed `Span[T]` and `ReadOnlySpan[T]` values are supported. |
 
 Interpreter values use boxed storage, which cannot hold stack-only CLR values
-or preserve their interior references. Compile the program with `gsc /out:<file>`
-to use these types.
+or preserve their interior references. The interpreter emulates spans created
+from arrays; CLR methods and properties returning stack-only values remain
+unsupported. Compile the program with `gsc /out:<file>` to use those values.
 
 ## Interpreter deinitializer boundary (GS0510)
 
