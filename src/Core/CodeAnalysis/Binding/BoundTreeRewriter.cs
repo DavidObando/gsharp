@@ -620,7 +620,7 @@ public abstract class BoundTreeRewriter
         // Issue #1644: preserve the set-after-construction generic-owner properties
         // (#1209 / #1433) so the emitter still parents the call at the construction's
         // TypeSpec instead of a bare open-generic MethodDef.
-        return new BoundCallExpression(null, node.Function, builder.MoveToImmutable(), node.ReturnType, node.IsConditionalElided)
+        return new BoundCallExpression(node.Syntax, node.Function, builder.MoveToImmutable(), node.ReturnType, node.IsConditionalElided)
         {
             StaticGenericOwnerType = node.StaticGenericOwnerType,
             StaticGenericInterfaceOwnerType = node.StaticGenericInterfaceOwnerType,

@@ -387,7 +387,14 @@ public class Compilation
         }
         catch (EvaluatorException ex)
         {
-            var location = ex.Location ?? ex.Node?.Syntax?.Location;
+            var diagnosticException = Evaluator.UnwrapDiagnosticException(ex);
+            var evaluatorException = diagnosticException as EvaluatorException ?? ex;
+            var location = evaluatorException.Location;
+            if (location == null)
+            {
+                location = ex.Node?.Syntax?.Location;
+            }
+
             if (location == null)
             {
                 using var textWriter = new StringWriter();
@@ -396,8 +403,11 @@ public class Compilation
                 location = new TextLocation(sourceText, new TextSpan(0, sourceText.Length));
             }
 
-            var message = Evaluator.UnwrapDiagnosticException(ex).Message;
-            var diagnostic = new Diagnostic(location.Value, ex.DiagnosticId, ex.Severity, message);
+            var diagnostic = new Diagnostic(
+                location.Value,
+                evaluatorException.DiagnosticId,
+                evaluatorException.Severity,
+                diagnosticException.Message);
             return new EvaluationResult(allWarnings.Add(diagnostic), null);
         }
     }

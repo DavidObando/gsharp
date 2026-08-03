@@ -62,7 +62,7 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal("GS0514", diagnostic.Id);
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Equal("pinvoke.gs", diagnostic.Location.FileName);
-        Assert.Equal(3, diagnostic.Location.StartLine);
+        Assert.Equal(5, diagnostic.Location.StartLine);
         Assert.Contains("NativeStrLen", diagnostic.Message);
         Assert.Contains("'gsc /out:<path>'", diagnostic.Message);
         Assert.Equal(string.Empty, cell.Output);
@@ -115,6 +115,32 @@ public class Issue2986InterpreterBoundaryTests
     }
 
     [Fact]
+    public void PInvokeCallWithRewrittenArgument_ReportsUseLocation()
+    {
+        var source = """
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+
+            func CallNative() nint {
+                let text = "Hello"
+                let invoke = func() nint { return NativeStrLen(text) }
+                return invoke()
+            }
+
+            CallNative()
+            """;
+
+        var cell = new SessionEngine().Evaluate(source, "capture.gs");
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.Equal("GS0514", diagnostic.Id);
+        Assert.Equal("capture.gs", diagnostic.Location.FileName);
+        Assert.Equal(7, diagnostic.Location.StartLine);
+    }
+
+    [Fact]
     public void PInvokeDeclaredInEarlierCell_IsDiagnosedOnlyWhenUsed()
     {
         var engine = new SessionEngine { CaptureConsole = true };
@@ -135,7 +161,103 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal("33\n", unrelated.Output);
         var diagnostic = Assert.Single(use.Diagnostics);
         Assert.Equal("GS0514", diagnostic.Id);
-        Assert.Equal("declaration.gs", diagnostic.Location.FileName);
+        Assert.Equal("use.gs", diagnostic.Location.FileName);
+    }
+
+    [Theory]
+    [InlineData(
+        "direct call",
+        """
+        try {
+            Console.WriteLine(NativeStrLen("Hello"))
+        } catch (e Exception) {
+            Console.WriteLine("caught-22")
+        }
+        Console.WriteLine("body-33")
+        """)]
+    [InlineData(
+        "method group",
+        """
+        try {
+            let f = NativeStrLen
+            Console.WriteLine(f("Hello"))
+        } catch (e Exception) {
+            Console.WriteLine("caught-22")
+        }
+        Console.WriteLine("body-33")
+        """)]
+    [InlineData(
+        "lambda call",
+        """
+        let invoke = func() nint { return NativeStrLen("Hello") }
+        try {
+            Console.WriteLine(invoke())
+        } catch (e Exception) {
+            Console.WriteLine("caught-22")
+        }
+        Console.WriteLine("body-33")
+        """)]
+    public void PInvokeBoundaryDiagnostic_CannotBeCaught(string _, string body)
+    {
+        AssertPInvokeUseRejected(body);
+    }
+
+    [Fact]
+    public void OtherEvaluatorBoundaryDiagnostic_CannotBeCaught()
+    {
+        var source = """
+            import System
+
+            try {
+                MemoryExtensions.AsSpan([]int32{11, 22, 33})
+            } catch (e Exception) {
+                Console.WriteLine("caught-22")
+            }
+            Console.WriteLine("body-33")
+            """;
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source, "byreflike.gs");
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.Equal("GS0511", diagnostic.Id);
+        Assert.Equal("byreflike.gs", diagnostic.Location.FileName);
+        Assert.Equal(string.Empty, cell.Output);
+    }
+
+    [Theory]
+    [InlineData(
+        "stored local",
+        """
+        let f = NativeStrLen
+        Console.WriteLine(f("Hello"))
+        """)]
+    [InlineData(
+        "generic wrapper",
+        """
+        func CallNative[T](value T) nint {
+            return NativeStrLen(value.ToString())
+        }
+        Console.WriteLine(CallNative[string]("Hello"))
+        """)]
+    [InlineData(
+        "LINQ lambda",
+        """
+        var values = List[string]()
+        values.Add("Hello")
+        Console.WriteLine(values.Select(func(value string) nint { return NativeStrLen(value) }).First())
+        """)]
+    public void PInvokeUseShapes_ReportGS0514(string _, string body)
+    {
+        AssertPInvokeUseRejected(body);
+    }
+
+    [Fact]
+    public void PInvokeGo_ReportsBeforeFireAndForgetSpawn()
+    {
+        AssertPInvokeUseRejected(
+            """
+            go NativeStrLen("Hello")
+            Console.WriteLine("body-33")
+            """);
     }
 
     /// <summary>
@@ -179,6 +301,28 @@ public class Issue2986InterpreterBoundaryTests
             Console.SetOut(previousOut);
             Console.SetError(previousError);
         }
+    }
+
+    private static void AssertPInvokeUseRejected(string body)
+    {
+        var source = """
+            import System
+            import System.Collections.Generic
+            import System.Linq
+            import Gsharp.Extensions.Go
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+
+            """ + body;
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source, "use.gs");
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.True(cell.HasError);
+        Assert.Equal("GS0514", diagnostic.Id);
+        Assert.Equal("use.gs", diagnostic.Location.FileName);
+        Assert.Equal(string.Empty, cell.Output);
     }
 
     private static string LocateSample(string fileName)

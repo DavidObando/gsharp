@@ -83,9 +83,10 @@ public class EvaluatorException : Exception
     internal DiagnosticSeverity Severity { get; private set; } = DiagnosticSeverity.Error;
 
     /// <summary>
-    /// Gets the source location for a deliberate diagnostic, when available.
+    /// Gets a value indicating whether this exception is a compiler diagnostic
+    /// that must bypass user exception handling.
     /// </summary>
-    internal TextLocation? Location { get; private set; }
+    internal bool IsDiagnosticControlSignal { get; private set; }
 
     /// <summary>
     /// Creates an evaluator exception for a deliberate diagnostic.
@@ -103,6 +104,7 @@ public class EvaluatorException : Exception
         {
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,
+            IsDiagnosticControlSignal = true,
         };
     }
 
@@ -148,6 +150,7 @@ public class EvaluatorException : Exception
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,
             Location = location,
+            IsDiagnosticControlSignal = true,
         };
     }
 }

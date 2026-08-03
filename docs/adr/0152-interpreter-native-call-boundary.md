@@ -23,8 +23,8 @@ This ADR does not redefine that boundary.
 
 Interpreted execution reports **GS0514 (Error)** when it reaches either a
 direct P/Invoke call or a first-class reference to a P/Invoke function. The
-diagnostic is located at the function identifier and directs the user to emit
-with `gsc /out:<path>` and run the emitted program.
+diagnostic is located at the use expression, not the declaration, and directs
+the user to emit with `gsc /out:<path>` and run the emitted program.
 
 An unused P/Invoke declaration remains valid. This preserves programs such as
 `samples/PInvokeFunctionPointer.gs`, which declare native signatures for the
@@ -33,6 +33,17 @@ when evaluated because the interpreter cannot create a valid callable value for
 it. A direct call is refused before argument evaluation or native dispatch.
 This prevents fabricated results and delayed `GS9999` failures without adding
 a native or reflection dispatch path.
+
+Deliberate evaluator diagnostics are compiler control signals, not user
+exceptions. G# `catch` clauses cannot intercept them; ordinary runtime
+exceptions remain catchable. The evaluator marks deliberate diagnostics as
+control signals and routes them past user exception matching. Evaluator
+wrappers that preserve a real runtime exception remain catchable by that
+exception's runtime type.
+
+ADR-0022 discards unhandled *runtime exceptions* from a free-standing `go`
+task. GS0514 is not a runtime exception, so a direct `go` P/Invoke call is
+rejected synchronously before the fire-and-forget task is scheduled.
 
 Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
 `Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
@@ -44,6 +55,8 @@ is deprecated and scheduled for removal in Phase 3c.
 
 - Interpreted execution never loads a native library for a P/Invoke use.
 - P/Invoke cannot silently return zero, `nil`, or another fabricated default.
+- User `catch` clauses cannot swallow GS0514, and a direct `go` P/Invoke call
+  is rejected before its fire-and-forget task is scheduled.
 - Programs may declare P/Invoke functions under interpretation when execution
   never calls or references them.
 - Default drivers run P/Invoke through emitted CLR execution; native calls are

@@ -230,7 +230,7 @@ public sealed partial class Evaluator
         {
             throw EvaluatorException.CreateDiagnostic(
                 DiagnosticDescriptors.PInvokeNotSupportedInInterpreter,
-                function.Declaration.Identifier.Location,
+                node.Syntax?.Location ?? function.Declaration.Identifier.Location,
                 node,
                 function.Name);
         }

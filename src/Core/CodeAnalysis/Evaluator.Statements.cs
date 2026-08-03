@@ -371,6 +371,11 @@ public sealed partial class Evaluator
         // blocked thread's state intact whether the goroutine runs on a new
         // thread or inline on this one.
         var expression = node.Expression;
+        if (expression is BoundCallExpression call)
+        {
+            RejectPInvoke(call.Function, call);
+        }
+
         var goroutineState = CloneExecutionStateForGoroutine();
         var enclosingScope = ScopeFrames.Count > 0 ? ScopeFrames.Peek() : null;
         if (enclosingScope != null)
@@ -812,6 +817,12 @@ public sealed partial class Evaluator
 
     private static bool TryFindCatchHandler(BoundTryStatement node, Exception ex, out BoundCatchClause matched)
     {
+        if (UnwrapDiagnosticException(ex) is EvaluatorException { IsDiagnosticControlSignal: true })
+        {
+            matched = null;
+            return false;
+        }
+
         var actualType = UnwrapRuntimeException(ex).GetType();
         foreach (var clause in node.CatchClauses)
         {
