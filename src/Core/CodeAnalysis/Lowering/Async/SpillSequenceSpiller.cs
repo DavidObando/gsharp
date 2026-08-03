@@ -989,7 +989,13 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundImportedCallExpression(null, call.Function, args.ToImmutable(), call.ArgumentRefKinds);
+            var value = new BoundImportedCallExpression(
+                null,
+                call.Function,
+                args.ToImmutable(),
+                call.ArgumentRefKinds,
+                call.TypeArgumentSymbols,
+                call.StaticContainerType);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),
@@ -1052,7 +1058,17 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundImportedInstanceCallExpression(null, receiver, call.Method, call.Type, args, call.ArgumentRefKinds);
+            var value = new BoundImportedInstanceCallExpression(
+                null,
+                receiver,
+                call.Method,
+                call.Type,
+                args,
+                call.ArgumentRefKinds,
+                call.TypeArgumentSymbols,
+                call.ConstrainedReceiverTypeParameter,
+                call.ConstrainedInterfaceType,
+                call.IsNonVirtualBaseCall);
             return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
