@@ -1343,7 +1343,9 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
-            // Keep inherited-field resolution aligned pending imported generic-record support.
+            // This branch executes but resolves to the same token as the else-arm for every
+            // expressible program. The !isGeneric guard above excludes imported and user-authored
+            // generics, so both that guard and generic-record support must change before this discriminates.
             var fieldHandle = init.FieldDeclaringType != null
                 ? this.ResolveStructLiteralFieldToken(literal, init)
                 : this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
