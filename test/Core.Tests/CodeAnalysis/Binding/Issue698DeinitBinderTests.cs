@@ -52,6 +52,7 @@ class Resource {
 }
 ";
         var (result, _) = EvaluateAndGetStructs(source);
+        Assert.Single(result.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
         Assert.All(result.Diagnostics, diagnostic => Assert.Equal("GS0510", diagnostic.Id));
     }
 

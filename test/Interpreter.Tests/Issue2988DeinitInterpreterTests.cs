@@ -64,6 +64,46 @@ public class Issue2988DeinitInterpreterTests
     }
 
     [Fact]
+    public void InheritedDeinitializersWarnOncePerDeclaringClass()
+    {
+        var source = """
+            import System
+
+            open class Resource(Tag string) {
+                deinit {
+                    Console.WriteLine("base-deinit-11")
+                }
+            }
+
+            class CachedResource : Resource {
+                init(tag string) : base(tag) {
+                }
+
+                deinit {
+                    Console.WriteLine("derived-deinit-22")
+                }
+            }
+
+            var resource = CachedResource("held-33")
+            Console.WriteLine("body-44")
+            GC.KeepAlive(resource)
+            """;
+
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+
+        Assert.False(cell.HasError);
+        Assert.Equal("body-44\n", cell.Output);
+        var warnings = cell.Diagnostics
+            .Where(diagnostic => diagnostic.Id == "GS0510")
+            .OrderBy(diagnostic => diagnostic.Message)
+            .ToArray();
+        Assert.Collection(
+            warnings,
+            warning => AssertWarning(warning, "CachedResource"),
+            warning => AssertWarning(warning, "Resource"));
+    }
+
+    [Fact]
     public void EscapingInstanceIsNotFinalizedAtScopeExitOrWhileReachable()
     {
         var source = """
