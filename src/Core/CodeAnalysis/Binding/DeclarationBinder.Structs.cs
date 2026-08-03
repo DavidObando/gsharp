@@ -21,6 +21,16 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class DeclarationBinder
 {
+    /// <summary>Validates explicit-layout overlaps once all top-level and nested type bodies are bound.</summary>
+    /// <param name="topLevelStructs">The compilation's top-level struct and class symbols.</param>
+    internal void ReportExplicitLayoutReferenceOverlaps(IEnumerable<StructSymbol> topLevelStructs)
+    {
+        foreach (var structSymbol in topLevelStructs.Concat(nestedStructShells.Values).Distinct())
+        {
+            StructLayoutBinder.ReportReferenceFieldOverlaps(structSymbol, Diagnostics);
+        }
+    }
+
     /// <summary>
     /// Issue #973 (phase 2): binds the body of a previously declared struct/class
     /// shell — its instance fields, primary-constructor parameters, base clause,

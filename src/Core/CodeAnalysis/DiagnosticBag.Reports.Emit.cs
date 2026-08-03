@@ -572,6 +572,26 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.FieldOffsetInvalidValue, value);
 
     /// <summary>
+    /// Issue #3115: GS0518 — an explicit layout misaligns a reference-typed
+    /// field or overlaps it with non-reference storage, which the CLR loader rejects.
+    /// </summary>
+    /// <param name="location">The invalid field identifier location.</param>
+    /// <param name="typeName">The owning type name.</param>
+    /// <param name="referenceFieldName">The reference-typed field name.</param>
+    /// <param name="reason">The invalid alignment or overlap.</param>
+    public void ReportExplicitLayoutReferenceStorageInvalid(
+        TextLocation location,
+        string typeName,
+        string referenceFieldName,
+        string reason)
+    => Report(
+        location,
+        DiagnosticDescriptors.ExplicitLayoutReferenceStorageInvalid,
+        typeName,
+        referenceFieldName,
+        reason);
+
+    /// <summary>
     /// ADR-0093 / issue #759: GS0351 — a class type is used as the return
     /// type of a P/Invoke function. v1 supports class types only as
     /// parameters (passed by reference); the return-value ownership /

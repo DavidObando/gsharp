@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -103,6 +104,169 @@ internal static class StructLayoutBinder
             }
 
             field.SetExplicitOffset(offset);
+        }
+    }
+
+    /// <summary>Reports CLR-invalid reference field alignment and overlaps after all type bodies are bound.</summary>
+    /// <param name="structSymbol">The fully bound struct symbol.</param>
+    /// <param name="diagnostics">The compilation diagnostics.</param>
+    internal static void ReportReferenceFieldOverlaps(StructSymbol structSymbol, DiagnosticBag diagnostics)
+    {
+        if (structSymbol.LayoutMetadata?.Layout != LayoutKind.Explicit)
+        {
+            return;
+        }
+
+        for (var i = 0; i < structSymbol.Fields.Length; i++)
+        {
+            var left = structSymbol.Fields[i];
+            if (left.ExplicitOffset is not int leftOffset)
+            {
+                continue;
+            }
+
+            var leftIsReference = IsReferenceFieldType(left.Type);
+            if (leftIsReference && IsMisalignedReference(leftOffset))
+            {
+                diagnostics.ReportExplicitLayoutReferenceStorageInvalid(
+                    FieldIdentifierLocation(structSymbol, left),
+                    structSymbol.Name,
+                    left.Name,
+                    $"its offset {leftOffset} is not aligned to pointer size {IntPtr.Size}");
+                continue;
+            }
+
+            for (var j = i + 1; j < structSymbol.Fields.Length; j++)
+            {
+                var right = structSymbol.Fields[j];
+                if (right.ExplicitOffset is not int rightOffset)
+                {
+                    continue;
+                }
+
+                var rightIsReference = IsReferenceFieldType(right.Type);
+                if ((rightIsReference && IsMisalignedReference(rightOffset))
+                    || leftIsReference == rightIsReference)
+                {
+                    continue;
+                }
+
+                var reference = leftIsReference ? left : right;
+                var referenceOffset = leftIsReference ? leftOffset : rightOffset;
+                var nonReference = leftIsReference ? right : left;
+                var nonReferenceOffset = leftIsReference ? rightOffset : leftOffset;
+                if (!TryGetStorageSize(nonReference.Type, out var nonReferenceSize))
+                {
+                    continue;
+                }
+
+                var referenceEnd = (long)referenceOffset + IntPtr.Size;
+                var nonReferenceEnd = (long)nonReferenceOffset + nonReferenceSize;
+                if (referenceOffset < nonReferenceEnd && nonReferenceOffset < referenceEnd)
+                {
+                    diagnostics.ReportExplicitLayoutReferenceStorageInvalid(
+                        FieldIdentifierLocation(structSymbol, nonReference),
+                        structSymbol.Name,
+                        reference.Name,
+                        $"it overlaps non-reference field '{nonReference.Name}'");
+                }
+            }
+        }
+    }
+
+    private static bool IsMisalignedReference(int offset) => offset % IntPtr.Size != 0;
+
+    private static bool IsReferenceFieldType(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol nullable)
+        {
+            return IsReferenceFieldType(nullable.UnderlyingType);
+        }
+
+        return type == TypeSymbol.Object || Binder.IsReferenceTypeForConstraint(type);
+    }
+
+    private static bool TryGetStorageSize(TypeSymbol type, out int size)
+    {
+        size = 0;
+        if (type is NullableTypeSymbol)
+        {
+            return TryGetClrStorageSize(NullableTypeSymbol.GetEffectiveClrType(type), out size);
+        }
+
+        if (type is EnumSymbol enumType)
+        {
+            return TryGetStorageSize(enumType.UnderlyingType, out size);
+        }
+
+        if (type is PointerTypeSymbol or ByRefTypeSymbol)
+        {
+            size = IntPtr.Size;
+            return true;
+        }
+
+        if (type == TypeSymbol.Bool || type == TypeSymbol.Int8 || type == TypeSymbol.UInt8)
+        {
+            size = 1;
+            return true;
+        }
+
+        if (type == TypeSymbol.Char || type == TypeSymbol.Int16 || type == TypeSymbol.UInt16)
+        {
+            size = 2;
+            return true;
+        }
+
+        if (type == TypeSymbol.Int32 || type == TypeSymbol.UInt32 || type == TypeSymbol.Float32)
+        {
+            size = 4;
+            return true;
+        }
+
+        if (type == TypeSymbol.Int64 || type == TypeSymbol.UInt64 || type == TypeSymbol.Float64)
+        {
+            size = 8;
+            return true;
+        }
+
+        if (type == TypeSymbol.Decimal)
+        {
+            size = 16;
+            return true;
+        }
+
+        if (type == TypeSymbol.NInt || type == TypeSymbol.NUInt)
+        {
+            size = IntPtr.Size;
+            return true;
+        }
+
+        if (type is StructSymbol structType)
+        {
+            return !structType.IsClass
+                && (TryGetClrStorageSize(structType.ClrType, out size)
+                    || StructValue.TryGetStorageSize(structType, out size));
+        }
+
+        return TryGetClrStorageSize(type?.ClrType, out size);
+    }
+
+    private static bool TryGetClrStorageSize(Type type, out int size)
+    {
+        size = 0;
+        if (type == null || !type.IsValueType)
+        {
+            return false;
+        }
+
+        try
+        {
+            size = Marshal.SizeOf(type);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 

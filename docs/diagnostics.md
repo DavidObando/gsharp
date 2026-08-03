@@ -1165,6 +1165,12 @@ This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
 `gsi` cannot create a valid callable value for direct or indirect use.
 
+## Explicit-layout reference storage (GS0518)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0518 | Error | An explicit-layout type places a reference-typed field at a misaligned offset or overlaps it with non-reference storage. The CLR rejects both layouts; pointer-align the reference and keep non-reference fields outside its storage. |
+
 ## Stack-only CLR values in the interpreter (GS0511)
 
 | ID | Severity | Description |

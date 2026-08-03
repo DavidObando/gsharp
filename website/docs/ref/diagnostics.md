@@ -1781,6 +1781,12 @@ The interpreter has no emitted class with a CLR `Finalize` override and does
 not invent deterministic scope-exit cleanup. Compile with `gsc` when program
 behavior depends on GC finalization.
 
+## Explicit-layout reference storage (GS0518)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0518 | Error | An explicit-layout type places a reference-typed field at a misaligned offset or overlaps it with non-reference storage. The CLR rejects both layouts; pointer-align the reference and keep non-reference fields outside its storage. |
+
 ## Additional current and reserved diagnostics
 
 These entries complete the current compiler catalogue. Older topic sections
