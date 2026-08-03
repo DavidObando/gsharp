@@ -75,7 +75,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor CannotConvertImplicitly = new("GS0156", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'. An explicit conversion exists (are you missing a cast?)");
     internal static readonly DiagnosticDescriptor UnableToFindType = new("GS0157", DiagnosticSeverity.Error, "Cannot find type {0}. Are you missing an import?");
     internal static readonly DiagnosticDescriptor UnableToFindMember = new("GS0158", DiagnosticSeverity.Error, "Cannot find member {0}.");
-    internal static readonly DiagnosticDescriptor UnableToFindFunction = new("GS0159", DiagnosticSeverity.Error, "Cannot find function {0}.");
+    internal static readonly DiagnosticDescriptor UnableToFindFunction = new("GS0159", DiagnosticSeverity.Error, "{0}");
     internal static readonly DiagnosticDescriptor AmbiguousOverload = new("GS0160", DiagnosticSeverity.Error, "Call to '{0}' is ambiguous between {1} applicable overloads.{2}");
     internal static readonly DiagnosticDescriptor CopyOrWithNotDataStruct = new("GS0161", DiagnosticSeverity.Error, "copy/with requires a data class or data struct receiver, but got '{0}'.");
     internal static readonly DiagnosticDescriptor NamedArgumentOnlyValidForCopy = new("GS0162", DiagnosticSeverity.Error, "Named arguments are only supported for data-struct .copy(...).");

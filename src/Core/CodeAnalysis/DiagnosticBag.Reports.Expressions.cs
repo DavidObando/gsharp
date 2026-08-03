@@ -317,7 +317,20 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="text">The text associated to the function.</param>
     public void ReportUnableToFindFunction(TextLocation location, string text)
-    => Report(location, DiagnosticDescriptors.UnableToFindFunction, text);
+    => Report(location, DiagnosticDescriptors.UnableToFindFunction, $"Cannot find function {text}.");
+
+    /// <summary>Reports a function call whose receiver lacks a valid non-null narrowing.</summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="functionName">The called function.</param>
+    /// <param name="receiverName">The nullable receiver spelling.</param>
+    public void ReportUnableToFindFunction(
+        TextLocation location,
+        string functionName,
+        string receiverName)
+    => Report(
+        location,
+        DiagnosticDescriptors.UnableToFindFunction,
+        $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
 
     /// <summary>
     /// Reports that an overloaded call (constructor, static method, or

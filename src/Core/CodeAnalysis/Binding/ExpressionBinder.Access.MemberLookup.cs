@@ -87,7 +87,8 @@ internal sealed partial class ExpressionBinder
         BoundExpression receiver,
         ImportedClassSymbol classSymbol,
         ExpressionSyntax rightPart,
-        ExpressionSyntax receiverSyntax = null)
+        ExpressionSyntax receiverSyntax = null,
+        int? receiverStart = null)
     {
         switch (rightPart)
         {
@@ -154,7 +155,8 @@ internal sealed partial class ExpressionBinder
                     return BindNullConditionalAccessExpressionCore(head, nested.RightPart);
                 }
 
-                return BindAccessorStep(head, null, nested.RightPart, nested.LeftPart);
+                var fullReceiverStart = receiverStart ?? receiverSyntax?.Span.Start ?? nested.LeftPart.Span.Start;
+                return BindAccessorStep(head, null, nested.RightPart, nested.LeftPart, fullReceiverStart);
 
             case CallExpressionSyntax ce:
                 // Issue #3084: bind tuple fields symbolically when their CLR
@@ -177,7 +179,7 @@ internal sealed partial class ExpressionBinder
                         nullSafeInvocation: "?(...)");
                 }
 
-                var callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax);
+                var callResult = BindAccessorCall(receiver, classSymbol, ce, receiverSyntax, receiverStart);
                 CheckValueTaskGetAwaiterGetResult(callResult, ce);
                 return callResult;
 
