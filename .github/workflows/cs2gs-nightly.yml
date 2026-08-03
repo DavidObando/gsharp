@@ -75,7 +75,7 @@ jobs:
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Migrate and run latest Oahu
+      - name: Migrate and run latest Oahu (advisory)
         id: oahu_latest
         env:
           OAHU_GATE_LABEL: latest
@@ -146,8 +146,13 @@ jobs:
             ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/run.json
             ${{ runner.temp }}/cs2gs-oahu-latest/smoke/*
 
-      - name: Enforce gate outcome
+      - name: Report advisory and enforce gate outcome
         run: |
+          # Latest Oahu detects upstream drift but stays advisory so upstream
+          # changes cannot break this repository's pinned compatibility gate.
+          if [[ "${{ steps.oahu_latest.outputs.exit_code }}" != "0" ]]; then
+            echo "::warning title=Latest Oahu compatibility::Latest Oahu gate failed (exit ${{ steps.oahu_latest.outputs.exit_code }}); pinned Oahu remains the enforced compatibility baseline."
+          fi
           if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ||
                 "${{ steps.oahu_pinned.outputs.exit_code }}" != "0" ]]; then
             exit 1
