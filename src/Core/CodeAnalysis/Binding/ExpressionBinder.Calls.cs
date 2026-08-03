@@ -1756,10 +1756,72 @@ internal sealed partial class ExpressionBinder
         if (inner is LambdaExpressionSyntax lambdaSyntax
             && TryResolveDelegateTargetFromCandidates(candidateParameterLists, paramOffset, sourceArgIndex, argName, out var target))
         {
-            return lambdas.BindLambdaExpression(lambdaSyntax, target);
+            var literal = lambdas.BindLambdaExpression(lambdaSyntax, target);
+            var nominalTarget = TryResolveUniqueNominalDelegateTarget(
+                candidateParameterLists,
+                paramOffset,
+                sourceArgIndex,
+                argName);
+            return nominalTarget != null && ShouldConvertToNominalDelegate(nominalTarget)
+                ? conversions.BindConversion(argumentSyntax.Location, literal, nominalTarget)
+                : literal;
         }
 
         return BindExpression(inner);
+    }
+
+    /// <summary>
+    /// Issue #3149: preserves a named delegate's identity when all matching
+    /// delegate parameters agree. Binding only to their shared function shape
+    /// erases the literal to Func/Action before overload resolution.
+    /// </summary>
+    private static TypeSymbol TryResolveUniqueNominalDelegateTarget(
+        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int paramOffset,
+        int sourceArgIndex,
+        string argName)
+    {
+        TypeSymbol target = null;
+        foreach (var parameters in candidateParameterLists)
+        {
+            var paramIndex = string.IsNullOrEmpty(argName)
+                ? sourceArgIndex + paramOffset
+                : Array.FindIndex(
+                    parameters,
+                    parameter => string.Equals(parameter.Name, argName, StringComparison.Ordinal));
+            if (paramIndex < 0 || paramIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            var parameterType = parameters[paramIndex].ParameterType;
+            if (parameterType == null)
+            {
+                continue;
+            }
+
+            if (parameterType.ContainsGenericParameters)
+            {
+                return null;
+            }
+
+            if (!MemberLookup.TryGetLambdaTargetFunctionType(parameterType, out _))
+            {
+                continue;
+            }
+
+            var candidate = TypeSymbol.FromClrType(parameterType);
+            if (target == null)
+            {
+                target = candidate;
+            }
+            else if (!SameDelegateIdentity(target, candidate))
+            {
+                return null;
+            }
+        }
+
+        return target;
     }
 
     /// <summary>
