@@ -118,9 +118,9 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
 
             class Broken {
                 shared {
-                    let Value int32 = Fail()
+                    let Values []int32 = []int32{ ...Fail() }
 
-                    func Fail() int32 {
+                    func Fail() []int32 {
                         attempts++
                         throw InvalidOperationException("boom")
                     }
@@ -129,8 +129,9 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
 
             func Read() {
                 try {
-                    let ignored = Broken.Value
-                } catch (ex InvalidOperationException) {
+                    let ignored = Broken.Values
+                } catch (ex TypeInitializationException) {
+                    Console.WriteLine(ex.InnerException is InvalidOperationException)
                 }
             }
 
@@ -139,7 +140,7 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
             Console.WriteLine(attempts)
             """;
 
-        Assert.Equal("1\n", Evaluate(Source));
+        Assert.Equal("True\nTrue\n1\n", Evaluate(Source));
     }
 
     [Fact]

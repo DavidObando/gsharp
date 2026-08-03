@@ -108,6 +108,43 @@ public sealed class Issue3096CollectionSpreadEmitTests
             CompileVerifyAndRun(Source));
     }
 
+    [Fact]
+    public void FaultedStaticSpreadInitializer_ThrowsTypeInitializationExceptionOnce()
+    {
+        const string Source = """
+            package Issue3096.Fault
+
+            import System
+
+            var Attempts = 0
+
+            class Broken {
+                shared {
+                    let Values []int32 = []int32{ ...Fail() }
+
+                    func Fail() []int32 {
+                        Attempts++
+                        throw InvalidOperationException("boom")
+                    }
+                }
+            }
+
+            func Read() {
+                try {
+                    let ignored = Broken.Values
+                } catch (ex TypeInitializationException) {
+                    Console.WriteLine(ex.InnerException is InvalidOperationException)
+                }
+            }
+
+            Read()
+            Read()
+            Console.WriteLine(Attempts)
+            """;
+
+        Assert.Equal("True\nTrue\n1\n", CompileVerifyAndRun(Source));
+    }
+
     private static string CompileVerifyAndRun(string source)
     {
         var directory = Directory.CreateTempSubdirectory("gs_issue3096_").FullName;

@@ -357,8 +357,11 @@ public sealed partial class Evaluator
         }
         catch (Exception ex)
         {
-            failure = ExceptionDispatchInfo.Capture(ex);
-            throw;
+            var wrapped = new TypeInitializationException(
+                type.ClrType?.FullName ?? type.Name,
+                UnwrapRuntimeException(ex));
+            failure = ExceptionDispatchInfo.Capture(wrapped);
+            throw wrapped;
         }
         finally
         {
