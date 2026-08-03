@@ -149,6 +149,42 @@ public class Issue710NullConditionalIndexingInterpreterTests
     }
 
     [Fact]
+    public void RangeSlice_ShortCircuitsBounds_WhenReceiverIsNil()
+    {
+        var source = """
+            var trace string = ""
+
+            func receiver(value string?) string? {
+                trace = trace + "R"
+                return value
+            }
+
+            func lower() int32 {
+                trace = trace + "S"
+                return 1
+            }
+
+            func upper() int32 {
+                trace = trace + "E"
+                return 4
+            }
+
+            var missing = receiver(nil)?[lower()..upper()]
+            if missing == nil {
+                Console.WriteLine("nil")
+            }
+            Console.WriteLine(trace)
+
+            trace = ""
+            Console.WriteLine(receiver("abcdef")?[lower()..upper()])
+            Console.WriteLine(trace)
+            """;
+
+        var output = RunSubmission(source).Replace("\r\n", "\n");
+        Assert.Contains("nil\nR\nbcd\nRSE\n", output);
+    }
+
+    [Fact]
     public void Chained_NullConditional_Member_Then_Index()
     {
         var source = """

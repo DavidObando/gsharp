@@ -160,7 +160,6 @@ public sealed partial class CSharpToGSharpTranslator
                         // of desugaring to `Slice`.
                         return this.TranslateRangeSlice(
                             this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
-                            elementAccess.Expression,
                             sliceRange);
                     }
 
@@ -297,10 +296,6 @@ public sealed partial class CSharpToGSharpTranslator
                         SanitizeIdentifier(memberBinding.Name.Identifier.Text));
 
                 case ElementBindingExpressionSyntax elementBinding:
-                    GExpression bindingIndex = elementBinding.ArgumentList.Arguments.Count > 0
-                        ? this.TranslateIndexArgumentWithNullForgiveness(
-                            elementBinding.ArgumentList.Arguments[0])
-                        : new IdentifierExpression("nil");
                     GExpression bindingReceiver =
                         this.state.ConditionalElementReceivers.TryGetValue(
                             elementBinding,
@@ -308,6 +303,16 @@ public sealed partial class CSharpToGSharpTranslator
                                 ? elementReceiver
                                 : this.state.ConditionalReceiverReplacement ??
                                     new ConditionalReceiverExpression();
+                    if (elementBinding.ArgumentList.Arguments.Count == 1 &&
+                        elementBinding.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax conditionalRange)
+                    {
+                        return this.TranslateRangeSlice(bindingReceiver, conditionalRange);
+                    }
+
+                    GExpression bindingIndex = elementBinding.ArgumentList.Arguments.Count > 0
+                        ? this.TranslateIndexArgumentWithNullForgiveness(
+                            elementBinding.ArgumentList.Arguments[0])
+                        : new IdentifierExpression("nil");
                     return new IndexExpression(bindingReceiver, bindingIndex);
 
                 case TypeOfExpressionSyntax typeOf:
@@ -2028,7 +2033,7 @@ public sealed partial class CSharpToGSharpTranslator
         // slice lowering below). This also drops #1894's `Length`-arithmetic
         // and receiver-spill workarounds entirely — gsc's own `^n` bound
         // handles from-end offsets and the receiver is only ever embedded once.
-        private GExpression TranslateRangeSlice(GExpression receiver, ExpressionSyntax receiverSyntax, RangeExpressionSyntax range)
+        private GExpression TranslateRangeSlice(GExpression receiver, RangeExpressionSyntax range)
         {
             GExpression start = range.LeftOperand != null ? this.TranslateRangeBound(range.LeftOperand) : null;
             GExpression end = range.RightOperand != null ? this.TranslateRangeBound(range.RightOperand) : null;
