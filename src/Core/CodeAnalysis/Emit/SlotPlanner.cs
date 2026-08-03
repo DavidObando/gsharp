@@ -650,7 +650,11 @@ internal sealed class SlotPlanner
 
                     break;
                 case BoundPropertyPattern pp:
-                    AllocatePatternLocal(pp.InputVariable, locals, localTypes);
+                    if (pp.InputVariable != null)
+                    {
+                        AllocatePatternLocal(pp.InputVariable, locals, localTypes);
+                    }
+
                     if (pp.UnwrappedVariable != null)
                     {
                         AllocatePatternLocal(pp.UnwrappedVariable, locals, localTypes);
@@ -658,7 +662,11 @@ internal sealed class SlotPlanner
 
                     foreach (var field in pp.Fields)
                     {
-                        AllocatePatternLocal(field.ValueVariable, locals, localTypes);
+                        if (field.ValueVariable != null)
+                        {
+                            AllocatePatternLocal(field.ValueVariable, locals, localTypes);
+                        }
+
                         AllocatePatternBindings(field.Pattern, locals, localTypes, typePatternScratchSlots);
                     }
 

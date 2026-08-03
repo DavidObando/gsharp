@@ -329,16 +329,21 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitPropertyPattern(BoundPropertyPattern pp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
     {
-        var inputSlot = this.locals[pp.InputVariable];
-        loadValue();
-        this.il.StoreLocal(inputSlot);
+        int? receiverSlot = null;
+        if (pp.InputVariable != null)
+        {
+            receiverSlot = this.locals[pp.InputVariable];
+            loadValue();
+            this.il.StoreLocal(receiverSlot.Value);
+        }
 
-        var receiverSlot = inputSlot;
         var receiverType = valueType;
         if (valueType is NullableTypeSymbol nullableValueType)
         {
             if (NullableLifting.IsAnyValueTypeNullable(nullableValueType))
             {
+                var inputSlot = receiverSlot
+                    ?? throw new InvalidOperationException("Nullable value property pattern requires an input slot.");
                 this.il.LoadLocal(inputSlot);
                 this.il.OpCode(ILOpCode.Box);
                 this.il.Token(this.outer.memberRefs.GetElementTypeToken(nullableValueType));
@@ -360,11 +365,19 @@ internal sealed partial class MethodBodyEmitter
                     this.il.Token(this.outer.wellKnown.GetNullableGetValueOrDefaultReference(underlyingClr));
                 }
 
-                this.il.StoreLocal(receiverSlot);
+                this.il.StoreLocal(receiverSlot.Value);
             }
             else
             {
-                this.il.LoadLocal(inputSlot);
+                if (receiverSlot.HasValue)
+                {
+                    this.il.LoadLocal(receiverSlot.Value);
+                }
+                else
+                {
+                    loadValue();
+                }
+
                 this.il.Branch(ILOpCode.Brfalse, failLabel);
             }
 
@@ -374,13 +387,30 @@ internal sealed partial class MethodBodyEmitter
         {
             // Recursive patterns reject null even when the source annotation is
             // non-nullable; runtime values can still arrive from oblivious code.
-            this.il.LoadLocal(inputSlot);
+            if (receiverSlot.HasValue)
+            {
+                this.il.LoadLocal(receiverSlot.Value);
+            }
+            else
+            {
+                loadValue();
+            }
+
             this.il.Branch(ILOpCode.Brfalse, failLabel);
         }
 
-        Action loadReceiver = ReflectionMetadataEmitter.IsValueTypeSymbol(receiverType)
-            ? () => this.il.LoadLocalAddress(receiverSlot)
-            : () => this.il.LoadLocal(receiverSlot);
+        Action loadReceiver;
+        if (receiverSlot.HasValue)
+        {
+            var slot = receiverSlot.Value;
+            loadReceiver = ReflectionMetadataEmitter.IsValueTypeSymbol(receiverType)
+                ? () => this.il.LoadLocalAddress(slot)
+                : () => this.il.LoadLocal(slot);
+        }
+        else
+        {
+            loadReceiver = loadValue;
+        }
 
         if (receiverType is TupleTypeSymbol tupleType)
         {
@@ -392,37 +422,38 @@ internal sealed partial class MethodBodyEmitter
             foreach (var field in pp.Fields)
             {
                 var fieldName = field.Field.Name;
-                if (tupleClr == null)
+                Action loadTupleChild = () =>
                 {
-                    var index = int.Parse(
-                        fieldName.AsSpan("Item".Length),
-                        System.Globalization.CultureInfo.InvariantCulture) - 1;
-                    this.EmitSymbolicTupleElementAccess(
-                        tupleType,
-                        index,
-                        loadReceiver,
-                        takeRestAddress: false);
-                }
-                else
-                {
-                    loadReceiver();
-                    this.il.OpCode(ILOpCode.Ldfld);
-                    if (tupleClr.IsConstructedGenericType)
+                    if (tupleClr == null)
                     {
-                        this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
+                        var index = int.Parse(
+                            fieldName.AsSpan("Item".Length),
+                            System.Globalization.CultureInfo.InvariantCulture) - 1;
+                        this.EmitSymbolicTupleElementAccess(
+                            tupleType,
+                            index,
+                            loadReceiver,
+                            takeRestAddress: false);
                     }
                     else
                     {
-                        var clrField = tupleClr.GetField(fieldName)
-                            ?? throw new InvalidOperationException(
-                                $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
-                        this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
+                        loadReceiver();
+                        this.il.OpCode(ILOpCode.Ldfld);
+                        if (tupleClr.IsConstructedGenericType)
+                        {
+                            this.il.Token(this.outer.memberRefs.GetFieldReferenceOnConstructedGeneric(tupleClr, fieldName));
+                        }
+                        else
+                        {
+                            var clrField = tupleClr.GetField(fieldName)
+                                ?? throw new InvalidOperationException(
+                                    $"ValueTuple type '{tupleClr.FullName}' has no public field '{fieldName}'.");
+                            this.il.Token(this.outer.memberRefs.GetFieldReference(clrField));
+                        }
                     }
-                }
+                };
 
-                var memberSlot = this.locals[field.ValueVariable];
-                this.il.StoreLocal(memberSlot);
-                this.EmitPattern(field.Pattern, () => this.il.LoadLocal(memberSlot), field.Type, failLabel);
+                this.EmitPattern(field.Pattern, loadTupleChild, field.Type, failLabel);
             }
 
             return;
@@ -430,10 +461,18 @@ internal sealed partial class MethodBodyEmitter
 
         foreach (var field in pp.Fields)
         {
-            this.EmitPropertyPatternMember(field, receiverType, loadReceiver);
-            var memberSlot = this.locals[field.ValueVariable];
-            this.il.StoreLocal(memberSlot);
-            this.EmitPattern(field.Pattern, () => this.il.LoadLocal(memberSlot), field.Type, failLabel);
+            if (field.IsProperty)
+            {
+                this.EmitPropertyPatternMember(field, receiverType, loadReceiver);
+                var memberSlot = this.locals[field.ValueVariable];
+                this.il.StoreLocal(memberSlot);
+                this.EmitPattern(field.Pattern, () => this.il.LoadLocal(memberSlot), field.Type, failLabel);
+            }
+            else
+            {
+                Action loadMember = () => this.EmitPropertyPatternMember(field, receiverType, loadReceiver);
+                this.EmitPattern(field.Pattern, loadMember, field.Type, failLabel);
+            }
         }
     }
 

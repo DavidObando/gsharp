@@ -19,10 +19,25 @@ public sealed class BoundPropertyPattern : BoundPattern
         : base(syntax, type)
     {
         Fields = fields;
-        InputVariable = new LocalVariableSymbol("<property-pattern-input>", isReadOnly: true, type);
         if (type is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable))
         {
             UnwrappedVariable = new LocalVariableSymbol("<property-pattern-value>", isReadOnly: true, nullable.UnderlyingType);
+        }
+
+        // Field reads are side-effect free and keep the existing direct emit path.
+        // Capture only when a getter must run once or Nullable<T> needs an address.
+        foreach (var field in fields)
+        {
+            if (field.IsProperty)
+            {
+                InputVariable = new LocalVariableSymbol("<property-pattern-input>", isReadOnly: true, type);
+                break;
+            }
+        }
+
+        if (InputVariable == null && UnwrappedVariable != null)
+        {
+            InputVariable = new LocalVariableSymbol("<property-pattern-input>", isReadOnly: true, type);
         }
     }
 
@@ -32,7 +47,7 @@ public sealed class BoundPropertyPattern : BoundPattern
     /// <summary>Gets the field patterns.</summary>
     public ImmutableArray<BoundPropertyPatternField> Fields { get; }
 
-    /// <summary>Gets the temporary holding the pattern input exactly once.</summary>
+    /// <summary>Gets the temporary holding the pattern input when a getter or nullable value requires capture.</summary>
     public LocalVariableSymbol InputVariable { get; }
 
     /// <summary>Gets the unwrapped nullable value-type temporary, when required.</summary>

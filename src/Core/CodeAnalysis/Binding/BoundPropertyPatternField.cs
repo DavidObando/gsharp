@@ -32,7 +32,6 @@ public sealed class BoundPropertyPatternField : BoundNode
         DeclaringType = declaringType;
         Type = field.Type;
         Pattern = pattern;
-        ValueVariable = new LocalVariableSymbol("<property-pattern-member>", isReadOnly: true, Type);
     }
 
     /// <summary>Initializes a new instance of the <see cref="BoundPropertyPatternField"/> class.</summary>
@@ -70,7 +69,10 @@ public sealed class BoundPropertyPatternField : BoundNode
         ClrMember = clrMember;
         Type = type;
         Pattern = pattern;
-        ValueVariable = new LocalVariableSymbol("<property-pattern-member>", isReadOnly: true, Type);
+        if (clrMember is PropertyInfo)
+        {
+            ValueVariable = new LocalVariableSymbol("<property-pattern-member>", isReadOnly: true, Type);
+        }
     }
 
     /// <inheritdoc/>
@@ -94,9 +96,12 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <summary>Gets the matched member type.</summary>
     public TypeSymbol Type { get; }
 
+    /// <summary>Gets a value indicating whether matching reads through a property getter.</summary>
+    public bool IsProperty => Property != null || ClrMember is PropertyInfo;
+
     /// <summary>Gets the nested field pattern.</summary>
     public BoundPattern Pattern { get; }
 
-    /// <summary>Gets the temporary holding one evaluation of the matched member.</summary>
+    /// <summary>Gets the temporary holding one getter evaluation, when property-backed.</summary>
     public LocalVariableSymbol ValueVariable { get; }
 }
