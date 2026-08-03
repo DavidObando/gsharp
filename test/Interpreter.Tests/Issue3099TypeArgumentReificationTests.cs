@@ -29,7 +29,7 @@ public class Issue3099TypeArgumentReificationTests
         yield return ["string", string.Empty, "string"];
         yield return ["nested-class", "class Owner {\n    class Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
         yield return ["nested-struct", "class Owner {\n    struct Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
-        yield return ["gsharp-generic", "struct Payload[T] {\n    let Value T\n    var Imported List[T]\n    var Slice []T\n    var Array [3]T\n}", "Payload[int32]"];
+        yield return ["gsharp-generic", "struct Payload[T] {\n    let Value T\n    var Imported List[T]\n    var Slice []T\n    var Nullable T?\n    var Array [3]T\n    shared {\n        var Stat int32\n    }\n    const Kilo int32 = 1000\n}", "Payload[int32]"];
         yield return ["imported-generic", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "List[Payload]"];
         yield return ["nullable", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload?"];
         yield return ["slice", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "[]Payload"];
@@ -90,9 +90,15 @@ public class Issue3099TypeArgumentReificationTests
             });
 
             var expected = NormalizeGenericTypeNames(emitted);
-            Assert.Matches(@"44\n[1-9][0-9]*\|", expected);
-            Assert.Equal(expected, NormalizeGenericTypeNames(compilerEvaluation));
-            Assert.Equal(expected, NormalizeGenericTypeNames(interpreter));
+            var evaluated = NormalizeGenericTypeNames(compilerEvaluation);
+            var interpreted = NormalizeGenericTypeNames(interpreter);
+            const string ControlShape =
+                "44\n2|Eleven:System.Int32:True:False:False|TwentyTwo:System.String:False:False:False\n";
+            Assert.Contains(ControlShape, expected, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, evaluated, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, interpreted, StringComparison.Ordinal);
+            Assert.Equal(expected, evaluated);
+            Assert.Equal(expected, interpreted);
             Assert.Contains("11\n", expected);
             Assert.Contains("22\n", expected);
             Assert.Contains("33\n", expected);
@@ -115,6 +121,11 @@ public class Issue3099TypeArgumentReificationTests
 
             __DECLARATION__
 
+            struct ReflectionControl {
+                let Eleven int32
+                var TwentyTwo string
+            }
+
             class Box[T] : EventArgs {
             }
 
@@ -124,7 +135,10 @@ public class Issue3099TypeArgumentReificationTests
             func FieldShape(t Type) string {
                 var shape = t.GetFields().Length.ToString()
                 for field in t.GetFields() {
-                    shape = shape + "|" + field.Name + ":" + field.FieldType.FullName + ":" + field.IsInitOnly.ToString()
+                    shape = shape + "|" + field.Name + ":" + field.FieldType.FullName + ":" + field.IsInitOnly.ToString() + ":" + field.IsStatic.ToString() + ":" + field.IsLiteral.ToString()
+                    if field.IsLiteral {
+                        shape = shape + ":" + field.GetRawConstantValue().ToString()
+                    }
                 }
                 return shape
             }
@@ -147,7 +161,7 @@ public class Issue3099TypeArgumentReificationTests
             var nested = Box[Box[__TYPE__]]()
             Console.WriteLine(nested.GetType().FullName)
             Console.WriteLine(FieldShape(nested.GetType().GenericTypeArguments[0].GenericTypeArguments[0]))
-            var control = Box[ConsoleColor]()
+            var control = Box[ReflectionControl]()
             Console.WriteLine(44)
             Console.WriteLine(FieldShape(control.GetType().GenericTypeArguments[0]))
             """;

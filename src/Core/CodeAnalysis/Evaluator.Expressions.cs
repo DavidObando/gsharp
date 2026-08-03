@@ -1340,19 +1340,35 @@ public sealed partial class Evaluator
             }
         }
 
-        // Issue #3137: reified type arguments must expose the same instance-field shape as emitted types.
-        foreach (var field in definition.Fields)
+        // Issue #3137: reified type arguments must expose the same field shape as emitted types.
+        foreach (var field in definition.Fields.Concat(definition.StaticFields).Concat(definition.ConstFields))
         {
             var fieldAttributes = Emit.AccessibilityMap.MapFieldAccessibility(field.Accessibility);
-            if (field.IsReadOnly)
+            if (field.IsConst)
             {
-                fieldAttributes |= FieldAttributes.InitOnly;
+                fieldAttributes |= FieldAttributes.Static | FieldAttributes.Literal | FieldAttributes.HasDefault;
+            }
+            else
+            {
+                if (field.IsStatic)
+                {
+                    fieldAttributes |= FieldAttributes.Static;
+                }
+
+                if (field.IsReadOnly)
+                {
+                    fieldAttributes |= FieldAttributes.InitOnly;
+                }
             }
 
-            typeBuilder.DefineField(
+            var fieldBuilder = typeBuilder.DefineField(
                 field.Name,
                 ResolveClrBackingTypeArgument(field.Type, reifiedTypeParameters),
                 fieldAttributes);
+            if (field.IsConst)
+            {
+                fieldBuilder.SetConstant(field.ConstantValue);
+            }
         }
 
         if (emitBaseConstructors)
@@ -1413,7 +1429,7 @@ public sealed partial class Evaluator
 
         if (argument is NullableTypeSymbol nullable)
         {
-            var underlying = ResolveClrBackingTypeArgument(nullable.UnderlyingType);
+            var underlying = ResolveClrBackingTypeArgument(nullable.UnderlyingType, reifiedTypeParameters);
             return underlying.IsValueType
                 ? typeof(Nullable<>).MakeGenericType(underlying)
                 : underlying;
