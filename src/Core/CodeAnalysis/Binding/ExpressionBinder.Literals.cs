@@ -2115,6 +2115,11 @@ internal sealed partial class ExpressionBinder
             elementType = CloseNestedEnumOverCurrentTypeParameters(bareElementEnum);
         }
 
+        if (syntax.Elements?.Any(element => element is SpreadElementExpressionSyntax) == true)
+        {
+            return BindSpreadArrayCreationExpression(syntax, elementType);
+        }
+
         var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements?.Count ?? 0);
 
         // Issue #1272: the runtime/zero-initialised allocation form `[n]T`
@@ -2150,6 +2155,90 @@ internal sealed partial class ExpressionBinder
         }
 
         return new BoundArrayCreationExpression(null, ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
+    }
+
+    /// <summary>
+    /// Issue #3096: binds a count-inferred array literal containing one or more
+    /// native <c>...source</c> elements. A hidden <see cref="List{T}"/> receives
+    /// fixed elements and each spread's elements in lexical order, then
+    /// <c>ToArray()</c> yields the slice value.
+    /// </summary>
+    private BoundExpression BindSpreadArrayCreationExpression(
+        ArrayCreationExpressionSyntax syntax,
+        TypeSymbol elementType)
+    {
+        var construction = CreateSpreadListConstruction(syntax, elementType, out var listType);
+        var tempName = "$spreadbuilder" +
+            System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var temp = new LocalVariableSymbol(tempName, isReadOnly: false, listType);
+        scope.TryDeclareVariable(temp);
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        statements.Add(new BoundVariableDeclaration(syntax, temp, construction));
+        foreach (var element in syntax.Elements)
+        {
+            if (element is SpreadElementExpressionSyntax spread)
+            {
+                statements.AddRange(BindCollectionSpreadStatements(temp, spread));
+                continue;
+            }
+
+            statements.Add(new BoundExpressionStatement(
+                element,
+                BindCollectionAddCall(temp, element, ImmutableArray.Create(element))));
+        }
+
+        var receiver = new BoundVariableExpression(syntax, temp);
+        var toArray = BindAccessorCall(
+            receiver,
+            classSymbol: null,
+            SynthesizeInstanceCall(syntax, "ToArray", ImmutableArray<ExpressionSyntax>.Empty));
+        var result = conversions.BindConversion(
+            syntax.Location,
+            toArray,
+            SliceTypeSymbol.Get(elementType));
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), result);
+    }
+
+    private BoundExpression CreateSpreadListConstruction(
+        SyntaxNode syntax,
+        TypeSymbol elementType,
+        out ImportedTypeSymbol listType)
+    {
+        var openListType = scope.References.MapClrTypeToReferences(typeof(List<>));
+        var clrElementType = resolveClrTypeForGenericArg(elementType);
+        if (clrElementType == null &&
+            MemberLookup.TryProjectErasedClrType(elementType, out var projectedElementType))
+        {
+            clrElementType = scope.References.MapClrTypeToReferences(projectedElementType);
+        }
+
+        clrElementType ??= scope.References.GetCoreType("System.Object");
+
+        Type closedListType;
+        try
+        {
+            closedListType = openListType.MakeGenericType(clrElementType);
+        }
+        catch (ArgumentException)
+        {
+            closedListType = openListType.MakeGenericType(scope.References.GetCoreType("System.Object"));
+        }
+
+        listType = ImportedTypeSymbol.GetConstructed(
+            closedListType,
+            openListType,
+            ImmutableArray.Create(elementType));
+        var constructor = ClrTypeUtilities
+            .SafeGetConstructors(closedListType, BindingFlags.Public | BindingFlags.Instance)
+            .Single(candidate => candidate.GetParameters().Length == 0);
+        return new BoundClrConstructorCallExpression(
+            syntax,
+            closedListType,
+            constructor,
+            ImmutableArray<BoundExpression>.Empty,
+            listType);
     }
 
     /// <summary>

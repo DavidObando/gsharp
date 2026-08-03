@@ -1,0 +1,126 @@
+name: windows-nightly
+
+# Issue #1670 (via #3163 P1 item 8): the shipped toolchain (gsc, gsi,
+# Gsharp.NET.Sdk) is never built or tested on Windows by the PR gates, yet it
+# contains path-sensitive logic (IsSwitch's `/`-vs-path disambiguation,
+# backslash tool paths in Gsharp.NET.Sdk.props, response-file quoting).
+# The full test matrix is 45+ minutes on Linux and too expensive to mirror per
+# PR, so this nightly runs the highest-signal Windows surface instead:
+#
+#   - full Release build of GSharp.sln on windows-latest
+#   - test/Core.Tests (fast, broad compiler front-end coverage)
+#   - Compiler.Tests LanguageConformance (SampleConformanceTests +
+#     MultiPackageEmitShapeTests): every golden sample through the emitted,
+#     evaluating-compiler, and interpreter drivers as real processes — the
+#     closest thing to an end-to-end gsc/gsi exercise that already encodes
+#     its known Windows skips (WindowsSkippedSamples: the PInvoke.gs family).
+#
+# build/run-ilverify.sh is deliberately NOT included: its
+# `dotnet --list-runtimes` awk parsing breaks on Windows install paths that
+# contain spaces (C:\Program Files\dotnet), and its success check matches a
+# forward-slash path in ilverify output. The conformance suite still runs the
+# stricter method-scoped IlVerifier.Verify in-process, so emitted IL is
+# verified on Windows anyway.
+#
+# Mirrors cs2gs-nightly's conventions: each suite runs to completion with its
+# exit code captured, results land in the step summary and a trx artifact,
+# and a final gate step turns any failure into a red workflow run.
+
+on:
+  schedule:
+    # 09:23 UTC — clear of cs2gs-nightly's 07:17 UTC slot.
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore GSharp.sln
+
+      - name: Restore .NET local tools
+        # dotnet-ilverify: the LanguageConformance suite invokes it via
+        # IlVerifier.Verify on every emitted sample assembly.
+        run: dotnet tool restore
+
+      - name: Build
+        # Same invocation as build.yml: the static project graph builds each
+        # project exactly once and avoids OutputPath races.
+        run: dotnet build GSharp.sln --configuration Release --no-restore -graph
+
+      - name: Test Core.Tests
+        id: core
+        shell: bash
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          set +e
+          dotnet test test/Core.Tests/Core.Tests.csproj \
+            --configuration Release --no-build --no-restore \
+            --logger "trx" --results-directory TestResults \
+            | tee core-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Core.Tests (windows-latest)"
+            echo ''
+            echo '```'
+            tail -n 20 core-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The gate outcome is reported at the END of the job so a red suite
+          # does not stop the remaining suites from producing signal.
+          exit 0
+
+      - name: Test Compiler.Tests (language conformance)
+        id: conformance
+        shell: bash
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          set +e
+          dotnet test test/Compiler.Tests/Compiler.Tests.csproj \
+            --configuration Release --no-build --no-restore \
+            --filter "FullyQualifiedName~GSharp.Compiler.Tests.LanguageConformance" \
+            --logger "trx" --results-directory TestResults \
+            | tee conformance-tests.log
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Compiler.Tests LanguageConformance (windows-latest)"
+            echo ''
+            echo '```'
+            tail -n 20 conformance-tests.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-nightly-test-results
+          path: |
+            TestResults/**/*.trx
+            core-tests.log
+            conformance-tests.log
+
+      - name: Enforce gate outcome
+        shell: bash
+        run: |
+          if [[ "${{ steps.core.outputs.exit_code }}" != "0" ||
+                "${{ steps.conformance.outputs.exit_code }}" != "0" ]]; then
+            exit 1
+          fi

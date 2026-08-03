@@ -211,11 +211,6 @@ internal sealed class DocumentTranslationState
     // `BuildScopeParameter`.
     public QueryExpressionSyntax CurrentQueryNode { get; set; }
 
-    // Issue #1897: numbers the `__spreadN` temporary built to lower a
-    // collection-expression spread element (see
-    // <see cref="TranslateSpreadCollectionExpression"/>).
-    public int SpreadCounter { get; set; }
-
     // Issue #1849: when non-null, `SpillOperand` is inside a "null-seam"
     // expression context — a field/property initializer or a
     // base(...)/this(...) constructor argument (issue #1731 N1) — that has
