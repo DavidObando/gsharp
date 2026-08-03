@@ -85,8 +85,8 @@ public class Issue3100FieldOffsetParityTests
 
             @StructLayout(LayoutKind.Explicit, Size: 16)
             struct Bad {
-                @FieldOffset(4) var Text string
-                @FieldOffset(0) var Bits Payload
+                @FieldOffset(8) var Text string
+                @FieldOffset(4) var Bits Payload
             }
             struct Payload { var Value int64 }
 
@@ -95,6 +95,63 @@ public class Issue3100FieldOffsetParityTests
             """;
 
         AssertGs0518AcrossDrivers(Source, "ForwardValueOverlap");
+    }
+
+    [Fact]
+    public void NestedStructOverlapReportsGs0518AcrossDrivers()
+    {
+        const string Source = """
+            package Issue3115NestedOverlap
+            import System
+            import System.Runtime.InteropServices
+            struct Outer {
+                @StructLayout(LayoutKind.Explicit, Size: 8)
+                struct Inner {
+                    @FieldOffset(0) var Text string
+                    @FieldOffset(0) var Bits int64
+                }
+            }
+            var value = 11
+            Console.WriteLine(value)
+            """;
+
+        AssertGs0518AcrossDrivers(Source, "NestedOverlap", 8, 29, 33);
+    }
+
+    [Theory]
+    [InlineData(0, 6)]
+    [InlineData(24, 30)]
+    public void MisalignedReferenceReportsGs0518WithRealLocationAcrossDrivers(
+        int paddingLines,
+        int expectedLine)
+    {
+        var source = string.Join(
+            "\n",
+            new[]
+            {
+                "package Issue3115MisalignedReference",
+                "import System",
+                "import System.Runtime.InteropServices",
+            }
+            .Concat(Enumerable.Repeat("// padding", paddingLines))
+            .Concat(
+            [
+                "@StructLayout(LayoutKind.Explicit, Size: 16)",
+                "struct Bad {",
+                "    @FieldOffset(4) var Text string",
+                "    @FieldOffset(12) var Bits int32",
+                "}",
+                "var value = Bad{Text: \"x\", Bits: 11}",
+                "Console.WriteLine(value.Bits)",
+            ]));
+
+        AssertGs0518AcrossDrivers(
+            source,
+            $"MisalignedReference{paddingLines}",
+            expectedLine,
+            25,
+            29,
+            "offset 4 is not aligned to pointer size");
     }
 
     [Fact]
@@ -205,7 +262,13 @@ public class Issue3100FieldOffsetParityTests
         return (sourcePath, stdout + stderr);
     }
 
-    private static void AssertGs0518AcrossDrivers(string source, string name)
+    private static void AssertGs0518AcrossDrivers(
+        string source,
+        string name,
+        int line = 8,
+        int startColumn = 25,
+        int endColumn = 29,
+        string reason = "it overlaps non-reference field 'Bits'")
     {
         var root = CreateEmptyDirectory(name);
         try
@@ -224,9 +287,9 @@ public class Issue3100FieldOffsetParityTests
                 CreateEmptyDirectory(root, "gsi"),
                 path => GSharp.Repl.Program.Main([path]));
 
-            AssertGs0518(bare.SourcePath, bare.Output);
-            AssertGs0518(emitted.SourcePath, emitted.Output);
-            AssertGs0518(interpreted.SourcePath, interpreted.Output);
+            AssertGs0518(bare.SourcePath, bare.Output, line, startColumn, endColumn, reason);
+            AssertGs0518(emitted.SourcePath, emitted.Output, line, startColumn, endColumn, reason);
+            AssertGs0518(interpreted.SourcePath, interpreted.Output, line, startColumn, endColumn, reason);
         }
         finally
         {
@@ -234,12 +297,21 @@ public class Issue3100FieldOffsetParityTests
         }
     }
 
-    private static void AssertGs0518(string sourcePath, string output)
+    private static void AssertGs0518(
+        string sourcePath,
+        string output,
+        int line,
+        int startColumn,
+        int endColumn,
+        string reason)
     {
-        Assert.Contains($"{sourcePath}(8,25,8,29)", output, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{sourcePath}({line},{startColumn},{line},{endColumn})",
+            output,
+            StringComparison.Ordinal);
         Assert.Contains("GS0518", output, StringComparison.Ordinal);
         Assert.Contains("reference-typed field 'Text'", output, StringComparison.Ordinal);
-        Assert.Contains("non-reference field 'Bits'", output, StringComparison.Ordinal);
+        Assert.Contains(reason, output, StringComparison.Ordinal);
         Assert.DoesNotContain("GSharpLayout_", output, StringComparison.Ordinal);
         Assert.DoesNotContain("GSharp.Interpreter.Layouts", output, StringComparison.Ordinal);
     }

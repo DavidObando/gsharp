@@ -107,7 +107,7 @@ internal static class StructLayoutBinder
         }
     }
 
-    /// <summary>Reports CLR-invalid reference/non-reference field overlaps after all type bodies are bound.</summary>
+    /// <summary>Reports CLR-invalid reference field alignment and overlaps after all type bodies are bound.</summary>
     /// <param name="structSymbol">The fully bound struct symbol.</param>
     /// <param name="diagnostics">The compilation diagnostics.</param>
     internal static void ReportReferenceFieldOverlaps(StructSymbol structSymbol, DiagnosticBag diagnostics)
@@ -125,6 +125,17 @@ internal static class StructLayoutBinder
                 continue;
             }
 
+            var leftIsReference = IsReferenceFieldType(left.Type);
+            if (leftIsReference && IsMisalignedReference(leftOffset))
+            {
+                diagnostics.ReportExplicitLayoutReferenceStorageInvalid(
+                    FieldIdentifierLocation(structSymbol, left),
+                    structSymbol.Name,
+                    left.Name,
+                    $"its offset {leftOffset} is not aligned to pointer size {IntPtr.Size}");
+                continue;
+            }
+
             for (var j = i + 1; j < structSymbol.Fields.Length; j++)
             {
                 var right = structSymbol.Fields[j];
@@ -133,9 +144,9 @@ internal static class StructLayoutBinder
                     continue;
                 }
 
-                var leftIsReference = IsReferenceFieldType(left.Type);
                 var rightIsReference = IsReferenceFieldType(right.Type);
-                if (leftIsReference == rightIsReference)
+                if ((rightIsReference && IsMisalignedReference(rightOffset))
+                    || leftIsReference == rightIsReference)
                 {
                     continue;
                 }
@@ -153,15 +164,17 @@ internal static class StructLayoutBinder
                 var nonReferenceEnd = (long)nonReferenceOffset + nonReferenceSize;
                 if (referenceOffset < nonReferenceEnd && nonReferenceOffset < referenceEnd)
                 {
-                    diagnostics.ReportExplicitLayoutReferenceOverlap(
+                    diagnostics.ReportExplicitLayoutReferenceStorageInvalid(
                         FieldIdentifierLocation(structSymbol, nonReference),
                         structSymbol.Name,
                         reference.Name,
-                        nonReference.Name);
+                        $"it overlaps non-reference field '{nonReference.Name}'");
                 }
             }
         }
     }
+
+    private static bool IsMisalignedReference(int offset) => offset % IntPtr.Size != 0;
 
     private static bool IsReferenceFieldType(TypeSymbol type)
     {

@@ -232,17 +232,6 @@ public sealed class StructValue
         return sb.ToString();
     }
 
-    private bool TryInvokeObjectOverride(MethodInfo method, object[] arguments, out object result)
-    {
-        if (objectOverrideDispatcher == null)
-        {
-            result = null;
-            return false;
-        }
-
-        return objectOverrideDispatcher(this, method, arguments, out result);
-    }
-
     internal static bool TryGetStorageSize(StructSymbol structType, out int size)
     {
         size = 0;
@@ -263,6 +252,17 @@ public sealed class StructValue
         {
             return false;
         }
+    }
+
+    private bool TryInvokeObjectOverride(MethodInfo method, object[] arguments, out object result)
+    {
+        if (objectOverrideDispatcher == null)
+        {
+            result = null;
+            return false;
+        }
+
+        return objectOverrideDispatcher(this, method, arguments, out result);
     }
 
     private void SetField(string name, object value)
