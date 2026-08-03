@@ -8,7 +8,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// Issue #479 / ADR-0117: the base class for a single element of a
 /// <see cref="CollectionInitializerExpressionSyntax"/>. The three concrete
 /// shapes are <see cref="ExpressionCollectionElementSyntax"/> (a bare element
-/// <c>expr</c>), <see cref="KeyedCollectionElementSyntax"/> (a key/value entry
+/// <c>expr</c>, including <c>...source</c>), <see cref="KeyedCollectionElementSyntax"/> (a key/value entry
 /// <c>key: value</c>), and <see cref="IndexedCollectionElementSyntax"/> (an
 /// indexed entry <c>[key] = value</c>).
 /// </summary>

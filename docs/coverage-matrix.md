@@ -228,6 +228,7 @@ SizeOfExpression
 SlashEqualsToken
 SlashToken
 SlicePattern
+SpreadElementExpression
 StackAllocExpression
 StarEqualsToken
 StarToken

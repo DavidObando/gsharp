@@ -80,6 +80,9 @@ public static class GNodeSamples
                 List(new AnonymousClassMemberInitializer("Bar", Type("int32"), Int("2"))))),
             [typeof(CollectionInitializerElement)] = CollectionInitializerSample,
             [typeof(CollectionInitializerExpression)] = CollectionInitializerSample,
+            [typeof(SpreadElementExpression)] = () => Expr(new ArrayLiteralExpression(
+                Type("int32"),
+                List<GExpression>(new SpreadElementExpression(Id("items"))))),
             [typeof(ArrayLiteralExpression)] = () => Expr(new ArrayLiteralExpression(Type("int32"), List<GExpression>(Int("1"), Int("2")))),
             [typeof(ArrayAllocationExpression)] = () => Expr(new ArrayAllocationExpression(Type("int32"), Int("3"))),
             [typeof(ConversionExpression)] = () => Expr(new ConversionExpression(Type("int32"), Id("y"))),

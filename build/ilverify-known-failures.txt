@@ -1,0 +1,25 @@
+# Known ILVerify failure baseline for build/run-ilverify.sh (issue #3163).
+#
+# Format (whitespace-separated):
+#   <AssemblyBaseName> <comma-separated-ilverify-error-codes>
+#
+# Each listed code is passed to ilverify as an assembly-scoped `-g <code>`
+# ignore flag for that sample only. Any error NOT listed here fails the gate.
+# Every entry must cite the tracking issue explaining why it is suppressed;
+# remove entries as the underlying bugs (or upstream verifier gaps) are fixed.
+# The method-scoped versions of these suppressions live in
+# test/Compiler.Tests/IlVerifier.cs (GetKnownIssuesForSample) and run inside
+# the conformance suite.
+
+# ilverify 10.0.8 false positive: by-value returns of a user-declared ref
+# struct trip ReturnPtrToStack even though the value is in its only legal
+# "permanent home" (the caller's frame). csc-emitted IL for the same C#
+# fails identically. Upstream: dotnet/runtime#129030.
+UserRefStruct ReturnPtrToStack
+
+# ilverify 10.0.8 predates .NET 7 static-virtual interface dispatch: the
+# canonical `constrained. !!T call <iface>::<method>` pattern trips the
+# pre-C#-11 CallAbstract/Constrained rules; csc-emitted IL for the same
+# C# 11 pattern fails identically and the JIT accepts it.
+# ADR-0089 / #755; upstream: dotnet/runtime#49558.
+StaticVirtualInterfaces CallAbstract,Constrained
