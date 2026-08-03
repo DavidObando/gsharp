@@ -1070,7 +1070,15 @@ internal sealed partial class ExpressionBinder
                 && TryResolveSymbolicDelegateTargetForCtor(
                     openGenericDefinition, symbolicTypeArgs, sourceArgIndex: i, argName: argName, out var symbolicTarget))
             {
-                boundArguments.Add(lambdas.BindLambdaExpression(ctorLambdaSyntax, symbolicTarget));
+                var literal = lambdas.BindLambdaExpression(
+                    ctorLambdaSyntax,
+                    symbolicTarget.FunctionType);
+                boundArguments.Add(ShouldConvertToNominalDelegate(symbolicTarget.DelegateType)
+                    ? conversions.BindConversion(
+                        syntax.Arguments[i].Location,
+                        literal,
+                        symbolicTarget.DelegateType)
+                    : literal);
                 symbolicCtorDelegateArgs.Add(i);
                 continue;
             }
@@ -1444,11 +1452,12 @@ internal sealed partial class ExpressionBinder
     /// <paramref name="argName"/>) of a constructed-generic CLR constructor whose
     /// type arguments include a same-compilation user-defined type. The closed
     /// CLR ctor parameter is type-erased (e.g. <c>Func&lt;object&gt;</c>); this
-    /// recovers the real shape (e.g. <c>() -&gt; Foo</c>) by substituting the
+    /// recovers the exact mapped delegate identity and its real shape (e.g.
+    /// <c>Func&lt;Foo&gt;</c> and <c>() -&gt; Foo</c>) by substituting the
     /// receiver's symbolic type arguments through the OPEN constructor's
     /// parameter type. Returns <see langword="false"/> (deferring to the ordinary
     /// erased path) when there is no symbolic substitution in effect, when the
-    /// candidate ctors disagree on the delegate shape, or when no open ctor
+    /// candidate ctors disagree on identity or shape, or when no open ctor
     /// exposes a delegate parameter at that position.
     /// </summary>
     private static bool TryResolveSymbolicDelegateTargetForCtor(
@@ -1456,9 +1465,9 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<TypeSymbol> symbolicTypeArgs,
         int sourceArgIndex,
         string argName,
-        out FunctionTypeSymbol target)
+        out (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType) target)
     {
-        target = null;
+        target = (null, null);
         if (openGenericDefinition == null || symbolicTypeArgs.IsDefaultOrEmpty)
         {
             return false;
@@ -1510,25 +1519,25 @@ internal sealed partial class ExpressionBinder
                     symbolicTypeArgs,
                     out var mappedDelegate,
                     out var candidate)
-                || (parameters[paramIndex].ParameterType.IsGenericParameter
-                    && !IsCanonicalFunctionDelegate(mappedDelegate))
                 || candidate == null)
             {
                 continue;
             }
 
-            if (target == null)
+            if (target.FunctionType == null)
             {
-                target = candidate;
+                target = (mappedDelegate, candidate);
             }
-            else if (!ReferenceEquals(target, candidate) && !target.Equals(candidate))
+            else if (!SameDelegateIdentity(target.DelegateType, mappedDelegate)
+                || (!ReferenceEquals(target.FunctionType, candidate)
+                    && !target.FunctionType.Equals(candidate)))
             {
-                target = null;
+                target = (null, null);
                 return false;
             }
         }
 
-        return target != null;
+        return target.FunctionType != null;
     }
 
     /// <summary>
