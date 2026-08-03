@@ -1183,7 +1183,11 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 EntityHandle fieldHandle;
-                if (isGeneric || literal.StructType.ClrType != null)
+                if (init.FieldDeclaringType != null)
+                {
+                    fieldHandle = this.ResolveStructLiteralFieldToken(literal, init);
+                }
+                else if (isGeneric || literal.StructType.ClrType != null)
                 {
                     fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
                 }
@@ -1236,7 +1240,11 @@ internal sealed partial class MethodBodyEmitter
             }
 
             EntityHandle fieldHandle;
-            if (isGeneric || literal.StructType.ClrType != null)
+            if (init.FieldDeclaringType != null)
+            {
+                fieldHandle = this.ResolveStructLiteralFieldToken(literal, init);
+            }
+            else if (isGeneric || literal.StructType.ClrType != null)
             {
                 fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
             }
@@ -1258,6 +1266,17 @@ internal sealed partial class MethodBodyEmitter
 
         // Leave the constructed struct value on the stack.
         this.il.LoadLocal(slot);
+    }
+
+    private EntityHandle ResolveStructLiteralFieldToken(
+        BoundStructLiteralExpression literal,
+        BoundFieldInitializer initializer)
+    {
+        var fieldContainer = ResolveFieldReferenceContainer(
+            initializer.FieldDeclaringType,
+            literal.StructType,
+            initializer.Field);
+        return this.outer.userTokens.ResolveFieldToken(fieldContainer, initializer.Field);
     }
 
     /// <summary>
@@ -1324,7 +1343,9 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
-            var fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
+            var fieldHandle = init.FieldDeclaringType != null
+                ? this.ResolveStructLiteralFieldToken(literal, init)
+                : this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
             this.il.OpCode(ILOpCode.Dup);
             this.EmitExpression(init.Value);
             this.il.OpCode(ILOpCode.Stfld);

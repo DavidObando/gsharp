@@ -10,6 +10,7 @@
     <ProjectReference Include="@(GsharpCompiler)" />
     <ProjectReference Include="@(GsharpRepl)" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
+    <Compile Include="..\Shared\Issue3081CompositeLiteralCases.cs" Link="Issue3081CompositeLiteralCases.cs" />
   </ItemGroup>
 
 </Project>

@@ -18,10 +18,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed record BoundFieldInitializer
 {
-    public BoundFieldInitializer(FieldSymbol field, BoundExpression value)
+    public BoundFieldInitializer(FieldSymbol field, BoundExpression value, StructSymbol fieldDeclaringType = null)
     {
         Field = field;
         Value = value;
+        FieldDeclaringType = fieldDeclaringType;
     }
 
     /// <summary>
@@ -40,6 +41,9 @@ public sealed record BoundFieldInitializer
 
     /// <summary>Gets the targeted field, or <see langword="null"/> when this initializer targets a property.</summary>
     public FieldSymbol Field { get; }
+
+    /// <summary>Gets the type that declares <see cref="Field"/>, or <see langword="null"/> when the initializer targets a property.</summary>
+    public StructSymbol FieldDeclaringType { get; }
 
     /// <summary>Gets the targeted property, or <see langword="null"/> when this initializer targets a field.</summary>
     public PropertySymbol Property { get; }
