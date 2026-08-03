@@ -391,4 +391,6 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor PointerTypeCannotBeFieldType = new("GS9006", DiagnosticSeverity.Error, "Pointer type '{0}' cannot be used as a field type.");
     internal static readonly DiagnosticDescriptor DuplicateSharedBlock = new("GS9007", DiagnosticSeverity.Error, "A type may contain at most one 'shared' block.");
     internal static readonly DiagnosticDescriptor FixedPointerCannotEscape = new("GS9008", DiagnosticSeverity.Error, "Unmanaged pointer '{0}' from a `fixed` statement cannot be captured by a closure; the pin is released when the enclosing `fixed` block exits.");
+    internal static readonly DiagnosticDescriptor SourceGeneratorExecutionFailure = new("GS9996", DiagnosticSeverity.Error, "Source generator execution failed: {0}");
+    internal static readonly DiagnosticDescriptor FatalCompilerIOError = new("GS9997", DiagnosticSeverity.Error, "Fatal compiler I/O error: {0}");
 }

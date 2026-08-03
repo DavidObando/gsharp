@@ -62,6 +62,7 @@ public class Issue2215AnalyzerFlagTests
                 "/gsgentool:/nonexistent/gsgen.dll",
             });
             Assert.NotEqual(0, exit);
+            Assert.Contains("GS9996", err.ToString());
             Assert.Contains("gsgen was not found", err.ToString());
         }
         finally

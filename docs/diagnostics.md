@@ -68,10 +68,10 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
 | GS0104 | Error | Reserved; not currently emitted. Zero-field `data class`/`data struct` declarations are supported (issue #2363, ADR-0029) with trivial equality/hash/ToString/copy semantics and no synthesized `Deconstruct`. | — |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
-| GS0106 | Error | `inline` cannot be combined with `data` or `record`. | `inline data struct Foo { … }` is not legal. |
+| GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by; pre-removal this diagnostic also covered `inline record`.) |
 | GS0107 | Error | `inline struct` cannot be combined with `open`. | `open inline struct Foo { … }` is not legal. |
 | GS0108 | Error | Inline struct synthesised member conflicts with an explicit declaration. | An `inline struct` auto-generates certain member names that cannot be re-declared. |
-| GS0109 | Error | `record` is an alias for `data struct` and cannot be combined with `data`. | `data record Foo { … }` — use either `data struct` or `record`. |
+| GS0109 | Error | `record` was an alias for `data struct` and could not be combined with `data`. GS0307 replaces this on legacy sources. | `data record Foo { … }` — use `data struct Foo` or `data class Foo`. |
 | GS0110 | Error | Empty enum declaration. | `enum Color {}` — an enum must have at least one member. |
 | GS0111 | Error | Duplicate enum member. | Two members in the same `enum` share a name. |
 | GS0112 | Error | Undefined enum member. | `Color.Purple` where `Purple` is not a declared member of `Color`. |
@@ -115,20 +115,20 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0150 | Error | Type-parameter variance position violation. | A covariant type parameter used in a contravariant position. |
 | GS0151 | Error | Type argument inference failed. | The compiler could not infer a type argument from the call arguments. |
 | GS0152 | Error | Type argument does not satisfy constraint. | `f[MyStruct]()` where `MyStruct` does not implement the required interface constraint. |
-| GS0153 | Error | Interface constraint is not sealed. | A generic constraint interface must be `sealed` (i.e. not `open`). |
+| GS0153 | Error | Constraint is neither an interface nor a class. | A generic type-parameter constraint must be an interface (any interface — sealed or not, generic or not;) or a base class; a value type such as a struct or enum is rejected. |
 | GS0154 | Error | Wrong argument type. | A positional argument's type does not match the parameter type. |
 | GS0155 | Error | Cannot convert type. | An explicit cast between incompatible types. |
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `int x = 3.14` — an explicit cast is available but was not written. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
 | GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
 | GS0159 | Error | Cannot resolve function call. | A function name does not resolve, or its nullable receiver lacks valid non-null narrowing. |
-| GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. |
+| GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. Generic candidates are filtered against their `where`-constraints; the constraint-disjoint case usually resolves to one candidate, but two candidates with mutually-incomparable constraint specificity remain ambiguous and report this code. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |
 | GS0162 | Error | Named arguments only supported for `data struct` `.copy(…)`. | Named arguments passed to a regular function. |
 | GS0163 | Error | Deconstruction field count mismatch. | `let (a, b) = p` where `p` is a `data struct` with three fields. |
 | GS0164 | Error | Deconstruction requires a tuple, `data struct`, or accessible `Deconstruct` method. | Deconstruction attempted on a type without a supported deconstruction shape. |
-| GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements (see [ADR-0066](adr/0066-top-level-statement-mechanics.md)). |
-| GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins, the explicit `Main` is shadowed (see [ADR-0066](adr/0066-top-level-statement-mechanics.md) §4). |
+| GS0165 | Error | Top-level statements may appear in at most one package per compilation. | Two or more `package` declarations in a single compilation each contain top-level statements (see [ADR-0066](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0066-top-level-statement-mechanics.md)). |
+| GS0166 | Warning | Top-level statements conflict with an explicit `Main` function. | Both top-level statements and a `func Main()` are present; TLS wins, the explicit `Main` is shadowed (see [ADR-0066](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0066-top-level-statement-mechanics.md) §4). |
 | GS0167 | Error | Multi-assignment target/value count mismatch. | `a, b = 1, 2, 3` — three values for two targets. |
 | GS0168 | Error | `fallthrough` is not supported (ADR-0013). | `fallthrough` keyword used in a `switch` case body. |
 | GS0169 | Error | Duplicate `default` arm in `switch`. | Two `default:` arms inside one `switch` statement. |
@@ -293,7 +293,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
 | GS9004 | Error | By-ref value cannot escape its declaration scope. | Returning a `*T` (managed-pointer) value from a function, capturing a `*T` local in a closure, hoisting a `*T` local into an `async`/iterator state machine, or using a `*T` return type in a function literal. Also raised when returning a `ref struct` parameter annotated as `scoped`. |
 | GS9005 | Error | Cannot take the address of a constant. | `&myConst` where `myConst` is declared `const`. |
-| GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type. |
+| GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type **outside an `unsafe` context**. Inside an `unsafe` context `*T` is an unmanaged pointer and IS legal as a field type. |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
@@ -303,13 +303,15 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 |----|----------|-------------|-----------------|
 | GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
 
-### Internal / emit diagnostics (GS9998–GS9999)
+### Internal diagnostics (GS9996–GS9999)
 
-These diagnostics indicate an internal compiler problem. If you encounter them, please file an issue.
+These diagnostics indicate a fatal compiler or evaluator failure. If you encounter them, please file an issue.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS9998 | Error | An unexpected `NotSupportedException` or `InvalidOperationException` was raised during IL emission. The message text contains the original exception message. |
+| GS9996 | Error | Source generator execution failure. `gsc` could not locate or launch `gsgen`, `gsgen` timed out, or it exited nonzero without producing its own diagnostics. |
+| GS9997 | Error | Fatal compiler I/O error. An unrecoverable file-system error occurred (permission denied, disk full, etc.) before or during assembly writing. |
+| GS9998 | Error | Internal compiler error (emit-time failure). The emit pipeline encountered an unexpected state and could not produce valid IL. The diagnostic message includes the exception type and a brief description of the failure. |
 | GS9999 | Error | An unexpected exception was caught by the evaluator. The message text contains the original exception message. |
 
 #### Interpreter compiled-only boundaries
@@ -691,7 +693,7 @@ value types are rejected.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0352 | Error | `ref`/`out`/`in` parameter `{name}` requires a blittable pointee; `{type}` is not blittable. Use a blittable primitive (e.g. `int32`, `int64`, `nint`), or a struct annotated with `@StructLayout(LayoutKind.Sequential)`. |
+| GS0352 | Error | `'ref'/'out'/'in'` parameter `<name>` requires a blittable pointee; `<T>` is not blittable. Use a blittable primitive (`int8`…`int64`, `nint`/`nuint`, `float32`/`float64`), or a struct annotated with `@StructLayout(LayoutKind.Sequential)`. |
 
 The struct-pointee path continues to use GS0349 (same remediation as the
 by-value struct case). GS0326 still fires for the remaining function-shape
@@ -730,7 +732,7 @@ constraints.
 | --- | --- | --- |
 | GS0375 | Error | A `const` field requires an initializer (e.g. `const X int32 = 10`). |
 | GS0376 | Error | A `const` field initializer must be a compile-time constant expression. |
-| GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (initializers run before the constructor body, so `this` is not available — assign it in an `init(...)` constructor instead). |
+| GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (field initializers run before the constructor body, so `this` is not available). Assign it in an `init(...)` constructor instead. |
 
 ## Self-inheritance diagnostic (GS0378)
 
@@ -779,7 +781,7 @@ reference types with a public parameterless constructor and value types.
 
 | ID | Severity | Summary |
 | --- | --- | --- |
-| GS0389 | Error | Cannot construct `{T}()` because type parameter `{T}` has no `init()` constraint; add an `init()` constraint (e.g. `[{T} init()]`) to allow construction. |
+| GS0389 | Error | `Cannot construct '<T>()' because type parameter '<T>' has no 'init()' constraint; add an 'init()' constraint (e.g. '[<T> init()]') to allow construction.` |
 
 GS0389 fires when the body constructs a type parameter (`T()`) that does not
 declare an `init()` constraint. A type **argument** that cannot satisfy the
@@ -796,7 +798,7 @@ assigned when the arm runs (mirrors C# CS8780).
 
 | ID | Severity | Summary |
 | --- | --- | --- |
-| GS0390 | Error | A pattern variable (`{name}`) may not be declared under an `or` or `not` pattern; it would not be definitely assigned. Use `_` instead. |
+| GS0390 | Error | `A pattern variable ('<name>') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead.` |
 
 GS0390 fires when a binding type pattern appears under `or`/`not`. Use the
 discard `_` (e.g. `_ is Dog or _ is Cat`) or move the binding under `and` (or to
@@ -811,7 +813,7 @@ struct as a base type is rejected.
 
 | ID | Severity | Summary |
 | --- | --- | --- |
-| GS0391 | Error | Interface `{interfaceName}` cannot declare base type `{baseTypeName}`; an interface may only extend other interfaces. |
+| GS0391 | Error | `Interface '<interfaceName>' cannot declare base type '<baseTypeName>'; an interface may only extend other interfaces.` |
 
 GS0391 fires when an interface's base clause names a class or struct. Remove the
 offending entry (an interface may only extend interfaces).
@@ -820,9 +822,9 @@ offending entry (an interface may only extend interfaces).
 
 | ID | Severity | Summary |
 | --- | --- | --- |
-| GS0393 | Error | A user-defined `{implicit/explicit}` conversion operator must take exactly one by-value parameter (the source operand). |
-| GS0394 | Error | A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ. |
-| GS0395 | Error | Duplicate user-defined conversion operator: a conversion from `{source}` to `{target}` is already declared on this type. |
+| GS0393 | Error | `A user-defined '<implicit/explicit>' conversion operator must take exactly one by-value parameter (the source operand).` |
+| GS0394 | Error | `A user-defined conversion operator must convert to or from a user type declared in the same package, and its source and target types must differ.` |
+| GS0395 | Error | `Duplicate user-defined conversion operator: a conversion from '<source>' to '<target>' is already declared on this type.` |
 
 These fire on conversion operators declared with `func operator implicit (x T) U`
 or `func operator explicit (x T) U` (issue #1017). `GS0393` requires exactly one
@@ -848,10 +850,10 @@ parenthesise it (`(^a)..b`).
 
 ## Stackalloc initializer diagnostics (GS0411–GS0412)
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0411 | Error | A count-inferred `stackalloc []T` requires a brace-delimited initializer to determine its length (e.g. `stackalloc []int32{1, 2, 3}`); supply an initializer or spell the count explicitly (`stackalloc [n]T`). |
-| GS0412 | Error | A `stackalloc [n]T{…}` initializer must supply exactly `n` element(s); the explicit count and the initializer length must match. |
+| ID | Severity | Description | Example trigger |
+|----|----------|------------------------------|-----------------|
+| GS0411 | Error | A count-inferred `stackalloc []T` requires an initializer. | A count-inferred `stackalloc []T` written without a brace-delimited initializer, so its length is undeterminable (e.g. `stackalloc []int32`). Supply an initializer (`stackalloc []int32{1, 2, 3}`) or spell the count explicitly (`stackalloc [n]T`). |
+| GS0412 | Error | A `stackalloc [n]T{…}` initializer length must match the explicit count. | A `stackalloc [n]T{…}` whose explicit constant count `n` disagrees with the number of initializer elements (e.g. `stackalloc [2]int32{1, 2, 3}`). As in C#, the two must match; use the count-inferred `stackalloc []T{…}` to avoid repeating the length. |
 
 GS0411 and GS0412 cover the `stackalloc [n]T` initializer forms added in issue
 #1041 (G#-style array grammar, ADR-0124 / issue #1057). The count-inferred
@@ -911,88 +913,88 @@ nesting depth.
 
 ## Additional language diagnostics (GS0270–GS0418)
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0270 | Error | The `as` operator targets a non-nullable value type; use a reference type or nullable value type instead. |
-| GS0274 | Error | `nil` is supplied to a non-nullable parameter of an attribute constructor. |
-| GS0275 | Warning | `.GetAwaiter().GetResult()` is called directly on a `ValueTask` or `ValueTask[T]`; convert it to `Task` with `.AsTask()` first. |
-| GS0278 | Error | A convenience initializer does not delegate to another initializer with `init(args)` before any other statement. |
-| GS0279 | Error | A convenience initializer declares `: base(args)` instead of delegating to another initializer with `init(args)`. |
-| GS0280 | Error | An `init(args)` constructor self-delegation appears outside a class constructor body. |
-| GS0281 | Error | A designated initializer delegates to a sibling `init(args)` overload instead of chaining to its base class. |
-| GS0282 | Error | A convenience initializer delegates to itself. |
-| GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call. |
-| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters. |
-| GS0293 | Error | A labeled `break` or `continue` names no enclosing loop. |
-| GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets (ADR-0139); this diagnostic is no longer emitted. |
-| GS0295 | Warning | A loop label shadows an enclosing loop label of the same name. |
-| GS0296 | Error | The right-hand side of an `if let` or `guard let` binding is not nullable. |
-| GS0297 | Error | A `guard let` else block can fall through instead of unconditionally exiting with `return`, `throw`, `break`, or `continue`. |
-| GS0300 | Warning | A null-conditional index access uses a non-nullable receiver; use ordinary indexing instead. |
-| GS0301 | Error | A null-conditional index access appears on the left-hand side of an assignment. |
-| GS0306 | Error | A declaration uses the removed `type Name <kind>` form instead of putting the aggregate-kind keyword first. |
-| GS0307 | Error | A declaration uses the removed `record` keyword instead of `data class` or `data struct`. |
-| GS0308 | Error | `inline` is applied to an aggregate kind other than `struct`. |
-| GS0309 | Error | `open` is applied to an aggregate kind other than `class`. |
-| GS0310 | Error | `sealed` is applied to an aggregate kind other than `class` or `interface`. |
-| GS0311 | Error | `data` and `inline` are combined on the same declaration. |
-| GS0312 | Error | `open` and `sealed` are combined on the same declaration. |
-| GS0313 | Warning | A switch over a sealed class hierarchy omits a known subtype. |
-| GS0316 | Error | Go-style concurrency syntax is used without importing `Gsharp.Extensions.Go`. |
-| GS0317 | Error | A Go-style built-in such as `len`, `cap`, `append`, or `delete` is used without importing `Gsharp.Extensions.Go`. |
-| GS0330 | Error | An event is declared inside an interface `shared` block; interface static events are not supported. |
-| GS0331 | Error | A class or struct does not implement a required static-virtual interface method that has no default body. |
-| GS0332 | Error | A class or struct declares an instance method where its interface requires a static-virtual method. |
-| GS0333 | Error | A constrained static access through a type parameter either is not a member name or names no static-virtual member on any interface constraint. |
-| GS0334 | Error | Code outside an interface declaration accesses one of the interface's private helpers. |
-| GS0335 | Error | A private interface method is declared without a body. |
-| GS0336 | Error | An implementer declares a method that clashes with a private helper on one of its interfaces. |
-| GS0337 | Error | `private` is applied to an interface property or event; only private interface methods are supported. |
-| GS0338 | Error | `base[IFoo]` names an interface not implemented by the enclosing type, or appears outside an instance member. |
-| GS0339 | Error | A `base[IFoo]` call names a member that `IFoo` does not declare. |
-| GS0340 | Error | A `base[IFoo]` call targets an abstract interface member with no default body. |
-| GS0341 | Error | A `base[IFoo]` call targets a private interface helper. |
-| GS0353 | Error | A delegate-typed P/Invoke parameter's delegate declaration lacks `@UnmanagedFunctionPointer` with a calling convention. |
-| GS0354 | Error | An unmanaged function-pointer type names an unsupported calling convention. |
-| GS0355 | Error | A P/Invoke declaration returns a managed delegate instead of a raw function pointer or opaque handle. |
-| GS0356 | Error | A raw function-pointer type omits its required calling convention. |
-| GS0361 | Error | A type parameter combines mutually exclusive constraints such as `class` with `struct`, or redundant `struct` with `init()`. |
-| GS0362 | Error | A bare `default` literal appears where no target type can be inferred. |
-| GS0363 | Error | A parameter uses C#'s unsupported `params` keyword instead of G#'s `name ...T` variadic syntax. |
-| GS0364 | Error | A signature declares more than one variadic parameter. |
-| GS0365 | Error | A variadic slot in an anonymous function type does not use the required `[]T` slice storage type. |
-| GS0366 | Error | A type clause uses the removed `map[K]V` spelling instead of `map[K,V]`. |
-| GS0367 | Error | A `yield` appears inside a `try` block that has a `catch` clause. |
-| GS0369 | Error | A collection initializer targets a type with no accessible `Add` method or settable indexer. |
-| GS0370 | Error | An indexer declaration has no index parameters. |
-| GS0371 | Error | An indexer declaration has no `get` or `set` accessor body. |
-| GS0372 | Error | An init-only property is assigned outside a constructor, object initializer, or `init` accessor for the same instance. |
-| GS0373 | Error | A property declares both `set` and `init` accessors. |
-| GS0374 | Error | A static property declares an `init` accessor. |
-| GS0379 | Error | Code outside a declaring or derived type accesses a protected member. |
-| GS0380 | Error | `protected` is used outside an inheritable `open class`. |
-| GS0381 | Error | A class participates in a direct or transitive inheritance cycle. |
-| GS0383 | Error | A `base` call appears outside an instance member of a class with a base class. |
-| GS0384 | Error | A `base` call names no accessible member on the base-class chain. |
-| GS0385 | Error | A bracketed `base[Type]` selector names a type that is not a base class of the enclosing type. |
-| GS0392 | Error | A range expression slices a type that has no supported array, slice, string, span-like, or `System.Range` indexer shape. |
-| GS0396 | Error | Retired by issue #1030. It formerly rejected default-bodied static-virtual interface properties, which are now supported. |
-| GS0397 | Error | A class or struct omits a compatible static property required by a static-virtual interface property slot. |
-| GS0398 | Error | An unmanaged pointer has a pointee type that is not supported as unmanaged or blittable storage. |
-| GS0399 | Error | A `stackalloc` expression uses a managed or otherwise non-blittable element type. |
-| GS0400 | Error | A `fixed` statement appears outside an `unsafe` context. |
-| GS0401 | Error | A `fixed` statement's source is not a pinnable array, string, or span-like value, or its element type does not match the pointer. |
-| GS0402 | Error | `++` or `--` targets something other than a writable variable, field, array element, or indexer. |
-| GS0403 | Error | A `*void` pointer is dereferenced, indexed, or used in pointer arithmetic before being cast to a typed pointer. |
-| GS0404 | Error | A managed function-pointer type appears outside an `unsafe` context. |
-| GS0405 | Error | A method address does not match the target function-pointer signature, or the operand is not one static method group. |
-| GS0406 | Error | A fixed-size buffer field appears outside an `unsafe` context. |
-| GS0407 | Error | A fixed-size buffer field does not use a fixed-length array type. |
-| GS0408 | Error | A fixed-size buffer field has a non-positive length. |
-| GS0409 | Error | A fixed-size buffer field uses an unsupported element type. |
-| GS0413 | Error | A `base` call targets an abstract member that has no implementation to invoke. |
-| GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern. |
-| GS0418 | Error | A `using` or `await using` statement uses tuple or named deconstruction instead of one variable declaration. |
+| ID | Severity | Description | Example trigger |
+|----|----------|------------------------------|-----------------|
+| GS0270 | Error | The `as` operator targets a non-nullable value type; use a reference type or nullable value type instead.  | |
+| GS0274 | Error | `nil` is supplied to a non-nullable parameter of an attribute constructor.  | |
+| GS0275 | Warning | `.GetAwaiter().GetResult()` is called directly on a `ValueTask` or `ValueTask[T]`; convert it to `Task` with `.AsTask()` first.  | |
+| GS0278 | Error | A convenience initializer does not delegate to another initializer with `init(args)` before any other statement.  | |
+| GS0279 | Error | A convenience initializer declares `: base(args)` instead of delegating to another initializer with `init(args)`.  | |
+| GS0280 | Error | An `init(args)` constructor self-delegation appears outside a class constructor body.  | |
+| GS0281 | Error | A designated initializer delegates to a sibling `init(args)` overload instead of chaining to its base class.  | |
+| GS0282 | Error | A convenience initializer delegates to itself.  | |
+| GS0283 | Error | No sibling initializer overload matches an `init(args)` self-delegation call.  | |
+| GS0284 | Error | An explicit `init(...)` duplicates the constructor synthesized from the class's primary-constructor parameters.  | |
+| GS0293 | Error | No enclosing loop is labeled `<label>` (in `break <label>` / `continue <label>`).  | |
+| GS0294 | _Retired_ | Previously: labels could only be applied to loop statements. Non-loop labels are now valid `goto` targets (ADR-0139); this diagnostic is no longer emitted.  | |
+| GS0295 | Warning | Label `<label>` shadows an enclosing loop label of the same name; the inner label wins for nested `break` / `continue`.  | |
+| GS0296 | Error | The right-hand side of an `if let` / `guard let` binding must be of nullable type; non-nullable initializers have nothing to strip.  | |
+| GS0297 | Error | A `guard let` else block can fall through instead of unconditionally exiting with `return`, `throw`, `break`, or `continue`.  | |
+| GS0300 | Warning | A null-conditional index access uses a non-nullable receiver; use ordinary indexing instead.  | |
+| GS0301 | Error | Null-conditional indexing `?[]` is not allowed on the left-hand side of an assignment. Use a plain `[]` after a nil-check, an `if let` binding, or the `??=` compound assignment instead.  | |
+| GS0306 | Error | A declaration uses the removed `type Name <kind>` form instead of putting the aggregate-kind keyword first.  | |
+| GS0307 | Error | The `record` keyword has been removed (ADR-0078); use `data struct Name` (value-typed) or `data class Name` (reference-typed).  | |
+| GS0308 | Error | `inline` is applied to an aggregate kind other than `struct`.  | |
+| GS0309 | Error | `open` is applied to an aggregate kind other than `class`.  | |
+| GS0310 | Error | `sealed` is applied to an aggregate kind other than `class` or `interface`.  | |
+| GS0311 | Error | `data` and `inline` are combined on the same declaration.  | |
+| GS0312 | Error | `open` and `sealed` are combined on the same declaration.  | |
+| GS0313 | Warning | Non-exhaustive `switch` over a sealed-hierarchy base or discriminated-union enum (ADR-0078).  | |
+| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).`  | |
+| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly (ADR-0083).`  | |
+| GS0330 | Error | An event is declared inside an interface `shared` block; interface static events are not supported.  | |
+| GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body (ADR-0089).`  | |
+| GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block (ADR-0089).`  | |
+| GS0333 | Error | A constrained static access through a type parameter either is not a member name or names no static-virtual member on any interface constraint.  | |
+| GS0334 | Error | `Private interface member '<I>.<Name>' is not accessible from this context; private helpers are visible only to sibling members of the same interface (ADR-0090).`  | |
+| GS0335 | Error | `Private interface method '<I>.<Name>' must declare a body; abstract private helpers are not allowed (ADR-0090).`  | |
+| GS0336 | Error | `<Kind> '<C>' declares method '<Name>' that clashes with private interface helper '<I>.<Name>'; private interface helpers are interface-internal and cannot be overridden by implementers (ADR-0090).`  | |
+| GS0337 | Error | `Modifier 'private' on interface member '<Name>' of kind '<Kind>' is not supported by ADR-0090. The v1 surface accepts 'private' only on instance / static methods.`  | |
+| GS0338 | Error | `base[IFoo]` names an interface not implemented by the enclosing type, or appears outside an instance member.  | |
+| GS0339 | Error | `Interface '<I>' does not declare a member named '<Name>' reachable via 'base[<I>]'.`  | |
+| GS0340 | Error | `Interface member '<I>.<Name>' is abstract; there is no default implementation to delegate to via 'base[<I>]'.`  | |
+| GS0341 | Error | `Interface member '<I>.<Name>' is a private helper (ADR-0090) and is not reachable via 'base[<I>]'.`  | |
+| GS0353 | Error | Delegate-typed P/Invoke parameter `<name>` of type `<T>` requires the delegate declaration to be annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or a matching calling convention).  | |
+| GS0354 | Error | Unknown calling convention `<name>` on an `unmanaged` function-pointer type clause. Use one of: `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall`.  | |
+| GS0355 | Error | Returning a managed delegate `<T>` from a P/Invoke declaration is not supported. Declare the return as `unmanaged[CC] (...) -> R` (a raw function pointer) or `nint` and wrap manually with `Marshal.GetDelegateForFunctionPointer`.  | |
+| GS0356 | Error | Raw function-pointer type clause is missing its calling-convention slot. Expected `unmanaged[Cdecl | Stdcall | Thiscall | Fastcall] (...) -> R`.  | |
+| GS0361 | Error | Type parameter `<T>` carries the mutually exclusive constraints `<first>` and `<second>`. The two combinations that fire today are `class struct` (a type cannot simultaneously be a reference type and a value type) and `struct init()` (the `init()` flag is redundant because the CLR's `NotNullableValueTypeConstraint` already implies `DefaultConstructorConstraint` per ECMA-335 II.10.1.7).  | |
+| GS0362 | Error | The bare `default` literal can only be used where its type is known from context. Use `default(T)` to spell the default value of an explicit type.  | |
+| GS0363 | Error | The C# `params` keyword is not supported in G#. Use the canonical variadic spelling `name ...T` (Go-style); inside the function body the parameter has type `[]T`.  | |
+| GS0364 | Error | A function signature may declare at most one variadic parameter.  | |
+| GS0365 | Error | A variadic parameter slot in an anonymous function-type clause must use the slice form `[]T`; got `<typeName>`.  | |
+| GS0366 | Error | The `map[K]V` type-clause spelling has been removed; use `map[{key},{value}]` instead (ADR-0104).  | |
+| GS0367 | Error | A `yield` appears inside a `try` block that has a `catch` clause.  | |
+| GS0369 | Error | A collection initializer targets a type with no accessible `Add` method or settable indexer.  | |
+| GS0370 | Error | An indexer declaration has no index parameters.  | |
+| GS0371 | Error | An indexer declaration has no `get` or `set` accessor body.  | |
+| GS0372 | Error | An init-only property is assigned outside a constructor, object initializer, or `init` accessor for the same instance.  | |
+| GS0373 | Error | A property declares both `set` and `init` accessors.  | |
+| GS0374 | Error | A static property declares an `init` accessor.  | |
+| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it.`  | |
+| GS0380 | Error | `'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.`  | |
+| GS0381 | Error | A class participates in a direct or transitive inheritance cycle.  | |
+| GS0383 | Error | `'base' is not valid here: '<T>' must be an instance member of a class that has a base class to use 'base.Member(...)'.`  | |
+| GS0384 | Error | `Base class '<Base>' does not declare an accessible method named '<Name>' to call via 'base'.`  | |
+| GS0385 | Error | `'base[<Type>]' is not valid: '<Type>' is not a base class of '<T>'. Use the immediate base class name, or the plain 'base.Member(...)' form.`  | |
+| GS0392 | Error | A range expression slices a type that has no supported array, slice, string, span-like, or `System.Range` indexer shape.  | |
+| GS0396 | Error | **Retired.** Default-bodied static-virtual interface properties (`prop Name T { get { … } }`) are now supported, so this diagnostic is no longer raised.  | |
+| GS0397 | Error | `Type '<C>' does not implement static-virtual interface property '<I>.<Name>' (<detail>) (ADR-0089).` Not raised for a fully default-bodied static property (the interface supplies the body).  | |
+| GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`, or a struct with a managed field); only blittable primitives, pointers-to-pointers, and blittable user/value structs are legal pointees. |
+| GS0399 | Error | `stackalloc` element type must be a blittable (unmanaged) type. | A `stackalloc [n]T` whose element type `T` is a managed reference type or otherwise non-blittable (e.g. `stackalloc [4]string`); only blittable primitives and pointers are legal `stackalloc` element types. |
+| GS0400 | Error | A `fixed` statement requires an `unsafe` context. | A `fixed <name> *T = <source> {... }` statement used outside an `unsafe` context (function, `unsafe {... }` block, or unsafe type). Because it binds a raw unmanaged pointer, `fixed` is legal only inside `unsafe`, consistent with `*T` pointer gating. |
+| GS0401 | Error | A `fixed` statement source is not pinnable, or the pointer's element type does not match. | The source of a `fixed` statement must be a managed array/slice (`[]T`), a `string`, or a span-like type exposing a public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` / `System.ReadOnlySpan[T]`), and the bound pointer's pointee type must match the buffer's element type (`uint16`/`char` interchangeable for `string`). Reported for a non-pinnable source (e.g. a scalar, or a type without `GetPinnableReference`) or a pointee/element-type mismatch. |
+| GS0402 | Error | The operand of an increment/decrement operator must be an assignable variable, field, or indexed element. | A prefix or postfix `++`/`--` applied to something that is not a writable lvalue, e.g. `5++`, `(a + b)--`, or a function-call result. The operand must be a mutable variable, field, array element, or indexer target. |
+| GS0403 | Error | Cannot dereference, index, or perform arithmetic on a void pointer `*void`. | A true void-element pointer `*void` (C# `void*`) carries no element type, so `*p`, `p[i]`, `p + i`, `p - i`, and `p - q` are rejected; cast it to a typed pointer `*T` (e.g. `*int32(p)`) first. Casts to/from typed pointers and `nint`, and comparison/equality, are allowed. |
+| GS0404 | Error | A managed function-pointer type `*func(...) R` requires an `unsafe` context. | A managed function-pointer type clause `*func(T1, T2) R` used outside an `unsafe` context; like the raw pointer `*T`, a function pointer is only legal inside `unsafe`. |
+| GS0405 | Error | Cannot take the address of this method as a function pointer. | `&Method` where the operand is not a single static/free, non-generic method (e.g. an instance method, an overloaded method group, or a generic method), or it is used outside an `unsafe` context. |
+| GS0406 | Error | A fixed-size buffer field `fixed name [N]T` requires an `unsafe` context. | A `fixed name [N]T` buffer field declared in a non-`unsafe` struct; declare it inside an `unsafe struct`. |
+| GS0407 | Error | A fixed-size buffer field must have a fixed-length array element type `[N]T`. | A `fixed name <T>` field whose type clause is not a fixed-length array `[N]T`. |
+| GS0408 | Error | A fixed-size buffer field must have a positive length. | A `fixed name [N]T` field with `N <= 0`. |
+| GS0409 | Error | Fixed-size buffer element type is not supported. | A `fixed name [N]T` field whose element type is not a blittable primitive (`bool`, `int8…int64`, `uint8…uint64`, `char`, `float32`, `float64`). |
+| GS0413 | Error | `Cannot call the abstract base member '<Base>.<Name>' via 'base'; it has no base implementation to delegate to.`  | |
+| GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern.  | |
+| GS0418 | Error | A `using` or `await using` statement uses tuple or named deconstruction instead of one variable declaration.  | |
 
 ## Defer with by-reference arguments (GS0460)
 
@@ -1185,12 +1187,7 @@ The interpreter has no emitted class with a CLR `Finalize` override and does
 not invent deterministic scope-exit cleanup. Compile with `gsc` when program
 behavior depends on GC finalization.
 
-## Internal compiler error diagnostics (GS9998–GS9999)
-
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS9998 | Error | Internal compiler error (emit-time failure). The emit pipeline encountered an unexpected state and could not produce valid IL. The diagnostic message includes the exception type and a brief description of the failure. |
-| GS9999 | Error | Fatal I/O error. An unrecoverable file-system error occurred (permission denied, disk full, etc.) before or during assembly writing. |
+## Internal compiler error details (GS9998)
 
 `GS9998` is the *silent emit failure* diagnostic. It is always anchored at the user's source file at the location of the expression or statement that triggered the failure. If you ever see `GS9998` anchored at `(1,1,1,1)` against `gsc.dll` instead of your source file, that itself is a bug — please file an issue.
 

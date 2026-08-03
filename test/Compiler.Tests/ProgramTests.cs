@@ -839,7 +839,7 @@ public class ProgramTests
         // (an existing FILE acts as a non-directory parent). On every OS this
         // makes Directory.CreateDirectory throw IOException, which previously
         // propagated out of Main and crashed gsc. The fix wraps Main with a
-        // catch that reports GS9999 and returns Error.
+        // catch that reports GS9997 and returns Error.
         var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
         File.WriteAllText(sample, "package P\n");
         var blocker = Path.Combine(Path.GetTempPath(), $"gs_blocker_{System.Guid.NewGuid():N}");
@@ -861,7 +861,7 @@ public class ProgramTests
             Assert.Null(ex);
             Assert.NotEqual(0, exit);
             var stderr = errWriter.ToString();
-            Assert.Contains("GS9999", stderr);
+            Assert.Contains("GS9997", stderr);
         }
         finally
         {
@@ -877,7 +877,7 @@ public class ProgramTests
     {
         // Pointing /out at an existing directory makes File.Create throw
         // UnauthorizedAccessException (Windows) or IOException (Unix). Both
-        // must be caught and surfaced as a structured GS9999 error.
+        // must be caught and surfaced as a structured GS9997 error.
         var sample = Path.Combine(Path.GetTempPath(), $"gs_test_{System.Guid.NewGuid():N}.gs");
         File.WriteAllText(sample, "package P\n");
         var tempDir = Directory.CreateTempSubdirectory("gsc_io_err_").FullName;
@@ -898,7 +898,7 @@ public class ProgramTests
             Assert.Null(ex);
             Assert.NotEqual(0, exit);
             var stderr = errWriter.ToString();
-            Assert.Contains("GS9999", stderr);
+            Assert.Contains("GS9997", stderr);
         }
         finally
         {

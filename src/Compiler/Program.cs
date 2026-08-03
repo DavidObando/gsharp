@@ -251,10 +251,11 @@ public class Program
 
     private static int ReportFatalIOError(Exception ex)
     {
-        // Emit in the csc-compatible "gsc: error GS9999: <message>" form so
+        // Emit in the csc-compatible "gsc: error GS9997: <message>" form so
         // the SDK BuildTask's diagnostic regex surfaces it as a structured
         // MSBuild error rather than an opaque process crash.
-        Console.Error.WriteLine($"gsc: error GS9999: {ex.Message}");
+        var descriptor = DiagnosticDescriptors.FatalCompilerIOError;
+        Console.Error.WriteLine($"gsc: error {descriptor.Id}: {string.Format(descriptor.MessageFormat, ex.Message)}");
         return Error;
     }
 
@@ -583,9 +584,8 @@ public class Program
         var gsgenPath = ResolveGsgenToolPath(parsed);
         if (!File.Exists(gsgenPath))
         {
-            Console.Error.WriteLine(
-                $"gsc: error GS9999: /analyzer was supplied but gsgen was not found at '{gsgenPath}'. Pass /gsgentool:<path> to override.");
-            return false;
+            return ReportGsgenFailure(
+                $"/analyzer was supplied but gsgen was not found at '{gsgenPath}'. Pass /gsgentool:<path> to override.");
         }
 
         // ponytail: a one-shot temp workspace; not cleaned up afterwards (the
@@ -644,8 +644,7 @@ public class Program
         }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
         {
-            Console.Error.WriteLine($"gsc: error GS9999: failed to launch gsgen ('{gsgenPath}'): {ex.Message}");
-            return false;
+            return ReportGsgenFailure($"failed to launch gsgen ('{gsgenPath}'): {ex.Message}");
         }
 
         using (proc)
@@ -668,9 +667,8 @@ public class Program
                     // Process already exited between the timeout check and Kill.
                 }
 
-                Console.Error.WriteLine(
-                    $"gsc: error GS9999: gsgen timed out after {gsgenTimeoutMs / 1000}s while running source generators.");
-                return false;
+                return ReportGsgenFailure(
+                    $"gsgen timed out after {gsgenTimeoutMs / 1000}s while running source generators.");
             }
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
@@ -690,8 +688,8 @@ public class Program
             {
                 if (string.IsNullOrWhiteSpace(stdout) && string.IsNullOrWhiteSpace(stderr))
                 {
-                    Console.Error.WriteLine(
-                        $"gsc: error GS9999: gsgen exited with code {proc.ExitCode} while running source generators.");
+                    return ReportGsgenFailure(
+                        $"gsgen exited with code {proc.ExitCode} while running source generators.");
                 }
 
                 return false;
@@ -711,6 +709,13 @@ public class Program
         }
 
         return true;
+    }
+
+    private static bool ReportGsgenFailure(string message)
+    {
+        var descriptor = DiagnosticDescriptors.SourceGeneratorExecutionFailure;
+        Console.Error.WriteLine($"gsc: error {descriptor.Id}: {string.Format(descriptor.MessageFormat, message)}");
+        return false;
     }
 
     /// <summary>
