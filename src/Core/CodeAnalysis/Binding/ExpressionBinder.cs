@@ -348,6 +348,11 @@ internal sealed partial class ExpressionBinder
                 return BindObjectCreationExpression((ObjectCreationExpressionSyntax)syntax);
             case SyntaxKind.CollectionInitializerExpression:
                 return BindCollectionInitializerExpression((CollectionInitializerExpressionSyntax)syntax);
+            case SyntaxKind.SpreadElementExpression:
+                // Spread wrappers are normally consumed by their enclosing
+                // array/collection literal binder. Binding the node directly
+                // (e.g. a semantic-model query) yields its source expression.
+                return BindExpression(((SpreadElementExpressionSyntax)syntax).Expression, canBeVoid);
             case SyntaxKind.AccessorExpression:
                 return BindAccessorExpression((AccessorExpressionSyntax)syntax);
             case SyntaxKind.ArrayCreationExpression:

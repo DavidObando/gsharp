@@ -31,7 +31,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore GSharp.sln
+        run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
         run: dotnet tool restore

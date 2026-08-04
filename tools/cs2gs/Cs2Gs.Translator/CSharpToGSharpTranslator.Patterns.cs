@@ -1802,30 +1802,27 @@ public sealed partial class CSharpToGSharpTranslator
 
             GTypeReference elementType = this.GetCollectionElementType(collection);
 
-            // A spread element (`[a, ..rest, b]`) has no G# composite-literal
-            // form (gsc's own collection-initializer grammar only has bare,
-            // keyed, and indexed elements — no spread). It lowers to a
-            // build-and-append temporary: a `List[T]` populated via `Add`/
-            // `AddRange` calls hoisted into the enclosing statement's prologue
-            // (issue #1897), then — for an array/span target — converted back
-            // via `.ToArray()`.
-            if (collection.Elements.Any(e => e is SpreadElementSyntax))
-            {
-                return this.TranslateSpreadCollectionExpression(collection, elementType, isConstructibleClassTarget);
-            }
-
             // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
             // the canonical G# collection-initializer form (`List[int32]{...}`,
             // ADR-0117) — NOT the array/slice literal `[]T{...}`, which does not
-            // convert to a constructed collection class (issue #1897).
+            // convert to a constructed collection class (issue #1897). Issue
+            // #3096: native `...source` elements keep this form initializer-safe.
             if (isConstructibleClassTarget)
             {
                 var initElements = new List<CollectionInitializerElement>();
                 foreach (CollectionElementSyntax element in collection.Elements)
                 {
-                    var expressionElement = (ExpressionElementSyntax)element;
-                    initElements.Add(new CollectionInitializerElement(
-                        this.CoerceCollectionElement(expressionElement.Expression, elementType)));
+                    if (element is SpreadElementSyntax spread)
+                    {
+                        initElements.Add(new CollectionInitializerElement(
+                            new SpreadElementExpression(this.TranslateExpression(spread.Expression))));
+                    }
+                    else
+                    {
+                        var expressionElement = (ExpressionElementSyntax)element;
+                        initElements.Add(new CollectionInitializerElement(
+                            this.CoerceCollectionElement(expressionElement.Expression, elementType)));
+                    }
                 }
 
                 return new CollectionInitializerExpression(
@@ -1834,107 +1831,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             // C# 12 collection expression `[a, b, c]` targeting an array/span.
             // The target type supplies the element type, so it maps to the
-            // canonical G# slice literal `[]T{ … }` (ADR-0115 §B).
+            // canonical G# slice literal `[]T{ … }` (ADR-0115 §B). Spreads map
+            // directly to native G# ellipsis elements, with no statement-hosted
+            // build/append temporary (issue #3096).
             var elements = new List<GExpression>();
-            foreach (CollectionElementSyntax element in collection.Elements)
-            {
-                var expressionElement = (ExpressionElementSyntax)element;
-                elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
-            }
-
-            return new ArrayLiteralExpression(elementType, elements);
-        }
-
-        private GExpression TranslateSpreadCollectionExpression(
-            CollectionExpressionSyntax collection, GTypeReference elementType, bool isConstructibleClassTarget)
-        {
-            if (this.state.PendingSpillPrologue == null)
-            {
-                string message =
-                    "a collection-expression spread element here has no enclosing statement to host the " +
-                    "build-and-append lowering it needs (e.g. a field/property initializer); emitted an " +
-                    "identifier placeholder (ADR-0115 §B).";
-                this.context.ReportUnsupported(collection, message);
-                return new IdentifierExpression("nil");
-            }
-
-            string temp = $"__spread{this.state.SpreadCounter++}";
-            this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
-                BindingKind.Let,
-                temp,
-                type: null,
-                initializer: new InvocationExpression(
-                    new IdentifierExpression("List"),
-                    new List<GExpression>(),
-                    new List<GTypeReference> { elementType })));
-
-            ITypeSymbol targetElementSymbol = GetEnumerableElementType(
-                this.context.GetTypeInfo(collection).ConvertedType ?? this.context.GetTypeInfo(collection).Type);
-
             foreach (CollectionElementSyntax element in collection.Elements)
             {
                 if (element is SpreadElementSyntax spread)
                 {
-                    GExpression source = this.CoerceSpreadSource(
-                        spread.Expression, this.TranslateExpression(spread.Expression), targetElementSymbol, elementType);
-                    this.state.PendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
-                        new MemberAccessExpression(new IdentifierExpression(temp), "AddRange"),
-                        new List<GExpression> { source })));
+                    elements.Add(new SpreadElementExpression(this.TranslateExpression(spread.Expression)));
                 }
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    this.state.PendingSpillPrologue.Add(new ExpressionStatement(new InvocationExpression(
-                        new MemberAccessExpression(new IdentifierExpression(temp), "Add"),
-                        new List<GExpression> { this.CoerceCollectionElement(expressionElement.Expression, elementType) })));
+                    elements.Add(this.CoerceCollectionElement(expressionElement.Expression, elementType));
                 }
             }
 
-            if (isConstructibleClassTarget)
-            {
-                return new IdentifierExpression(temp);
-            }
-
-            // `List[T].ToArray()` is the real (non-generic) BCL instance
-            // method — no bracket type argument (unlike the LINQ
-            // `Enumerable.ToArray[T]()` extension method).
-            return new InvocationExpression(
-                new MemberAccessExpression(new IdentifierExpression(temp), "ToArray"));
-        }
-
-        // A spread source (`..src` in `[..src]`) whose element type `U` differs
-        // from the target collection's element type `T` (an implicit conversion
-        // exists, e.g. `int[]` spread into a `long[]` target) needs a projection
-        // before `AddRange`, since `List[T].AddRange(IEnumerable[U])` does not
-        // bind in gsc (issue #1985). Wraps the source in `.Select(x => (T)x)`.
-        private GExpression CoerceSpreadSource(
-            ExpressionSyntax sourceExpression, GExpression translatedSource, ITypeSymbol targetElementSymbol, GTypeReference targetElementType)
-        {
-            if (targetElementSymbol == null)
-            {
-                return translatedSource;
-            }
-
-            ITypeSymbol sourceType = this.context.GetTypeInfo(sourceExpression).Type;
-            ITypeSymbol sourceElementSymbol = GetEnumerableElementType(sourceType);
-            if (sourceElementSymbol == null ||
-                SymbolEqualityComparer.Default.Equals(sourceElementSymbol, targetElementSymbol))
-            {
-                return translatedSource;
-            }
-
-            Conversion conversion = this.context.Compilation.ClassifyConversion(sourceElementSymbol, targetElementSymbol);
-            if (!conversion.Exists || conversion.IsIdentity)
-            {
-                return translatedSource;
-            }
-
-            GTypeReference sourceElementType = this.typeMapper.Map(sourceElementSymbol, this.context, sourceExpression.GetLocation());
-            var lambda = new LambdaExpression(
-                new List<Parameter> { new Parameter("__x", sourceElementType) },
-                expressionBody: new ConversionExpression(targetElementType, new IdentifierExpression("__x")));
-            return new InvocationExpression(
-                new MemberAccessExpression(translatedSource, "Select"), new List<GExpression> { lambda });
+            return new ArrayLiteralExpression(elementType, elements);
         }
 
         private GExpression CoerceCollectionElement(ExpressionSyntax element, GTypeReference elementType)
