@@ -133,9 +133,15 @@ The binder lowers `ref t` to a `BoundAddressOfExpression` wrapping a `BoundVaria
 
 ### 6. Interpreter behavior
 
-The interpreter does **not** perform actual native transitions — for any P/Invoke target it runs the empty body the binder reserves (`BoundBlockStatement` with zero statements) and returns the declared return type's default value (consistent with ADR-0086 §7 / ADR-0092 §4 / ADR-0093 §8). The ADR-0060 call-site write-back of ref-kind parameter slots still fires: the interpreter seeds `locals[parameter]` from the caller's lvalue before the call and writes the post-body slot value back to the lvalue after the call. For an empty body the post-body value equals the pre-body value, so the lvalue is unchanged. The interpreter therefore accepts ref-kind P/Invoke declarations and runs them without crashing, but the only way to actually observe native side-effects is the compiler (`gsc`) emit path.
+ADR-0152 supersedes the original empty-body/default-value behavior. Valid
+ref-kind P/Invoke declarations bind without GS0326/GS0352, then the tree
+evaluator reports GS0514 before evaluation; no call-site write-back or native
+transition occurs. Binder errors such as GS0352 still take precedence.
+ADR-0156 default drivers emit the byref signature and execute the real native
+transition. The evaluator is deprecated and scheduled for removal in Phase 3c.
 
-The interpreter test suite covers (a) ref-kind P/Invoke declarations bind without GS0326 / GS0352 diagnostics, (b) `ref` / `out` / `in` parameters with a blittable pointee evaluate to the default return value, and (c) the GS0352 path is reachable from the REPL.
+The interpreter test suite covers valid `ref`/`out`/`in` declarations reaching
+GS0514 and invalid pointees reaching GS0352 before that boundary.
 
 ### 7. Interaction with ADR-0086, ADR-0092, ADR-0093
 
@@ -158,7 +164,9 @@ The interpreter test suite covers (a) ref-kind P/Invoke declarations bind withou
 - The bound tree gains **no new** `BoundNodeKind` (per the rule of engagement). The bound model already represented ref-kind parameters via `ParameterSymbol.RefKind` and ref-kind arguments via `BoundAddressOfExpression`; the only changes are the binder's narrowed validation (GS0326 → GS0349 / GS0352 routing) and a tighter `IsSupportedMarshallingType` byref pointee classifier.
 - The emit pipeline is unchanged. `EmitPInvokeFunction` and `EmitLibraryImportFunction` already encode `isByRef: p.RefKind != RefKind.None`; the resulting metadata signature carries `ELEMENT_TYPE_BYREF` before the pointee type. The runtime marshaller sees a `T*` and passes the caller's managed slot address straight to the unmanaged callee.
 - `ilverify` is clean on the emitted assemblies. The ADR-0094 emit tests gate verification through `IlVerifier.Verify` exactly as the ADR-0086 / ADR-0092 / ADR-0093 emit tests do.
-- The interpreter accepts ref-kind P/Invoke declarations without crashing and continues to return the declared return type's default value — there is no managed-IL emit pipeline under the interpreter, so the byref slot does not actually round-trip through a native call (consistent with how `@DllImport` / `@LibraryImport` behave today).
+- The tree evaluator accepts the ref-kind declaration shape, then reports
+  GS0514 before execution. Default drivers emit the signature and round-trip
+  the byref slot through the native call.
 - The remaining v1 P/Invoke gaps (issue #761 function pointers, #762 `@MarshalAs` custom marshallers, slices of structs, fixed-size buffers inside marshalled structs) are unchanged.
 
 ## Alternatives considered

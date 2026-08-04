@@ -308,11 +308,18 @@ These diagnostics indicate a fatal compiler or evaluator failure. If you encount
 
 #### Interpreter compiled-only boundaries
 
-Storage-dependent unsafe constructs are compiled-only. The clean boundary
-sites for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers
-currently surface through `GS0513` with a self-contained message naming the
-construct and the required CIL emit path. Evaluator `GS9999` diagnostics still
-indicate a defect.
+[ADR-0153](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0153-interpreter-compiled-only-storage-boundary.md)
+defines storage-dependent unsafe constructs as compiled-only in the tree
+evaluator. Unmanaged `&`/`*` operations surface through `GS0513`. Older guards
+for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers still
+carry self-contained boundary messages through legacy `GS9999`; issue
+[#3199](https://github.com/DavidObando/gsharp/issues/3199) tracks moving those
+deliberate failures out of the internal-error category. Since
+[ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+Phase 3a the boundary applies only to direct tree evaluation and
+`gsi --engine evaluator`; all default drivers execute emitted code, where
+these constructs run natively. The evaluator path is deprecated and scheduled
+for removal in Phase 3c.
 
 ## Documentation diagnostics (GS0227–GS0231)
 
@@ -1771,7 +1778,12 @@ GS0264, even though iterator specialization synthesizes equivalent variants.
 
 This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
-`gsi` cannot create a valid callable value for direct or indirect use.
+the interpreter cannot create a valid callable value for direct or indirect
+use. Since [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+Phase 3a no driver interprets by default: `gsi <file>`, bare `gsc`, and the
+interactive REPL all execute emitted code, where P/Invoke runs natively. This
+diagnostic now fires only under gsi's deprecated `--engine evaluator` escape
+hatch and retires with the evaluator in Phase 3c.
 
 ## Interpreter deinitializer boundary (GS0510)
 
@@ -1780,8 +1792,13 @@ compiler error. It applies even when the declaration is not called because
 | GS0510 | Warning | A class declares a CLR GC finalizer with `deinit`, which does not run under interpreted execution. |
 
 The interpreter has no emitted class with a CLR `Finalize` override and does
-not invent deterministic scope-exit cleanup. Compile with `gsc` when program
-behavior depends on GC finalization.
+not invent deterministic scope-exit cleanup. Since
+[ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+Phase 3a no driver interprets by default: `gsi <file>`, bare `gsc`, and the
+interactive REPL all execute emitted code, whose deinitializers run as real CLR
+finalizers, so this warning no longer appears in a default `gsi` session. It
+now fires only under gsi's deprecated `--engine evaluator` escape hatch and
+retires with the evaluator in Phase 3c.
 
 ## Explicit-layout reference storage (GS0518)
 

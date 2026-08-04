@@ -1,9 +1,9 @@
 # ADR-0153: Interpreter compiled-only storage boundary
 
-- **Status**: Accepted
+- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phases 1–3a; remains accepted for direct tree evaluation and the deprecated evaluator compatibility path
 - **Date**: 2026-08-01
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), [#3022](https://github.com/DavidObando/gsharp/issues/3022), [#3028](https://github.com/DavidObando/gsharp/pull/3028), [#3032](https://github.com/DavidObando/gsharp/pull/3032), and [#2939](https://github.com/DavidObando/gsharp/issues/2939)
+- **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), [#3022](https://github.com/DavidObando/gsharp/issues/3022), [#3028](https://github.com/DavidObando/gsharp/pull/3028), [#3032](https://github.com/DavidObando/gsharp/pull/3032), [#2939](https://github.com/DavidObando/gsharp/issues/2939), and [#3199](https://github.com/DavidObando/gsharp/issues/3199)
 
 ## Context
 
@@ -21,24 +21,28 @@ that position, an address was previously reduced to a value copy. Issue #3004
 demonstrated the consequence; #3028 now rejects free-standing unmanaged pointer
 operations with `GS0513` and exit code 1.
 
-`fixed` is the cleanest existing boundary. The evaluator already rejects it
-with a self-contained message explaining that pinning requires the CIL
-pinned-local emit path. `stackalloc`, `sizeof` over unmanaged storage, method
-function pointers, and function-pointer invocation use the same pattern.
+`fixed` is the cleanest existing boundary message: the evaluator explains that
+pinning requires the CIL pinned-local emit path. `stackalloc`, `sizeof` over
+unmanaged storage, method function pointers, and function-pointer invocation
+use the same pattern. These older guards are still wrapped as legacy GS9999
+diagnostics; #3199 tracks moving deliberate boundary failures out of the
+internal-error category.
 
-Script-mode diagnostic rendering is not part of this boundary contract and may
-include a source location and caret. Boundary messages must still name the
-construct, state that the interpreter does not support it, and explain which
-compiled runtime facility it requires. They cannot rely on surrounding
-diagnostic rendering for meaning.
+Diagnostic presentation is not part of this boundary contract. Boundary
+messages must still name the construct, state that the evaluator does not
+support it, and explain which compiled runtime facility it requires. They
+cannot rely on surrounding rendering for meaning.
 
 ## Decision
 
 Constructs whose interpreter behavior requires real address identity —
 including pinning, stack allocation, unmanaged-pointer storage or dereference,
-and function-pointer execution — are **compiled-only**. `gsi` must report a
-self-contained boundary diagnostic instead of attempting a value-only
-approximation. Users who need these constructs must compile with `gsc`.
+and function-pointer execution — are **compiled-only in the tree evaluator**.
+Interactive `gsi --engine evaluator` must report a self-contained boundary
+diagnostic instead of attempting a value-only approximation. Since ADR-0156
+Phases 1–3a, all default drivers use emitted execution and run these constructs
+natively. The evaluator path is deprecated and scheduled for removal in
+Phase 3c.
 
 This ADR governs only the evaluator's storage-model boundary. It does not
 redefine unsafe/native language validity or CIL emission.
@@ -49,29 +53,29 @@ value operations continues to evaluate normally.
 
 The current implementation status is:
 
-| Construct | Current `gsi` behavior | Contract status |
+| Construct | Current tree-evaluator behavior | Contract status |
 |---|---|---|
 | `unsafe { ... }` without a storage-only construct | Evaluates normally | Supported |
-| `fixed` over array/slice, string, or a pinnable-reference source | Self-contained boundary diagnostic | Meets contract |
-| `stackalloc` | Self-contained boundary diagnostic | Meets contract |
-| `sizeof` requiring the CIL unmanaged-storage path | Self-contained boundary diagnostic | Meets contract |
-| `&Method` function pointer | Self-contained boundary diagnostic | Meets contract |
-| Function-pointer invocation | Self-contained boundary diagnostic | Meets contract |
-| Ref local alias (`let ref r = arr[i]`) | Re-evaluates the initializer at read time; silently wrong | Must alias a captured storage location; fixed by #3032 |
+| `fixed` over array/slice, string, or a pinnable-reference source | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| `stackalloc` | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| `sizeof` requiring the CIL unmanaged-storage path | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| `&Method` function pointer | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| Function-pointer invocation | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| Ref local alias (`let ref r = arr[i]`) | Aliases the captured storage location | Meets contract after #3032 |
 | `*p = value` | `GS0513` compiled-only boundary | Meets contract |
 | `*(p + 1)` | `GS0513` fires before pointer arithmetic is evaluated | Meets contract |
 | Free-standing `&x` followed by `*p` | `GS0513` compiled-only boundary | Meets contract |
 | Pointer arithmetic or comparison over copied values | May return coincidentally plausible results | Must become a boundary |
 
-The evaluator reports compiled-only storage boundaries through `GS0513` with
-exact, construct-specific messages. The conformance work in #2939 must classify
-that code as `IntentionalBoundary` and assert that each listed boundary fires;
-`GS9999` remains a failure.
+The evaluator reports unmanaged `&`/`*` storage boundaries through `GS0513`.
+The older construct-specific guards listed above still use self-contained
+messages carried by GS9999; #3199 tracks that diagnostic-classification gap.
+Outside those named legacy guards, `GS9999` remains a failure.
 
 ## Consequences
 
-- `gsi` does not promise compiled/interpreted parity for storage-dependent
-  unsafe constructs.
+- The tree evaluator does not promise parity for storage-dependent unsafe
+  constructs; default drivers use emitted execution.
 - Existing ref/out argument write-back at call sites remains supported; this
   does not provide stable ref-local aliasing.
 - Boundary tests pin non-zero exit status, empty standard output, and the

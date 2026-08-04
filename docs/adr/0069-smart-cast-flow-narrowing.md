@@ -327,8 +327,10 @@ Narrowing proved anew for each iteration remains valid. In particular,
 `while x != nil`, `while x is T`, and equivalent C-style loop conditions keep
 their condition-derived narrowing, while a guard or proven-non-null assignment
 inside the body may re-establish narrowing after an inherited narrowing is
-removed. This applies equally to function locals and top-level globals, so
-compiled top-level programs and `gsi` scripts use the same back-edge rules.
+removed. This applies equally to function locals and top-level globals. Since
+ADR-0156 Phase 3a, every default driver, including interactive `gsi`, uses the
+compiled back-edge rules. The `gsi --engine evaluator` escape hatch is
+deprecated and scheduled for removal in Phase 3c.
 
 Assignment precision is limited to plain storage whose identity the flow pass
 tracks directly: ordinary locals (including captured locals and `if let`

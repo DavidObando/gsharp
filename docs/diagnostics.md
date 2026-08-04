@@ -317,13 +317,16 @@ These diagnostics indicate a fatal compiler or evaluator failure. If you encount
 #### Interpreter compiled-only boundaries
 
 [ADR-0153](adr/0153-interpreter-compiled-only-storage-boundary.md) defines
-storage-dependent unsafe constructs as compiled-only. The clean boundary sites
-for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers currently
-surface through `GS0513` with a self-contained message naming the construct and
-the required CIL emit path. Evaluator `GS9999` diagnostics still indicate a
-defect. Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 1 the
-boundary applies only to the interactive REPL — `gsi <file>` and bare `gsc`
-execute emitted code, where these constructs run natively.
+storage-dependent unsafe constructs as compiled-only in the tree evaluator.
+Unmanaged `&`/`*` operations surface through `GS0513`. Older guards for
+`fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers still carry
+self-contained boundary messages through legacy `GS9999`; issue
+[#3199](https://github.com/DavidObando/gsharp/issues/3199) tracks moving those
+deliberate failures out of the internal-error category. Since
+[ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 3a the boundary
+applies only to direct tree evaluation and `gsi --engine evaluator`; all
+default drivers execute emitted code, where these constructs run natively.
+The evaluator path is deprecated and scheduled for removal in Phase 3c.
 
 ## Documentation diagnostics (GS0227–GS0231)
 

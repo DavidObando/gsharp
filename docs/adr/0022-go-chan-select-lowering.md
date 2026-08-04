@@ -9,7 +9,10 @@
 
 Per ADR-0002 (D2) GSharp adopts a **synthesis** concurrency model: a Go-shaped surface (`go`, `chan T`, `<-`, `select`) lowered onto .NET primitives, plus first-class `async`/`await` for direct BCL interop. This ADR fixes the lowering targets and the visible semantics that fall out of those choices, so item-by-item work in 5.3 – 5.7 has a single agreed contract.
 
-The interpreter is the source of truth (per the cross-cutting "authoritative-semantics rule"). This ADR therefore documents both:
+At the time of this decision, the interpreter was the project's semantic
+oracle. ADR-0156 later moved production file drivers and the conformance oracle
+to emitted execution. The evaluator backend is deprecated and scheduled for
+removal in ADR-0156 Phase 3c. This ADR still documents both backends:
 
 1. The Go-shaped surface the user sees.
 2. The .NET surface the interpreter (and, later, the emitter) lowers to.

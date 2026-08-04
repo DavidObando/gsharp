@@ -194,9 +194,15 @@ The emitted FNPTR signature is bit-compatible with the C# / Roslyn `delegate*` e
 
 ### 9. Interpreter behavior
 
-The interpreter does **not** perform actual native transitions for P/Invoke targets — for every P/Invoke target it runs the empty body the binder reserves and returns the declared return type's default value (consistent with ADR-0086 §7 / ADR-0092 §4 / ADR-0093 §8 / ADR-0094 §6). For Shape A the binder accepts the delegate parameter and the interpreter returns `default(R)` from the empty body without ever invoking the delegate. For Shape B the binder accepts the `FunctionPointerTypeSymbol` parameter / return and the interpreter again returns `default(R)` (zero `nint` for a Shape-B return) from the empty body.
+ADR-0152 supersedes the original empty-body/default-value behavior. Valid
+Shape A and Shape B declarations bind, then the tree evaluator reports GS0514
+before evaluation; it neither invokes the delegate nor fabricates `default(R)`.
+Binder diagnostics GS0353–GS0356 still take precedence. ADR-0156 default
+drivers emit and run the native transition. The evaluator is deprecated and
+scheduled for removal in Phase 3c.
 
-The interpreter test suite covers (a) Shape-A P/Invoke declarations bind without GS0353 / GS0354 / GS0355 diagnostics, (b) Shape-A delegate parameters evaluate to the default return value without invoking the delegate, (c) Shape-B `unmanaged[CC] (T) -> R` parameters and returns parse and bind, and (d) the GS0353 / GS0356 paths are reachable from the REPL.
+The interpreter test suite covers valid Shape A/Shape B declarations reaching
+GS0514 and invalid shapes reaching their binder diagnostics first.
 
 ### 10. Interaction with ADR-0086, ADR-0092, ADR-0093, ADR-0094
 
@@ -218,7 +224,9 @@ See §5. ADR-0086 §1 GS0323 continues to fire for every other unsupported funct
 - A single new `SyntaxKind` is added — `FunctionPointerType` — and surfaces in the CoverageMatrix golden snapshot.
 - The `EncodeTypeSymbol` emit-side fork adds one branch (FNPTR encoding via `SignatureTypeEncoder.FunctionPointer(...)`); every other emit path is unchanged.
 - `ilverify` is clean on the emitted assemblies. The ADR-0095 emit tests gate verification through `IlVerifier.Verify` exactly as the ADR-0086 / ADR-0092 / ADR-0093 / ADR-0094 emit tests do.
-- The interpreter accepts both shapes without crashing and continues to return the declared return type's default value — there is no managed-IL emit pipeline under the interpreter, so callback invocation does not actually flow through native (consistent with how `@DllImport` / `@LibraryImport` behave today). The only way to observe the callback being called by native code is via the compiler (`gsc`) emit path.
+- The tree evaluator accepts both declaration shapes, then reports GS0514
+  before execution. Default drivers use emitted execution, so callback
+  invocation can flow through native code there.
 - The remaining v1 P/Invoke gaps (issue #762 `@MarshalAs` custom marshallers, slices of structs, fixed-size buffers, direct `calli` invocation of `FunctionPointerTypeSymbol` values without a `Marshal.GetDelegateForFunctionPointer` round-trip) are unchanged. The direct-invocation gap in particular is the only foreseeable follow-up that would require a new `BoundNodeKind` and is deliberately deferred to a future ADR.
 
 ## Alternatives considered

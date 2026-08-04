@@ -162,7 +162,11 @@ Extension functions (ADR-0019) lower to a static method on `<Extensions>` with t
 
 The interpreter (`Evaluator`) gains a parallel "attribute table" keyed by GSharp symbol. Each binding records the resolved attribute type, the constructor arguments (as runtime `object?[]`), and the named-arguments dictionary. The interpreter exposes them through the same reflection-shaped facade it already uses for `MethodInfo` / `Type` mirrors — `GetCustomAttributes(typeof(T))` on an interpreter symbol returns the same materialised list the emit path would surface to a runtime caller. Compiler-recognised attributes (§6) are honoured at interpretation time identically to the compiled path: `[Conditional("DEBUG")]` elision, `[Obsolete]` diagnostics, `[EnumeratorCancellation]` threading.
 
-This keeps the ADR-0023 rule that the interpreter is the authoritative semantics for everything the language exposes.
+This originally followed the project's interpreter-authority convention.
+ADR-0156 later made emitted execution the production oracle; evaluator parity
+remains relevant only while direct `Compilation.Evaluate` consumers and the
+deprecated `gsi --engine evaluator` compatibility path remain. Phase 3c
+removes the evaluator.
 
 ### 10. Grammar additions (summary)
 

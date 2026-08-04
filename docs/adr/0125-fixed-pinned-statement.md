@@ -194,9 +194,11 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
   a nested lambda remains legal because that lambda has its own function body;
   normal fixed-pointer escape rules still prevent capturing the pointer.
 - `fixed` is compiled-only under
-  [ADR-0153](0153-interpreter-compiled-only-storage-boundary.md). `gsi` reports
-  that pinning requires the CIL pinned-local emit path; it does not attempt to
-  emulate pinning without a storage and address model.
+  [ADR-0153](0153-interpreter-compiled-only-storage-boundary.md). The deprecated
+  `gsi --engine evaluator` path reports that pinning requires the CIL
+  pinned-local emit path; it does not attempt to emulate pinning without a
+  storage and address model. Every default driver executes the emitted
+  pinned-local path. ADR-0156 Phase 3c removes the evaluator.
 - Deferred: fixed-size buffers.
 
 ## Diagnostics

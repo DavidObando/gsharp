@@ -1,9 +1,9 @@
 # ADR-0068: `deinit` destructor support for classes
 
-- **Status**: Accepted
+- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine boundary only; the `deinit` language and emission design remain accepted)
 - **Date**: 2026-06-11
 - **Phase**: Phase 9 — language depth / class destruction
-- **Related**: ADR-0003 (OO surface), ADR-0017 (method virtuality / `open`), ADR-0065 (class initializers and base invocation), ADR-0067 (fields require `var`/`let`), issue [#698](https://github.com/DavidObando/gsharp/issues/698)
+- **Related**: ADR-0003 (OO surface), ADR-0017 (method virtuality / `open`), ADR-0065 (class initializers and base invocation), ADR-0067 (fields require `var`/`let`), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issue [#698](https://github.com/DavidObando/gsharp/issues/698)
 
 ## Context
 
@@ -104,33 +104,42 @@ The compiler does **not** auto-generate either side of this pattern. It does not
 
 The `deinit` member is not a callable name. There is no `obj.deinit()`, no `this.deinit()`, and no `init(args)`-style delegation form. The synthesized `Finalize` method exists in metadata so the CLR runtime can invoke it, but the user-facing G# binder does not surface `deinit` as a member lookup name. Attempting `obj.deinit()` produces the standard "member not found" diagnostic.
 
-### Interpreter boundary
+### Execution-engine boundary (amended by ADR-0156)
 
-`deinit` requires CLR GC finalization and therefore runs only in emitted code.
-The interpreter has no emitted class with a `Finalize` override, and running
-the body at scope exit would incorrectly finalize objects that remain
-reachable. Interpreted execution reports warning **GS0510** once for each
-declaring class and skips its deinitializer. Compile with `gsc` when program
-behavior depends on finalization.
+`deinit` requires an emitted CLR type with a `Finalize` override. ADR-0156
+changed which invocations use that backend. Current routing is:
 
-Measurements against emitted CLR behavior establish the boundary:
-
-| Probe | `gsc` | `gsi` |
+| Invocation | Engine | Deinitializer behavior |
 |---|---|---|
-| Object dies in a function; collection forced | `made-22` / `deinit-11` / `body-33` | `made-22` / `body-33` |
-| Object dies in a function; no forced collection | `made-22` / `body-33` | `made-22` / `body-33` |
-| Object remains reachable at exit | no `deinit` | no `deinit` |
+| bare `gsc file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
+| `gsc /out:program.dll file.gs`, then run the assembly | emit to file, then CLR host | real CLR finalizer; no GS0510 |
+| `gsi file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
+| interactive `gsi` (default) | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
+| interactive `gsi --engine evaluator` (deprecated; removed in Phase 3c) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
 
-Scope-exit and shutdown execution are therefore both wrong. Matching CLR
-behavior requires tying finalization to `StructValue` lifetime and re-entering
-`Evaluator` from a finalizer thread, risking shutdown deadlock and
-timing-dependent output that golden-sample comparison cannot pin.
+The old two-column `gsc`/`gsi` table made object reachability appear to be the
+discriminating axis. It is not. Driving the legacy evaluator-backed
+`SessionEngine` across the old rows produces the same boundary regardless of
+liveness:
 
-GS0510 is a warning because the CLR does not guarantee that a finalizer runs;
-the interpreted program can still complete with an omitted GC-scheduled side
-effect. In contrast, unsafe storage and P/Invoke boundaries are errors because
-interpreted execution cannot proceed correctly without emitted storage or
-would fabricate a deterministic native return value.
+| Evaluator probe | Output | GS0510 |
+|---|---|---:|
+| object dies in a function; collection forced | `made-22` / `body-33` | 1 |
+| object dies in a function; no forced collection | `made-22` / `body-33` | 1 |
+| object remains reachable; collection forced | `made-22` / `body-33` / `kept` | 1 |
+
+The discriminating axis is the execution engine. Emitted execution delegates
+lifetime to the CLR; the tree evaluator has no emitted `Finalize` override and
+does not invent scope-exit cleanup. GS0510 remains a warning on that evaluator
+surface because the program can complete while omitting a nondeterministic
+GC-scheduled side effect.
+
+Matching CLR behavior requires tying finalization to `StructValue` lifetime
+and re-entering `Evaluator` from a finalizer thread, risking shutdown deadlock
+and timing-dependent output that golden-sample comparison cannot pin. In
+contrast, unsafe storage and P/Invoke boundaries are errors because interpreted
+execution cannot proceed correctly without emitted storage or would fabricate a
+deterministic native return value.
 
 ## Considered alternatives
 
@@ -162,4 +171,7 @@ Two new diagnostics are allocated:
 
 ## Status
 
-Accepted; implemented in the same PR as this ADR.
+The `deinit` language and emission design remain accepted. ADR-0156 partially
+supersedes only this ADR's original driver-boundary model: all default drivers
+now emit, while the deprecated evaluator compatibility path retains GS0510
+until its Phase 3c removal.
