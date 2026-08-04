@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -94,9 +95,7 @@ public class Issue1194FieldAndCtorInitializerScopeTests
 
     private static IEnumerable<Diagnostic> GetDiagnostics(string source)
     {
-        var tree = SyntaxTree.Parse(source);
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
         return result.Diagnostics.ToList();
     }
 }
