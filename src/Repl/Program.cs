@@ -98,7 +98,21 @@ public static class Program
         try
         {
             var compilation = new Compilation(resolver, tree);
-            var result = EmittedProgramHost.Run(compilation, references);
+            EmittedProgramResult result;
+            try
+            {
+                result = EmittedProgramHost.Run(compilation, references);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            {
+                // 6.2 SilentEmitFailure invariant, gsi edition: a compiler
+                // exception that escapes the emit pipeline (e.g. #3183) must
+                // surface as gsc's canonical GS9998 line rather than a raw
+                // driver crash. User-code exceptions never reach here — the
+                // host reports those via UnhandledException below.
+                Console.Error.WriteLine($"{scriptPath}(1,1,1,1): error GS9998: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
             if (result.Diagnostics.Any())
             {
                 Console.Error.WriteDiagnostics(result.Diagnostics);
