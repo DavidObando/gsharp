@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
+    <Compile Include="..\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />
     <Compile Include="..\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />
   </ItemGroup>
 
