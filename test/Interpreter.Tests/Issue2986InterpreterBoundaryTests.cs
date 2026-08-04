@@ -435,44 +435,11 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal(string.Empty, cell.Output);
     }
 
-    [Fact]
-    public void PInvokeInstanceDispatch_DefensiveGuardReportsGS0514()
-    {
-        var compilation = new Compilation(
-            SyntaxTree.Parse(
-                """
-                import System.Runtime.InteropServices
-
-                @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
-                func NativeStrLen(text string) nint;
-
-                class Holder {
-                    func CallNative() nint {
-                        return 0
-                    }
-                }
-
-                let holder = Holder()
-                holder.CallNative()
-                """));
-        var native = compilation.BoundProgram.Functions.Keys.Single(static f => f.Name == "NativeStrLen");
-        var method = compilation.BoundProgram.Functions.Keys.Single(static f => f.Name == "CallNative");
-        method.PInvokeMetadata = native.PInvokeMetadata;
-        var evaluator = new Evaluator(
-            compilation.BoundProgram,
-            new Dictionary<VariableSymbol, object>());
-
-        var exception = Assert.Throws<EvaluatorException>(() => evaluator.Evaluate());
-
-        Assert.Equal("GS0514", exception.DiagnosticId);
-        Assert.Equal(6, exception.Location?.StartLine);
-    }
-
     /// <summary>
-    /// ADR-0156 Phase 1: script-mode <c>gsi</c> executes emitted code, so the
+    /// ADR-0156 Phase 3a: script-mode <c>gsi</c> executes emitted code, so the
     /// ADR-0152 native-call boundary (GS0514) no longer applies to file mode —
     /// the P/Invoke sample calls straight into libc and prints its golden
-    /// output. GS0514 remains an interactive-REPL boundary (tests above).
+    /// output. GS0514 remains a deprecated evaluator-engine boundary (tests above).
     /// </summary>
     [Fact]
     public void BatchFileRunner_ExecutesPInvokeNatively()
