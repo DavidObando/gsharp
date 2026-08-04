@@ -3,8 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Repl;
 using GSharp.Repl.Engine;
 using Xunit;
@@ -263,7 +268,7 @@ public class Issue2986InterpreterBoundaryTests
     [Fact]
     public void PInvokeGoThroughWrapper_ReportsGS0514()
     {
-        AssertPInvokeUseRejected(
+        var diagnostic = AssertPInvokeUseRejected(
             """
             func CallNative() nint {
                 return NativeStrLen("Hello")
@@ -272,6 +277,101 @@ public class Issue2986InterpreterBoundaryTests
             go CallNative()
             Console.WriteLine("body-33")
             """);
+
+        Assert.Equal(9, diagnostic.Location.StartLine);
+    }
+
+    [Theory]
+    [InlineData(
+        "instance method",
+        """
+        class Holder {
+            func CallNative() nint {
+                return NativeStrLen("Hello")
+            }
+        }
+
+        let holder = Holder()
+        go holder.CallNative()
+        Console.WriteLine("body-33")
+        """)]
+    [InlineData(
+        "constructor",
+        """
+        class Holder {
+            init() {
+                NativeStrLen("Hello")
+            }
+        }
+
+        func CreateHolder() Holder {
+            return Holder()
+        }
+
+        go CreateHolder()
+        Console.WriteLine("body-33")
+        """)]
+    public void PInvokeGoThroughUserDispatch_ReportsGS0514(string _, string body)
+    {
+        var diagnostic = AssertPInvokeUseRejected(body);
+        Assert.Equal(10, diagnostic.Location.StartLine);
+    }
+
+    [Theory]
+    [InlineData(
+        "instance method",
+        """
+        class Holder {
+            func CallNative() nint {
+                return NativeStrLen("Hello")
+            }
+        }
+
+        let holder = Holder()
+        scope {
+            go holder.CallNative()
+        }
+        Console.WriteLine("body-33")
+        """)]
+    [InlineData(
+        "constructor",
+        """
+        class Holder {
+            init() {
+                NativeStrLen("Hello")
+            }
+        }
+
+        func CreateHolder() Holder {
+            return Holder()
+        }
+
+        scope {
+            go CreateHolder()
+        }
+        Console.WriteLine("body-33")
+        """)]
+    public void PInvokeScopedGoThroughUserDispatch_ReportsGS0514(string _, string body)
+    {
+        var diagnostic = AssertPInvokeUseRejected(body);
+        Assert.Equal(10, diagnostic.Location.StartLine);
+    }
+
+    [Fact]
+    public void PInvokeDeclarationWithFreeGo_IsConservativelyRejected()
+    {
+        var diagnostic = AssertPInvokeUseRejected(
+            """
+            func Managed() int32 {
+                return 33
+            }
+
+            go Managed()
+            Console.WriteLine("body-33")
+            """);
+
+        Assert.Equal(12, diagnostic.Location.StartLine);
+        Assert.Contains("NativeStrLen", diagnostic.Message);
     }
 
     [Fact]
@@ -335,6 +435,39 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal(string.Empty, cell.Output);
     }
 
+    [Fact]
+    public void PInvokeInstanceDispatch_DefensiveGuardReportsGS0514()
+    {
+        var compilation = new Compilation(
+            SyntaxTree.Parse(
+                """
+                import System.Runtime.InteropServices
+
+                @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+                func NativeStrLen(text string) nint;
+
+                class Holder {
+                    func CallNative() nint {
+                        return 0
+                    }
+                }
+
+                let holder = Holder()
+                holder.CallNative()
+                """));
+        var native = compilation.BoundProgram.Functions.Keys.Single(static f => f.Name == "NativeStrLen");
+        var method = compilation.BoundProgram.Functions.Keys.Single(static f => f.Name == "CallNative");
+        method.PInvokeMetadata = native.PInvokeMetadata;
+        var evaluator = new Evaluator(
+            compilation.BoundProgram,
+            new Dictionary<VariableSymbol, object>());
+
+        var exception = Assert.Throws<EvaluatorException>(() => evaluator.Evaluate());
+
+        Assert.Equal("GS0514", exception.DiagnosticId);
+        Assert.Equal(6, exception.Location?.StartLine);
+    }
+
     /// <summary>
     /// ADR-0156 Phase 1: script-mode <c>gsi</c> executes emitted code, so the
     /// ADR-0152 native-call boundary (GS0514) no longer applies to file mode —
@@ -378,7 +511,7 @@ public class Issue2986InterpreterBoundaryTests
         }
     }
 
-    private static void AssertPInvokeUseRejected(string body)
+    private static Diagnostic AssertPInvokeUseRejected(string body)
     {
         var source = """
             import System
@@ -398,6 +531,7 @@ public class Issue2986InterpreterBoundaryTests
         Assert.Equal("GS0514", diagnostic.Id);
         Assert.Equal("use.gs", diagnostic.Location.FileName);
         Assert.Equal(string.Empty, cell.Output);
+        return diagnostic;
     }
 
     private static string LocateSample(string fileName)

@@ -353,6 +353,8 @@ public sealed partial class Evaluator
             }
         }
 
+        RejectPInvoke(method, node);
+
         var frame = new ConcurrentDictionary<VariableSymbol, object>
         {
             [method.ThisParameter] = receiverValue,

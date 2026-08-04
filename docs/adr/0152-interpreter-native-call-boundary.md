@@ -44,8 +44,11 @@ exception's runtime type.
 
 ADR-0022 discards unhandled *runtime exceptions* from a free-standing `go`
 task. GS0514 is not a runtime exception. Before scheduling such a task, the
-evaluator follows its user-function and closure call graph and rejects any
-reachable P/Invoke use synchronously. Scoped goroutines propagate the same
+evaluator follows its statically resolvable user-function and closure call
+graph and rejects any reachable P/Invoke use synchronously. If that scan does
+not identify a specific native call but the compilation declares P/Invoke, the
+evaluator conservatively refuses the free-standing goroutine; its unobserved
+task offers no later diagnostic backstop. Scoped goroutines propagate the same
 control signal through their awaited task. Static initialization likewise
 preserves the signal instead of replacing it with `TypeInitializationException`
 and GS9999.
@@ -63,7 +66,8 @@ is deprecated and scheduled for removal in Phase 3c.
 - User `catch`, static initialization, free-standing `go`, and scoped `go`
   cannot translate or swallow GS0514.
 - Programs may declare P/Invoke functions under interpretation when execution
-  never calls or references them.
+  never calls or references them, except that free-standing goroutines in the
+  same compilation are conservatively refused.
 - Default drivers run P/Invoke through emitted CLR execution; native calls are
   unavailable only on the deprecated evaluator path.
 - `GS9999` remains an unexpected evaluator-exception diagnostic, not a

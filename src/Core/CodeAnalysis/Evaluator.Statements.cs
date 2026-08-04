@@ -422,9 +422,13 @@ public sealed partial class Evaluator
     {
         var finder = new PInvokeReachabilityWalker(this);
         finder.VisitExpression(expression);
-        if (finder.Function != null)
+
+        // A fire-and-forget task cannot return a later evaluator diagnostic,
+        // so a scan without a precise hit falls back to any declared P/Invoke.
+        var function = finder.Function ?? program.Functions.Keys.FirstOrDefault(static f => f.IsPInvoke);
+        if (function != null)
         {
-            RejectPInvoke(finder.Function, finder.Node);
+            RejectPInvoke(function, finder.Node ?? expression);
         }
     }
 
@@ -891,26 +895,23 @@ public sealed partial class Evaluator
                 return;
             }
 
-            base.VisitExpression(node);
-        }
-
-        protected override void VisitCallExpression(BoundCallExpression node)
-        {
-            if (Find(node.Function, node))
+            if (TryGetFunction(node, out var function))
             {
+                if (Find(function, node))
+                {
+                    return;
+                }
+
+                base.VisitExpression(node);
+                if (node is not BoundMethodGroupExpression and not BoundFunctionPointerFromMethodExpression)
+                {
+                    VisitFunction(function);
+                }
+
                 return;
             }
 
-            base.VisitCallExpression(node);
-            VisitFunction(node.Function);
-        }
-
-        protected override void VisitMethodGroupExpression(BoundMethodGroupExpression node)
-        {
-            if (!Find(node.Function, node))
-            {
-                base.VisitMethodGroupExpression(node);
-            }
+            base.VisitExpression(node);
         }
 
         protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
@@ -931,6 +932,24 @@ public sealed partial class Evaluator
             {
                 VisitFunction(closure.Function, closure.Body);
             }
+        }
+
+        private static bool TryGetFunction(BoundExpression node, out FunctionSymbol function)
+        {
+            function = node switch
+            {
+                BoundCallExpression call => call.Function,
+                BoundMethodGroupExpression methodGroup => methodGroup.Function,
+                BoundUserInstanceCallExpression call => call.Method,
+                BoundBaseClassCallExpression call => call.Method,
+                BoundBaseInterfaceCallExpression call => call.Method,
+                BoundConstrainedStaticCallExpression call => call.InterfaceMethod,
+                BoundFunctionPointerFromMethodExpression pointer => pointer.Method,
+                BoundClrBinaryOperatorExpression binary => binary.Function,
+                BoundConstructorCallExpression constructor => constructor.SelectedConstructor?.Function,
+                _ => null,
+            };
+            return function != null;
         }
 
         private bool Find(FunctionSymbol function, BoundNode node)
