@@ -34,6 +34,21 @@ Handled shapes (everything else is left untouched and reported as residue):
            lines (dedented out of the deleted try) + `return
            result.Output.Replace(...)` on the oracle's captured stream.
 
+  T6  guarded statement form (Phase 3b.1 extension):
+        var <t> = SyntaxTree.Parse(<src>);
+        var <c> = new Compilation(<t>);
+        var <r> = <c>.Evaluate(new Dictionary<VariableSymbol, object>());
+        -> var <r> = EmittedOracle.Evaluate(<src>);
+      applied ONLY when neither <t> nor <c> is referenced again before the
+      enclosing block closes (binder-inspection tests that keep using the
+      Compilation object are left as residue on purpose).
+
+  Phase 3b.1 generalizations (Core.Tests bulk): the tree/compilation local
+  names are arbitrary identifiers, the empty-dictionary argument may be
+  namespace-qualified, T2 accepts a trailing member tail (e.g. `.Diagnostics`)
+  and the two-line `return new Compilation(<t>).Evaluate(...)` /
+  `var <c> = new Compilation(SyntaxTree.Parse(...));` folds.
+
 Usage:
   build/migrate-emitted-oracle.py [--dry-run] FILE [FILE ...]
 
@@ -51,18 +66,45 @@ import sys
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
 # SyntaxTree.Parse(x) / SyntaxTree.Parse(SourceText.From(x)) where x is an
-# identifier or a simple string-concatenation expression without parens.
-PARSE_ARG = rf"(?:SourceText\.From\((?P<arg1>[^()]+)\)|(?P<arg2>{IDENT}))"
+# identifier or a simple comma-free expression (string concatenation) without
+# parens; a comma would smuggle a second SourceText.From argument into the
+# rewritten EmittedOracle.Evaluate call, so it is excluded.
+PARSE_ARG = rf"(?:SourceText\.From\((?P<arg1>[^(),]+)\)|(?P<arg2>{IDENT}))"
+
+# The empty variables dictionary, optionally namespace-qualified on either the
+# collection type or the VariableSymbol type argument.
+EMPTY_DICT = (
+    r"new (?:System\.Collections\.Generic\.)?"
+    r"Dictionary<(?:[A-Za-z0-9_.]+\.)?VariableSymbol, object>\(\)"
+)
 
 T1_INLINE = re.compile(
     rf"new Compilation\(SyntaxTree\.Parse\({PARSE_ARG}\)\)\s*\n?\s*"
-    r"\.Evaluate\(new Dictionary<VariableSymbol, object>\(\)\)",
+    rf"\.Evaluate\({EMPTY_DICT}\)",
 )
 
 T2_BLOCK = re.compile(
-    rf"var tree = SyntaxTree\.Parse\({PARSE_ARG}\);\s*\n"
-    r"(?P<indent>[ \t]*)var compilation = new Compilation\(tree\);\s*\n"
-    r"[ \t]*return compilation\.Evaluate\(new Dictionary<VariableSymbol, object>\(\)\);",
+    rf"var (?P<tv>{IDENT}) = SyntaxTree\.Parse\({PARSE_ARG}\);\s*\n"
+    rf"[ \t]*var (?P<cv>{IDENT}) = new Compilation\((?P=tv)\);\s*\n"
+    rf"[ \t]*return (?P=cv)\.Evaluate\({EMPTY_DICT}\)(?P<tail>[^;\n]*);",
+)
+
+# Two-line fold: the Compilation is constructed inside the return statement.
+T2_FOLD_RETURN = re.compile(
+    rf"var (?P<tv>{IDENT}) = SyntaxTree\.Parse\({PARSE_ARG}\);\s*\n"
+    rf"[ \t]*return new Compilation\((?P=tv)\)\.Evaluate\({EMPTY_DICT}\)(?P<tail>[^;\n]*);",
+)
+
+# Two-line fold: the parse happens inside the Compilation constructor call.
+T2_FOLD_PARSE = re.compile(
+    rf"var (?P<cv>{IDENT}) = new Compilation\(SyntaxTree\.Parse\({PARSE_ARG}\)\);\s*\n"
+    rf"[ \t]*return (?P=cv)\.Evaluate\({EMPTY_DICT}\)(?P<tail>[^;\n]*);",
+)
+
+T6_STATEMENT = re.compile(
+    rf"(?P<ind>[ \t]*)var (?P<tv>{IDENT}) = SyntaxTree\.Parse\({PARSE_ARG}\);\s*\n"
+    rf"[ \t]*var (?P<cv>{IDENT}) = new Compilation\((?P=tv)\);\s*\n"
+    rf"[ \t]*var (?P<rv>{IDENT}) = (?P=cv)\.Evaluate\({EMPTY_DICT}\);",
 )
 
 T3_RETYPE = re.compile(
@@ -88,13 +130,13 @@ T5_CONSOLE_HELPER = re.compile(
     r"(?P<cmp>, StringComparison\.Ordinal)?\);",
 )
 
-RESIDUE = re.compile(r"\.Evaluate\((?:new Dictionary<VariableSymbol, object>\(\)|variables)")
+RESIDUE = re.compile(rf"\.Evaluate\((?:{EMPTY_DICT}|variables\b|vars\b)")
 
 USING_LINE = re.compile(r"^using (?P<ns>[A-Za-z0-9_.]+);\s*$", re.MULTILINE)
 
 
 def rewrite(text: str) -> tuple[str, dict[str, int]]:
-    counts = {"T1": 0, "T2": 0, "T3": 0, "T4": 0, "T5": 0}
+    counts = {"T1": 0, "T2": 0, "T3": 0, "T4": 0, "T5": 0, "T6": 0}
 
     def t1(match: re.Match) -> str:
         counts["T1"] += 1
@@ -102,7 +144,8 @@ def rewrite(text: str) -> tuple[str, dict[str, int]]:
 
     def t2(match: re.Match) -> str:
         counts["T2"] += 1
-        return f"return EmittedOracle.Evaluate({match.group('arg1') or match.group('arg2')});"
+        source = match.group("arg1") or match.group("arg2")
+        return f"return EmittedOracle.Evaluate({source}){match.group('tail')};"
 
     def t3(match: re.Match) -> str:
         counts["T3"] += 1
@@ -128,6 +171,9 @@ def rewrite(text: str) -> tuple[str, dict[str, int]]:
     text = T5_CONSOLE_HELPER.sub(t5, text)
     text = T1_INLINE.sub(t1, text)
     text = T2_BLOCK.sub(t2, text)
+    text = T2_FOLD_RETURN.sub(t2, text)
+    text = T2_FOLD_PARSE.sub(t2, text)
+    text = apply_t6(text, counts)
     text = T3_RETYPE.sub(t3, text)
 
     if "EmittedOracle" in text and "using GSharp.Tests;" not in text and "namespace GSharp.Tests" not in text:
@@ -135,6 +181,37 @@ def rewrite(text: str) -> tuple[str, dict[str, int]]:
         counts["T4"] += 1
 
     return text, counts
+
+
+def apply_t6(text: str, counts: dict[str, int]) -> str:
+    """Rewrite guarded `var <r> = <c>.Evaluate(...)` statement triples.
+
+    Each candidate is applied only when neither the tree nor the compilation
+    local is referenced again before the enclosing block closes, so
+    binder-inspection tests that keep using the Compilation object are left
+    untouched (reported as residue).
+    """
+    pieces = []
+    pos = 0
+    for match in T6_STATEMENT.finditer(text):
+        if match.start() < pos:
+            continue
+
+        indent = match.group("ind")
+        outer = indent[:-4] if len(indent) >= 4 else ""
+        close = text.find("\n" + outer + "}", match.end())
+        span = text[match.end(): close if close != -1 else len(text)]
+        if re.search(rf"\b(?:{match.group('tv')}|{match.group('cv')})\b", span):
+            continue
+
+        source = match.group("arg1") or match.group("arg2")
+        pieces.append(text[pos: match.start()])
+        pieces.append(f"{indent}var {match.group('rv')} = EmittedOracle.Evaluate({source});")
+        pos = match.end()
+        counts["T6"] += 1
+
+    pieces.append(text[pos:])
+    return "".join(pieces)
 
 
 def insert_using(text: str, namespace: str) -> str:
