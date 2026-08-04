@@ -11,7 +11,14 @@ using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issue #2986: explicit interpreter native-call boundary.</summary>
+/// <summary>
+/// Issue #2986: explicit interpreter native-call boundary (GS0514).
+/// ADR-0156 Phase 3a: the interactive cells here pin the LEGACY tree-walking
+/// evaluator engine, constructed explicitly as <see cref="SessionEngine"/> —
+/// never the interactive default, which is now the emitted engine where
+/// P/Invoke runs natively. These evaluator-pinned tests retire with the
+/// deprecated <c>--engine evaluator</c> escape hatch in Phase 3c.
+/// </summary>
 [Collection("ConsoleIo")]
 public class Issue2986InterpreterBoundaryTests
 {

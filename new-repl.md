@@ -1,5 +1,12 @@
 # Plan: a modern TUI REPL to replace `Interpreter.csproj`
 
+> **Historical note (2026-08):** this plan shipped as `src/Repl`. Its eval
+> core has since moved on: per [ADR-0156](docs/adr/0156-gsi-emit-to-memory-execution.md)
+> Phase 3a the interactive default engine is the emitted submission-chaining
+> `EmittedSessionEngine`, not the `Compilation.ContinueWith`/`Evaluate`
+> `SessionEngine` described below (which survives only behind the deprecated
+> `--engine evaluator` escape hatch until Phase 3c).
+
 ## 1. Goal
 
 Replace the current console REPL (`src/Interpreter`) with a brand-new, full-screen,

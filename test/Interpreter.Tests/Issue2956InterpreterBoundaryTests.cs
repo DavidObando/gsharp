@@ -14,8 +14,9 @@ namespace GSharp.Interpreter.Tests;
 /// used to reject with self-contained boundary diagnostics (<c>fixed</c>,
 /// <c>stackalloc</c>, <c>sizeof</c> on user structs, function pointers) now
 /// compile through the real emitter and run in-process, so each case asserts
-/// the construct's observable result instead of a refusal. The ADR-0153
-/// boundary remains in force for the interactive REPL, which still evaluates
+/// the construct's observable result instead of a refusal. Since Phase 3a the
+/// interactive REPL default is emitted too; the ADR-0153 boundary remains in
+/// force only under the deprecated <c>--engine evaluator</c> escape hatch
 /// (see <c>Issue3004PointerBoundaryInterpreterTests</c>).
 /// </summary>
 [Collection("ConsoleIo")]

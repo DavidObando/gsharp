@@ -207,8 +207,10 @@ public sealed class EmittedSessionEngineParityTests
     /// engine's chained scopes surface BOTH declarations as overloads, so the
     /// call reports an ambiguity and the redefined function is uncallable;
     /// the emitted engine gives clean newest-wins shadowing (the Roslyn
-    /// interactive model). When the emitted engine becomes the default, the
-    /// evaluator half of this test retires with it.
+    /// interactive model). Phase 3a made the emitted engine the interactive
+    /// default; both halves keep selecting their engine EXPLICITLY while the
+    /// deprecated <c>--engine evaluator</c> escape hatch exists, and the
+    /// evaluator half retires with it in Phase 3c.
     /// </summary>
     [Fact]
     public void RedefinedFunctionCallDivergesByDesign()
@@ -234,9 +236,11 @@ public sealed class EmittedSessionEngineParityTests
     /// methods against a COPY of the receiver, so the mutation is lost — even
     /// within a single cell — while the emitted engine passes the global's
     /// real address (`ldsflda`) as the receiver, so the mutation persists,
-    /// matching what the same program compiled by `gsc` does. When the
-    /// emitted engine becomes the default, the evaluator half of this test
-    /// retires with it.
+    /// matching what the same program compiled by `gsc` does. Phase 3a made
+    /// the emitted engine the interactive default; both halves keep selecting
+    /// their engine EXPLICITLY while the deprecated <c>--engine evaluator</c>
+    /// escape hatch exists, and the evaluator half retires with it in
+    /// Phase 3c.
     /// </summary>
     [Fact]
     public void StructMethodReceiverMutationDivergesByDesign()

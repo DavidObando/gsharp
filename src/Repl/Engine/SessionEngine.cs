@@ -21,6 +21,10 @@ namespace GSharp.Repl.Engine;
 /// <summary>
 /// Owns the incremental compilation state and the transcript of evaluated cells.
 /// Replaces the eval core of the old <c>GSharpRepl</c> without any console output.
+/// ADR-0156 Phase 3a: no longer the interactive default — the tree-walking
+/// evaluator behind this engine is reachable only via the deprecated
+/// <c>--engine evaluator</c> / <c>GSI_ENGINE=evaluator</c> escape hatch and
+/// retires with it in Phase 3c.
 /// </summary>
 public sealed class SessionEngine : ISessionEngine
 {

@@ -1,6 +1,6 @@
 # Emit pipeline
 
-GSharp has two execution backends. The interpreter (`Evaluator`) walks the bound tree in-process and is what powers the REPL and most language tests. The emit pipeline produces standalone managed PEs that load and run under any compatible .NET runtime. This document describes the emit pipeline only; the interpreter remains the canonical reference for language semantics, but compiling to disk is now the production path for `dotnet build`.
+GSharp has two execution backends. The emit pipeline produces managed PEs — written to disk by `dotnet build`/`gsc /out:`, or loaded straight from memory by the in-process drivers ([ADR-0156](adr/0156-gsi-emit-to-memory-execution.md)) — and since ADR-0156 Phase 3a it is the execution path for every driver by default, including the interactive REPL. The interpreter (`Evaluator`) walks the bound tree in-process; it survives only behind gsi's deprecated `--engine evaluator` escape hatch and as the `Compilation.Evaluate` oracle in many language tests, and it retires in ADR-0156 Phase 3c. This document describes the emit pipeline only.
 
 ```
 .gs source ──► Lexer ──► Parser ──► Syntax tree
@@ -157,7 +157,7 @@ The emit path does **not** depend on Roslyn — `ReflectionMetadataEmitter` writ
 
 ## Interpreter vs. emit
 
-The in-process `Evaluator` remains the canonical reference for language semantics and is still the default execution backend for the REPL and most language tests. The emit pipeline mirrors its lowering behavior for any construct it supports; if the two ever disagree, the interpreter is treated as authoritative. Both paths share the `Binder`, `BoundProgram`, and lowering stages — only the final code-generation step differs.
+Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) the emitted pipeline is the execution backend for every driver by default — `gsc`, `gsi <file>` (Phase 1), and the interactive REPL (Phases 2–3a). The in-process `Evaluator` remains reachable only via gsi's deprecated `--engine evaluator` escape hatch and as the `Compilation.Evaluate` oracle in existing language tests; where the two disagree, the emitted semantics are authoritative (evaluator/emit divergence is the bug class ADR-0156 retires), and the evaluator is deleted in Phase 3c. Both paths share the `Binder`, `BoundProgram`, and lowering stages — only the final code-generation step differs.
 
 ## File map
 

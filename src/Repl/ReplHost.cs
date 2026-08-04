@@ -15,7 +15,13 @@ namespace GSharp.Repl;
 /// <summary>Owns the alt-screen lifecycle and the AppShell. Restores the terminal on exit.</summary>
 public static class ReplHost
 {
-    public static int Run() => Run(new SessionEngine());
+    /// <summary>
+    /// Runs the interactive TUI over the default engine — the emitted
+    /// submission-chaining <see cref="EmittedSessionEngine"/> (ADR-0156
+    /// Phase 3a).
+    /// </summary>
+    /// <returns>The process exit code.</returns>
+    public static int Run() => Run(new EmittedSessionEngine());
 
     /// <summary>
     /// Runs the interactive TUI over the given evaluation engine (ADR-0156

@@ -10,9 +10,10 @@ using System.Threading.Tasks;
 namespace GSharp.Repl.Engine;
 
 /// <summary>
-/// The evaluation engine surface the interactive TUI drives (ADR-0156
-/// Phase 2): the historical tree-walking <see cref="SessionEngine"/> and the
-/// emitted submission-chaining <see cref="EmittedSessionEngine"/> both
+/// The evaluation engine surface the interactive TUI drives (ADR-0156): the
+/// emitted submission-chaining <see cref="EmittedSessionEngine"/> (the
+/// interactive default since Phase 3a) and the legacy tree-walking
+/// <see cref="SessionEngine"/> (deprecated escape hatch until Phase 3c) both
 /// implement it, so the REPL screen is engine-agnostic.
 /// </summary>
 public interface ISessionEngine

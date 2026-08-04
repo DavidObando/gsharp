@@ -22,7 +22,8 @@ using GSharp.Core.CodeAnalysis.Text;
 namespace GSharp.Repl.Engine;
 
 /// <summary>
-/// The emitted submission-chaining REPL engine (ADR-0156 Phase 2): every
+/// The emitted submission-chaining REPL engine (ADR-0156 Phase 2; the
+/// interactive default since Phase 3a): every
 /// submission compiles with the real emitter into an in-memory assembly
 /// (<c>gsi$N</c>) that binds against all prior submissions' assemblies, loads
 /// into one session-wide collectible <see cref="System.Runtime.Loader.AssemblyLoadContext"/>,

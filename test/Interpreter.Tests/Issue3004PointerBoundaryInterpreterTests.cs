@@ -9,7 +9,13 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #3004: unmanaged pointer evaluation must fail loudly without breaking
-/// managed-byref auto-dereference used by ordinary CLR members.
+/// managed-byref auto-dereference used by ordinary CLR members (GS0513,
+/// ADR-0153). ADR-0156 Phase 3a: the interactive cells here pin the LEGACY
+/// tree-walking evaluator engine, constructed explicitly as
+/// <see cref="SessionEngine"/> — never the interactive default, which is now
+/// the emitted engine where the compiled storage model runs natively. These
+/// evaluator-pinned tests retire with the deprecated
+/// <c>--engine evaluator</c> escape hatch in Phase 3c.
 /// </summary>
 public class Issue3004PointerBoundaryInterpreterTests
 {
