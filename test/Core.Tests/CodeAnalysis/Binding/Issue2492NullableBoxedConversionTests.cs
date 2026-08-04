@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -105,10 +106,8 @@ public sealed class Issue2492NullableBoxedConversionTests
         Assert.Equal(3, diagnostics.Count(d => d.Id == "GS0155"));
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree) { IsLibrary = true };
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
     }
 }

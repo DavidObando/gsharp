@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -81,9 +82,7 @@ class C { func F() int32 { return Box[int32].Make(5) } }
 
     private static IReadOnlyList<Diagnostic> GetDiagnostics(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree) { IsLibrary = true };
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
         return result.Diagnostics;
     }
 }

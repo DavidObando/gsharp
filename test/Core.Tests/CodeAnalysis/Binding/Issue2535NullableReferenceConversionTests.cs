@@ -9,6 +9,7 @@ using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -22,7 +23,12 @@ public sealed class Issue2535NullableReferenceConversionTests
     [Fact]
     public void CovariantImplementedInterfaceLiftsThroughReferenceNullability()
     {
-        var result = Evaluate("""
+        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
+        // emitter cannot lower the covariant interface lift through
+        // reference nullability yet (issue #3236: NotSupportedException
+        // "Conversion from 'Service' to 'IService[object?]?'"); realigns
+        // with that issue's resolution.
+        var result = EvaluateWithEvaluator("""
             interface IService[out T] {}
             class Service : IService[object] {}
 
@@ -60,7 +66,13 @@ public sealed class Issue2535NullableReferenceConversionTests
         Assert.Equal(3, result.Diagnostics.Count());
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
+    {
+        return EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
+    }
+
+    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3236-pinned test.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
     {
         var tree = GsSyntaxTree.Parse(SourceText.From(source));
         var compilation = new GsCompilation(tree) { IsLibrary = true };

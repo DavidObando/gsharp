@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -118,12 +119,17 @@ func Sink[T Animal](x T?) object? -> x
     {
         // Not special-cased to `object`: the reference conversion also reaches
         // the base-class constraint target.
+        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
+        // emitter cannot lower the constrained nullable type parameter to
+        // its nullable base yet (issue #3236: NotSupportedException
+        // "Conversion from 'T?' to 'Animal?'"); realigns with that issue's
+        // resolution.
         var source = @"
 package p
 class Animal { init() {} }
 func Sink[T Animal](x T?) Animal? -> x
 ";
-        Assert.Empty(Evaluate(source).Diagnostics);
+        Assert.Empty(EvaluateWithEvaluator(source).Diagnostics);
     }
 
     [Fact]
@@ -197,7 +203,13 @@ class C {
         Assert.Empty(Evaluate(source).Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
+    {
+        return EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
+    }
+
+    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3236-pinned test.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree) { IsLibrary = true };
