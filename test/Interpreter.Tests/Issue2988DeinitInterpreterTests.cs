@@ -125,7 +125,7 @@ public class Issue2988DeinitInterpreterTests
     }
 
     [Fact]
-    public void ForcedCollectionSkipsDeinitializerAndWarnsOnce()
+    public void ReachableInstanceReportsGS0510WithoutRunningDeinitializer()
     {
         var source = """
             import System
