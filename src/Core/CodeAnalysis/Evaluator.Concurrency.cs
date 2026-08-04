@@ -123,7 +123,7 @@ public sealed partial class Evaluator
         switch (pattern.Kind)
         {
             case BoundNodeKind.ConstantPattern:
-                return object.Equals(value, EvaluateExpression(((BoundConstantPattern)pattern).Value));
+                return NumericEquals(value, EvaluateExpression(((BoundConstantPattern)pattern).Value));
             case BoundNodeKind.DiscardPattern:
                 return true;
             case BoundNodeKind.TypePattern:

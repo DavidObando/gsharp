@@ -229,6 +229,60 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        var isObject = valueType?.ClrType.IsSameAs(typeof(object)) == true;
+        var isValueNullable = valueType is NullableTypeSymbol nullable
+            && ReflectionMetadataEmitter.IsValueTypeNullable(nullable);
+        if (isObject || isValueNullable)
+        {
+            // PatternBinder adds at most one conversion to the discriminant type.
+            // Strip only that carrier; inner conversions determine the runtime value type.
+            var patternValue = cp.Value is BoundConversionExpression conversion && conversion.Type == valueType
+                ? conversion.Expression
+                : cp.Value;
+            if (patternValue.Type == TypeSymbol.Float32 || patternValue.Type == TypeSymbol.Float64)
+            {
+                loadValue();
+                if (isValueNullable)
+                {
+                    this.il.OpCode(ILOpCode.Box);
+                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(valueType));
+                }
+
+                this.il.OpCode(ILOpCode.Isinst);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(patternValue.Type));
+                var typeMatched = this.il.DefineLabel();
+                this.il.OpCode(ILOpCode.Dup);
+                this.il.Branch(ILOpCode.Brtrue, typeMatched);
+                this.il.OpCode(ILOpCode.Pop);
+                this.il.Branch(ILOpCode.Br, failLabel);
+                this.il.MarkLabel(typeMatched);
+                this.il.OpCode(ILOpCode.Unbox_any);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(patternValue.Type));
+                this.EmitExpression(patternValue);
+                this.il.OpCode(ILOpCode.Ceq);
+                this.il.Branch(ILOpCode.Brfalse, failLabel);
+                return;
+            }
+
+            loadValue();
+            if (isValueNullable)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(valueType));
+            }
+
+            this.EmitExpression(cp.Value);
+            if (isValueNullable)
+            {
+                this.il.OpCode(ILOpCode.Box);
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(valueType));
+            }
+
+            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
+            this.il.Branch(ILOpCode.Brfalse, failLabel);
+            return;
+        }
+
         // int / bool / other primitives lowered to ceq + brfalse.
         loadValue();
         this.EmitExpression(cp.Value);
