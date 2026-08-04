@@ -49,8 +49,6 @@ public class EvaluatorRetirementGateTests
         "test/Compiler.Tests/Emit/Issue2928TupleFunctionParityTests.cs",
         "test/Core.Tests/CodeAnalysis/Binding/ByRefEvaluationTests.cs",
         "test/Core.Tests/CodeAnalysis/Binding/Issue1654EvaluateNoCfgDumpTests.cs",
-        "test/Core.Tests/CodeAnalysis/Binding/Issue2188ReferenceConstrainedTypeParamObjectTests.cs",
-        "test/Core.Tests/CodeAnalysis/Binding/Issue2535NullableReferenceConversionTests.cs",
         "test/Core.Tests/CodeAnalysis/Binding/Issue698DeinitBinderTests.cs",
         "test/Core.Tests/CodeAnalysis/Emit/AsyncInterpVsEmitParityTests.cs",
         "test/Core.Tests/CodeAnalysis/Emit/Issue2544LiftedUnaryOperatorTests.cs",

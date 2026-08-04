@@ -2,20 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
-using GSharp.Core.CodeAnalysis;
-using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
-
-// Pinned on the evaluator pending the #3236 emitter fix (nullable-lifted
-// reference conversions); unpins onto the emitted oracle when #3236 lands
-// (ADR-0156, #3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
@@ -28,12 +17,10 @@ public sealed class Issue2535NullableReferenceConversionTests
     [Fact]
     public void CovariantImplementedInterfaceLiftsThroughReferenceNullability()
     {
-        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
-        // emitter cannot lower the covariant interface lift through
-        // reference nullability yet (issue #3236: NotSupportedException
-        // "Conversion from 'Service' to 'IService[object?]?'"); realigns
-        // with that issue's resolution.
-        var result = EvaluateWithEvaluator("""
+        // ADR-0156 Phase 3c (#3176): unpinned onto the emitted oracle — the
+        // #3241 emitter fix lowers the covariant interface lift through
+        // reference nullability (issue #3236).
+        var result = Evaluate("""
             interface IService[out T] {}
             class Service : IService[object] {}
 
@@ -74,13 +61,5 @@ public sealed class Issue2535NullableReferenceConversionTests
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
-    }
-
-    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3236-pinned test.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = GsSyntaxTree.Parse(SourceText.From(source));
-        var compilation = new GsCompilation(tree) { IsLibrary = true };
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
