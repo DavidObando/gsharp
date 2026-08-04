@@ -40,6 +40,7 @@ public sealed partial class Evaluator
     private readonly Dictionary<VariableSymbol, object> globals;
     private readonly bool evaluateEntryPoint;
     private readonly bool useEntryPointReturnType;
+    private readonly StructValue.ObjectOverrideDispatcher objectOverrideDispatcher;
 
     // Issue #1651: everything below this point used to be an ordinary
     // instance field. That is correct only because the interpreter was
@@ -127,6 +128,7 @@ public sealed partial class Evaluator
         globals = variables;
         this.evaluateEntryPoint = evaluateEntryPoint;
         this.useEntryPointReturnType = useEntryPointReturnType;
+        objectOverrideDispatcher = TryEvaluateExternalOverride;
         Locals.Push(new ConcurrentDictionary<VariableSymbol, object>());
     }
 

@@ -9,9 +9,11 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Repl.Engine;
 using GSharp.Tests;
 using Xunit;
 using CompilerProgram = GSharp.Compiler.Program;
@@ -135,6 +137,51 @@ public class Issue2896StructObjectOverrideTests
         AssertIssue3134EmittedSemantics(surface, emitted);
         Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Evaluate", "gsc-evaluate"));
         Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Gsi", "gsi"));
+    }
+
+    [Fact]
+    public void Issue3135_NoOverrideDispatchReusesDelegateWithoutPerCallClosure()
+    {
+        const string Source = """
+            package Issue3135
+            import System
+
+            struct Empty {
+            }
+
+            let first = Empty{}
+            let second = Empty{}
+            Console.WriteLine(first.Equals(second))
+            """;
+
+        var engine = new SessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(Source);
+
+        Assert.False(cell.HasError, string.Join(Environment.NewLine, cell.Diagnostics));
+        Assert.Equal("True\n", cell.Output);
+
+        var values = engine.Variables.Values.OfType<StructValue>().ToArray();
+        Assert.Equal(2, values.Length);
+
+        var dispatcherField = typeof(StructValue).GetField(
+            "objectOverrideDispatcher",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(dispatcherField);
+        var dispatcher = dispatcherField.GetValue(values[0]);
+        Assert.NotNull(dispatcher);
+        Assert.Same(dispatcher, dispatcherField.GetValue(values[1]));
+
+        _ = values[0].GetHashCode();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100_000; i++)
+        {
+            _ = values[0].GetHashCode();
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(
+            allocated < 14_000_000,
+            $"100,000 no-override hash calls allocated {allocated:N0} bytes; expected no per-call LINQ closure.");
     }
 
     [Theory]

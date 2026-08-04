@@ -1060,7 +1060,7 @@ public sealed partial class Evaluator
     }
 
     private StructValue CreateStructValue(StructSymbol structType) =>
-        new(structType, TryEvaluateExternalOverride);
+        new(structType, objectOverrideDispatcher);
 
     private bool TryEvaluateExternalOverride(
         StructValue receiver,
@@ -1104,14 +1104,18 @@ public sealed partial class Evaluator
 
     private static FunctionSymbol FindExternalOverride(StructSymbol type, MethodInfo externalMethod)
     {
-        FunctionSymbol externalOverride = null;
-        for (; type != null && externalOverride == null; type = type.BaseClass)
+        for (; type != null; type = type.BaseClass)
         {
-            externalOverride = type.Methods.FirstOrDefault(method =>
-                method.IsOverride && FindExternalOverrideRoot(method)?.Equals(externalMethod) == true);
+            foreach (var method in type.Methods)
+            {
+                if (method.IsOverride && FindExternalOverrideRoot(method)?.Equals(externalMethod) == true)
+                {
+                    return method;
+                }
+            }
         }
 
-        return externalOverride;
+        return null;
     }
 
     private static MethodInfo FindExternalOverrideRoot(FunctionSymbol method)
