@@ -341,6 +341,74 @@ public class EmittedOracleTests
     }
 
     [Fact]
+    public void MultiSource_CrossTreeImportAlias_ResolvesAndRuns()
+    {
+        var holder = """
+            package Oracle3b2.Nested
+
+            class Holder3b2 {
+                prop Value int32
+
+                shared {
+                    func MakeOne() Holder3b2 {
+                        var h Holder3b2 = Holder3b2{Value: 42}
+                        return h
+                    }
+                }
+            }
+            """;
+        var main = """
+            package Oracle3b2Main
+
+            import R = Oracle3b2.Nested.Holder3b2
+
+            var h R = R.MakeOne()
+            h.Value
+            """;
+
+        var result = EmittedOracle.Evaluate(new[] { holder, main });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void OracleRuns_DoNotShadowLaterCompilationsOfTheSamePackage()
+    {
+        // Issue #3235: a finished oracle run's collectible assembly must not
+        // leak into later compilations' default reference scans — otherwise
+        // its emitted types shadow same-named source packages.
+        var first = EmittedOracle.Evaluate("""
+            package Oracle3b2.Shadow
+            class Probe3b2 {
+                shared {
+                    const Tag string = "first"
+                }
+            }
+            var t = Probe3b2.Tag
+            t
+            """);
+        Assert.Empty(first.Diagnostics);
+        Assert.Equal("first", first.Value);
+
+        // Same package, different shape: must bind against ITS OWN source,
+        // not the still-loaded assembly of the first run (kept alive by the
+        // held result above).
+        var second = EmittedOracle.Evaluate("""
+            package Oracle3b2.Shadow
+            class Probe3b2 {
+                shared {
+                    func Make() int32 -> 42
+                }
+            }
+            var r = Probe3b2.Make()
+            r
+            """);
+        Assert.Empty(second.Diagnostics);
+        Assert.Equal(42, second.Value);
+    }
+
+    [Fact]
     public void IsLibrary_EmitsWithoutExecuting()
     {
         var result = EmittedOracle.Evaluate(
