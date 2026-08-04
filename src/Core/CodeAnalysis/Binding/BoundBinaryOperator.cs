@@ -672,8 +672,20 @@ public sealed record BoundBinaryOperator
         list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.String, TypeSymbol.Bool));
 
         // ADR-0045: `object` reference equality.
-        list.Add(new BoundBinaryOperator(SyntaxKind.EqualsEqualsToken, BoundBinaryOperatorKind.Equals, TypeSymbol.Object, TypeSymbol.Bool));
-        list.Add(new BoundBinaryOperator(SyntaxKind.BangEqualsToken, BoundBinaryOperatorKind.NotEquals, TypeSymbol.Object, TypeSymbol.Bool));
+        list.Add(new BoundBinaryOperator(
+            SyntaxKind.EqualsEqualsToken,
+            BoundBinaryOperatorKind.Equals,
+            TypeSymbol.Object,
+            TypeSymbol.Object,
+            TypeSymbol.Bool,
+            isReferenceEquality: true));
+        list.Add(new BoundBinaryOperator(
+            SyntaxKind.BangEqualsToken,
+            BoundBinaryOperatorKind.NotEquals,
+            TypeSymbol.Object,
+            TypeSymbol.Object,
+            TypeSymbol.Bool,
+            isReferenceEquality: true));
 
         return list.ToArray();
     }
