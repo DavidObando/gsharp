@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -63,7 +64,9 @@ if nil != x {
 }
 y
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3217 tracks the nil-on-left smart-cast invalid IL.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
     }
@@ -119,10 +122,18 @@ y
         Assert.Equal(5, result.Value);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(syntaxTree);
+        return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3217 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3217 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
         return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

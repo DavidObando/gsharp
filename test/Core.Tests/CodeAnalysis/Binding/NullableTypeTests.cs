@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -81,10 +82,8 @@ var x int32 = nil
         Assert.NotEmpty(result.Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(syntaxTree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }

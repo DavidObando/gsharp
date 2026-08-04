@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -114,16 +115,14 @@ public class SliceTests
         Assert.Equal("b", result.Value);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0083 / issue #723: every gated built-in (len / cap / append /
         // delete) used in the test sources is intentional, so prepend the
         // gate import here rather than duplicating it across every literal
         // string. This mirrors the helper-level mitigation #722 applied for
         // the channel-cluster tests.
-        var tree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -248,6 +249,9 @@ data struct Point {
 }
 0
 ";
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
+        // inspects this Compilation's bound state afterwards, which the
+        // EmittedOracle does not expose; disposition in 3b.2.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         compilation = new Compilation(tree);
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
@@ -258,10 +262,8 @@ data struct Point {
         return sym;
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }

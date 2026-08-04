@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -130,36 +131,22 @@ scope {
         // the failure surfaces from the runtime, which is what this test
         // actually exercises.
         source = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        EvaluationResult result = null;
-        Exception thrown = null;
-        try
-        {
-            result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        }
-        catch (Exception ex)
-        {
-            thrown = ex;
-        }
+        var result = EmittedOracle.Evaluate(source);
 
-        // The failure may surface either as a raw exception escaping
-        // the evaluator or as an evaluator-reported diagnostic — both
-        // are acceptable, what matters is that the failure was not
-        // silently swallowed.
+        // The failure may surface either as an unhandled runtime exception
+        // or as a reported diagnostic — both are acceptable, what matters
+        // is that the failure was not silently swallowed.
         Assert.True(
-            thrown != null || (result != null && !result.Diagnostics.IsEmpty),
+            result.UnhandledException != null || !result.Diagnostics.IsEmpty,
             "Scope did not surface the failure from the scoped goroutine.");
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: prepend the Go-extensions import so
         // existing scope-with-go tests continue to exercise scope
         // semantics rather than the import gate.
         var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(fullSource);
     }
 }

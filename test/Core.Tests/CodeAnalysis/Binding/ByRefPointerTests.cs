@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -26,7 +27,9 @@ public class ByRefPointerTests
 var x = 42
 var p = &x
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3215 tracks address-of/pointer signature encoding in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -82,7 +85,9 @@ var x = 42
 var p = &x
 var y = *p
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3215 tracks address-of/pointer signature encoding in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -167,7 +172,9 @@ var ok = Int32.TryParse(""123"", &result)
 var x = 10
 var p = &x
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3215 tracks address-of/pointer signature encoding in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -185,7 +192,15 @@ var y = &x + 1
         Assert.NotEmpty(result.Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
+    {
+        return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3215 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3215 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);

@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -26,6 +27,9 @@ class Target { var Name string var Age int64 }
 let source = Source{Name: ""Ada"", Age: 36, Extra: true}
 0
 ";
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
+        // inspects this Compilation's bound state afterwards, which the
+        // EmittedOracle does not expose; disposition in 3b.2.
         var tree = SyntaxTree.Parse(SourceText.From(sourceText));
         var compilation = new Compilation(tree);
         _ = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
@@ -300,7 +304,9 @@ target.Number
     [Fact]
     public void ImportedMethodOverloadAcceptsStructuralProjection()
     {
-        var result = Evaluate(@"
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3218 tracks the imported-nullable structural-projection emit gap.
+        var result = EvaluateWithEvaluator(@"
 import System.Net.Http
 class Source { var uriString string }
 func Probe(client HttpClient, source Source) {
@@ -438,7 +444,10 @@ let box Box[int32] = source
     [Fact]
     public void ConstructedGenericTargetsPreserveDeclaredFieldInitializers()
     {
-        var classResult = Evaluate(@"
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3219 tracks projection's private-field materialization
+        // (FieldAccessException on the constructed generic target).
+        var classResult = EvaluateWithEvaluator(@"
 class Source { var Value int32 }
 class Box[T] {
     var Value T
@@ -452,7 +461,7 @@ box.ReadMarker()
         Assert.Empty(classResult.Diagnostics);
         Assert.Equal(9, classResult.Value);
 
-        var structResult = Evaluate(@"
+        var structResult = EvaluateWithEvaluator(@"
 struct Source { var Value int32 }
 struct Box[T] {
     var Value T
@@ -551,7 +560,15 @@ Touch(ref source)
         Assert.NotEmpty(result.Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
+    {
+        return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3218/#3219 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3218/#3219 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);

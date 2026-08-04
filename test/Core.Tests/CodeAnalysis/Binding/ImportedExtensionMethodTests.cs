@@ -15,6 +15,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -52,8 +53,7 @@ for (key, value) in values {
 total
 ";
             AssertCompilesWithoutErrors(source);
-        var result = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(3, result.Value);

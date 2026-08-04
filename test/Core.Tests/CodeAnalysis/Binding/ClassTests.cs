@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -411,6 +412,9 @@ open class A {
     open func F() int32 { return 1 }
 }
 "));
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
+        // compilation; the EmittedOracle takes a single source. Disposition
+        // in 3b.2.
         var result = new Compilation(derived, baseType)
             .Evaluate(new Dictionary<VariableSymbol, object>());
 
@@ -906,10 +910,8 @@ class Dog : Animal(""rex"") {
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("may not declare ': base"));
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }
