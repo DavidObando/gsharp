@@ -10,6 +10,18 @@ on:
     branches:
       - main
 
+env:
+  # Nerdbank.GitVersioning's GitHub Actions integration appends
+  # GitBuildVersion* lines to $GITHUB_ENV from every MSBuild node; with
+  # parallel builds (-graph, dotnet test) concurrent appends interleave and
+  # corrupt the file, failing shards with "Unable to process file command
+  # 'env': Invalid format". No step in any workflow consumes those variables
+  # (version stamping goes through the nbgv CLI instead), so disable the
+  # emission workflow-wide. The gate property in Nerdbank.GitVersioning
+  # 3.11's targets is NBGV_SetCloudBuildVersionVars; the cloud build-number
+  # path is already a no-op on GitHub Actions.
+  NBGV_SetCloudBuildVersionVars: false
+
 jobs:
   build:
     runs-on: ubuntu-latest

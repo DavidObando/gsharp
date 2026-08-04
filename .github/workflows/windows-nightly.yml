@@ -32,6 +32,12 @@ on:
     - cron: '23 9 * * *'
   workflow_dispatch:
 
+env:
+  # Parallel MSBuild nodes corrupt $GITHUB_ENV via Nerdbank.GitVersioning's
+  # GitBuildVersion* emission; nothing consumes those variables, so disable
+  # it (see build.yml for the full rationale).
+  NBGV_SetCloudBuildVersionVars: false
+
 jobs:
   windows:
     runs-on: windows-latest

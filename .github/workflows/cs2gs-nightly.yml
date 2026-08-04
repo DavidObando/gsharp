@@ -16,6 +16,12 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  # Parallel MSBuild nodes corrupt $GITHUB_ENV via Nerdbank.GitVersioning's
+  # GitBuildVersion* emission; nothing consumes those variables, so disable
+  # it (see build.yml for the full rationale).
+  NBGV_SetCloudBuildVersionVars: false
+
 jobs:
   nightly:
     runs-on: ubuntu-latest
