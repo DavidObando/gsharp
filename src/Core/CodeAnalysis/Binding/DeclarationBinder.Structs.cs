@@ -1652,6 +1652,18 @@ internal sealed partial class DeclarationBinder
 
                     if (hasGetter && getAccessor?.Body != null)
                     {
+                        // Issue #3223: a property override is itself overridable —
+                        // the override-validation rule above accepts a base
+                        // property that is `IsVirtual || IsOverride` — so the
+                        // accessor symbol must be open whenever the property is
+                        // `open` OR `override`. Leaving an override accessor
+                        // closed made FunctionEmitter stamp it `Final`, and a
+                        // grandchild override of that slot produced an
+                        // unloadable type (TypeLoadException: "Declaration
+                        // referenced in a method implementation cannot be a
+                        // final method"). Mirrors the auto-property fallback
+                        // path in MemberDefEmitter, which never adds Final to
+                        // an override accessor.
                         var getterSymbol = new FunctionSymbol(
                             $"get_{propName}",
                             isIndexer ? indexerParameters : ImmutableArray<ParameterSymbol>.Empty,
@@ -1660,7 +1672,7 @@ internal sealed partial class DeclarationBinder
                             package,
                             getterAccessibility,
                             receiverType: structSymbol,
-                            isOpen: isVirtual,
+                            isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
 
                         // ADR-0118: indexer accessors are emitted as SpecialName
@@ -1677,6 +1689,10 @@ internal sealed partial class DeclarationBinder
                         var setterParameters = isIndexer
                             ? indexerParameters.Add(setterParam)
                             : ImmutableArray.Create(setterParam);
+
+                        // Issue #3223: see the matching comment on the getter —
+                        // an override property's accessor stays open so a
+                        // further override can reuse its (non-Final) slot.
                         var setterSymbol = new FunctionSymbol(
                             $"set_{propName}",
                             setterParameters,
@@ -1685,7 +1701,7 @@ internal sealed partial class DeclarationBinder
                             package,
                             setterAccessibility,
                             receiverType: structSymbol,
-                            isOpen: isVirtual,
+                            isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
                         setterSymbol.IsSpecialName = isIndexer;
                         setterSymbol.IsInitOnlySetter = isInitOnly;
@@ -1872,7 +1888,14 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                // Create add/remove method symbols
+                // Create add/remove method symbols.
+                // Issue #3223: like a property override, an event override is
+                // itself overridable (the override-validation rule above
+                // accepts a base event that is `IsVirtual || IsOverride`), so
+                // accessor symbols must be open whenever the event is `open`
+                // OR `override` — otherwise FunctionEmitter stamps the
+                // computed accessor `Final` and a grandchild override produces
+                // an unloadable type.
                 var handlerParam = new ParameterSymbol("value", handlerType);
                 eventSymbol.AddMethodSymbol = new FunctionSymbol(
                     $"add_{eventName}",
@@ -1882,7 +1905,7 @@ internal sealed partial class DeclarationBinder
                     package,
                     eventAccessibility,
                     receiverType: structSymbol,
-                    isOpen: isVirtual,
+                    isOpen: isVirtual || isOverride,
                     isOverride: isOverride)
                 {
                     IsSpecialName = true,
@@ -1896,7 +1919,7 @@ internal sealed partial class DeclarationBinder
                     package,
                     eventAccessibility,
                     receiverType: structSymbol,
-                    isOpen: isVirtual,
+                    isOpen: isVirtual || isOverride,
                     isOverride: isOverride)
                 {
                     IsSpecialName = true,
@@ -1926,7 +1949,7 @@ internal sealed partial class DeclarationBinder
                         package,
                         eventAccessibility,
                         receiverType: structSymbol,
-                        isOpen: isVirtual,
+                        isOpen: isVirtual || isOverride,
                         isOverride: isOverride)
                     {
                         IsSpecialName = true,
