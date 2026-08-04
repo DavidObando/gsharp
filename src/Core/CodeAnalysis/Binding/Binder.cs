@@ -2743,6 +2743,18 @@ public sealed class Binder
             // belong to the entry point — fall through to recurse.
         }
 
+        if (node is AwaitForRangeStatementSyntax or AwaitUsingStatementSyntax)
+        {
+            // Issue #3214: the statement-level await forms (`await for … { }`
+            // and `await using …`) carry their `await` as a keyword token on
+            // the statement syntax — there is no AwaitExpressionSyntax child
+            // to find. They make the synthesized entry point async exactly
+            // like an expression-level `await`; the async state-machine
+            // lowering handles the rest. Fall through to recurse: their
+            // bodies may contain returns/awaits of their own.
+            awaitFound = true;
+        }
+
         if (node is ReturnStatementSyntax ret)
         {
             if (ret.Expression == null)
