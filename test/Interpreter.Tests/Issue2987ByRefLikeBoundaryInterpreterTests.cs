@@ -14,7 +14,13 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2987: reflection cannot invoke members whose signatures contain
-/// stack-only CLR values, so the interpreter reports an explicit boundary.
+/// stack-only CLR values, so the interpreter reports an explicit boundary
+/// (GS0511). ADR-0156 Phase 3a: the interactive cells here pin the LEGACY
+/// tree-walking evaluator engine, constructed explicitly as
+/// <see cref="SessionEngine"/> — never the interactive default, which is now
+/// the emitted engine where ByRefLike values work natively. These
+/// evaluator-pinned tests retire with the deprecated
+/// <c>--engine evaluator</c> escape hatch in Phase 3c.
 /// </summary>
 public class Issue2987ByRefLikeBoundaryInterpreterTests
 {

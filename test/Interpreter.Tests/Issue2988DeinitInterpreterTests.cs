@@ -13,6 +13,14 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Interpreter boundary coverage for CLR GC finalizers declared with <c>deinit</c>.
+/// ADR-0156 Phase 3a: the GS0510 tests here pin the LEGACY tree-walking
+/// evaluator engine, constructed explicitly as <see cref="SessionEngine"/> —
+/// never the interactive default, which is now the emitted engine that runs
+/// deinitializers for real without GS0510 (see
+/// <c>EmittedSessionEngineTests.InteractiveDeinitializerRunsWithoutBoundaryWarning</c>).
+/// The evaluator engine is reachable only via the deprecated
+/// <c>--engine evaluator</c> escape hatch; these evaluator-pinned tests
+/// retire with it in Phase 3c.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2988DeinitInterpreterTests
@@ -68,8 +76,10 @@ public class Issue2988DeinitInterpreterTests
     /// ADR-0156 Phase 1: bare <c>gsc</c> and script-mode <c>gsi</c> execute
     /// emitted code, so deinitializers run as real CLR finalizers on every
     /// driver — derived-then-base, per declaring class — and the GS0510
-    /// boundary warning no longer fires on any of them. The warning remains
-    /// an interactive-REPL concern (see the SessionEngine tests above).
+    /// boundary warning no longer fires on any of them. Since Phase 3a the
+    /// interactive default is emitted too, so the warning survives only under
+    /// the deprecated <c>--engine evaluator</c> escape hatch (see the
+    /// evaluator-pinned SessionEngine tests above).
     /// </summary>
     /// <param name="driver">The driver under test.</param>
     [Theory]
