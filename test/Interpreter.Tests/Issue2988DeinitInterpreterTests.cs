@@ -68,7 +68,7 @@ public class Issue2988DeinitInterpreterTests
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation)]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission)]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.Interpreter)]
-    public void InheritedDeinitializersWarnOncePerDeclaringClass(
+    public void InheritedDeinitializersExposeDriverBoundaryPerDeclaringClass(
         Issue3010EntryPointDriverMatrixTests.Driver driver)
     {
         const string Source = """
@@ -89,41 +89,41 @@ public class Issue2988DeinitInterpreterTests
                 }
             }
 
-            var resource = CachedResource("held-33")
-            Console.WriteLine("body-44")
-            GC.KeepAlive(resource)
+            func Allocate() {
+                var resource = CachedResource("held-33")
+                Console.WriteLine("body-44")
+                GC.KeepAlive(resource)
+            }
+
+            Allocate()
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
+            Console.WriteLine("end-55")
             """;
+        const string InterpretedOutput = "body-44\nend-55\n";
+        const string EmittedOutput = "body-44\nderived-deinit-22\nbase-deinit-11\nend-55\n";
 
-        var emitted = Issue3010EntryPointDriverMatrixTests.Run(
-            "inherited-deinit-emitted",
+        var result = Issue3010EntryPointDriverMatrixTests.Run(
+            "inherited-deinit-" + driver,
             Source,
-            Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission);
-        Assert.Equal(0, emitted.ExitCode);
-        Assert.NotEmpty(emitted.StandardOutput);
-        Assert.Equal(string.Empty, emitted.StandardError);
-
-        var result = driver == Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission
-            ? emitted
-            : Issue3010EntryPointDriverMatrixTests.Run(
-                "inherited-deinit-" + driver,
-                Source,
-                driver);
+            driver);
         Assert.Equal(0, result.ExitCode);
 
         string warningOutput;
         switch (driver)
         {
             case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation:
-                Assert.StartsWith(emitted.StandardOutput + "\n", result.StandardOutput, StringComparison.Ordinal);
+                Assert.StartsWith(InterpretedOutput + "\n", result.StandardOutput, StringComparison.Ordinal);
                 Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
-                warningOutput = result.StandardOutput[emitted.StandardOutput.Length..];
+                Assert.Equal(string.Empty, result.StandardError);
+                warningOutput = result.StandardOutput[InterpretedOutput.Length..];
                 break;
             case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission:
-                Assert.Equal(emitted.StandardOutput, result.StandardOutput);
+                Assert.Equal(EmittedOutput, result.StandardOutput);
                 Assert.Equal(string.Empty, result.StandardError);
                 return;
             case Issue3010EntryPointDriverMatrixTests.Driver.Interpreter:
-                Assert.Equal(emitted.StandardOutput, result.StandardOutput);
+                Assert.Equal(InterpretedOutput, result.StandardOutput);
                 warningOutput = result.StandardError;
                 break;
             default:

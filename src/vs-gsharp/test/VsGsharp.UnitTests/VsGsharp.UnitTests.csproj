@@ -7,6 +7,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <!-- MessagePack + StreamJsonRpc versions: keep in sync with
+         build/gsharp.build.props (this tree is an isolated build island and
+         does not import the repo-wide props). -->
     <PackageReference Include="MessagePack" Version="2.5.301" />
     <PackageReference Include="StreamJsonRpc" Version="2.22.11" />
     <PackageReference Include="xunit" Version="2.9.2" />
