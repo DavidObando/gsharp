@@ -849,7 +849,21 @@ internal sealed partial class MethodBodyEmitter
             {
                 foreach (var iface in c.Interfaces)
                 {
-                    if (iface == targetIface)
+                    // Issue #3236: mirror the binder's #2535 rule —
+                    // declaration-site variance lifts through a class's
+                    // implemented interface (`Service : IService[object]` →
+                    // `IService[object?]`), exactly as the #1927 arm above
+                    // already recognises for an interface-typed SOURCE. At the
+                    // IL level this stays a plain reference load with no cast:
+                    // both constructed interfaces erase to the same open
+                    // generic definition (differing only by reference type
+                    // argument) and CLR generic-interface variance makes the
+                    // runtime reference directly assignment-compatible.
+                    // Without this, the emitter threw NotSupportedException
+                    // for the class-sourced lift the binder had accepted
+                    // (`Conversion from 'Service' to 'IService[object?]?'`).
+                    if (iface == targetIface
+                        || Conversion.IsVarianceCompatibleInterfaceConversion(iface, targetIface))
                     {
                         return true;
                     }
