@@ -169,7 +169,10 @@ public class Issue721NullIdentifierDiagnosticTests
     {
         // Sanity guard: the changes for #721 must not regress the
         // canonical `nil` spelling.
-        var result = Evaluate("""
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3227 tracks trailing if-expression value capture in the emitted
+        // submission (<Result>$ stays null).
+        var result = EvaluateWithEvaluator("""
             let x string? = nil
             if x == nil { 1 } else { 0 }
             """);
@@ -186,5 +189,15 @@ public class Issue721NullIdentifierDiagnosticTests
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3227 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3227 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

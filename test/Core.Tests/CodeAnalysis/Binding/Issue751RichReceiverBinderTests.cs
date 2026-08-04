@@ -118,7 +118,7 @@ m.CountKeys()
         Assert.Equal(3, result.Value);
     }
 
-    private static void AssertNoErrors(EvaluationResult result)
+    private static void AssertNoErrors(EmittedOracleResult result)
     {
         var errors = result.Diagnostics.Where(d => d.IsError).ToList();
         Assert.True(errors.Count == 0, "Unexpected errors:\n" + string.Join("\n", errors.Select(d => d.ToString())));

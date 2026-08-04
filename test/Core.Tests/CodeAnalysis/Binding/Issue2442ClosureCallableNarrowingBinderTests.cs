@@ -396,12 +396,12 @@ Run(Box{convertAction: nil}, []uint8{})
         Assert.Contains(result.Diagnostics, d => d.IsError);
     }
 
-    private static void AssertClean(EvaluationResult result)
+    private static void AssertClean(EmittedOracleResult result)
     {
         Assert.Empty(result.Diagnostics);
     }
 
-    private static void AssertContainsError(EvaluationResult result, string diagnosticId)
+    private static void AssertContainsError(EmittedOracleResult result, string diagnosticId)
     {
         Assert.Contains(result.Diagnostics, d => d.IsError && d.Id == diagnosticId);
     }

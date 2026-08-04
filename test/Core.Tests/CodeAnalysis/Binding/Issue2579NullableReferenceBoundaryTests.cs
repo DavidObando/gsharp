@@ -19,7 +19,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void GuardsAndAssertions_EnableReferenceUsesAcrossAllBoundaries()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             import System
             import System.Collections.Generic
 
@@ -60,7 +60,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void UnguardedNullableReferencesRemainHardErrors()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             import System.Collections.Generic
 
             func Consume(value string) {}
@@ -85,7 +85,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void NullableValuesAndInvalidReferenceConversionsRemainHardErrors()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             interface IService {}
             class Service : IService {}
             class Other {}
