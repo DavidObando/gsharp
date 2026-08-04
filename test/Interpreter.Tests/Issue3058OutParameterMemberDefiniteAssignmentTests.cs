@@ -13,6 +13,10 @@ using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Repl.Engine;
 using Xunit;
 
+// Interp-vs-emit parity harness; the evaluator side retires with the
+// evaluator in ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>

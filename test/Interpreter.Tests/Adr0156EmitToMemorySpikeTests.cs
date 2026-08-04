@@ -16,6 +16,10 @@ using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 using Xunit.Abstractions;
 
+// ADR-0156 spike parity harness comparing the evaluator and the emit path;
+// retires with the evaluator in Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>

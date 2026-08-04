@@ -308,6 +308,7 @@ public class Compilation
     /// </summary>
     /// <param name="variables">The symbol table with actual values.</param>
     /// <returns>An evaluation result.</returns>
+    [Obsolete("The tree-walking evaluator retires in ADR-0156 Phase 3c. New callers are forbidden; see #3176.", error: false)]
     public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables) =>
         Evaluate(variables, evaluateEntryPoint: true, useEntryPointReturnType: false);
 
@@ -317,6 +318,7 @@ public class Compilation
     /// <param name="variables">The symbol table with actual values.</param>
     /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
     /// <returns>An evaluation result.</returns>
+    [Obsolete("The tree-walking evaluator retires in ADR-0156 Phase 3c. New callers are forbidden; see #3176.", error: false)]
     public EvaluationResult Evaluate(Dictionary<VariableSymbol, object> variables, bool evaluateEntryPoint) =>
         Evaluate(variables, evaluateEntryPoint, useEntryPointReturnType: evaluateEntryPoint);
 
@@ -327,6 +329,7 @@ public class Compilation
     /// <param name="evaluateEntryPoint">Whether to invoke an explicit program entry point.</param>
     /// <param name="useEntryPointReturnType">Whether the declared entry-point return type controls the result.</param>
     /// <returns>An evaluation result.</returns>
+    [Obsolete("The tree-walking evaluator retires in ADR-0156 Phase 3c. New callers are forbidden; see #3176.", error: false)]
     public EvaluationResult Evaluate(
         Dictionary<VariableSymbol, object> variables,
         bool evaluateEntryPoint,
