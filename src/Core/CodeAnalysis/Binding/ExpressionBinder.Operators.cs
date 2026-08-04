@@ -1579,6 +1579,29 @@ internal sealed partial class ExpressionBinder
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type);
         }
 
+        // Issue #3217: canonicalize a `nil` literal on the LEFT of `==` / `!=`
+        // (`nil != x`) to the nil-on-right form (`x != nil`). The operator
+        // table's null-compare arm binds both orders symmetrically, but the
+        // entire downstream nil-comparison machinery — the lifted-slot
+        // planner's Form 2 (`Nullable<T> op nil`), EmitLiftedNullableBinary,
+        // and the user-enum / type-parameter nil arms — matches only the
+        // nil-on-right shape, so a Null-typed LEFT operand fell through to
+        // the emitter's generic `ceq` tail and produced unverifiable IL
+        // (InvalidProgramException at runtime). Swapping is semantics-
+        // preserving: equality is symmetric and the `nil` literal is a pure
+        // constant, so the reordering of operand evaluation is unobservable.
+        if ((boundOperator.Kind == BoundBinaryOperatorKind.Equals || boundOperator.Kind == BoundBinaryOperatorKind.NotEquals)
+            && boundLeft.Type == TypeSymbol.Null
+            && boundRight.Type != TypeSymbol.Null)
+        {
+            var mirrored = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundRight.Type, boundLeft.Type);
+            if (mirrored != null)
+            {
+                (boundLeft, boundRight) = (boundRight, boundLeft);
+                boundOperator = mirrored;
+            }
+        }
+
         // Issue #1881: Sum/Difference/Product bound inside a `checked`
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
@@ -2021,7 +2044,11 @@ internal sealed partial class ExpressionBinder
         // 'int32'" even though C# boxes the value-type operand and compares
         // by reference identity. When exactly one side is `object` and the
         // OTHER side has an implicit (boxing) conversion to `object`, box it
-        // and rebind the homogeneous `object == object` operator.
+        // and bind the boxed-VALUE equality operator: the bound semantics
+        // compare the boxed value (the evaluator's historical behavior), so
+        // the emitter must dispatch through `Object.Equals(object, object)`
+        // rather than compare two distinct box references with `ceq`, which
+        // silently yielded `false` for equal values (issue #3224).
         if (boundOperator == null && (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken))
         {
             if (boundLeft.Type == TypeSymbol.Object
@@ -2029,14 +2056,14 @@ internal sealed partial class ExpressionBinder
                 && Conversion.Classify(boundRight.Type, TypeSymbol.Object).IsImplicit)
             {
                 boundRight = conversions.BindConversion(rightLocation, boundRight, TypeSymbol.Object);
-                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+                boundOperator = BoundBinaryOperator.MakeBoxedValueEquality(operatorKind);
             }
             else if (boundRight.Type == TypeSymbol.Object
                 && boundLeft.Type != TypeSymbol.Object
                 && Conversion.Classify(boundLeft.Type, TypeSymbol.Object).IsImplicit)
             {
                 boundLeft = conversions.BindConversion(leftLocation, boundLeft, TypeSymbol.Object);
-                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+                boundOperator = BoundBinaryOperator.MakeBoxedValueEquality(operatorKind);
             }
         }
 
