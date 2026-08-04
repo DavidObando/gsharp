@@ -39,13 +39,20 @@ public sealed record BoundBinaryOperator
     {
     }
 
-    private BoundBinaryOperator(SyntaxKind syntaxKind, BoundBinaryOperatorKind kind, TypeSymbol leftType, TypeSymbol rightType, TypeSymbol resultType)
+    private BoundBinaryOperator(
+        SyntaxKind syntaxKind,
+        BoundBinaryOperatorKind kind,
+        TypeSymbol leftType,
+        TypeSymbol rightType,
+        TypeSymbol resultType,
+        bool isReferenceEquality = false)
     {
         SyntaxKind = syntaxKind;
         Kind = kind;
         LeftType = leftType;
         RightType = rightType;
         Type = resultType;
+        IsReferenceEquality = isReferenceEquality;
     }
 
     /// <summary>
@@ -72,6 +79,9 @@ public sealed record BoundBinaryOperator
     /// Gets the bound binary operator type symbol.
     /// </summary>
     public TypeSymbol Type { get; }
+
+    /// <summary>Gets a value indicating whether equality compares reference identity.</summary>
+    internal bool IsReferenceEquality { get; }
 
     /// <summary>
     /// Binds a syntax kind and a type symbol to the corresponding bound binary operator, or
@@ -367,7 +377,7 @@ public sealed record BoundBinaryOperator
         var kind = syntaxKind == SyntaxKind.EqualsEqualsToken
             ? BoundBinaryOperatorKind.Equals
             : BoundBinaryOperatorKind.NotEquals;
-        return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool);
+        return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool, isReferenceEquality: true);
     }
 
     /// <summary>

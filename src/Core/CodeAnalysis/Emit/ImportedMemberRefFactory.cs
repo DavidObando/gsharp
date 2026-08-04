@@ -877,8 +877,7 @@ internal sealed class ImportedMemberRefFactory
             var symbolKey = new MetadataTokenCache.MethodSpecSymbolKey(
                 method,
                 typeArgSymbols,
-                this.remaps.ActiveIteratorStateMachineRemap,
-                this.remaps.ActiveLambdaMethodTypeParamRemap);
+                this.remaps.CurrentScope);
             if (this.cache.MethodSpecsWithSymbolArgs.TryGetValue(symbolKey, out var existingSym))
             {
                 return existingSym;
@@ -921,8 +920,7 @@ internal sealed class ImportedMemberRefFactory
                 new MetadataTokenCache.MethodSpecSymbolKey(
                     method,
                     typeArgSymbols,
-                    this.remaps.ActiveIteratorStateMachineRemap,
-                    this.remaps.ActiveLambdaMethodTypeParamRemap)] = spec;
+                    this.remaps.CurrentScope)] = spec;
         }
 
         return spec;
@@ -1357,8 +1355,7 @@ internal sealed class ImportedMemberRefFactory
         var cacheKey = new MetadataTokenCache.CtorRefSymbolKey(
             ctor,
             imported.TypeArguments,
-            this.remaps.ActiveIteratorStateMachineRemap,
-            this.remaps.ActiveLambdaMethodTypeParamRemap);
+            this.remaps.CurrentScope);
         if (this.cache.CtorRefsWithSymbolArgs.TryGetValue(cacheKey, out var cached))
         {
             handle = cached;
@@ -1446,7 +1443,8 @@ internal sealed class ImportedMemberRefFactory
                 "GetNullableCtorMemberRefForOpenTypeParameter requires Nullable<TypeParameter>.");
         }
 
-        if (this.cache.NullableOpenCtorMemberRefs.TryGetValue(tp, out var cached))
+        var tpKey = (tp, this.remaps.CurrentScope);
+        if (this.cache.NullableOpenCtorMemberRefs.TryGetValue(tpKey, out var cached))
         {
             return cached;
         }
@@ -1471,7 +1469,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableOpenCtorMemberRefs[tp] = handle;
+        this.cache.NullableOpenCtorMemberRefs[tpKey] = handle;
         return handle;
     }
 
@@ -1494,7 +1492,8 @@ internal sealed class ImportedMemberRefFactory
                 "GetNullableCtorMemberRefForUserEnum requires Nullable<EnumSymbol>.");
         }
 
-        if (this.cache.NullableUserEnumCtorMemberRefs.TryGetValue(enumSym, out var cached))
+        var enumKey = (enumSym, this.remaps.CurrentScope);
+        if (this.cache.NullableUserEnumCtorMemberRefs.TryGetValue(enumKey, out var cached))
         {
             return cached;
         }
@@ -1517,7 +1516,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableUserEnumCtorMemberRefs[enumSym] = handle;
+        this.cache.NullableUserEnumCtorMemberRefs[enumKey] = handle;
         return handle;
     }
 
@@ -1549,7 +1548,8 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
-        if (this.cache.NullableUserStructCtorMemberRefs.TryGetValue(underlying, out var cached))
+        var underlyingKey = (underlying, this.remaps.CurrentScope);
+        if (this.cache.NullableUserStructCtorMemberRefs.TryGetValue(underlyingKey, out var cached))
         {
             return cached;
         }
@@ -1572,7 +1572,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableUserStructCtorMemberRefs[underlying] = handle;
+        this.cache.NullableUserStructCtorMemberRefs[underlyingKey] = handle;
         return handle;
     }
 
@@ -1601,7 +1601,8 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
-        if (this.cache.NullableUserValueTypeGetValueMemberRefs.TryGetValue(underlying, out var cached))
+        var underlyingKey = (underlying, this.remaps.CurrentScope);
+        if (this.cache.NullableUserValueTypeGetValueMemberRefs.TryGetValue(underlyingKey, out var cached))
         {
             return cached;
         }
@@ -1621,7 +1622,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_Value"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableUserValueTypeGetValueMemberRefs[underlying] = handle;
+        this.cache.NullableUserValueTypeGetValueMemberRefs[underlyingKey] = handle;
         return handle;
     }
 
@@ -1649,7 +1650,8 @@ internal sealed class ImportedMemberRefFactory
         }
 
         var underlying = nullableOfUserVt.UnderlyingType;
-        if (this.cache.NullableUserValueTypeGetHasValueMemberRefs.TryGetValue(underlying, out var cached))
+        var underlyingKey = (underlying, this.remaps.CurrentScope);
+        if (this.cache.NullableUserValueTypeGetHasValueMemberRefs.TryGetValue(underlyingKey, out var cached))
         {
             return cached;
         }
@@ -1669,7 +1671,7 @@ internal sealed class ImportedMemberRefFactory
             parent: parent,
             name: this.emitCtx.Metadata.GetOrAddString("get_HasValue"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
-        this.cache.NullableUserValueTypeGetHasValueMemberRefs[underlying] = handle;
+        this.cache.NullableUserValueTypeGetHasValueMemberRefs[underlyingKey] = handle;
         return handle;
     }
 
@@ -2043,20 +2045,20 @@ internal sealed class ImportedMemberRefFactory
     }
 
     // ADR-0087 §3 R6: cache reified delegate metadata by function shape and
-    // active generic-remap scopes. The same interned FunctionTypeSymbol can
-    // encode as VAR inside a synthesized generic class and MVAR at its outer
-    // generic-method use site.
-    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+    // the active generic-remap scope (issue #3163). The same interned
+    // FunctionTypeSymbol can encode as VAR inside a synthesized generic class
+    // and MVAR at its outer generic-method use site.
+    private readonly Dictionary<(FunctionTypeSymbol Type, RemapScope Scope), EntityHandle>
         functionDelegateTypeSpecCache = new();
 
-    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+    private readonly Dictionary<(FunctionTypeSymbol Type, RemapScope Scope), EntityHandle>
         functionDelegateCtorRefCache = new();
 
-    private readonly Dictionary<(FunctionTypeSymbol Type, object ClassRemap, object MethodRemap), EntityHandle>
+    private readonly Dictionary<(FunctionTypeSymbol Type, RemapScope Scope), EntityHandle>
         functionDelegateInvokeRefCache = new();
 
-    private (FunctionTypeSymbol Type, object ClassRemap, object MethodRemap) GetFunctionDelegateCacheKey(FunctionTypeSymbol fnType)
-        => (fnType, this.remaps.ActiveIteratorStateMachineRemap, this.remaps.ActiveLambdaMethodTypeParamRemap);
+    private (FunctionTypeSymbol Type, RemapScope Scope) GetFunctionDelegateCacheKey(FunctionTypeSymbol fnType)
+        => (fnType, this.remaps.CurrentScope);
 
     /// <summary>
     /// ADR-0087 §3 R6: returns a <c>TypeSpec</c> EntityHandle for the
