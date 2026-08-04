@@ -45,8 +45,7 @@ public sealed record BoundBinaryOperator
         TypeSymbol leftType,
         TypeSymbol rightType,
         TypeSymbol resultType,
-        bool isReferenceEquality = false,
-        bool isBoxedValueEquality = false)
+        bool isReferenceEquality = false)
     {
         SyntaxKind = syntaxKind;
         Kind = kind;
@@ -54,7 +53,6 @@ public sealed record BoundBinaryOperator
         RightType = rightType;
         Type = resultType;
         IsReferenceEquality = isReferenceEquality;
-        IsBoxedValueEquality = isBoxedValueEquality;
     }
 
     /// <summary>
@@ -84,17 +82,6 @@ public sealed record BoundBinaryOperator
 
     /// <summary>Gets a value indicating whether equality compares reference identity.</summary>
     internal bool IsReferenceEquality { get; }
-
-    /// <summary>
-    /// Gets a value indicating whether equality compares boxed values by VALUE
-    /// (dispatching through <c>Object.Equals(object, object)</c>) rather than by
-    /// box reference identity. Set only by the Issue #1923 boxed-constant
-    /// equality seam (<c>answer == 42</c> where <c>answer</c> is typed
-    /// <c>object</c> and the other operand boxes in): the bound semantics
-    /// compare the boxed value, so the emitter must not fall through to the
-    /// reference-identity <c>ceq</c> tail (issue #3224).
-    /// </summary>
-    internal bool IsBoxedValueEquality { get; }
 
     /// <summary>
     /// Binds a syntax kind and a type symbol to the corresponding bound binary operator, or
@@ -391,26 +378,6 @@ public sealed record BoundBinaryOperator
             ? BoundBinaryOperatorKind.Equals
             : BoundBinaryOperatorKind.NotEquals;
         return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool, isReferenceEquality: true);
-    }
-
-    /// <summary>
-    /// Issue #3224: builds the boxed-value equality (<c>==</c> / <c>!=</c>)
-    /// operator the Issue #1923 boxed-constant seam binds when exactly one
-    /// operand is statically <c>object</c> and the other side boxes in via an
-    /// implicit conversion (<c>answer == 42</c> where <c>answer</c> is typed
-    /// <c>object</c>). Both operands are <c>object</c>-typed after the boxing
-    /// conversion and compare by VALUE — the evaluator's historical semantics —
-    /// so the emitter dispatches through <c>Object.Equals(object, object)</c>
-    /// instead of the reference-identity <c>ceq</c> tail.
-    /// </summary>
-    /// <param name="syntaxKind">The <c>==</c> or <c>!=</c> token.</param>
-    /// <returns>The boxed-value equality operator over <c>object</c> operands.</returns>
-    internal static BoundBinaryOperator MakeBoxedValueEquality(SyntaxKind syntaxKind)
-    {
-        var kind = syntaxKind == SyntaxKind.EqualsEqualsToken
-            ? BoundBinaryOperatorKind.Equals
-            : BoundBinaryOperatorKind.NotEquals;
-        return new BoundBinaryOperator(syntaxKind, kind, TypeSymbol.Object, TypeSymbol.Object, TypeSymbol.Bool, isReferenceEquality: false, isBoxedValueEquality: true);
     }
 
     /// <summary>

@@ -49,9 +49,8 @@ public class Issue1923PatternMatchingSeamsTests
 let answer object = 42
 answer == 42
 ";
-        // Issue #3224: the emitted comparison dispatches through
-        // Object.Equals (value semantics), matching the evaluator; it
-        // previously compared two distinct box references and yielded false.
+        // ADR-0045: the literal boxes into a new object, so reference
+        // equality against the existing box is false.
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(false, result.Value);
