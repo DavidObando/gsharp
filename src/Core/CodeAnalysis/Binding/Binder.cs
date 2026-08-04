@@ -1247,6 +1247,24 @@ public sealed class Binder
                         resultVariable,
                         new BoundVariableExpression(trailing.Syntax, trailingDeclaration.Variable)));
                 }
+                else if (TryInferTrailingCaptureType(trailing, out var trailingBranchType))
+                {
+                    // Issue #3227: the trailing statement is a value-producing
+                    // branching form — a trailing `if`/`if let` statement whose
+                    // arms all end in a value, a bare block, or an exhaustive
+                    // switch statement. The evaluator's LastValue echoed the
+                    // taken arm's tail value; capture statically by rewriting
+                    // every tail into an assignment of the synthesized
+                    // `<Result>$` global (the static field exists purely by
+                    // virtue of the GlobalVariableSymbol declaration — every
+                    // arm assigns it, so no separate initializer is needed).
+                    resultVariable = new GlobalVariableSymbol(
+                        SubmissionImports.ResultFieldName,
+                        isReadOnly: false,
+                        trailingBranchType,
+                        Accessibility.Public);
+                    statements[statements.Count - 1] = RewriteTrailingCapture(trailing, resultVariable);
+                }
 
                 if (resultVariable != null)
                 {
@@ -1374,6 +1392,131 @@ public sealed class Binder
             && type != TypeSymbol.Void
             && type != TypeSymbol.Error
             && !TypeSymbol.IsByRefLike(type);
+
+    /// <summary>
+    /// Issue #3227: determines whether a trailing branching statement — a
+    /// value-producing <c>if</c>/<c>if let</c> statement, a bare block, or an
+    /// exhaustive <c>switch</c> statement — has a statically capturable tail
+    /// value on every path, mirroring the shapes for which the retired
+    /// evaluator's LastValue produced the taken arm's tail value. Succeeds
+    /// only when every leaf tail is an expression statement (or variable
+    /// declaration) of one identical, capturable type: an <c>if</c> without
+    /// an <c>else</c>, an empty block, mixed arm types, or a non-value tail
+    /// on any path all decline the capture (no echo), exactly like the
+    /// historical single-statement shapes declined non-capturable values.
+    /// </summary>
+    private static bool TryInferTrailingCaptureType(BoundStatement statement, out TypeSymbol type)
+    {
+        switch (statement)
+        {
+            case BoundExpressionStatement expressionStatement:
+                type = expressionStatement.Expression.Type;
+                return IsCapturableEchoType(type);
+
+            case BoundVariableDeclaration declaration
+                when declaration.Initializer is not BoundAddressOfExpression:
+                type = declaration.Variable.Type;
+                return IsCapturableEchoType(type);
+
+            case BoundBlockStatement block when block.Statements.Length > 0:
+                return TryInferTrailingCaptureType(block.Statements[block.Statements.Length - 1], out type);
+
+            case BoundIfStatement ifStatement when ifStatement.ElseStatement != null:
+                if (TryInferTrailingCaptureType(ifStatement.ThenStatement, out var thenType)
+                    && TryInferTrailingCaptureType(ifStatement.ElseStatement, out var elseType)
+                    && thenType == elseType)
+                {
+                    type = thenType;
+                    return true;
+                }
+
+                type = null;
+                return false;
+
+            case BoundPatternSwitchStatement switchStatement
+                when switchStatement.Arms.Length > 0
+                    && (switchStatement.IsExhaustive || switchStatement.Arms.Any(a => a.IsDefault && a.Guard == null)):
+                TypeSymbol common = null;
+                foreach (var arm in switchStatement.Arms)
+                {
+                    if (!TryInferTrailingCaptureType(arm.Body, out var armType)
+                        || (common != null && armType != common))
+                    {
+                        type = null;
+                        return false;
+                    }
+
+                    common = armType;
+                }
+
+                type = common;
+                return type != null;
+
+            default:
+                type = null;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #3227: rewrites the tails accepted by
+    /// <see cref="TryInferTrailingCaptureType"/> so every leaf tail stores
+    /// its value into the synthesized <c>&lt;Result&gt;$</c> global. Leaf
+    /// expression statements become assignments to the global; leaf variable
+    /// declarations keep the declaration and append the echo assignment
+    /// (matching the historical trailing-declaration echo).
+    /// </summary>
+    private static BoundStatement RewriteTrailingCapture(BoundStatement statement, GlobalVariableSymbol resultVariable)
+    {
+        switch (statement)
+        {
+            case BoundExpressionStatement expressionStatement:
+                return new BoundExpressionStatement(
+                    statement.Syntax,
+                    new BoundAssignmentExpression(statement.Syntax, resultVariable, expressionStatement.Expression));
+
+            case BoundVariableDeclaration declaration:
+                return new BoundBlockStatement(
+                    statement.Syntax,
+                    ImmutableArray.Create<BoundStatement>(
+                        declaration,
+                        new BoundExpressionStatement(
+                            statement.Syntax,
+                            new BoundAssignmentExpression(
+                                statement.Syntax,
+                                resultVariable,
+                                new BoundVariableExpression(statement.Syntax, declaration.Variable)))));
+
+            case BoundBlockStatement block:
+                return new BoundBlockStatement(
+                    block.Syntax,
+                    block.Statements.SetItem(
+                        block.Statements.Length - 1,
+                        RewriteTrailingCapture(block.Statements[block.Statements.Length - 1], resultVariable)));
+
+            case BoundIfStatement ifStatement:
+                return new BoundIfStatement(
+                    ifStatement.Syntax,
+                    ifStatement.Condition,
+                    RewriteTrailingCapture(ifStatement.ThenStatement, resultVariable),
+                    RewriteTrailingCapture(ifStatement.ElseStatement, resultVariable));
+
+            case BoundPatternSwitchStatement switchStatement:
+                return new BoundPatternSwitchStatement(
+                    switchStatement.Syntax,
+                    switchStatement.Discriminant,
+                    switchStatement.Arms.Select(a => new BoundPatternSwitchArm(
+                        a.Syntax,
+                        a.Pattern,
+                        a.Guard,
+                        RewriteTrailingCapture(a.Body, resultVariable))).ToImmutableArray(),
+                    switchStatement.IsExhaustive);
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unexpected trailing-capture statement kind '{statement.Kind}'.");
+        }
+    }
 
     /// <summary>
     /// Produces a bound program from the specified global scope.

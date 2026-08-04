@@ -742,4 +742,16 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Contains(state.Types, t => t.Display.Contains("Point", StringComparison.Ordinal));
         Assert.DoesNotContain(state.Variables, v => v.Display.Contains("<Result>$", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void TrailingIfCell_EchoesTakenBranchValue()
+    {
+        // Issue #3227: a trailing value-producing `if` statement in a cell
+        // echoes the taken branch's value through `<Result>$`.
+        Assert.False(engine.Evaluate("let x string? = nil").HasError);
+
+        var cell = engine.Evaluate("if x == nil { 1 } else { 0 }");
+        Assert.False(cell.HasError);
+        Assert.Equal(1, cell.Value);
+    }
 }
