@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using GSharp.Compiler;
+using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -17,6 +18,8 @@ namespace GSharp.Interpreter.Tests;
 /// Issue #3099: interpreter-created generic backing types must preserve every
 /// G# type-argument kind instead of erasing value types to <see cref="object"/>.
 /// Issue #3137 extends the same emit-oracle matrix to reflected field shape.
+/// Issue #3180 covers enclosing generic parameters in the interactive evaluator;
+/// ADR-0156 file drivers remain compared against the emitted oracle.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
@@ -29,6 +32,11 @@ public class Issue3099TypeArgumentReificationTests
         yield return ["string", string.Empty, "string"];
         yield return ["nested-class", "class Owner {\n    class Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
         yield return ["nested-struct", "class Owner {\n    struct Payload {\n        let Eleven int32\n        var TwentyTwo string\n    }\n}", "Owner.Payload"];
+        yield return ["generic-owner-nested-class", "class Owner[T] {\n    class Payload {\n        let Eleven T\n        var TwentyTwo string\n    }\n}", "Owner[int32].Payload"];
+        yield return ["generic-owner-nested-struct", "class Owner[T] {\n    struct Payload {\n        let Eleven T\n        var TwentyTwo string\n    }\n}", "Owner[int32].Payload"];
+        yield return ["generic-owner-multi-arity-nested", "class Owner[TFirst, TSecond] {\n    class Payload {\n        let Eleven TFirst\n        var TwentyTwo TSecond\n    }\n}", "Owner[int32, string].Payload"];
+        yield return ["generic-owner-nested-generic", "class Owner[T] {\n    class Payload[U] {\n        let Eleven T\n        var TwentyTwo U\n    }\n}", "Owner[int32].Payload[string]"];
+        yield return ["generic-owner-deep-nested", "class Owner[T] {\n    class Middle[U] {\n        class Payload {\n            let Eleven T\n            var TwentyTwo U\n        }\n    }\n}", "Owner[int32].Middle[string].Payload"];
         yield return ["gsharp-generic", "struct Payload[T] {\n    let Value T\n    var Imported List[T]\n    var Slice []T\n    var Nullable T?\n    var Array [3]T\n    shared {\n        var Stat int32\n    }\n    const Kilo int32 = 1000\n}", "Payload[int32]"];
         yield return ["imported-generic", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "List[Payload]"];
         yield return ["nullable", "struct Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload?"];
@@ -38,7 +46,7 @@ public class Issue3099TypeArgumentReificationTests
 
     [Theory]
     [MemberData(nameof(TypeArgumentCases))]
-    public void TypeArguments_AgreeAcrossEvaluationEmitAndInterpretation(
+    public void TypeArguments_AgreeAcrossInteractiveEvaluationEmitAndFileDrivers(
         string caseName,
         string declaration,
         string typeArgument)
@@ -52,17 +60,18 @@ public class Issue3099TypeArgumentReificationTests
 
         try
         {
-            var compilerEvaluation = RunSourceDriver(
+            var compilerFile = RunSourceDriver(
                 Path.Combine(root, "gsc-eval"),
                 source,
                 Program.Main);
-            Assert.EndsWith("Success.\n", compilerEvaluation);
-            compilerEvaluation = compilerEvaluation[..^"Success.\n".Length];
+            Assert.EndsWith("Success.\n", compilerFile);
+            compilerFile = compilerFile[..^"Success.\n".Length];
 
-            var interpreter = RunSourceDriver(
+            var gsiFile = RunSourceDriver(
                 Path.Combine(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
+            var interactive = RunInteractive(source);
 
             var emitDirectory = PrepareEmptyDirectory(Path.Combine(root, "gsc-emit"));
             var sourcePath = Path.Combine(emitDirectory, "Probe.gs");
@@ -90,15 +99,18 @@ public class Issue3099TypeArgumentReificationTests
             });
 
             var expected = NormalizeGenericTypeNames(emitted);
-            var evaluated = NormalizeGenericTypeNames(compilerEvaluation);
-            var interpreted = NormalizeGenericTypeNames(interpreter);
+            var evaluated = NormalizeGenericTypeNames(interactive);
+            var compiledFile = NormalizeGenericTypeNames(compilerFile);
+            var interpretedFile = NormalizeGenericTypeNames(gsiFile);
             const string ControlShape =
                 "44\n2|Eleven:System.Int32:True:False:False|TwentyTwo:System.String:False:False:False\n";
             Assert.Contains(ControlShape, expected, StringComparison.Ordinal);
             Assert.Contains(ControlShape, evaluated, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, interpreted, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, compiledFile, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, interpretedFile, StringComparison.Ordinal);
             Assert.Equal(expected, evaluated);
-            Assert.Equal(expected, interpreted);
+            Assert.Equal(expected, compiledFile);
+            Assert.Equal(expected, interpretedFile);
             Assert.Contains("11\n", expected);
             Assert.Contains("22\n", expected);
             Assert.Contains("33\n", expected);
@@ -178,6 +190,13 @@ public class Issue3099TypeArgumentReificationTests
         var sourcePath = Path.Combine(probeDirectory, "Probe.gs");
         File.WriteAllText(sourcePath, source);
         return CaptureDriver(() => driver([sourcePath]));
+    }
+
+    private static string RunInteractive(string source)
+    {
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+        Assert.False(cell.HasError, string.Join(Environment.NewLine, cell.Diagnostics));
+        return cell.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     private static string PrepareEmptyDirectory(string directory)

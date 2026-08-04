@@ -1295,7 +1295,9 @@ public sealed partial class Evaluator
     {
         var module = CreateClrBackingModule();
         var definition = structType.Definition ?? structType;
-        var arity = definition.TypeParameters.Length;
+
+        // Issue #3180: CLR nested types redeclare the flattened enclosing and own generic parameters.
+        var reifiedParameters = GetClrReifiedTypeParameters(definition);
         var reifiedTypeParameters = new Dictionary<TypeParameterSymbol, Type>();
         var enclosingTypes = new Stack<StructSymbol>();
         for (var containing = definition.ContainingType as StructSymbol;
@@ -1343,13 +1345,13 @@ public sealed partial class Evaluator
                 metadataName,
                 (attributes & ~TypeAttributes.VisibilityMask) | TypeAttributes.NestedPublic,
                 clrBase);
-        if (arity > 0)
+        if (!reifiedParameters.IsDefaultOrEmpty)
         {
             var parameters = typeBuilder.DefineGenericParameters(
-                definition.TypeParameters.Select(static parameter => parameter.Name).ToArray());
+                reifiedParameters.Select(static parameter => parameter.Name).ToArray());
             for (var i = 0; i < parameters.Length; i++)
             {
-                reifiedTypeParameters[definition.TypeParameters[i]] = parameters[i];
+                reifiedTypeParameters[reifiedParameters[i]] = parameters[i];
             }
         }
 
@@ -1416,18 +1418,35 @@ public sealed partial class Evaluator
             enclosingBuilders[i].CreateType();
         }
 
-        if (arity == 0)
+        if (reifiedParameters.IsDefaultOrEmpty)
         {
             return backingType;
         }
 
-        var typeArguments = new Type[structType.TypeArguments.Length];
-        for (var i = 0; i < typeArguments.Length; i++)
+        var definitionEnclosingParameters = StructSymbol.CollectEnclosingTypeParameters(definition);
+        var typeArguments = new Type[reifiedParameters.Length];
+        for (var i = 0; i < definitionEnclosingParameters.Length; i++)
         {
-            typeArguments[i] = ResolveClrBackingTypeArgument(structType.TypeArguments[i]);
+            var argument = i < structType.EnclosingTypeArguments.Length
+                ? structType.EnclosingTypeArguments[i]
+                : definitionEnclosingParameters[i];
+            typeArguments[i] = ResolveClrBackingTypeArgument(argument);
+        }
+
+        for (var i = 0; i < definition.TypeParameters.Length; i++)
+        {
+            var argument = i < structType.TypeArguments.Length
+                ? structType.TypeArguments[i]
+                : definition.TypeParameters[i];
+            typeArguments[definitionEnclosingParameters.Length + i] = ResolveClrBackingTypeArgument(argument);
         }
 
         return backingType.MakeGenericType(typeArguments);
+    }
+
+    private static ImmutableArray<TypeParameterSymbol> GetClrReifiedTypeParameters(StructSymbol type)
+    {
+        return StructSymbol.CollectEnclosingTypeParameters(type).AddRange(type.TypeParameters);
     }
 
     private static Type ResolveClrBackingTypeArgument(
