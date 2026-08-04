@@ -142,10 +142,13 @@ internal sealed class MetadataTokenCache
     /// <c>System.Nullable`1&lt;!!T&gt;::.ctor(!0)</c> (issue #814 / ADR-0084 §L5).
     /// The parent TypeSpec uses the same VAR/MVAR slot as the wrapping
     /// method's signature, so a single MemberRef per <c>T</c> serves every
-    /// instantiation of the enclosing generic method or type.
+    /// instantiation of the enclosing generic method or type. Issue #3163:
+    /// the parent TypeSpec is encoded through <c>EncodeTypeSymbol</c>, whose
+    /// VAR/MVAR ordinal depends on the active generic remaps, so the key
+    /// includes the <see cref="RemapScope"/>.
     /// </summary>
-    public Dictionary<TypeParameterSymbol, MemberReferenceHandle> NullableOpenCtorMemberRefs { get; }
-        = new Dictionary<TypeParameterSymbol, MemberReferenceHandle>();
+    public Dictionary<(TypeParameterSymbol Tp, RemapScope Scope), MemberReferenceHandle> NullableOpenCtorMemberRefs { get; }
+        = new Dictionary<(TypeParameterSymbol Tp, RemapScope Scope), MemberReferenceHandle>();
 
     /// <summary>
     /// Gets the cache mapping a user-defined <see cref="EnumSymbol"/> to the
@@ -153,19 +156,24 @@ internal sealed class MetadataTokenCache
     /// <c>System.Nullable`1&lt;E&gt;::.ctor(!0)</c> (issue #1298). The parent
     /// TypeSpec closes <c>Nullable&lt;&gt;</c> over the enum's emitted TypeDef,
     /// so one MemberRef per enum serves every <c>E -&gt; E?</c> lift site.
+    /// Issue #3163: a nested enum's parent TypeSpec can encode enclosing
+    /// type-parameter ordinals, so the key includes the
+    /// <see cref="RemapScope"/>.
     /// </summary>
-    public Dictionary<EnumSymbol, MemberReferenceHandle> NullableUserEnumCtorMemberRefs { get; }
-        = new Dictionary<EnumSymbol, MemberReferenceHandle>();
+    public Dictionary<(EnumSymbol Enum, RemapScope Scope), MemberReferenceHandle> NullableUserEnumCtorMemberRefs { get; }
+        = new Dictionary<(EnumSymbol Enum, RemapScope Scope), MemberReferenceHandle>();
 
     /// <summary>
     /// Gets the cache mapping a symbolic value-type underlying to the
     /// <see cref="MemberReferenceHandle"/> for
     /// <c>System.Nullable`1&lt;T&gt;::.ctor(!0)</c>. The parent TypeSpec closes
     /// <c>Nullable&lt;&gt;</c> over the encoded underlying, so one MemberRef
-    /// serves every matching nullable lift site.
+    /// serves every matching nullable lift site. Issue #3163: the symbolic
+    /// underlying can encode type-parameter ordinals, so the key includes
+    /// the <see cref="RemapScope"/>.
     /// </summary>
-    public Dictionary<TypeSymbol, MemberReferenceHandle> NullableUserStructCtorMemberRefs { get; }
-        = new Dictionary<TypeSymbol, MemberReferenceHandle>();
+    public Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle> NullableUserStructCtorMemberRefs { get; }
+        = new Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle>();
 
     /// <summary>
     /// Gets the cache mapping a user-defined value-type underlying
@@ -174,10 +182,13 @@ internal sealed class MetadataTokenCache
     /// <c>System.Nullable`1&lt;T&gt;::get_Value()</c> (issue #1572). The parent
     /// TypeSpec closes <c>Nullable&lt;&gt;</c> over the type's emitted
     /// TypeDef/TypeSpec, so one MemberRef per underlying serves every
-    /// <c>(v!!)</c> unwrap and narrowing-read site.
+    /// <c>(v!!)</c> unwrap and narrowing-read site. Issue #3163: the
+    /// underlying can be (or contain) a type parameter whose VAR/MVAR
+    /// ordinal depends on the active remaps, so the key includes the
+    /// <see cref="RemapScope"/>.
     /// </summary>
-    public Dictionary<TypeSymbol, MemberReferenceHandle> NullableUserValueTypeGetValueMemberRefs { get; }
-        = new Dictionary<TypeSymbol, MemberReferenceHandle>();
+    public Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle> NullableUserValueTypeGetValueMemberRefs { get; }
+        = new Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle>();
 
     /// <summary>
     /// Gets the cache mapping a user-defined value-type underlying
@@ -189,9 +200,11 @@ internal sealed class MetadataTokenCache
     /// over a same-compilation struct, where no real CLR
     /// <see cref="System.Type"/> exists to drive the reflection-based
     /// <see cref="WellKnownReferences.GetNullableGetHasValueReference"/>.
+    /// Issue #3163: keyed with the <see cref="RemapScope"/>, mirroring
+    /// <see cref="NullableUserValueTypeGetValueMemberRefs"/>.
     /// </summary>
-    public Dictionary<TypeSymbol, MemberReferenceHandle> NullableUserValueTypeGetHasValueMemberRefs { get; }
-        = new Dictionary<TypeSymbol, MemberReferenceHandle>();
+    public Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle> NullableUserValueTypeGetHasValueMemberRefs { get; }
+        = new Dictionary<(TypeSymbol Underlying, RemapScope Scope), MemberReferenceHandle>();
 
     /// <summary>
     /// Gets the cache mapping a <see cref="FieldInfo"/> to its
@@ -400,27 +413,25 @@ internal sealed class MetadataTokenCache
 
     /// <summary>
     /// Issue #420 / #3065: structural cache key for MethodSpec rows whose
-    /// generic arguments include user-defined type symbols. Includes both
-    /// active generic-remap scopes because the same symbols can encode to
-    /// different VAR/MVAR ordinals. Uses reference equality throughout.
+    /// generic arguments include user-defined type symbols. Requires the
+    /// full <see cref="RemapScope"/> (issue #3163) because the same symbols
+    /// can encode to different VAR/MVAR ordinals under different active
+    /// remaps. Uses reference equality throughout.
     /// </summary>
     internal readonly struct MethodSpecSymbolKey : IEquatable<MethodSpecSymbolKey>
     {
         private readonly MethodInfo method;
         private readonly ImmutableArray<TypeSymbol> typeArgs;
-        private readonly object classRemap;
-        private readonly object methodRemap;
+        private readonly RemapScope scope;
 
         public MethodSpecSymbolKey(
             MethodInfo method,
             ImmutableArray<TypeSymbol> typeArgs,
-            object classRemap,
-            object methodRemap)
+            RemapScope scope)
         {
             this.method = method;
             this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
-            this.classRemap = classRemap;
-            this.methodRemap = methodRemap;
+            this.scope = scope;
         }
 
         public bool Equals(MethodSpecSymbolKey other)
@@ -430,8 +441,7 @@ internal sealed class MetadataTokenCache
                 return false;
             }
 
-            if (!ReferenceEquals(this.classRemap, other.classRemap)
-                || !ReferenceEquals(this.methodRemap, other.methodRemap)
+            if (!this.scope.Equals(other.scope)
                 || this.typeArgs.Length != other.typeArgs.Length)
             {
                 return false;
@@ -453,8 +463,7 @@ internal sealed class MetadataTokenCache
         public override int GetHashCode()
         {
             var hash = RuntimeHelpers.GetHashCode(this.method);
-            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.classRemap));
-            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.methodRemap));
+            hash = unchecked((hash * 31) + this.scope.GetHashCode());
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
                 hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
@@ -467,27 +476,26 @@ internal sealed class MetadataTokenCache
     /// <summary>
     /// Issues #671 and #2930: structural cache key for ctor MemberRef rows
     /// whose parent TypeSpec carries G# user-defined symbolic type arguments.
-    /// Includes both active generic-remap scopes because the same symbols can
-    /// encode to different VAR/MVAR ordinals. Issue #3065 tracks equivalent
-    /// remap discrimination for <see cref="MethodSpecSymbolKey"/>.
+    /// Requires the full <see cref="RemapScope"/> (issue #3163) because the
+    /// same symbols can encode to different VAR/MVAR ordinals under
+    /// different active remaps. Counterpart to
+    /// <see cref="MethodSpecSymbolKey"/>, which is keyed the same way
+    /// since #3065.
     /// </summary>
     internal readonly struct CtorRefSymbolKey : IEquatable<CtorRefSymbolKey>
     {
         private readonly ConstructorInfo ctor;
         private readonly ImmutableArray<TypeSymbol> typeArgs;
-        private readonly object classRemap;
-        private readonly object methodRemap;
+        private readonly RemapScope scope;
 
         public CtorRefSymbolKey(
             ConstructorInfo ctor,
             ImmutableArray<TypeSymbol> typeArgs,
-            object classRemap,
-            object methodRemap)
+            RemapScope scope)
         {
             this.ctor = ctor;
             this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
-            this.classRemap = classRemap;
-            this.methodRemap = methodRemap;
+            this.scope = scope;
         }
 
         public bool Equals(CtorRefSymbolKey other)
@@ -497,8 +505,7 @@ internal sealed class MetadataTokenCache
                 return false;
             }
 
-            if (!ReferenceEquals(this.classRemap, other.classRemap)
-                || !ReferenceEquals(this.methodRemap, other.methodRemap)
+            if (!this.scope.Equals(other.scope)
                 || this.typeArgs.Length != other.typeArgs.Length)
             {
                 return false;
@@ -520,8 +527,7 @@ internal sealed class MetadataTokenCache
         public override int GetHashCode()
         {
             var hash = RuntimeHelpers.GetHashCode(this.ctor);
-            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.classRemap));
-            hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.methodRemap));
+            hash = unchecked((hash * 31) + this.scope.GetHashCode());
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
                 hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
