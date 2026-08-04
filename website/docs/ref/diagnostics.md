@@ -1789,6 +1789,17 @@ behavior depends on GC finalization.
 |----|----------|-------------|
 | GS0518 | Error | An explicit-layout type places a reference-typed field at a misaligned offset or overlaps it with non-reference storage. The CLR rejects both layouts; pointer-align the reference and keep non-reference fields outside its storage. |
 
+## ByRefLike interpolation on emitted paths (GS0519)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0519 | Error | A ByRefLike value without an available CLR `ToString()` method cannot be used as an interpolation hole on emitted execution paths. |
+
+Emitted interpolation routes ByRefLike holes through their CLR `ToString()`
+method because `DefaultInterpolatedStringHandler.AppendFormatted<T>` rejects
+ByRefLike generic arguments. GS0519 is the source-anchored fallback when no
+such method is available, preventing a GS9998 reflection exception.
+
 ## Additional current and reserved diagnostics
 
 These entries complete the current compiler catalogue. Older topic sections

@@ -17,9 +17,9 @@ public class Issue3114ReadOnlySpanInterpreterTests
 {
     public enum Driver
     {
-        CompilerEvaluation,
-        CompilerEmission,
-        Interpreter,
+        CompilerEmitToMemory,
+        CompilerEmitToFile,
+        ReplEmitToMemory,
     }
 
     public static IEnumerable<object[]> SampleDriverCases()
@@ -46,12 +46,6 @@ public class Issue3114ReadOnlySpanInterpreterTests
         }
     }
 
-    public static IEnumerable<object[]> InterpretingDrivers()
-    {
-        yield return new object[] { Driver.CompilerEvaluation };
-        yield return new object[] { Driver.Interpreter };
-    }
-
     [Theory]
     [MemberData(nameof(SampleDriverCases))]
     public void ShippedSpanSample_MatchesGoldenAcrossDrivers(string sample, string expected, Driver driver)
@@ -65,17 +59,17 @@ public class Issue3114ReadOnlySpanInterpreterTests
         {
             var result = driver switch
             {
-                Driver.CompilerEvaluation => CaptureConsole(
+                Driver.CompilerEmitToMemory => CaptureConsole(
                     () => GSharp.Compiler.Program.Main([sourcePath])),
-                Driver.CompilerEmission => CompileAndRun(root, sample, sourcePath),
-                Driver.Interpreter => CaptureConsole(
+                Driver.CompilerEmitToFile => CompileAndRun(root, sample, sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
                     () => GSharp.Repl.Program.Main([sourcePath])),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
-                driver == Driver.CompilerEvaluation ? expected + "Success.\n" : expected,
+                driver == Driver.CompilerEmitToMemory ? expected + "Success.\n" : expected,
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -135,17 +129,17 @@ public class Issue3114ReadOnlySpanInterpreterTests
 
             var result = driver switch
             {
-                Driver.CompilerEvaluation => CaptureConsole(
+                Driver.CompilerEmitToMemory => CaptureConsole(
                     () => GSharp.Compiler.Program.Main([sourcePath])),
-                Driver.CompilerEmission => emitted,
-                Driver.Interpreter => CaptureConsole(
+                Driver.CompilerEmitToFile => emitted,
+                Driver.ReplEmitToMemory => CaptureConsole(
                     () => GSharp.Repl.Program.Main([sourcePath])),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
-                driver == Driver.CompilerEvaluation
+                driver == Driver.CompilerEmitToMemory
                     ? emitted.StandardOutput + "Success.\n"
                     : emitted.StandardOutput,
                 result.StandardOutput);
@@ -178,12 +172,8 @@ public class Issue3114ReadOnlySpanInterpreterTests
     }
 
     /// <summary>
-    /// The evaluator's public-name span interpolation (#3128) now lives only
-    /// where the evaluator still runs — the interactive REPL. ADR-0156
-    /// Phase 1 moved <c>gsi &lt;file&gt;</c> and bare <c>gsc</c> to emitted
-    /// execution, and the emit path cannot lower a span interpolation hole
-    /// (#3183), so the driver-level variant of this coverage is
-    /// <see cref="SpanInterpolation_ReportsEmitIceOnFileDrivers"/>.
+    /// The evaluator's public-name span interpolation (#3128) remains pinned
+    /// while file drivers use emitted execution.
     /// </summary>
     [Fact]
     public void SpanInterpolation_UsesPublicSpanNameInteractively()
@@ -212,18 +202,14 @@ public class Issue3114ReadOnlySpanInterpreterTests
     }
 
     /// <summary>
-    /// #3183: the emit path ICEs on span interpolation holes
-    /// (<c>DefaultInterpolatedStringHandler.AppendFormatted[T]</c> rejects
-    /// ByRefLike type arguments), which the evaluator masked on the file
-    /// drivers until ADR-0156 Phase 1. Until #3183 is fixed, both emitted
-    /// file drivers must surface the canonical GS9998 line with exit code 1
-    /// instead of crashing; when it is fixed, flip this to assert the
-    /// evaluator's golden rendering.
+    /// #3183: emitted interpolation routes ByRefLike holes through their CLR
+    /// <c>ToString()</c> method instead of closing generic
+    /// <c>AppendFormatted&lt;T&gt;</c> over an unsupported type argument.
     /// </summary>
     /// <param name="driver">The driver under test.</param>
     [Theory]
-    [MemberData(nameof(InterpretingDrivers))]
-    public void SpanInterpolation_ReportsEmitIceOnFileDrivers(Driver driver)
+    [MemberData(nameof(Drivers))]
+    public void SpanInterpolation_RendersAcrossFileDrivers(Driver driver)
     {
         const string Source = """
             import System
@@ -231,7 +217,15 @@ public class Issue3114ReadOnlySpanInterpreterTests
             func Main() {
                 var values = []int32{11, 22, 33}
                 var writable Span[int32] = values
+                var readOnly ReadOnlySpan[int32] = writable
+                var letters = []char{'h', 'e', 'l', 'l', 'o'}
+                var writableChars Span[char] = letters
+                var readOnlyChars ReadOnlySpan[char] = writableChars
                 Console.WriteLine("writable=${writable}")
+                Console.WriteLine("readonly=${readOnly}")
+                Console.WriteLine("writableChars=${writableChars}")
+                Console.WriteLine("chars=${readOnlyChars}")
+                Console.WriteLine("aligned=${readOnlyChars,8}")
             }
             """;
 
@@ -245,24 +239,149 @@ public class Issue3114ReadOnlySpanInterpreterTests
         {
             var result = driver switch
             {
-                Driver.CompilerEvaluation => CaptureConsole(
+                Driver.CompilerEmitToMemory => CaptureConsole(
                     () => GSharp.Compiler.Program.Main([sourcePath])),
-                Driver.Interpreter => CaptureConsole(
+                Driver.CompilerEmitToFile => CompileAndRun(root, "span-interpolation.gs", sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
                     () => GSharp.Repl.Program.Main([sourcePath])),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };
 
-            Assert.Equal(1, result.ExitCode);
-            var diagnosticStream = driver == Driver.CompilerEvaluation
-                ? result.StandardOutput
-                : result.StandardError;
-            Assert.Contains("error GS9998: ArgumentException", diagnosticStream, StringComparison.Ordinal);
-            Assert.Contains("AppendFormatted", diagnosticStream, StringComparison.Ordinal);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(
+                driver == Driver.CompilerEmitToMemory
+                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nSuccess.\n"
+                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\n",
+                result.StandardOutput);
+            Assert.Equal(string.Empty, result.StandardError);
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(Drivers))]
+    public void OrdinaryInterpolation_RemainsUnchangedAcrossFileDrivers(Driver driver)
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                var value = 42
+                Console.WriteLine("value=${value}")
+            }
+            """;
+
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3183-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var sourcePath = Path.Combine(root, "ordinary-interpolation.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = driver switch
+            {
+                Driver.CompilerEmitToMemory => CaptureConsole(
+                    () => GSharp.Compiler.Program.Main([sourcePath])),
+                Driver.CompilerEmitToFile => CompileAndRun(root, "ordinary-interpolation.gs", sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
+                    () => GSharp.Repl.Program.Main([sourcePath])),
+                _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
+            };
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(
+                driver == Driver.CompilerEmitToMemory
+                    ? "value=42\nSuccess.\n"
+                    : "value=42\n",
+                result.StandardOutput);
+            Assert.Equal(string.Empty, result.StandardError);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Drivers))]
+    public void UserRefStructInterpolation_ReportsFallbackDiagnosticAcrossFileDrivers(Driver driver)
+    {
+        const string Source = """
+            ref struct Token {
+                var value int32
+            }
+
+            func Main() {
+                var token Token = Token{value: 42}
+                Console.WriteLine("token=${token}")
+            }
+            """;
+
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3183-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var sourcePath = Path.Combine(root, "user-ref-struct-interpolation.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = driver switch
+            {
+                Driver.CompilerEmitToMemory => CaptureConsole(
+                    () => GSharp.Compiler.Program.Main([sourcePath])),
+                Driver.CompilerEmitToFile => CompileOnly(root, "user-ref-struct-interpolation.gs", sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
+                    () => GSharp.Repl.Program.Main([sourcePath])),
+                _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
+            };
+
+            Assert.Equal(1, result.ExitCode);
+            var diagnosticStream = driver == Driver.ReplEmitToMemory
+                ? result.StandardError
+                : result.StandardOutput;
+            Assert.Equal(
+                driver == Driver.ReplEmitToMemory ? string.Empty : "Failed.\n",
+                driver == Driver.ReplEmitToMemory ? result.StandardOutput : result.StandardError);
+
+            var diagnostic = Assert.Single(
+                diagnosticStream.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                line => line.Contains("error GS0519:", StringComparison.Ordinal));
+            AssertByRefLikeInterpolationDiagnostic(diagnostic, sourcePath, 7, "Token");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void AssertByRefLikeInterpolationDiagnostic(
+        string line,
+        string sourcePath,
+        int startLine,
+        string typeName)
+    {
+        Assert.StartsWith($"{sourcePath}({startLine},", line, StringComparison.Ordinal);
+        Assert.Contains(": error GS0519:", line, StringComparison.Ordinal);
+        Assert.Contains(typeName, line, StringComparison.Ordinal);
+        Assert.Contains("has no available CLR ToString method", line, StringComparison.Ordinal);
+    }
+
+    private static (int ExitCode, string StandardOutput, string StandardError) CompileOnly(
+        string root,
+        string sample,
+        string sourcePath)
+    {
+        var outputDirectory = Path.Combine(root, "emit");
+        Directory.CreateDirectory(outputDirectory);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outputDirectory));
+        var assemblyPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(sample) + ".dll");
+        return CaptureConsole(
+            () => GSharp.Compiler.Program.Main(
+                ["/out:" + assemblyPath, "/target:exe", "/targetframework:net10.0", sourcePath]));
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CompileAndRun(

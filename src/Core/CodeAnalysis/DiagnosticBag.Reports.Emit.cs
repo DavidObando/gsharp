@@ -137,6 +137,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.FixedStatementCannotSuspend, keyword);
 
     /// <summary>
+    /// GS0519: a default interpolated-string hole has a ByRefLike type without
+    /// an available CLR <c>ToString()</c> method. Generic
+    /// <c>AppendFormatted&lt;T&gt;</c> cannot close over stack-only values.
+    /// </summary>
+    /// <param name="location">The source location of the interpolation hole.</param>
+    /// <param name="type">The rejected ByRefLike type.</param>
+    public void ReportByRefLikeInterpolationUnsupported(TextLocation location, TypeSymbol type)
+    => Report(location, DiagnosticDescriptors.ByRefLikeInterpolationUnsupported, type);
+
+    /// <summary>
     /// GS0403: a <c>void</c>-element pointer (<c>*void</c>, the faithful mapping
     /// of C# <c>void*</c>; ADR-0122 §3 / issue #1033) was directly dereferenced
     /// (<c>*p</c>), indexed (<c>p[i]</c>), or used in pointer arithmetic
