@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -39,12 +40,12 @@ public class Issue1680ExtensionResolutionIndexTests
         // types the extension's own package doesn't own (ADR-0079), so the
         // types and the extension live in separate packages, like the
         // pre-existing cross-package extension tests.
-        var typeTree = SyntaxTree.Parse(SourceText.From(@"
+        var typeTree = @"
 package Zoo
 open class Animal { var Name string }
 class Dog : Animal { }
-"));
-        var extensionTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var extensionTree = @"
 package ZooExtensions
 func (a Animal) Speak() string {
     return ""...""
@@ -52,7 +53,7 @@ func (a Animal) Speak() string {
 
 var d = Dog{Name: ""Rex""}
 d.Speak()
-"));
+";
         var result = Evaluate(typeTree, extensionTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("...", result.Value);
@@ -63,7 +64,7 @@ d.Speak()
     {
         // An extension declared on an INTERFACE must be found for a call site
         // whose static receiver type is a class that implements it.
-        var typeTree = SyntaxTree.Parse(SourceText.From(@"
+        var typeTree = @"
 package Greeting
 interface IGreeter {
     func Hello() string;
@@ -71,8 +72,8 @@ interface IGreeter {
 class Person : IGreeter {
     func Hello() string -> ""hi""
 }
-"));
-        var extensionTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var extensionTree = @"
 package GreetingExtensions
 func (g IGreeter) Greet() string {
     return g.Hello()
@@ -80,7 +81,7 @@ func (g IGreeter) Greet() string {
 
 var p = Person{}
 p.Greet()
-"));
+";
         var result = Evaluate(typeTree, extensionTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("hi", result.Value);
@@ -165,15 +166,13 @@ arr.MyFirst(99)
         return function;
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        return Evaluate(syntaxTree);
+        return EmittedOracle.Evaluate(source);
     }
 
-    private static EvaluationResult Evaluate(params SyntaxTree[] syntaxTrees)
+    private static EmittedOracleResult Evaluate(params string[] sources)
     {
-        var compilation = new Compilation(syntaxTrees);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(sources);
     }
 }

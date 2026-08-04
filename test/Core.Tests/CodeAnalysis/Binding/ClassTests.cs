@@ -412,13 +412,12 @@ open class A {
     open func F() int32 { return 1 }
 }
 "));
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
-        // compilation; the EmittedOracle takes a single source. Disposition
-        // in 3b.2.
-        var result = new Compilation(derived, baseType)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        // Tree-order binder regression (issue #3176 Phase 3b.2): bind the
+        // plain multi-tree compilation via EmittedOracle.CompileDiagnostics;
+        // the sources declare types only and nothing needs to run.
+        var compilation = new Compilation(derived, baseType);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
     }
 
     [Fact]

@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -25,7 +26,7 @@ public class Issue2273ImportTypeAliasTests
     [Fact]
     public void Alias_To_CrossPackage_Source_Type_Resolves_Static_Member_Access()
     {
-        var holderTree = SyntaxTree.Parse(SourceText.From(@"
+        var holderTree = @"
 package App.Nested
 
 class Holder {
@@ -33,14 +34,14 @@ class Holder {
         const Message string = ""hi""
     }
 }
-"));
-        var mainTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var mainTree = @"
 package App
 
 import R = App.Nested.Holder
 
 var result = R.Message
-"));
+";
         var result = Evaluate(holderTree, mainTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("hi", result.Value);
@@ -61,7 +62,7 @@ var result = R.Sqrt(16.0)
     [Fact]
     public void Alias_To_CrossPackage_Source_Type_Resolves_In_TypeClause_Position()
     {
-        var holderTree = SyntaxTree.Parse(SourceText.From(@"
+        var holderTree = @"
 package App.Nested
 
 class Holder {
@@ -74,15 +75,15 @@ class Holder {
         }
     }
 }
-"));
-        var mainTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var mainTree = @"
 package App
 
 import R = App.Nested.Holder
 
 var h R = R.MakeOne()
 var result = h.Value
-"));
+";
         var result = Evaluate(holderTree, mainTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(42, result.Value);
@@ -91,7 +92,7 @@ var result = h.Value
     [Fact]
     public void Alias_To_Outer_Type_Resolves_Nested_Type_Access()
     {
-        var outerTree = SyntaxTree.Parse(SourceText.From(@"
+        var outerTree = @"
 package App.Nested
 
 class Outer {
@@ -101,28 +102,26 @@ class Outer {
         }
     }
 }
-"));
-        var mainTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var mainTree = @"
 package App
 
 import R = App.Nested.Outer
 
 var result = R.Inner.Message
-"));
+";
         var result = Evaluate(outerTree, mainTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("nested-hi", result.Value);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        return Evaluate(syntaxTree);
+        return EmittedOracle.Evaluate(source);
     }
 
-    private static EvaluationResult Evaluate(params SyntaxTree[] syntaxTrees)
+    private static EmittedOracleResult Evaluate(params string[] sources)
     {
-        var compilation = new Compilation(syntaxTrees);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(sources);
     }
 }

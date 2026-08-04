@@ -2,11 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -53,10 +52,12 @@ public sealed class Issue2517ConstructedBaseOrderingTests
             }
             """);
 
-        var result = new Compilation(early, derived, entry, middle, baseType)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        // Tree-order binder regression (issue #3176 Phase 3b.2): bind the
+        // plain multi-tree compilation via EmittedOracle.CompileDiagnostics;
+        // the sources declare types only and nothing needs to run.
+        var compilation = new Compilation(early, derived, entry, middle, baseType);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
     }
 
     [Theory]
@@ -95,10 +96,9 @@ public sealed class Issue2517ConstructedBaseOrderingTests
         var trees = reverse
             ? new[] { layers, derived, early }
             : new[] { early, derived, layers };
-        var result = new Compilation(trees)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var compilation = new Compilation(trees);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
     }
 
     private static SyntaxTree Parse(string source)

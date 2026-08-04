@@ -2,13 +2,13 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -159,11 +159,7 @@ public class Issue3075DiagnosticTypeKindTests
 
     private static Diagnostic GetDiagnostic(string id, params string[] sources)
     {
-        var trees = sources
-            .Select((source, index) => SyntaxTree.Parse(SourceText.From(source, $"issue3075-{index}.gs")))
-            .ToArray();
-        var compilation = new Compilation(trees);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(sources);
         return Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.Id == id));
     }
 }

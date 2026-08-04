@@ -2,17 +2,22 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
-/// <summary>Binding regressions for issue #2519's source class-constraint ordering.</summary>
+/// <summary>Binding regressions for issue #2519's source class-constraint
+/// ordering. Tree-order binder regressions (issue #3176 Phase 3b.2): these
+/// bind the plain multi-tree compilation via
+/// <c>EmittedOracle.CompileDiagnostics</c> — the property under test is the
+/// PLAIN compilation's order independence, and the sources declare types
+/// only, so nothing needs to run.</summary>
 public sealed class Issue2519SourceClassConstraintOrderingTests
 {
     [Theory]
@@ -52,10 +57,9 @@ public sealed class Issue2519SourceClassConstraintOrderingTests
         var trees = reverse
             ? new[] { constraint, constrained }
             : new[] { constrained, constraint };
-        var result = new Compilation(trees)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var compilation = new Compilation(trees);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
     }
 
     [Theory]
@@ -107,12 +111,11 @@ public sealed class Issue2519SourceClassConstraintOrderingTests
         var trees = reverse
             ? new[] { genericBase, dependencies, multipart }
             : new[] { multipart, dependencies, genericBase };
-        var result = new Compilation(trees)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var compilation = new Compilation(trees);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         Assert.DoesNotContain(
-            result.Diagnostics,
+            EmittedOracle.CompileDiagnostics(compilation),
             diagnostic => diagnostic.Message.Contains("FrameEntry2519")
                 || diagnostic.Message.Contains("Chunk")
                 || diagnostic.Message.Contains("SamplesInFrame"));
@@ -132,9 +135,8 @@ public sealed class Issue2519SourceClassConstraintOrderingTests
             }
             """);
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         var holder = Assert.Single(compilation.GlobalScope.Structs.Where(s => s.Name == "Holder2519"));
         var constraint = Assert.IsType<StructSymbol>(Assert.Single(holder.TypeParameters).ClassConstraint);
         Assert.Equal("Entry2519", constraint.Name);
@@ -170,10 +172,9 @@ public sealed class Issue2519SourceClassConstraintOrderingTests
         var trees = reverse
             ? new[] { model, consumers }
             : new[] { consumers, model };
-        var result = new Compilation(trees)
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var compilation = new Compilation(trees);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
     }
 
     private static SyntaxTree Parse(string source)
