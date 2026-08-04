@@ -12,6 +12,10 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
+// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
+// with the evaluator in ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>

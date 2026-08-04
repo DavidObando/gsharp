@@ -10,6 +10,11 @@ using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
+// Evaluator-machinery pin on the interpreter's map/interface-slot
+// concurrency model (#3205/#3209); retires with the evaluator in ADR-0156
+// Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>

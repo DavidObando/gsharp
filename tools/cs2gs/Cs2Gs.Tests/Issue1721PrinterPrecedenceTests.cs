@@ -16,6 +16,11 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 
+// Semantic round-trip check runs translated G# on the evaluator (Cs2Gs.Tests
+// has no emitted-oracle reference); migrate or retire with the evaluator in
+// ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace Cs2Gs.Tests;
 
 /// <summary>

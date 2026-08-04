@@ -2,12 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
-using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
@@ -27,12 +24,11 @@ class Target { var Name string var Age int64 }
 let source = Source{Name: ""Ada"", Age: 36, Extra: true}
 0
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards, which the
-        // EmittedOracle does not expose; disposition in 3b.2.
+        // Binder inspection only (issue #3176 Phase 3b.3): a full bind of
+        // this compilation populates GlobalScope; nothing needs to execute.
         var tree = SyntaxTree.Parse(SourceText.From(sourceText));
         var compilation = new Compilation(tree);
-        _ = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        _ = EmittedOracle.CompileDiagnostics(compilation);
         var sourceType = compilation.GlobalScope.Variables.Single(v => v.Name == "source").Type;
         var targetType = compilation.GlobalScope.Structs.Single(s => s.Name == "Target");
 
@@ -563,15 +559,5 @@ Touch(ref source)
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3219 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3219 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

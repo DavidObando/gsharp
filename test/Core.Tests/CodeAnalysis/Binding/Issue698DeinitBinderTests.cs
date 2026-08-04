@@ -11,6 +11,11 @@ using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
+// Evaluator-machinery pin: asserts the interpreter-boundary GS0510 deinit
+// diagnostic only Compilation.Evaluate synthesizes; retires with the
+// evaluator in ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>

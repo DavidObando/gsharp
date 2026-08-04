@@ -12,6 +12,11 @@ using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
+// Pinned on the evaluator pending the #3236 emitter fix (nullable-lifted
+// reference conversions); unpins onto the emitted oracle when #3236 lands
+// (ADR-0156, #3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>

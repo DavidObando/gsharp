@@ -108,6 +108,7 @@ public sealed partial class Evaluator
     /// </summary>
     /// <param name="program">The program.</param>
     /// <param name="variables">The variables.</param>
+    [Obsolete("The tree-walking evaluator retires in ADR-0156 Phase 3c. New callers are forbidden; see #3176.", error: false)]
     public Evaluator(BoundProgram program, Dictionary<VariableSymbol, object> variables)
         : this(
             program,
@@ -117,6 +118,7 @@ public sealed partial class Evaluator
     {
     }
 
+    [Obsolete("The tree-walking evaluator retires in ADR-0156 Phase 3c. New callers are forbidden; see #3176.", error: false)]
     internal Evaluator(
         BoundProgram program,
         Dictionary<VariableSymbol, object> variables,

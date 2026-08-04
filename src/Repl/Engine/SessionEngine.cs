@@ -231,7 +231,11 @@ public sealed class SessionEngine : ISessionEngine
                 var compilation = previous == null
                     ? references is null ? new Compilation(tree) : new Compilation(references, tree)
                     : previous.ContinueWith(tree);
+                // The tree-walking SessionEngine is the evaluator's product host; it
+                // retires with the evaluator in ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618
                 var result = compilation.Evaluate(variables, evaluateEntryPoint: RunEntryPoint);
+#pragma warning restore CS0618
 
                 var hasError = result.Diagnostics.Any(d => d.IsError);
 

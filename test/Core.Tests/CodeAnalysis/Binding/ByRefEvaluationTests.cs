@@ -11,6 +11,10 @@ using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
+// Pinned: the AddressOf test asserts the interpreter's by-design ADR-0039
+// pointer model; retires with the evaluator in ADR-0156 Phase 3c (#3176).
+#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
+
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
@@ -49,16 +53,15 @@ var ok = Int32.TryParse(""notanumber"", &result)
     [Fact]
     public void Dereference_Returns_Original_Value()
     {
-        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — a
-        // pointer-typed top-level global trips the #3215 signature-encoding
-        // failure under emit ("Cannot encode '*int32' as a non-byref
-        // signature slot"); realigns with that issue's resolution.
+        // #3215 (fixed): the byref-typed `p` stays an entry-point local under
+        // emit while `x` and `y` still hoist, so the dereference round-trip
+        // is observable through the emitted globals.
         var source = @"
 var x = 100
 var p = &x
 var y = *p
 ";
-        var (eval, vars) = EvaluateWithEvaluatorVariables(source);
+        var (eval, vars) = EvaluateWithVariables(source);
         Assert.Empty(eval.Diagnostics);
         Assert.Equal(100, vars["y"]);
     }
@@ -66,10 +69,11 @@ var y = *p
     [Fact]
     public void AddressOf_Evaluates_To_Value_In_Interpreter()
     {
-        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — same
-        // #3215 pointer-global emit failure as above, and the asserted
-        // semantics ("&x evaluates to the value") are the interpreter's
-        // pointer model by design (ADR-0039); retires with the evaluator.
+        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
+        // asserted semantics ("&x evaluates to the value") are the
+        // interpreter's pointer model by design (ADR-0039), and under the
+        // #3215 fix the byref-typed `p` is an entry-point local, not a
+        // readable global; retires with the evaluator (Phase 3c).
         var source = @"
 var x = 55
 var p = &x
@@ -89,7 +93,8 @@ var p = &x
         return (result, result.ReadGlobals());
     }
 
-    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3215-pinned tests.
+    // ADR-0156 Phase 3b (#3176): evaluator twin for the ADR-0039-pinned
+    // pointer-model test above; delete with the evaluator (Phase 3c).
     private static (EvaluationResult Result, Dictionary<string, object> Variables) EvaluateWithEvaluatorVariables(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
