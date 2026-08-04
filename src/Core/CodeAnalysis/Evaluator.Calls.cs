@@ -672,11 +672,11 @@ public sealed partial class Evaluator
             || (node.Type?.ClrType != null && !node.Type.ClrType.IsValueType))
         {
             // Reference upcast (class → implemented interface, derived class
-            // → base class, or any → object). Also covers issue #521: a CLR
-            // class or interface widening. The interpreter stores instances
-            // as boxed objects, so the upcast is a no-op at runtime — only
-            // the bind-time static type changes.
-            return value;
+            // → base class, or any → object). User value structs take one
+            // boxed snapshot; reference values keep their existing identity.
+            return value is StructValue { IsBoxed: false, StructType.IsClass: false } structValue
+                ? structValue.Box()
+                : value;
         }
         else if (node.Type?.ClrType != null && IsSupportedNumericClrType(node.Type.ClrType))
         {
@@ -1669,9 +1669,9 @@ public sealed partial class Evaluator
 
     private void Assign(VariableSymbol variable, object value)
     {
-        // Value-typed structs are copied on assignment (Go semantics).
-        // Class types (Phase 3.B.3) are reference types — share the instance.
-        if (value is StructValue sv && !sv.StructType.IsClass)
+        // Unboxed value structs copy on assignment (Go semantics). Boxes and
+        // class values are references — preserve the existing instance.
+        if (value is StructValue sv && !sv.StructType.IsClass && !sv.IsBoxed)
         {
             value = sv.Copy();
         }

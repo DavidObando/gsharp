@@ -369,6 +369,23 @@ public sealed partial class Evaluator
                 {
                     return true;
                 }
+
+                // A boxed G# value retains both user-declared and imported
+                // interface identities through is/as and pattern bindings.
+                if (targetType is InterfaceSymbol targetInterface
+                    && t.Interfaces.Any(iface => iface.SelfAndAllBaseInterfaces().Contains(targetInterface)))
+                {
+                    return true;
+                }
+
+                if (targetType.ClrType is { IsInterface: true } targetClrInterface
+                    && t.ImplementedClrInterfaces.Any(iface =>
+                        iface.ClrType != null
+                        && (ClrTypeUtilities.AreSame(iface.ClrType, targetClrInterface)
+                            || ClrTypeUtilities.ImplementsInterfaceByName(iface.ClrType, targetClrInterface))))
+                {
+                    return true;
+                }
             }
 
             // Issue #319: when a GSharp class carries a CLR backing (because it

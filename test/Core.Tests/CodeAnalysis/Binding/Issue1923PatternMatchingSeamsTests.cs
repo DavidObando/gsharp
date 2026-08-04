@@ -17,7 +17,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <see cref="GSharp.Core.CodeAnalysis.Binding.BoundBinaryOperator"/> only
 /// registers the homogeneous <c>object == object</c> arm; there was no
 /// boxing-conversion adaptation for a non-<c>object</c> operand, unlike the
-/// existing integer-literal / numeric-widening adaptations.</description></item>
+/// existing integer-literal / numeric-widening adaptations. The comparison
+/// uses object reference identity, so separately boxed equal values are not
+/// equal.</description></item>
 /// <item><description>A property pattern (<c>{ City: "x" }</c>) against a
 /// nullable CLASS-typed subject (<c>Address?</c>) previously reported GS0172
 /// because <c>PatternBinder.BindPropertyPattern</c> required the discriminant
@@ -41,18 +43,17 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue1923PatternMatchingSeamsTests
 {
     [Fact]
-    public void BoxedConstantEquality_BindsAgainstObjectTypedVariable()
+    public void BoxedConstantEquality_UsesObjectReferenceIdentity()
     {
         var source = @"
 let answer object = 42
 answer == 42
 ";
-        // Issue #3224: the emitted comparison dispatches through
-        // Object.Equals (value semantics), matching the evaluator; it
-        // previously compared two distinct box references and yielded false.
+        // ADR-0045: the literal boxes into a new object, so reference
+        // equality against the existing box is false.
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(true, result.Value);
+        Assert.Equal(false, result.Value);
     }
 
     [Fact]

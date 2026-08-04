@@ -709,30 +709,6 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Issue #3224: the Issue #1923 boxed-constant equality seam
-        // (`answer == 42` where `answer` is typed `object` and the other
-        // operand boxes in). The bound semantics compare the boxed VALUE —
-        // the binder marks the operator with IsBoxedValueEquality — so
-        // dispatch through static `Object.Equals(object, object)` (which
-        // routes to the boxed value's Equals override and handles nil on
-        // either side). Falling through to the bottom-of-method `ceq` tail
-        // compared two distinct box references and silently yielded `false`
-        // for equal values. Both operands are already `object`-typed after
-        // the seam's boxing conversion, so no `box` is needed here.
-        if (b.Op.IsBoxedValueEquality)
-        {
-            this.EmitExpression(b.Left);
-            this.EmitExpression(b.Right);
-            this.il.Call(this.outer.wellKnown.GetObjectStaticEqualsReference());
-            if (b.Op.Kind == BoundBinaryOperatorKind.NotEquals)
-            {
-                this.il.LoadConstantI4(0);
-                this.il.OpCode(ILOpCode.Ceq);
-            }
-
-            return;
-        }
-
         // String concatenation / equality go through BCL helpers. Issue #1927:
         // `+` also accepts `string?` mixed with `string` on either/both sides
         // (the operator table binds that combination too); at runtime a

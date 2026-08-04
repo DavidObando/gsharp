@@ -12,18 +12,13 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #3224: equality between an <c>object</c>-typed operand and a value
 /// that boxes in (the Issue #1923 boxed-constant seam, <c>answer == 42</c>
-/// where <c>answer</c> is typed <c>object</c>) compares the boxed VALUE.
-/// The emitted comparison previously fell through to the reference-identity
-/// <c>ceq</c> tail and compared two distinct box references — silently
-/// yielding <c>false</c> where the bound semantics (and the evaluator) said
-/// <c>true</c>. The binder now marks the seam's operator as boxed-value
-/// equality and the emitter dispatches through
-/// <c>Object.Equals(object, object)</c>.
+/// where <c>answer</c> is typed <c>object</c>) uses ADR-0045 reference
+/// equality. Each value operand boxes independently before the comparison.
 /// </summary>
 public sealed class Issue3224BoxedConstantEqualityEmitTests
 {
     [Fact]
-    public void BoxedConstantEquality_RunsAndVerifies()
+    public void BoxedConstantReferenceEquality_RunsAndVerifies()
     {
         const string Source = """
             package Issue3224
@@ -48,7 +43,7 @@ public sealed class Issue3224BoxedConstantEqualityEmitTests
             """;
 
         Assert.Equal(
-            "True\nFalse\nFalse\nTrue\nTrue\nTrue\nbranch\n",
+            "False\nTrue\nFalse\nTrue\nFalse\nTrue\n",
             CompileVerifyAndRun(Source));
     }
 
