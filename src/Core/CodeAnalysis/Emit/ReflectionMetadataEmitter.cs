@@ -1738,6 +1738,20 @@ internal sealed class ReflectionMetadataEmitter
         // after these globals so SM field rows remain strictly greater than
         // <Program>'s fieldList pointer.
         var globals = this.emitCtx.Program.Globals;
+
+        // Issue #3215: a top-level `var p = &x` binds `p` as a global whose
+        // type is a managed pointer (`*T`, ByRefTypeSymbol). ECMA-335 §II.14.4.2
+        // forbids ELEMENT_TYPE_BYREF in a field signature, so such a variable
+        // cannot be hoisted to a static FieldDef at all — the signature
+        // encoder (correctly) refuses to encode it and the whole emit died
+        // with an ICE. Keep byref-typed globals out of the hoist plan instead:
+        // every consumer (SlotPlanner, MethodBodyPlanner, the member-access
+        // emit paths) already falls back to an ordinary method-local slot when
+        // a GlobalVariableSymbol has no registered FieldDef, and a byref LOCAL
+        // slot is legal IL (EncodeLocalVariableType emits `T&`). The variable
+        // keeps evaluator-identical single-run semantics; it simply is not
+        // observable as a CLR static field (which no legal PE could express).
+        globals = globals.RemoveAll(g => g.Type is ByRefTypeSymbol);
         int programFirstFieldRow = nextFieldRow;
         var globalFieldRows = new Dictionary<GlobalVariableSymbol, int>();
         foreach (var g in globals)

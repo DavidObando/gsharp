@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using System.Linq;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Binding;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
@@ -27,9 +21,8 @@ public class ByRefPointerTests
 var x = 42
 var p = &x
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3215 tracks address-of/pointer signature encoding in the emitter.
-        var result = EvaluateWithEvaluator(source);
+        // #3215: emitted — the byref-typed top-level var stays a local slot.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -84,11 +77,12 @@ var y = *x
 var x = 42
 var p = &x
 var y = *p
+y
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3215 tracks address-of/pointer signature encoding in the emitter.
-        var result = EvaluateWithEvaluator(source);
+        // #3215: emitted — dereference through the byref local round-trips.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]
@@ -172,9 +166,8 @@ var ok = Int32.TryParse(""123"", &result)
 var x = 10
 var p = &x
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3215 tracks address-of/pointer signature encoding in the emitter.
-        var result = EvaluateWithEvaluator(source);
+        // #3215: emitted — same shape as AddressOf_Variable_Binds_Successfully.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -195,15 +188,5 @@ var y = &x + 1
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3215 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3215 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
