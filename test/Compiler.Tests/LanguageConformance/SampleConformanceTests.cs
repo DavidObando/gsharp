@@ -17,7 +17,12 @@ namespace GSharp.Compiler.Tests.LanguageConformance;
 
 /// <summary>
 /// Runs every golden sample through the emitted runtime and every single-file
-/// sample through both evaluator front ends.
+/// sample through the in-process emit-to-memory drivers (bare <c>gsc</c> and
+/// <c>gsi</c>, ADR-0156 Phase 1), comparing all three byte-wise. Since Phase 1
+/// there are no expected per-driver differences: the historical
+/// <c>ExpectedDifferences</c> table (interpreter boundaries GS0510/GS0511/GS0514
+/// and the missing gsi reference channel, #3130) was deleted with the
+/// boundaries that caused it, and per the ADR no new entries may be added.
 /// </summary>
 public class SampleConformanceTests
 {
@@ -37,37 +42,6 @@ public class SampleConformanceTests
         "PInvokeRefOutIn.gs",
         "PInvokeMarshalAs.gs",
     };
-
-    private static readonly IReadOnlyDictionary<string, ExpectedDifference> ExpectedDifferences =
-        new Dictionary<string, ExpectedDifference>(StringComparer.Ordinal)
-        {
-            ["Deinit.gs"] = SameDifference(
-                Expected(0, "Allocated: db/users\ndone\n", "GS0510"),
-                "docs/diagnostics.md GS0510 / #2988",
-                "the evaluators do not run deinitializers"),
-            ["GsharpExtensionsMixed.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0157", "GS0159"),
-                "#3130",
-                "the evaluator drivers do not load the separately built Gsharp.Extensions assembly"),
-            ["GsharpExtensionsOptional.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0159"),
-                "#3130",
-                "the evaluator drivers do not load the separately built Gsharp.Extensions assembly"),
-            ["GsharpExtensionsSequences.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0157", "GS0158", "GS0159"),
-                "#3130",
-                "the evaluator drivers do not load the separately built Gsharp.Extensions assembly"),
-            ["PInvoke.gs"] = NativeCallDifference(),
-            ["PInvokeFunctionPointer.gs"] = NativeCallDifference(),
-            ["PInvokeLibraryImport.gs"] = NativeCallDifference(),
-            ["PInvokeLibraryImportStringReturn.gs"] = NativeCallDifference(),
-            ["PInvokeMarshalAs.gs"] = NativeCallDifference(),
-            ["PInvokeRefOutIn.gs"] = NativeCallDifference(),
-            ["RefStructSpan.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0511"),
-                "docs/diagnostics.md GS0511 / #3114",
-                "reflection cannot invoke ByRefLike signatures"),
-        };
 
     private static readonly Regex DiagnosticIdPattern =
         new(@"\b(?:GS\d{4}|GSI\d{3})\b", RegexOptions.CultureInvariant);
@@ -112,26 +86,27 @@ public class SampleConformanceTests
         var sourcePath = Path.Combine(samplesDirectory, sampleName);
         var goldenPath = Path.ChangeExtension(sourcePath, ".golden");
 
-        Assembly.Load("Gsharp.Extensions");
+        var extensionsAssembly = Assembly.Load("Gsharp.Extensions");
+
+        // Samples that consume the separately built Gsharp.Extensions assembly
+        // need it on every driver's reference channel (#3130): gsc and gsi get
+        // the same /r: path the emitted column compiles against, and gsc also
+        // mirrors the emitted column's GS9100 suppression so the compile-time
+        // console output stays identical.
+        var usesExtensions = File.ReadAllText(sourcePath).Contains("Gsharp.Extensions", StringComparison.Ordinal);
+        var extensionsReference = usesExtensions
+            ? "/r:" + extensionsAssembly.Location
+            : null;
+        var compilerArguments = usesExtensions
+            ? new[] { extensionsReference, "/nowarn:GS9100", sourcePath }
+            : new[] { sourcePath };
+        var interpreterArguments = usesExtensions
+            ? new[] { extensionsReference, sourcePath }
+            : new[] { sourcePath };
 
         var emitted = await RunEmittedAsync(new[] { sourcePath }, goldenPath, Path.GetFileNameWithoutExtension(sampleName));
-        var evaluatingCompiler = await RunDriverProcessAsync("Compiler", "gsc", sourcePath, compilerProtocol: true);
-        var interpreter = await RunDriverProcessAsync("Repl", "gsi", sourcePath, compilerProtocol: false);
-
-        if (ExpectedDifferences.TryGetValue(sampleName, out var difference))
-        {
-            var expectedCompiler = difference.EvaluatingCompiler;
-            var expectedInterpreter = difference.Interpreter;
-            Assert.False(
-                Equivalent(emitted, expectedCompiler)
-                && Equivalent(emitted, expectedInterpreter),
-                $"{sampleName} has a redundant expected-difference entry ({difference.Reference}: {difference.Reason}).");
-            AssertResults(
-                sampleName,
-                ("gsc", expectedCompiler, evaluatingCompiler),
-                ("gsi", expectedInterpreter, interpreter));
-            return;
-        }
+        var evaluatingCompiler = await RunDriverProcessAsync("Compiler", "gsc", sourcePath, compilerProtocol: true, compilerArguments);
+        var interpreter = await RunDriverProcessAsync("Repl", "gsi", sourcePath, compilerProtocol: false, interpreterArguments);
 
         AssertResults(
             sampleName,
@@ -165,7 +140,6 @@ public class SampleConformanceTests
         Assert.True(
             samples.Count >= MinimumSingleFileSampleCount,
             $"Expected at least {MinimumSingleFileSampleCount} single-file golden samples, found {samples.Count}.");
-        Assert.Empty(ExpectedDifferences.Keys.Except(samples, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -184,6 +158,8 @@ public class SampleConformanceTests
         Assert.Equal(MainOnlySamples, actual);
         foreach (var sample in actual)
         {
+            // A Main-only sample with empty golden output would pass every
+            // driver vacuously; require the entry point to produce evidence.
             var golden = SampleConformanceData.ReadNormalizedFile(
                 Path.Combine(samplesDirectory, Path.ChangeExtension(sample, ".golden")));
             Assert.False(string.IsNullOrEmpty(golden), $"{sample} must have non-empty golden output.");
@@ -294,7 +270,8 @@ public class SampleConformanceTests
         string projectDirectory,
         string executableName,
         string sourcePath,
-        bool compilerProtocol)
+        bool compilerProtocol,
+        string[] arguments)
     {
         var testDirectory = Path.GetDirectoryName(typeof(SampleConformanceTests).Assembly.Location);
         Assert.NotNull(testDirectory);
@@ -308,7 +285,7 @@ public class SampleConformanceTests
         var process = await RunProcessAsync(
             executable,
             Path.GetDirectoryName(sourcePath),
-            sourcePath);
+            arguments);
         return CreateCliResult(
             process.ExitCode,
             process.StandardOutput,
@@ -383,21 +360,6 @@ public class SampleConformanceTests
             await stderrTask);
     }
 
-    private static ExpectedDifference NativeCallDifference()
-        => SameDifference(
-            Expected(1, string.Empty, "GS0514"),
-            "ADR-0152 / #2986",
-            "GS0514 requires native calls to use emitted gsc output");
-
-    private static ExpectedDifference SameDifference(
-        DriverResult result,
-        string reference,
-        string reason)
-        => new(result, result, reference, reason);
-
-    private static DriverResult Expected(int exitCode, string output, params string[] diagnosticIds)
-        => new(exitCode, output, diagnosticIds, string.Empty);
-
     private static bool Equivalent(DriverResult left, DriverResult right)
         => left.ExitCode == right.ExitCode
             && string.Equals(left.Output, right.Output, StringComparison.Ordinal)
@@ -433,12 +395,6 @@ public class SampleConformanceTests
         string Output,
         string[] DiagnosticIds,
         string StandardError);
-
-    private sealed record ExpectedDifference(
-        DriverResult EvaluatingCompiler,
-        DriverResult Interpreter,
-        string Reference,
-        string Reason);
 
     private sealed record ProcessResult(
         int ExitCode,

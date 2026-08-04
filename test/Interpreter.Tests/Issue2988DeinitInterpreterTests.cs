@@ -64,11 +64,19 @@ public class Issue2988DeinitInterpreterTests
         Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
     }
 
+    /// <summary>
+    /// ADR-0156 Phase 1: bare <c>gsc</c> and script-mode <c>gsi</c> execute
+    /// emitted code, so deinitializers run as real CLR finalizers on every
+    /// driver — derived-then-base, per declaring class — and the GS0510
+    /// boundary warning no longer fires on any of them. The warning remains
+    /// an interactive-REPL concern (see the SessionEngine tests above).
+    /// </summary>
+    /// <param name="driver">The driver under test.</param>
     [Theory]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation)]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission)]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.Interpreter)]
-    public void InheritedDeinitializersExposeDriverBoundaryPerDeclaringClass(
+    public void InheritedDeinitializersRunOnEveryDriver(
         Issue3010EntryPointDriverMatrixTests.Driver driver)
     {
         const string Source = """
@@ -100,7 +108,6 @@ public class Issue2988DeinitInterpreterTests
             GC.WaitForPendingFinalizers()
             Console.WriteLine("end-55")
             """;
-        const string InterpretedOutput = "body-44\nend-55\n";
         const string EmittedOutput = "body-44\nderived-deinit-22\nbase-deinit-11\nend-55\n";
 
         var result = Issue3010EntryPointDriverMatrixTests.Run(
@@ -109,33 +116,12 @@ public class Issue2988DeinitInterpreterTests
             driver);
         Assert.Equal(0, result.ExitCode);
 
-        string warningOutput;
-        switch (driver)
-        {
-            case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation:
-                Assert.StartsWith(InterpretedOutput + "\n", result.StandardOutput, StringComparison.Ordinal);
-                Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
-                Assert.Equal(string.Empty, result.StandardError);
-                warningOutput = result.StandardOutput[InterpretedOutput.Length..];
-                break;
-            case Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission:
-                Assert.Equal(EmittedOutput, result.StandardOutput);
-                Assert.Equal(string.Empty, result.StandardError);
-                return;
-            case Issue3010EntryPointDriverMatrixTests.Driver.Interpreter:
-                Assert.Equal(InterpretedOutput, result.StandardOutput);
-                warningOutput = result.StandardError;
-                break;
-            default:
-                throw new InvalidOperationException($"Unexpected driver {driver}.");
-        }
-
-        Assert.Equal(
-            2,
-            warningOutput.Split('\n')
-                .Count(line => line.Contains("warning GS0510", StringComparison.Ordinal)));
-        Assert.Contains("class 'CachedResource'", warningOutput, StringComparison.Ordinal);
-        Assert.Contains("class 'Resource'", warningOutput, StringComparison.Ordinal);
+        var expectedOutput = driver == Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation
+            ? EmittedOutput + "Success.\n"
+            : EmittedOutput;
+        Assert.Equal(expectedOutput, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+        Assert.DoesNotContain("GS0510", result.StandardOutput + result.StandardError, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -189,18 +175,35 @@ public class Issue2988DeinitInterpreterTests
         Assert.DoesNotContain(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
     }
 
+    /// <summary>
+    /// ADR-0156 Phase 1: script-mode <c>gsi</c> runs emitted code, so a class
+    /// deinitializer executes as a real CLR finalizer — asserted positively by
+    /// forcing a collection — and the GS0510 boundary warning that used to
+    /// accompany file mode no longer fires there.
+    /// </summary>
     [Fact]
-    public void ScriptRunnerWritesBoundaryWarningToStandardError()
+    public void ScriptRunnerRunsDeinitializersWithoutBoundaryWarning()
     {
         var sourcePath = Path.Combine(AppContext.BaseDirectory, "issue2988-deinit.gs");
         File.WriteAllText(
             sourcePath,
             """
+            import System
+
             class Resource {
                 deinit {
+                    Console.WriteLine("deinit-ran-22")
                 }
             }
 
+            func Allocate() {
+                var resource = Resource()
+                GC.KeepAlive(resource)
+            }
+
+            Allocate()
+            GC.Collect()
+            GC.WaitForPendingFinalizers()
             Console.WriteLine("body-33")
             """);
 
@@ -214,11 +217,9 @@ public class Issue2988DeinitInterpreterTests
         {
             var exitCode = GSharp.Repl.Program.Main([sourcePath]);
 
-            // Unlike GS0513, GS0510 skips only a GC-scheduled side effect after evaluation completes.
             Assert.Equal(0, exitCode);
-            Assert.Equal("body-33\n", output.ToString());
-            Assert.Contains("warning GS0510", error.ToString(), StringComparison.Ordinal);
-            Assert.Contains("deinit", error.ToString(), StringComparison.Ordinal);
+            Assert.Equal("deinit-ran-22\nbody-33\n", output.ToString());
+            Assert.Equal(string.Empty, error.ToString());
         }
         finally
         {

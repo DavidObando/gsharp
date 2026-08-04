@@ -9,17 +9,23 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2956 / ADR-0153: script-mode <c>gsi</c> reports self-contained
-/// diagnostics for constructs that require the compiled storage model.
+/// Issue #2956 / ADR-0153 / ADR-0156 Phase 1: script-mode <c>gsi</c> executes
+/// the compiled storage model natively. The constructs the interpreting driver
+/// used to reject with self-contained boundary diagnostics (<c>fixed</c>,
+/// <c>stackalloc</c>, <c>sizeof</c> on user structs, function pointers) now
+/// compile through the real emitter and run in-process, so each case asserts
+/// the construct's observable result instead of a refusal. The ADR-0153
+/// boundary remains in force for the interactive REPL, which still evaluates
+/// (see <c>Issue3004PointerBoundaryInterpreterTests</c>).
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2956InterpreterBoundaryTests
 {
     [Fact]
-    public void FixedArrayReportsCompiledOnlyBoundary()
+    public void FixedArrayPinsAndExecutes()
     {
-        AssertBoundary(
-            nameof(FixedArrayReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(FixedArrayPinsAndExecutes),
             """
             import System
 
@@ -29,15 +35,16 @@ public class Issue2956InterpreterBoundaryTests
                     Console.WriteLine(values.Length)
                 }
             }
-            """,
-            "'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.");
+            """);
+
+        AssertRan(result, "2\n");
     }
 
     [Fact]
-    public void FixedStringReportsCompiledOnlyBoundary()
+    public void FixedStringPinsAndDereferences()
     {
-        AssertBoundary(
-            nameof(FixedStringReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(FixedStringPinsAndDereferences),
             """
             import System
 
@@ -46,90 +53,111 @@ public class Issue2956InterpreterBoundaryTests
                     Console.WriteLine(*p)
                 }
             }
-            """,
-            "'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.");
+            """);
+
+        AssertRan(result, "65\n");
     }
 
     [Fact]
-    public void FixedPinnableSpanReportsCompiledOnlyBoundary()
+    public void FixedEmptySpanPinsNil()
     {
-        AssertBoundary(
-            nameof(FixedPinnableSpanReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(FixedEmptySpanPinsNil),
             """
             import System
 
             unsafe {
                 fixed p *int32 = Span[int32].Empty {
-                    Console.WriteLine(*p)
+                    if p == nil {
+                        Console.WriteLine("empty-span-pins-nil")
+                    }
                 }
             }
-            """,
-            "'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.");
+            """);
+
+        AssertRan(result, "empty-span-pins-nil\n");
     }
 
     [Fact]
-    public void StackAllocReportsCompiledOnlyBoundary()
+    public void StackAllocExecutes()
     {
-        AssertBoundary(
-            nameof(StackAllocReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(StackAllocExecutes),
             """
+            import System
+
             func run() int32 {
                 let values = stackalloc [2]int32
                 return values.Length
             }
 
-            run()
-            """,
-            "stackalloc is not supported in the interpreter; it requires the CIL localloc emit path.");
+            Console.WriteLine(run())
+            """);
+
+        AssertRan(result, "2\n");
     }
 
     [Fact]
-    public void SizeOfUserStructReportsCompiledOnlyBoundary()
+    public void SizeOfUserStructExecutes()
     {
-        AssertBoundary(
-            nameof(SizeOfUserStructReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(SizeOfUserStructExecutes),
             """
+            import System
+
             struct Pair {
                 var Left int32
                 var Right int32
             }
 
             unsafe {
-                sizeof(Pair)
+                Console.WriteLine(sizeof(Pair))
             }
-            """,
-            "sizeof on an unmanaged-pointer struct pointee is not supported in the interpreter; it requires the CIL sizeof emit path.");
+            """);
+
+        AssertRan(result, "8\n");
     }
 
     [Fact]
-    public void FunctionPointerAddressReportsCompiledOnlyBoundary()
+    public void FunctionPointerAddressExecutes()
     {
-        AssertBoundary(
-            nameof(FunctionPointerAddressReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(FunctionPointerAddressExecutes),
             """
+            import System
+
             unsafe func identity(value int32) int32 {
                 return value
             }
 
             unsafe {
                 let pointer *func(int32) int32 = &identity
+                Console.WriteLine("took-address")
             }
-            """,
-            "'&Method' function pointers are not supported in the interpreter; they require the CIL ldftn/calli emit path (ADR-0122 §9).");
+            """);
+
+        AssertRan(result, "took-address\n");
     }
 
     [Fact]
-    public void FunctionPointerInvocationReportsCompiledOnlyBoundary()
+    public void FunctionPointerInvocationExecutes()
     {
-        AssertBoundary(
-            nameof(FunctionPointerInvocationReportsCompiledOnlyBoundary),
+        var result = RunGsi(
+            nameof(FunctionPointerInvocationExecutes),
             """
-            unsafe {
-                let pointer *func(int32) int32 = nil
-                pointer(1)
+            import System
+
+            unsafe func identity(value int32) int32 {
+                return value
             }
-            """,
-            "function-pointer invocation ('fp(args)') is not supported in the interpreter; it requires the CIL calli emit path (ADR-0122 §9).");
+
+            unsafe {
+                let pointer *func(int32) int32 = &identity
+                Console.WriteLine(pointer(41) + 1)
+            }
+            """);
+
+        AssertRan(result, "42\n");
     }
 
     [Fact]
@@ -145,18 +173,16 @@ public class Issue2956InterpreterBoundaryTests
             }
             """);
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.Equal("42\n", result.StandardOutput);
-        Assert.Equal(string.Empty, result.StandardError);
+        AssertRan(result, "42\n");
     }
 
-    private static void AssertBoundary(string name, string source, string message)
+    private static void AssertRan(
+        (int ExitCode, string StandardOutput, string StandardError) result,
+        string expectedOutput)
     {
-        var result = RunGsi(name, source);
-
-        Assert.Equal(1, result.ExitCode);
-        Assert.Equal(string.Empty, result.StandardOutput);
-        Assert.Contains(message, result.StandardError);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(expectedOutput, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunGsi(

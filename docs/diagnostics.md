@@ -321,7 +321,9 @@ storage-dependent unsafe constructs as compiled-only. The clean boundary sites
 for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers currently
 surface through `GS0513` with a self-contained message naming the construct and
 the required CIL emit path. Evaluator `GS9999` diagnostics still indicate a
-defect.
+defect. Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 1 the
+boundary applies only to the interactive REPL — `gsi <file>` and bare `gsc`
+execute emitted code, where these constructs run natively.
 
 ## Documentation diagnostics (GS0227–GS0231)
 
@@ -1165,7 +1167,11 @@ GS0264, even though iterator specialization synthesizes equivalent variants.
 
 This is an intentional interpreter capability boundary, not an internal
 compiler error. It applies even when the declaration is not called because
-`gsi` cannot create a valid callable value for direct or indirect use.
+the interpreter cannot create a valid callable value for direct or indirect
+use. Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 1 only
+the interactive REPL interprets: `gsi <file>` and bare `gsc` execute emitted
+code, so P/Invoke runs natively there and this diagnostic no longer fires on
+those drivers.
 
 ## Explicit-layout reference storage (GS0518)
 
@@ -1182,7 +1188,9 @@ compiler error. It applies even when the declaration is not called because
 Interpreter values use boxed storage, which cannot hold stack-only CLR values
 or preserve their interior references. The interpreter emulates spans created
 from arrays; CLR methods and properties returning stack-only values remain
-unsupported. Compile the program with `gsc /out:<file>` to use those values.
+unsupported. Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md)
+Phase 1 only the interactive REPL interprets: `gsi <file>` and bare `gsc`
+execute emitted code, where ByRefLike values work natively.
 
 ## Interpreter deinitializer boundary (GS0510)
 
@@ -1191,8 +1199,11 @@ unsupported. Compile the program with `gsc /out:<file>` to use those values.
 | GS0510 | Warning | A class declares a CLR GC finalizer with `deinit`, which does not run under interpreted execution. |
 
 The interpreter has no emitted class with a CLR `Finalize` override and does
-not invent deterministic scope-exit cleanup. Compile with `gsc` when program
-behavior depends on GC finalization.
+not invent deterministic scope-exit cleanup. Since
+[ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 1 only the
+interactive REPL interprets: `gsi <file>` and bare `gsc` execute emitted code,
+whose deinitializers run as real CLR finalizers, so this warning no longer
+fires on those drivers.
 
 ## Internal compiler error details (GS9998)
 

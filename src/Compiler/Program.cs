@@ -13,6 +13,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Emit;
+using GSharp.Core.CodeAnalysis.Execution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.IO;
@@ -153,8 +154,10 @@ public class Program
 
                 if (parsed.OutputPath is null)
                 {
-                    // Legacy / no-output mode: interpret the program (back-compat).
-                    return Interpret(compilation, parsed);
+                    // Legacy / no-output mode (ADR-0156 Phase 1): compile with
+                    // the real emitter into memory and execute in-process,
+                    // preserving the historical evaluate-mode driver protocol.
+                    return ExecuteInMemory(compilation, parsed);
                 }
 
                 return Emit(compilation, parsed);
@@ -308,9 +311,14 @@ public class Program
             "Members that reference these assemblies will be skipped. Ensure the full transitive closure of references is passed (e.g. add the missing package or project reference).");
     }
 
-    private static int Interpret(Compilation compilation, CommandLineArgs args)
+    // ADR-0156 Phase 1: bare gsc no longer interprets. The program is emitted
+    // to memory and executed in-process by the shared host, keeping the
+    // driver protocol: diagnostics to stdout, "Success."/"Failed." trailer,
+    // exit code 0 on success (the program's own return value is discarded,
+    // as evaluate mode always did — use /out: for a real executable).
+    private static int ExecuteInMemory(Compilation compilation, CommandLineArgs args)
     {
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedProgramHost.Run(compilation, args.References);
         if (result.Diagnostics.Any())
         {
             var effective = ApplySuppressPromote(result.Diagnostics, args);
@@ -320,6 +328,14 @@ public class Program
                 Console.Error.WriteLine("Failed.");
                 return Error;
             }
+        }
+
+        if (result.UnhandledException is not null)
+        {
+            // Mirror the CLR host's unhandled-exception protocol so the
+            // in-memory driver and `dotnet exec` render crashes identically.
+            Console.Error.WriteLine(EmittedProgramHost.FormatUnhandledException(result.UnhandledException));
+            return EmittedProgramHost.UnhandledExceptionExitCode;
         }
 
         Console.WriteLine("Success.");

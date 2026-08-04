@@ -145,9 +145,16 @@ public class Issue3114ReadOnlySpanInterpreterTests
         }
     }
 
-    [Theory]
-    [MemberData(nameof(InterpretingDrivers))]
-    public void SpanInterpolation_UsesPublicSpanName(Driver driver)
+    /// <summary>
+    /// The evaluator's public-name span interpolation (#3128) now lives only
+    /// where the evaluator still runs — the interactive REPL. ADR-0156
+    /// Phase 1 moved <c>gsi &lt;file&gt;</c> and bare <c>gsc</c> to emitted
+    /// execution, and the emit path cannot lower a span interpolation hole
+    /// (#3183), so the driver-level variant of this coverage is
+    /// <see cref="SpanInterpolation_ReportsEmitIceOnFileDrivers"/>.
+    /// </summary>
+    [Fact]
+    public void SpanInterpolation_UsesPublicSpanNameInteractively()
     {
         const string Source = """
             import System
@@ -158,6 +165,41 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 var readOnly ReadOnlySpan[int32] = writable
                 Console.WriteLine("writable=${writable}")
                 Console.WriteLine("readonly=${readOnly}")
+            }
+            """;
+
+        // ByRefLike values cannot be top-level session variables (GS0219), so
+        // the interpolation runs inside an entry point, exactly as the file
+        // drivers used to evaluate it.
+        var cell = new GSharp.Repl.Engine.SessionEngine { CaptureConsole = true, RunEntryPoint = true }.Evaluate(Source);
+
+        Assert.False(cell.HasError);
+        Assert.Equal(
+            "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\n",
+            cell.Output);
+    }
+
+    /// <summary>
+    /// #3183: the emit path ICEs on span interpolation holes
+    /// (<c>DefaultInterpolatedStringHandler.AppendFormatted[T]</c> rejects
+    /// ByRefLike type arguments), which the evaluator masked on the file
+    /// drivers until ADR-0156 Phase 1. Until #3183 is fixed, both emitted
+    /// file drivers must surface the canonical GS9998 line with exit code 1
+    /// instead of crashing; when it is fixed, flip this to assert the
+    /// evaluator's golden rendering.
+    /// </summary>
+    /// <param name="driver">The driver under test.</param>
+    [Theory]
+    [MemberData(nameof(InterpretingDrivers))]
+    public void SpanInterpolation_ReportsEmitIceOnFileDrivers(Driver driver)
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                var values = []int32{11, 22, 33}
+                var writable Span[int32] = values
+                Console.WriteLine("writable=${writable}")
             }
             """;
 
@@ -178,13 +220,12 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };
 
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal(
-                driver == Driver.CompilerEvaluation
-                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nSuccess.\n"
-                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\n",
-                result.StandardOutput);
-            Assert.Equal(string.Empty, result.StandardError);
+            Assert.Equal(1, result.ExitCode);
+            var diagnosticStream = driver == Driver.CompilerEvaluation
+                ? result.StandardOutput
+                : result.StandardError;
+            Assert.Contains("error GS9998: ArgumentException", diagnosticStream, StringComparison.Ordinal);
+            Assert.Contains("AppendFormatted", diagnosticStream, StringComparison.Ordinal);
         }
         finally
         {
