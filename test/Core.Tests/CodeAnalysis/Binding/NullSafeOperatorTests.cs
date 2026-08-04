@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -63,12 +57,15 @@ x!!
 var x int32? = nil
 x!!
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
-        // with 'nil value !!'; emitted throws the raw CLR exception).
-        var result = EvaluateWithEvaluator(source);
+        // Issue #3216 contract decision: `!!` on nil fails with the
+        // underlying CLR exception (compiled semantics); the evaluator's
+        // 'nil value !!' panic message retires with the evaluator
+        // (ADR-0156 Phase 3c). Unwrapping a value-type `T?` surfaces
+        // InvalidOperationException.
+        var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
+        Assert.IsType<System.InvalidOperationException>(result.UnhandledException);
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("Nullable object must have a value"));
     }
 
     [Fact]
@@ -144,12 +141,13 @@ import System
 var s string? = nil
 s!!.Length
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
-        // with 'nil value !!'; emitted throws the raw CLR exception).
-        var result = EvaluateWithEvaluator(source);
+        // Issue #3216 contract decision: `!!` on nil fails with the
+        // underlying CLR exception (compiled semantics) — a nil reference
+        // receiver surfaces NullReferenceException; the evaluator's
+        // 'nil value !!' panic retires with the evaluator (Phase 3c).
+        var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
+        Assert.IsType<System.NullReferenceException>(result.UnhandledException);
     }
 
     [Fact]
@@ -214,12 +212,13 @@ import System.IO
 let dir = DirectoryInfo(""{literal}"")
 dir.Parent!!.Name
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
-        // with 'nil value !!'; emitted throws the raw CLR exception).
-        var result = EvaluateWithEvaluator(source);
+        // Issue #3216 contract decision: `!!` on nil fails with the
+        // underlying CLR exception (compiled semantics) — a nil reference
+        // receiver surfaces NullReferenceException; the evaluator's
+        // 'nil value !!' panic retires with the evaluator (Phase 3c).
+        var result = Evaluate(source);
         Assert.NotEmpty(result.Diagnostics);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
+        Assert.IsType<System.NullReferenceException>(result.UnhandledException);
     }
 
     private static string EscapeForGSharpString(string s) =>
@@ -228,15 +227,5 @@ dir.Parent!!.Name
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3216 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3216 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
