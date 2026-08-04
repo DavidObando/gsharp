@@ -394,18 +394,17 @@ public sealed partial class Evaluator
         };
 
         var parameterOffset = method.ExplicitReceiverParameter == null ? 0 : 1;
-        for (int i = 0; i < node.Arguments.Length; i++)
-        {
-            var parameter = method.Parameters[i + parameterOffset];
-            var value = EvaluateExpression(node.Arguments[i]);
-            frame[parameter] = value;
-        }
+        var args = PopulateUserCallFrame(node.Arguments, method, parameterOffset, frame, out var refSlots);
 
+        object result;
         using (PushFrame(frame))
         {
             var statement = program.Functions[method];
-            return EvaluateUserMethodBody(method, statement);
+            result = EvaluateUserMethodBody(method, statement);
         }
+
+        WriteBackUserCallFrame(refSlots, args, method, parameterOffset, frame);
+        return result;
     }
 
     /// <summary>
@@ -486,12 +485,10 @@ public sealed partial class Evaluator
     /// </summary>
     private object EvaluateConstrainedStaticCallExpression(BoundConstrainedStaticCallExpression node)
     {
-        // Evaluate arguments left-to-right (matches IL evaluation order).
+        // BuildRefSlots evaluates arguments left-to-right while retaining caller lvalues for write-back.
         var evaluatedArgs = new object[node.Arguments.Length];
-        for (var i = 0; i < node.Arguments.Length; i++)
-        {
-            evaluatedArgs[i] = EvaluateExpression(node.Arguments[i]);
-        }
+        var refKinds = node.InterfaceMethod.Parameters.Select(parameter => parameter.RefKind).ToImmutableArray();
+        var refSlots = BuildRefSlots(node.Arguments, refKinds, evaluatedArgs, method: null);
 
         var slotIface = node.InterfaceMethod.StaticOwnerType as InterfaceSymbol;
         StructSymbol resolvedImpl = null;
@@ -619,10 +616,14 @@ public sealed partial class Evaluator
             frame2[target.Parameters[i]] = evaluatedArgs[i];
         }
 
+        object result;
         using (PushFrame(frame2))
         {
-            return EvaluateUserMethodBody(target, statement);
+            result = EvaluateUserMethodBody(target, statement);
         }
+
+        WriteBackUserCallFrame(refSlots, evaluatedArgs, target, parameterOffset: 0, frame2);
+        return result;
     }
 
     private object EvaluateConversionExpression(BoundConversionExpression node)
@@ -1579,6 +1580,12 @@ public sealed partial class Evaluator
                     break;
                 case BoundIndexExpression idx:
                     WriteBackIndex(idx, value);
+                    break;
+                case BoundDereferenceExpression deref:
+                    var target = deref.Operand is BoundAddressOfExpression addressOf
+                        ? addressOf.Operand
+                        : deref.Operand;
+                    WriteBackToOperand(target, value);
                     break;
             }
         }
