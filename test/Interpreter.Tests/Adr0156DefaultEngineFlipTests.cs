@@ -3,54 +3,68 @@
 // </copyright>
 
 using System;
+using System.IO;
 using ReplProgram = GSharp.Repl.Program;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// ADR-0156 Phase 3a: interactive <c>gsi</c> defaults to the emitted
-/// submission-chaining engine. Only an explicit <c>--engine evaluator</c> (or
-/// <c>GSI_ENGINE=evaluator</c>) selects the legacy tree-walking engine — a
-/// deprecated escape hatch that retires with the evaluator in Phase 3c.
-/// Witness (ADR-0154): <see cref="ReplProgram.UsesEvaluatorEngine"/> is the
-/// single interactive engine-selection predicate and does not exist before
-/// the flip; before this change the equivalent condition defaulted the
-/// unset/null choice to the evaluator, so
-/// <see cref="DefaultEngineChoiceSelectsEmittedEngine"/> pins the flipped
-/// behavior itself.
+/// ADR-0156 Phase 3c (#3176): the emitted submission-chaining engine is the
+/// ONLY interactive engine — the tree-walking evaluator and its
+/// <c>--engine evaluator</c> / <c>GSI_ENGINE=evaluator</c> escape hatch are
+/// deleted. These tests pin the surviving engine-selection surface: 'emit'
+/// (and the unset default) is accepted, anything else — including the
+/// removed 'evaluator' — is rejected with an error that lists only the
+/// valid value.
 /// </summary>
 public sealed class Adr0156DefaultEngineFlipTests
 {
     [Fact]
-    public void DefaultEngineChoiceSelectsEmittedEngine()
+    public void DefaultAndEmitChoicesAreValid()
     {
-        // No --engine and no GSI_ENGINE: the emitted engine is the default.
-        Assert.False(ReplProgram.UsesEvaluatorEngine(null));
+        Assert.True(ReplProgram.IsValidEngineChoice(null));
+        Assert.True(ReplProgram.IsValidEngineChoice("emit"));
     }
 
     [Fact]
-    public void ExplicitEmitChoiceSelectsEmittedEngine()
+    public void EvaluatorChoiceIsNoLongerValid()
     {
-        Assert.False(ReplProgram.UsesEvaluatorEngine("emit"));
+        Assert.False(ReplProgram.IsValidEngineChoice("evaluator"));
+        Assert.Equal("Unknown engine 'evaluator'. Expected 'emit'.", ReplProgram.UnknownEngineMessage("evaluator"));
     }
 
     [Fact]
-    public void ExplicitEvaluatorChoiceSelectsEvaluatorEscapeHatch()
+    public void BadEngineArgument_FailsWithErrorListingOnlyEmit()
     {
-        Assert.True(ReplProgram.UsesEvaluatorEngine("evaluator"));
+        var (exitCode, _, stderr) = RunMain("--engine", "bogus");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown engine 'bogus'. Expected 'emit'.", stderr);
+        Assert.DoesNotContain("evaluator", stderr);
     }
 
     [Fact]
-    public void EnvironmentVariableStillSelectsEvaluatorEscapeHatch()
+    public void EvaluatorEngineArgument_FailsWithErrorListingOnlyEmit()
+    {
+        var (exitCode, _, stderr) = RunMain("--engine", "evaluator");
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown engine 'evaluator'. Expected 'emit'.", stderr);
+    }
+
+    [Fact]
+    public void EvaluatorEnvironmentVariable_FailsWithErrorListingOnlyEmit()
     {
         var previous = Environment.GetEnvironmentVariable("GSI_ENGINE");
         try
         {
             Environment.SetEnvironmentVariable("GSI_ENGINE", "EVALUATOR");
-            var choice = ReplProgram.EngineChoiceFromEnvironment();
-            Assert.Equal("evaluator", choice);
-            Assert.True(ReplProgram.UsesEvaluatorEngine(choice));
+            Assert.Equal("evaluator", ReplProgram.EngineChoiceFromEnvironment());
+
+            var (exitCode, _, stderr) = RunMain();
+            Assert.Equal(1, exitCode);
+            Assert.Contains("Unknown engine 'evaluator'. Expected 'emit'.", stderr);
         }
         finally
         {
@@ -59,19 +73,48 @@ public sealed class Adr0156DefaultEngineFlipTests
     }
 
     [Fact]
-    public void UnsetEnvironmentVariableYieldsDefaultEmittedEngine()
+    public void UnsetEnvironmentVariableYieldsDefault()
     {
         var previous = Environment.GetEnvironmentVariable("GSI_ENGINE");
         try
         {
             Environment.SetEnvironmentVariable("GSI_ENGINE", null);
-            var choice = ReplProgram.EngineChoiceFromEnvironment();
-            Assert.Null(choice);
-            Assert.False(ReplProgram.UsesEvaluatorEngine(choice));
+            Assert.Null(ReplProgram.EngineChoiceFromEnvironment());
         }
         finally
         {
             Environment.SetEnvironmentVariable("GSI_ENGINE", previous);
+        }
+    }
+
+    [Fact]
+    public void HelpText_ListsOnlyTheEmitEngine()
+    {
+        var (exitCode, stdout, _) = RunMain("--help");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("'emit'", stdout);
+        Assert.Contains("was removed in ADR-0156 Phase 3c", stdout);
+        Assert.DoesNotContain("deprecated", stdout);
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunMain(params string[] args)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        try
+        {
+            var exitCode = ReplProgram.Main(args);
+            return (exitCode, stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
         }
     }
 }

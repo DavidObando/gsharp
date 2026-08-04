@@ -12,10 +12,11 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
 /// Phase 3 (ADR-0027 §7.7a) tests covering the <see cref="DebugInformationOptions"/>
-/// surface on <see cref="Compilation"/>: defaults, inheritance through
-/// <see cref="Compilation.ContinueWith"/>, null normalisation, and that
-/// the option set does not change PE output until later phases light up
-/// the actual PDB writer.
+/// surface on <see cref="Compilation"/>: defaults, null normalisation, and
+/// that the option set does not change PE output until later phases light up
+/// the actual PDB writer. (The <c>ContinueWith</c> options-cloning pin was
+/// deleted with <c>Compilation.ContinueWith</c> itself in ADR-0156 Phase 3c,
+/// #3176 — its only product consumer was the evaluator SessionEngine.)
 /// </summary>
 public class DebugInformationOptionsTests
 {
@@ -61,37 +62,6 @@ public class DebugInformationOptionsTests
         Assert.Equal("/tmp/x.pdb", compilation.DebugInformation.PdbFilePath);
         Assert.Equal("/tmp/sourcelink.json", compilation.DebugInformation.SourceLinkFilePath);
         Assert.True(compilation.DebugInformation.Deterministic);
-    }
-
-    /// <summary>
-    /// CHAIN-MACHINERY PIN (ADR-0156 Phase 3b.3, #3176): pins the
-    /// <see cref="Compilation.ContinueWith"/> options-cloning contract, not
-    /// the evaluator oracle (nothing here evaluates). The API's only product
-    /// consumer is the tree-walking REPL <c>SessionEngine</c>, so Phase 3c
-    /// must revisit this test alongside any decision to delete
-    /// <c>ContinueWith</c> with that engine.
-    /// </summary>
-    [Fact]
-    public void DebugInformation_IsClonedThroughContinueWith()
-    {
-        var initial = new Compilation(SyntaxTree.Parse("package P\n"))
-        {
-            DebugInformation = new DebugInformationOptions
-            {
-                Format = DebugInformationFormat.Embedded,
-                Deterministic = true,
-            },
-        };
-
-        var next = initial.ContinueWith(SyntaxTree.Parse("package P\n"));
-
-        Assert.Equal(DebugInformationFormat.Embedded, next.DebugInformation.Format);
-        Assert.True(next.DebugInformation.Deterministic);
-
-        // The chained compilation gets its own copy: mutating the new one
-        // does not bleed back to the previous one.
-        next.DebugInformation.Format = DebugInformationFormat.None;
-        Assert.Equal(DebugInformationFormat.Embedded, initial.DebugInformation.Format);
     }
 
     [Fact]

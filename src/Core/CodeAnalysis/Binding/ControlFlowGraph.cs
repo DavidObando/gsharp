@@ -836,12 +836,9 @@ public sealed class ControlFlowGraph
                             // CFG as a fall-through to the next statement; the
                             // iterator state-machine rewriter (`IteratorRewriter`
                             // / `AsyncIteratorRewriter`) later lowers it on the
-                            // emit path. Without this arm the gsc interpreter
-                            // path (`Compilation.Evaluate`) — which runs CFG
-                            // visualization on iterator bodies prior to running
-                            // the iterator rewriter — would throw GS9998
-                            // "Unexpected statement: YieldStatement" instead of
-                            // interpreting the iterator.
+                            // emit path. Without this arm, CFG analysis over an
+                            // iterator body prior to the iterator rewriter would
+                            // throw GS9998 "Unexpected statement: YieldStatement".
                             if (isLastStatementInBlock)
                             {
                                 Connect(current, next);

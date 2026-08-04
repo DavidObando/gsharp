@@ -23,7 +23,14 @@ public static class Program
     {
         if (args.Length == 0)
         {
-            return RunInteractive(EngineChoiceFromEnvironment(), new List<string>());
+            var envChoice = EngineChoiceFromEnvironment();
+            if (!IsValidEngineChoice(envChoice))
+            {
+                Console.Error.WriteLine(UnknownEngineMessage(envChoice));
+                return 1;
+            }
+
+            return RunInteractive(new List<string>());
         }
 
         switch (args[0])
@@ -35,10 +42,9 @@ public static class Program
                 Console.WriteLine("  file.gs                Run the given G# script and exit.");
                 Console.WriteLine("  /r:<file>              Reference an assembly (repeatable).");
                 Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).");
-                Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (default) or 'evaluator'");
-                Console.WriteLine("                         (also via GSI_ENGINE). 'evaluator' selects the legacy");
-                Console.WriteLine("                         tree-walking engine; it is deprecated and will be");
-                Console.WriteLine("                         removed in ADR-0156 Phase 3c.");
+                Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (the default and only");
+                Console.WriteLine("                         engine; also via GSI_ENGINE). The legacy 'evaluator'");
+                Console.WriteLine("                         engine was removed in ADR-0156 Phase 3c.");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
                 Console.WriteLine("  --version              Show the gsi version and exit.");
                 Console.WriteLine("  (no args)              Start the interactive REPL.");
@@ -83,9 +89,9 @@ public static class Program
         }
 
         engineChoice ??= EngineChoiceFromEnvironment();
-        if (engineChoice is not null and not "evaluator" and not "emit")
+        if (!IsValidEngineChoice(engineChoice))
         {
-            Console.Error.WriteLine($"Unknown engine '{engineChoice}'. Expected 'emit' or 'evaluator'.");
+            Console.Error.WriteLine(UnknownEngineMessage(engineChoice));
             return 1;
         }
 
@@ -97,7 +103,7 @@ public static class Program
 
         if (scriptPath is null)
         {
-            return RunInteractive(engineChoice, references);
+            return RunInteractive(references);
         }
 
         if (!File.Exists(scriptPath))
@@ -110,16 +116,20 @@ public static class Program
     }
 
     /// <summary>
-    /// Decides whether an interactive engine choice selects the legacy
-    /// tree-walking evaluator. ADR-0156 Phase 3a: the emitted
-    /// submission-chaining engine is the interactive default, so only an
-    /// explicit <c>--engine evaluator</c> (or <c>GSI_ENGINE=evaluator</c>)
-    /// selects the evaluator — a deprecated escape hatch that retires with
-    /// the evaluator in Phase 3c.
+    /// Decides whether an engine choice names a known interactive engine.
+    /// ADR-0156 Phase 3c (#3176): the emitted submission-chaining engine is
+    /// the only engine — the legacy tree-walking evaluator (and its
+    /// <c>--engine evaluator</c> escape hatch) was deleted.
     /// </summary>
     /// <param name="engineChoice">The normalized engine choice, or <see langword="null"/> for the default.</param>
-    /// <returns><see langword="true"/> when the evaluator engine was explicitly requested.</returns>
-    internal static bool UsesEvaluatorEngine(string? engineChoice) => engineChoice == "evaluator";
+    /// <returns><see langword="true"/> when the choice is valid.</returns>
+    internal static bool IsValidEngineChoice(string? engineChoice) => engineChoice is null or "emit";
+
+    /// <summary>Builds the error line for an unknown engine choice, listing only valid values.</summary>
+    /// <param name="engineChoice">The rejected engine choice.</param>
+    /// <returns>The error message.</returns>
+    internal static string UnknownEngineMessage(string? engineChoice)
+        => $"Unknown engine '{engineChoice}'. Expected 'emit'.";
 
     /// <summary>Reads the <c>GSI_ENGINE</c> environment variable as a normalized engine choice.</summary>
     /// <returns>The lower-cased engine name, or <see langword="null"/> when unset or empty.</returns>
@@ -127,13 +137,11 @@ public static class Program
         => Environment.GetEnvironmentVariable("GSI_ENGINE") is { Length: > 0 } env ? env.ToLowerInvariant() : null;
 
     /// <summary>
-    /// Starts the interactive TUI. ADR-0156 Phase 3a: submissions execute
-    /// through the emitted <see cref="Engine.EmittedSessionEngine"/> by
-    /// default; <c>--engine evaluator</c> (or <c>GSI_ENGINE=evaluator</c>)
-    /// temporarily selects the legacy tree-walking engine until it is
-    /// removed in Phase 3c.
+    /// Starts the interactive TUI on the emitted submission-chaining
+    /// <see cref="Engine.EmittedSessionEngine"/> (ADR-0156; the only
+    /// interactive engine since Phase 3c deleted the tree-walking evaluator).
     /// </summary>
-    private static int RunInteractive(string? engineChoice, List<string> references)
+    private static int RunInteractive(List<string> references)
     {
         if (Console.IsInputRedirected)
         {
@@ -142,12 +150,6 @@ public static class Program
         }
 
         var effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references);
-        if (UsesEvaluatorEngine(engineChoice))
-        {
-            using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
-            return ReplHost.Run(new Engine.SessionEngine(resolver));
-        }
-
         return ReplHost.Run(new Engine.EmittedSessionEngine(effectiveReferences));
     }
 

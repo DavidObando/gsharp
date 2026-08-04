@@ -986,19 +986,4 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string typeParameterName)
     => Report(location, DiagnosticDescriptors.ConstructedTypeParameterRequiresNewConstraint, typeParameterName, typeParameterName, typeParameterName);
-
-    /// <summary>
-    /// Reports that unmanaged pointer operations require compiled execution.
-    /// </summary>
-    /// <param name="location">The pointer operation location.</param>
-    public void ReportInterpreterPointerOperationsNotSupported(TextLocation location)
-    => Report(location, DiagnosticDescriptors.InterpreterPointerOperationsNotSupported);
-
-    /// <summary>
-    /// Reports that a stack-only CLR value requires compiled execution.
-    /// </summary>
-    /// <param name="location">The reflection boundary location.</param>
-    /// <param name="typeName">The unsupported CLR type.</param>
-    public void ReportInterpreterByRefLikeValuesNotSupported(TextLocation location, string typeName)
-    => Report(location, DiagnosticDescriptors.InterpreterByRefLikeValuesNotSupported, typeName);
 }

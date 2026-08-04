@@ -67,7 +67,7 @@ if !String.IsNullOrWhiteSpace(asin) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ if String.IsNullOrWhiteSpace(asin) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ if !String.IsNullOrWhiteSpace(asin) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -146,7 +146,7 @@ func run(filePath string, key string?, iv string?, asin string?, dbPath string?)
 run(""x"", nil, nil, nil, nil)
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -206,7 +206,7 @@ var r = Runner()
 r.RunExport(""x"", nil, nil, nil, nil)
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -233,7 +233,7 @@ if !String.IsNullOrWhiteSpace(asin) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ if dict.TryGetValue(""key"", &value) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ if tryFetch(asin) {
 }
 ");
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(result);
     }
 
     /// <summary>
@@ -296,7 +296,7 @@ if tryFetch(asin) {
     /// ordinary real reflection. Bind-time diagnostics are exactly what these
     /// regression tests need to observe.
     /// </summary>
-    private static EvaluationResult EvaluateBindOnlyWithMlc(string source)
+    private static ImmutableArray<Diagnostic> EvaluateBindOnlyWithMlc(string source)
     {
         var runtimeDir = RuntimeEnvironment.GetRuntimeDirectory();
         var refPaths = Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly);
@@ -309,6 +309,6 @@ if tryFetch(asin) {
             .Concat(compilation.GlobalScope.Diagnostics)
             .Concat(compilation.BoundProgram.Diagnostics)
             .ToImmutableArray();
-        return new EvaluationResult(diagnostics, null);
+        return diagnostics;
     }
 }

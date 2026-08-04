@@ -24,9 +24,9 @@ public static class ReplHost
     public static int Run() => Run(new EmittedSessionEngine());
 
     /// <summary>
-    /// Runs the interactive TUI over the given evaluation engine (ADR-0156
-    /// Phase 2: the tree-walking <see cref="SessionEngine"/> or the emitted
-    /// <see cref="EmittedSessionEngine"/>).
+    /// Runs the interactive TUI over the given evaluation engine (ADR-0156:
+    /// the emitted <see cref="EmittedSessionEngine"/>, or any test double
+    /// implementing <see cref="ISessionEngine"/>).
     /// </summary>
     /// <param name="engine">The evaluation engine driving the session.</param>
     /// <returns>The process exit code.</returns>
