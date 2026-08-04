@@ -6,7 +6,7 @@ draft: false
 
 # Feature matrix
 
-This matrix summarizes feature support in the compiler emit path (`gsc`) and the interpreter/REPL path. Legend: **Supported** means implemented on that path; **Mostly supported** means ordinary cases work with known edge limitations; **Partial** means syntax or binding exists but execution or emit is incomplete; **Not supported** means rejected or intentionally absent; **N/A** means the feature belongs to tooling rather than one execution path.
+This matrix summarizes feature support in the emitter and interactive evaluator. Every driver uses the emitter by default, including the interactive `gsi` REPL. `gsi --engine evaluator` or `GSI_ENGINE=evaluator` selects the deprecated evaluator, which is scheduled for removal. Legend: **Supported** means implemented on that path; **Mostly supported** means ordinary cases work with known edge limitations; **Partial** means syntax or binding exists but execution or emit is incomplete; **Not supported** means rejected or intentionally absent; **N/A** means the feature belongs to tooling rather than one execution path.
 
 ## Lexical and source structure
 
@@ -154,6 +154,6 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Portable PDB, Source Link, embedded sources, deterministic IDs | Supported | N/A | Emit-only debug information. |
 | Reference assemblies | Supported | N/A | SDK can produce reference assemblies. |
 | SDK `.gsproj` build/run/pack | Supported | N/A | `Gsharp.NET.Sdk` integrates with MSBuild and `dotnet`. |
-| REPL | N/A | Supported | Interpreter executable starts a REPL with no file argument. |
+| REPL | Supported (default) | Deprecated (`--engine evaluator`) | `gsi` starts the interactive REPL when no file is supplied. |
 | Language server and VS Code extension | N/A | N/A | Pull-based diagnostics, semantic tokens, hover for CLR XML docs, CodeLens reference counts on members of types/structs/interfaces/enums, signature help, inlay hints, completion, go-to-definition, references, rename, formatting, debug + test integration. |
 | VS Code color themes | N/A | N/A | Six bundled themes (Ember, Magma, Synthwave — Dark + Light each). |

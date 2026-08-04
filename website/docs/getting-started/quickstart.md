@@ -46,7 +46,7 @@ The SDK path is the everyday workflow. `Gsharp.NET.Sdk` wires `.gs` files into M
 
 ## Run it with `gsc` directly
 
-When you pass source files to `gsc` without `/out`, the compiler uses interpreter compatibility mode:
+When you pass source files to `gsc` without `/out`, the compiler emits the program and runs it immediately:
 
 ```bash
 dotnet path/to/gsc.dll samples/HelloWorld.gs
@@ -59,9 +59,9 @@ Hello, world!
 Success.
 ```
 
-The `Success.` line is printed by `gsc` after interpreter execution completes.
+The `Success.` line is printed by `gsc` after the emitted program completes.
 
-To emit an assembly, add `/out`. For an executable, keep `/target:exe`; `/tfm` selects the target framework runtime config.
+To save the emitted assembly, add `/out`. For an executable, keep `/target:exe`; `/tfm` selects the target framework runtime config.
 
 ```bash
 dotnet path/to/gsc.dll samples/HelloWorld.gs /out:artifacts/HelloWorld.dll /target:exe /tfm:net10.0
@@ -74,6 +74,6 @@ Output:
 Hello, world!
 ```
 
-Use the emit path for application builds and for CLR interop scenarios that need real delegates, metadata, Portable PDBs, or runtime config files. The interpreter is convenient for quick checks, but it does not model every emitted CLR behavior.
+Both direct commands use the compiler emitter. Omit `/out` for immediate execution; add it when you need a reusable assembly.
 
 Next: [A Tour of G#](/docs/tour).

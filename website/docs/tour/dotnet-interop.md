@@ -174,7 +174,7 @@ The SDK bundles a `Gsharp.Extensions` assembly with opt-in helper namespaces. Im
 
 `Optional` adds `Map` / `FlatMap` / `OrElse` / `OrCompute` / `OrThrow` / `IfPresent` / `Filter` over `T?`. `Sequences` adds builders and transformers. See the [standard-library reference](/docs/ref/standard-library) for the full surface.
 
-Use emitted builds for delegate-heavy interop. The interpreter can evaluate many imported members by reflection, but it cannot marshal every G# function literal into a CLR delegate the same way an emitted assembly can.
+File execution uses emitted code, including bare `gsc`, so G# function literals can be passed to imported CLR delegate parameters without `/out`.
 
 ## Unsafe pointers
 

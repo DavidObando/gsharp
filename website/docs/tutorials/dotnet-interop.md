@@ -9,7 +9,7 @@ draft: false
 In this tutorial, you will import CLR namespaces, call constructors and methods, subscribe to events, pass delegates, use extension functions, and rely on operator overloads.
 
 :::note
-Passing G# lambdas to imported CLR methods works on the compiler emit path, such as SDK builds or `gsc /out`. It does not work in the interpreter path used when `gsc` runs without `/out`.
+Passing G# lambdas to imported CLR methods works in every file mode: bare `gsc`, `gsc /out`, and `gsi file.gs`. `/out` is only needed when you want to save the assembly.
 :::
 
 ## Prerequisites
@@ -626,5 +626,4 @@ Expected output:
 
 - Imports bind both G# packages and CLR namespaces.
 - Constructors, inheritance, properties, events, operators, and extension methods are available from CLR metadata.
-- G# lambdas, function values, and method groups can become delegates on the emit path.
-- Interpreter-only runs do not support passing G# lambdas to imported CLR methods; use SDK builds or `gsc /out` for that scenario.
+- G# lambdas, function values, and method groups can become delegates on every file path, including bare `gsc`.

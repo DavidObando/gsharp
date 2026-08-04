@@ -90,7 +90,7 @@ $ dotnet path/to/gsc.dll Program.gs /out:bin/hello.dll /target:exe /tfm:net10.0
 $ dotnet bin/hello.dll
 ```
 
-When `/out` is omitted, `gsc` uses the interpreter path for compatibility. Prefer the SDK or `/out` when you want compiler-emitted behavior.
+When `/out` is omitted, `gsc` still emits the program and runs it immediately. Add `/out` when you want to save the assembly.
 
 ## Next steps
 
