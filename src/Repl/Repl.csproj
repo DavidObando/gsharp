@@ -40,6 +40,7 @@
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore)" />
     <ProjectReference Include="@(GsharpLanguageServer)" />
+    <ProjectReference Include="..\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
   </ItemGroup>
 
   <ItemGroup>

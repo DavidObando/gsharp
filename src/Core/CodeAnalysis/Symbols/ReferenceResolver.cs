@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
@@ -56,6 +57,7 @@ public sealed class ReferenceResolver : IDisposable
 
     private readonly ImmutableArray<Assembly> assemblies;
     private readonly MetadataLoadContext metadataContext;
+    private readonly AssemblyLoadContext runtimeContext;
     private readonly ImmutableArray<string> missingTransitiveReferences;
 
     // Process-wide registry of original on-disk paths for assemblies loaded
@@ -165,10 +167,15 @@ public sealed class ReferenceResolver : IDisposable
     {
     }
 
-    private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext, ImmutableArray<string> missingTransitiveReferences)
+    private ReferenceResolver(
+        ImmutableArray<Assembly> assemblies,
+        MetadataLoadContext metadataContext,
+        ImmutableArray<string> missingTransitiveReferences,
+        AssemblyLoadContext runtimeContext = null)
     {
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
+        this.runtimeContext = runtimeContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
         this.typeNameIndex = new Lazy<Dictionary<string, Type>>(
             this.BuildTypeNameIndex,
@@ -177,6 +184,36 @@ public sealed class ReferenceResolver : IDisposable
 
     private sealed class NotFoundSentinel
     {
+    }
+
+    private sealed class DriverReferenceLoadContext : AssemblyLoadContext
+    {
+        private readonly HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
+
+        public DriverReferenceLoadContext()
+            : base(isCollectible: true)
+        {
+        }
+
+        public Assembly LoadReference(string path)
+        {
+            directories.Add(Path.GetDirectoryName(path) ?? string.Empty);
+            return LoadFromAssemblyPath(path);
+        }
+
+        protected override Assembly Load(AssemblyName assemblyName)
+        {
+            foreach (var directory in directories)
+            {
+                var path = Path.Combine(directory, assemblyName.Name + ".dll");
+                if (File.Exists(path))
+                {
+                    return LoadFromAssemblyPath(path);
+                }
+            }
+
+            return null;
+        }
     }
 
     /// <summary>
@@ -193,12 +230,13 @@ public sealed class ReferenceResolver : IDisposable
     /// </remarks>
     public void Dispose()
     {
-        if (metadataContext is null)
+        if (metadataContext is null && runtimeContext is null)
         {
             return;
         }
 
-        metadataContext.Dispose();
+        metadataContext?.Dispose();
+        runtimeContext?.Unload();
 
         // The static ImportedTypeSymbol cache may hold Type instances that
         // originated from the now-disposed MetadataLoadContext. Those entries
@@ -337,6 +375,109 @@ public sealed class ReferenceResolver : IDisposable
     public static ReferenceResolver Default()
     {
         return new ReferenceResolver(BuildHostAssemblies(), metadataContext: null);
+    }
+
+    /// <summary>
+    /// Resolves the references supplied to a driver and appends the bundled
+    /// Gsharp.Extensions assembly when it is available.
+    /// </summary>
+    /// <param name="referencePaths">Explicit reference paths.</param>
+    /// <returns>The effective reference paths.</returns>
+    public static IReadOnlyList<string> ResolveDriverReferencePaths(IEnumerable<string> referencePaths)
+    {
+        var paths = referencePaths?
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToList()
+            ?? new List<string>();
+
+        var extensionPath = FindBundledExtensionPath(AppContext.BaseDirectory);
+        if (extensionPath != null
+            && !paths.Any(path => string.Equals(Path.GetFullPath(path), extensionPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            paths.Add(extensionPath);
+        }
+
+        return paths;
+    }
+
+    /// <summary>
+    /// Validates explicit driver references before implicit bundled references
+    /// are appended.
+    /// </summary>
+    /// <param name="referencePaths">Explicit reference paths.</param>
+    /// <param name="error">A command-line error when validation fails.</param>
+    /// <returns><see langword="true"/> when every reference is a readable .NET assembly.</returns>
+    public static bool TryValidateDriverReferencePaths(IEnumerable<string> referencePaths, out string error)
+    {
+        foreach (var path in referencePaths)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                error = "/reference requires a path.";
+                return false;
+            }
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                if (!File.Exists(fullPath))
+                {
+                    error = $"Unable to load reference '{path}': file does not exist.";
+                    return false;
+                }
+
+                _ = AssemblyName.GetAssemblyName(fullPath);
+            }
+            catch (BadImageFormatException)
+            {
+                error = $"Unable to load reference '{path}': file is not a valid .NET assembly.";
+                return false;
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+            {
+                error = $"Unable to load reference '{path}': {ex.Message}";
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Gets a resolver for evaluated code by loading explicit references into
+    /// the runtime context rather than a metadata-only context.
+    /// </summary>
+    /// <param name="referencePaths">Paths to runtime assemblies.</param>
+    /// <returns>A resolver over the loaded assemblies and host BCL.</returns>
+    public static ReferenceResolver WithRuntimeReferences(IEnumerable<string> referencePaths)
+    {
+        var runtimeContext = new DriverReferenceLoadContext();
+        var runtimeAssemblies = new List<Assembly>();
+        if (referencePaths is not null)
+        {
+            foreach (var path in referencePaths.Where(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                var fullPath = Path.GetFullPath(path);
+                var assembly = runtimeContext.LoadReference(fullPath);
+                RegisterAssemblyOriginalPath(assembly, fullPath);
+                runtimeAssemblies.Add(assembly);
+            }
+        }
+
+        var runtimeNames = runtimeAssemblies
+            .Select(assembly => assembly.GetName().FullName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var assemblies = BuildHostAssemblies()
+            .Where(assembly => !runtimeNames.Contains(assembly.GetName().FullName))
+            .Concat(runtimeAssemblies)
+            .ToImmutableArray();
+
+        return new ReferenceResolver(
+            assemblies,
+            metadataContext: null,
+            missingTransitiveReferences: ImmutableArray<string>.Empty,
+            runtimeContext: runtimeContext);
     }
 
     /// <summary>
@@ -824,6 +965,22 @@ public sealed class ReferenceResolver : IDisposable
         return true;
     }
 
+    internal static string FindBundledExtensionPath(string baseDirectory)
+    {
+        // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
+        // build already references Compiler; solution and SDK layouts provide it.
+        var candidates = new[]
+        {
+            Path.Combine(baseDirectory, "Gsharp.Extensions.dll"),
+            Path.Combine(baseDirectory, "..", "Gsharp.Extensions", "Gsharp.Extensions.dll"),
+            Path.Combine(baseDirectory, "..", "extensions", "Gsharp.Extensions.dll"),
+        };
+
+        return candidates
+            .Select(Path.GetFullPath)
+            .FirstOrDefault(File.Exists);
+    }
+
     // Raw resolution shared by the public/internal TryResolveType overloads: it
     // performs the reference-set name lookup (warm/cold index + cache) without
     // applying the external-visibility gate, which the callers layer on top.
@@ -1066,7 +1223,7 @@ public sealed class ReferenceResolver : IDisposable
 
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (asm.IsDynamic)
+            if (asm.IsDynamic || AssemblyLoadContext.GetLoadContext(asm) is DriverReferenceLoadContext)
             {
                 continue;
             }
