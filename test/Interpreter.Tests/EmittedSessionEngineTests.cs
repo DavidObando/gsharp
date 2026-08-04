@@ -331,7 +331,7 @@ public sealed class EmittedSessionEngineTests : IDisposable
     /// run real emitted code, so a class deinitializer executes as a genuine
     /// CLR finalizer when a collection is forced — and the GS0510 interpreter
     /// boundary warning (pinned for the evaluator engine by
-    /// <c>Issue2988DeinitInterpreterTests.ForcedCollectionSkipsDeinitializerAndWarnsOnce</c>)
+    /// <c>Issue2988DeinitInterpreterTests.ReachableInstanceReportsGS0510WithoutRunningDeinitializer</c>)
     /// no longer fires, matching Phase 1's script-mode behavior.
     /// </summary>
     [Fact]
