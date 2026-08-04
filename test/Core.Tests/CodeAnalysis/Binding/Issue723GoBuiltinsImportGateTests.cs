@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -265,6 +266,9 @@ let n = len(42)
 let xs = []int32{1}
 let n = len(xs)
 ";
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate —
+        // ImplicitSystemImport is a Compilation-level knob the EmittedOracle
+        // does not expose; disposition in 3b.2.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree) { ImplicitSystemImport = false };
         var diags = compilation.Evaluate(new Dictionary<VariableSymbol, object>()).Diagnostics;
@@ -356,16 +360,12 @@ n
 
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>()).Diagnostics;
+        return EmittedOracle.Evaluate(source).Diagnostics;
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 
     private static void AssertNoBuiltinGateDiagnostic(ImmutableArray<Diagnostic> diags)

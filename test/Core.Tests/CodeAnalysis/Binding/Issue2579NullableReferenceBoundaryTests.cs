@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -18,7 +19,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void GuardsAndAssertions_EnableReferenceUsesAcrossAllBoundaries()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             import System
             import System.Collections.Generic
 
@@ -59,7 +60,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void UnguardedNullableReferencesRemainHardErrors()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             import System.Collections.Generic
 
             func Consume(value string) {}
@@ -84,7 +85,7 @@ public sealed class Issue2579NullableReferenceBoundaryTests
     [Fact]
     public void NullableValuesAndInvalidReferenceConversionsRemainHardErrors()
     {
-        EvaluationResult result = Evaluate("""
+        EmittedOracleResult result = Evaluate("""
             interface IService {}
             class Service : IService {}
             class Other {}
@@ -105,10 +106,8 @@ public sealed class Issue2579NullableReferenceBoundaryTests
             Assert.Contains(diagnostic.Id, new[] { "GS0154", "GS0155", "GS0156" }));
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }

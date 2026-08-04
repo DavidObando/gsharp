@@ -11,6 +11,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -216,8 +217,7 @@ public sealed class Issue3091PropertyPatternPropertyTests
 
     private static void AssertEvaluates(string source, object expected)
     {
-        var result = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(expected, result.Value);
     }
