@@ -238,6 +238,9 @@ public class Issue3006FallthroughGuardDriverTests
     [MemberData(nameof(FallthroughCases))]
     public async Task UnmatchedExhaustiveSwitch_AllDriversSurfaceGuard(string name, string source)
     {
+        // ADR-0156 Phase 1: every driver executes emitted code, so all three
+        // surface the guard identically — the InvalidOperationException crash
+        // protocol of the CLR host, not an interpreter diagnostic.
         var root = CreateEmptyProbeRoot(name);
         try
         {
@@ -245,19 +248,17 @@ public class Issue3006FallthroughGuardDriverTests
                 CreateEmptyDirectory(root, "gsc-eval"),
                 source,
                 Program.Main);
-            Assert.Equal(1, compilerEvaluation.ExitCode);
-            Assert.Contains("GS0100", compilerEvaluation.StandardOutput);
-            Assert.Contains(GuardMessage, compilerEvaluation.StandardOutput);
-            Assert.Equal($"Failed.{Environment.NewLine}", compilerEvaluation.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, compilerEvaluation.ExitCode);
+            Assert.Equal(string.Empty, compilerEvaluation.StandardOutput);
+            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", compilerEvaluation.StandardError);
 
             var interpreter = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(1, interpreter.ExitCode);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, interpreter.ExitCode);
             Assert.Equal(string.Empty, interpreter.StandardOutput);
-            Assert.Contains("GS0100", interpreter.StandardError);
-            Assert.Contains(GuardMessage, interpreter.StandardError);
+            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", interpreter.StandardError);
 
             var emitted = await CompileAndRunAsync(
                 CreateEmptyDirectory(root, "gsc-emit"),
@@ -433,13 +434,18 @@ public class Issue3006FallthroughGuardDriverTests
         }
     }
 
-    [Theory]
-    [InlineData(0, 3)]
-    [InlineData(9, 12)]
-    public void FallthroughGuard_ReportsFunctionDeclarationLocation(int paddingLines, int functionLine)
+    /// <summary>
+    /// ADR-0156 Phase 1: the guard is a runtime exception on every driver, so
+    /// the evaluator's GS0100 diagnostic (which carried the function's
+    /// declaration location) is gone. What remains observable — and what this
+    /// pins so a silently swallowed guard cannot pass — is the crash protocol:
+    /// the CLR-host "Unhandled exception." prefix, the exception type and
+    /// guard message, and a stack trace rooted in the program's own frames.
+    /// </summary>
+    [Fact]
+    public void FallthroughGuard_RendersClrHostCrashProtocol()
     {
         var source = "import System\n\n"
-            + new string('\n', paddingLines)
             + """
             func F(x DateTimeKind) int32 {
                 switch x {
@@ -451,33 +457,38 @@ public class Issue3006FallthroughGuardDriverTests
 
             F(DateTimeKind(99))
             """;
-        var root = CreateEmptyProbeRoot($"Location-{functionLine}");
+        var root = CreateEmptyProbeRoot("CrashProtocol");
 
         try
         {
-            var compilerDirectory = CreateEmptyDirectory(root, "gsc-eval");
-            var compilerEvaluation = RunSourceDriver(compilerDirectory, source, Program.Main);
-            var sourcePath = Path.Combine(compilerDirectory, "Probe.gs");
-            Assert.Equal(1, compilerEvaluation.ExitCode);
-            Assert.Contains(
-                $"{sourcePath}({functionLine},6,{functionLine},7): error GS0100",
-                compilerEvaluation.StandardOutput);
-            Assert.Contains("func F(x DateTimeKind) int32 {", compilerEvaluation.StandardOutput);
+            var compilerEvaluation = RunSourceDriver(
+                CreateEmptyDirectory(root, "gsc-eval"),
+                source,
+                Program.Main);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, compilerEvaluation.ExitCode);
+            AssertCrashProtocol(compilerEvaluation.StandardError);
 
             var interpreter = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(1, interpreter.ExitCode);
-            Assert.Contains(
-                $"({functionLine},6,{functionLine},7): error GS0100",
-                interpreter.StandardError);
-            Assert.Contains("func F(x DateTimeKind) int32 {", interpreter.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, interpreter.ExitCode);
+            AssertCrashProtocol(interpreter.StandardError);
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static void AssertCrashProtocol(string standardError)
+    {
+        Assert.StartsWith(
+            $"Unhandled exception. System.InvalidOperationException: {GuardMessage}",
+            standardError,
+            StringComparison.Ordinal);
+        Assert.Contains("   at Default.<Program>.<Main>$(String[] args)", standardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("MethodBaseInvoker", standardError, StringComparison.Ordinal);
     }
 
     private static int ExpectedUnhandledExceptionExitCode

@@ -62,15 +62,27 @@ public class Issue2986InterpreterBoundaryTests
         Assert.DoesNotContain("IConvertible", diagnostic.Message);
     }
 
+    /// <summary>
+    /// ADR-0156 Phase 1: script-mode <c>gsi</c> executes emitted code, so the
+    /// ADR-0152 native-call boundary (GS0514) no longer applies to file mode —
+    /// the P/Invoke sample calls straight into libc and prints its golden
+    /// output. GS0514 remains an interactive-REPL boundary (tests above).
+    /// </summary>
     [Fact]
-    public void BatchFileRunner_RendersPInvokeLocationAndUsesErrorExitCode()
+    public void BatchFileRunner_ExecutesPInvokeNatively()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            // The sample targets POSIX libc; the conformance gate skips it on
+            // Windows for the same reason (WindowsSkippedSamples).
+            return;
+        }
+
         var pInvokePath = LocateSample("PInvoke.gs");
         var pInvoke = RunBatchFile(pInvokePath);
-        Assert.Equal(1, pInvoke.ExitCode);
-        Assert.Contains($"{pInvokePath}(20,6,20,18): error GS0514:", pInvoke.StandardError);
-        Assert.Contains("func NativeStrLen(text string) nint;", pInvoke.StandardError);
-        Assert.Equal(string.Empty, pInvoke.StandardOutput);
+        Assert.Equal(0, pInvoke.ExitCode);
+        Assert.Equal("13\n", pInvoke.StandardOutput.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(string.Empty, pInvoke.StandardError);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunBatchFile(string path)

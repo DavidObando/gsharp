@@ -210,10 +210,13 @@ public class Issue3010EntryPointExitCodeTests
 
         var result = RunScript(Source);
 
-        Assert.Equal(1, result.ExitCode);
+        // ADR-0156 Phase 1: the emitted driver mirrors the CLR host, which
+        // rejects an invalid entry-point signature with MethodAccessException
+        // before running a single statement.
+        Assert.Equal(GSharp.Core.CodeAnalysis.Execution.EmittedProgramHost.UnhandledExceptionExitCode, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
         Assert.Contains(
-            "error GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.",
+            "Unhandled exception. System.MethodAccessException: Entry point must have a return type of void, integer, or unsigned integer.",
             result.StandardError);
     }
 
@@ -235,10 +238,11 @@ public class Issue3010EntryPointExitCodeTests
 
         var result = RunScript(Source);
 
-        Assert.Equal(1, result.ExitCode);
+        // ADR-0156 Phase 1: same CLR-host rejection shape as the string case.
+        Assert.Equal(GSharp.Core.CodeAnalysis.Execution.EmittedProgramHost.UnhandledExceptionExitCode, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
         Assert.Contains(
-            "error GSI001: Evaluation error: Entry point must have a return type of void, int32, or uint32.",
+            "Unhandled exception. System.MethodAccessException: Entry point must have a return type of void, integer, or unsigned integer.",
             result.StandardError);
     }
 
