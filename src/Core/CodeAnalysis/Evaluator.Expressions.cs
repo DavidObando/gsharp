@@ -117,6 +117,11 @@ public sealed partial class Evaluator
 
     private object EvaluateLiteralExpression(BoundLiteralExpression n)
     {
+        if (n.Type == TypeSymbol.String)
+        {
+            return string.Intern((string)n.Value);
+        }
+
         return n.Value;
     }
 

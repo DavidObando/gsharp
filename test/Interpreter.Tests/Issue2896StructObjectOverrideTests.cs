@@ -87,10 +87,10 @@ public class Issue2896StructObjectOverrideTests
     }
 
     [Theory]
-    [InlineData(false, "gsc-evaluate")]
+    [InlineData(false, "gsc-script")]
     [InlineData(false, "gsc-emit")]
     [InlineData(false, "gsi")]
-    [InlineData(true, "gsc-evaluate")]
+    [InlineData(true, "gsc-script")]
     [InlineData(true, "gsc-emit")]
     [InlineData(true, "gsi")]
     public async Task ClassObjectOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
@@ -138,14 +138,21 @@ public class Issue2896StructObjectOverrideTests
         var emitted = await RunDriverAsync(source, suffix + "Emit", "gsc-emit");
 
         AssertIssue3134EmittedSemantics(surface, emitted);
-        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Evaluate", "gsc-evaluate"));
+        Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Evaluate", "gsc-script"));
         Assert.Equal(emitted, await RunDriverAsync(source, suffix + "Gsi", "gsi"));
     }
 
     [Theory]
+    [InlineData("objectStringLiterals", "ObjectStringLiterals|True|True|False|False|False|True")]
+    [InlineData("objectLiteralAndComputedString", "ObjectLiteralAndComputedString|False|True|False|True|False|True")]
     [InlineData("objectStrings", "ObjectStrings|False|True|False|True|False|True")]
     [InlineData("objectClass", "ObjectClass|False|True|False|True|False|True")]
     [InlineData("objectBoxedInts", "ObjectBoxedInts|False|True|False|True|False|True")]
+    [InlineData("objectBoxedStruct", "ObjectBoxedStruct|False|True|False|True|False|True")]
+    [InlineData("objectBoxedStructClrInterfaceAlias", "ObjectBoxedStructClrInterfaceAlias|False|True|False|True|False|True")]
+    [InlineData("objectBoxedStructInterfaceAlias", "ObjectBoxedStructInterfaceAlias|False|True|False|True|False|True")]
+    [InlineData("objectBoxedStructInCopiedValue", "ObjectBoxedStructInCopiedValue|False|True|False|True|False|True")]
+    [InlineData("objectBoxedEnum", "ObjectBoxedEnum|False|True|False|True|False|True")]
     [InlineData("dataClass", "DataClass|True|True|False|False|False|True")]
     [InlineData("version", "Version|True|True|False|False|False|True")]
     [InlineData("typedStrings", "TypedStrings|True|True|False|False|False|True")]
@@ -159,19 +166,19 @@ public class Issue2896StructObjectOverrideTests
         Assert.All(
             new[]
             {
-                await RunDriverAsync(source, suffix + "Evaluate", "gsc-evaluate"),
+                await RunDriverAsync(source, suffix + "Evaluate", "gsc-script"),
                 await RunDriverAsync(source, suffix + "Gsi", "gsi"),
-                Evaluate(source),
+                EvaluateWithEvaluator(source),
                 EvaluateWithSessionEngine(source),
             },
             output => Assert.Equal(emitted, output));
     }
 
     [Theory]
-    [InlineData(false, "gsc-evaluate")]
+    [InlineData(false, "gsc-script")]
     [InlineData(false, "gsc-emit")]
     [InlineData(false, "gsi")]
-    [InlineData(true, "gsc-evaluate")]
+    [InlineData(true, "gsc-script")]
     [InlineData(true, "gsc-emit")]
     [InlineData(true, "gsi")]
     public async Task ImplicitBclToString_DepthFourOverrideChain_UsesMostDerivedOverrideAcrossDrivers(
@@ -605,9 +612,42 @@ public class Issue2896StructObjectOverrideTests
 
             data class DataClass{{suffix}}(Number int32) {
             }
+
+            interface Marker{{suffix}} {
+            }
+
+            struct Value{{suffix}} : Marker{{suffix}}, IEquatable[Value{{suffix}}] {
+                var Number int32
+                func Equals(other Value{{suffix}}) bool -> Number == other.Number
+            }
+
+            struct Holder{{suffix}} {
+                var Item object
+            }
+
+            enum Shade{{suffix}} {
+                Light,
+                Dark
+            }
             """;
         var (label, setup) = specimen switch
         {
+            "objectStringLiterals" => (
+                "ObjectStringLiterals",
+                """
+                let a object = "hello"
+                let b object = "hello"
+                let c object = a
+                let other object = "world"
+                """),
+            "objectLiteralAndComputedString" => (
+                "ObjectLiteralAndComputedString",
+                """
+                let a object = "hello"
+                let b object = String.Concat("hel", "lo")
+                let c object = a
+                let other object = "world"
+                """),
             "objectStrings" => (
                 "ObjectStrings",
                 """
@@ -631,6 +671,48 @@ public class Issue2896StructObjectOverrideTests
                 let b object = 5
                 let c object = a
                 let other object = 6
+                """),
+            "objectBoxedStruct" => (
+                "ObjectBoxedStruct",
+                $$"""
+                let a object = Value{{suffix}}{Number: 5}
+                let b object = Value{{suffix}}{Number: 5}
+                let c object = a
+                let other object = Value{{suffix}}{Number: 6}
+                """),
+            "objectBoxedStructClrInterfaceAlias" => (
+                "ObjectBoxedStructClrInterfaceAlias",
+                $$"""
+                let a object = Value{{suffix}}{Number: 5}
+                let b object = Value{{suffix}}{Number: 5}
+                let c = a as IEquatable[Value{{suffix}}]
+                let other object = Value{{suffix}}{Number: 6}
+                """),
+            "objectBoxedStructInterfaceAlias" => (
+                "ObjectBoxedStructInterfaceAlias",
+                $$"""
+                let a object = Value{{suffix}}{Number: 5}
+                let b object = Value{{suffix}}{Number: 5}
+                let c = a as Marker{{suffix}}
+                let other object = Value{{suffix}}{Number: 6}
+                """),
+            "objectBoxedStructInCopiedValue" => (
+                "ObjectBoxedStructInCopiedValue",
+                $$"""
+                let a object = Value{{suffix}}{Number: 5}
+                let holder = Holder{{suffix}}{Item: a}
+                let copy = holder
+                let b object = Value{{suffix}}{Number: 5}
+                let c object = copy.Item
+                let other object = Value{{suffix}}{Number: 6}
+                """),
+            "objectBoxedEnum" => (
+                "ObjectBoxedEnum",
+                $$"""
+                let a object = Shade{{suffix}}.Dark
+                let b object = Shade{{suffix}}.Dark
+                let c object = a
+                let other object = Shade{{suffix}}.Light
                 """),
             "dataClass" => (
                 "DataClass",
@@ -717,7 +799,7 @@ public class Issue2896StructObjectOverrideTests
     public static IEnumerable<object[]> ImplicitBclOverrideCases()
     {
         var surfaces = new[] { "dictionary", "hashSet", "listContains", "format" };
-        var drivers = new[] { "gsc-evaluate", "gsc-emit", "gsi" };
+        var drivers = new[] { "gsc-script", "gsc-emit", "gsi" };
         foreach (var surface in surfaces)
         {
             foreach (var insideFunction in new[] { false, true })
@@ -827,7 +909,7 @@ public class Issue2896StructObjectOverrideTests
 
             return driver switch
             {
-                "gsc-evaluate" => RunCompilerEvaluation(sourcePath),
+                "gsc-script" => RunCompilerEvaluation(sourcePath),
                 "gsc-emit" => await RunEmittedBinaryAsync(directory, sourcePath, suffix),
                 "gsi" => RunInterpreter(sourcePath),
                 _ => throw new ArgumentOutOfRangeException(nameof(driver), driver, null),
