@@ -315,7 +315,8 @@ public partial class Parser
             || Peek(1).Kind == SyntaxKind.DotToken)
         {
             var nestedElementType = ParseTypeClause();
-            var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) = ParseOptionalArrayInitializer();
+            var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) =
+                ParseOptionalArrayInitializer(allowSpread: lengthExpression == null && lengthToken == null);
 
             // Issue #1272: the no-initializer (or empty-initializer) form with a
             // length yields the runtime/zero-initialised allocation `[n][]T`.
@@ -354,7 +355,8 @@ public partial class Parser
         {
             var questionToken = MatchToken(SyntaxKind.QuestionToken);
             var elementClause = new TypeClauseSyntax(syntaxTree, openBracketToken: null, lengthToken: null, closeBracketToken: null, elementType, questionToken);
-            var (nElemOpenBrace, nElemElements, nElemCloseBrace, nElemHasElements) = ParseOptionalArrayInitializer();
+            var (nElemOpenBrace, nElemElements, nElemCloseBrace, nElemHasElements) =
+                ParseOptionalArrayInitializer(allowSpread: lengthExpression == null && lengthToken == null);
 
             if (!nElemHasElements && (lengthExpression != null || lengthToken != null))
             {
@@ -380,7 +382,8 @@ public partial class Parser
                 nElemCloseBrace ?? MatchToken(SyntaxKind.CloseBraceToken));
         }
 
-        var (openBrace, elements, closeBrace, hasElements) = ParseOptionalArrayInitializer();
+        var (openBrace, elements, closeBrace, hasElements) =
+            ParseOptionalArrayInitializer(allowSpread: lengthExpression == null && lengthToken == null);
 
         // Issue #1272: `[n]T` (no initializer) or `[n]T{}` (empty initializer)
         // with a runtime length is the zero-initialised allocation form. A lone
@@ -414,7 +417,7 @@ public partial class Parser
     // when no `{` is present (the issue #1272 no-initializer form), and reports
     // whether any element expressions were supplied (an empty `{}` counts as the
     // zero-initialised allocation form, not a literal).
-    private (SyntaxToken OpenBrace, SeparatedSyntaxList<ExpressionSyntax> Elements, SyntaxToken CloseBrace, bool HasElements) ParseOptionalArrayInitializer()
+    private (SyntaxToken OpenBrace, SeparatedSyntaxList<ExpressionSyntax> Elements, SyntaxToken CloseBrace, bool HasElements) ParseOptionalArrayInitializer(bool allowSpread)
     {
         if (Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -422,7 +425,7 @@ public partial class Parser
         }
 
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-        var elements = ParseArrayInitializerElements();
+        var elements = ParseArrayInitializerElements(allowSpread);
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         return (openBrace, elements, closeBrace, elements.Count > 0);
     }
@@ -471,7 +474,7 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            elements = ParseArrayInitializerElements();
+            elements = ParseArrayInitializerElements(allowSpread: false);
             closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         }
 
@@ -526,7 +529,7 @@ public partial class Parser
             body);
     }
 
-    private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements()
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArrayInitializerElements(bool allowSpread)
     {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
@@ -534,7 +537,16 @@ public partial class Parser
                Current.Kind != SyntaxKind.CloseBraceToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseExpression());
+            if (allowSpread && Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                var ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+                nodesAndSeparators.Add(new SpreadElementExpressionSyntax(syntaxTree, ellipsis, ParseExpression()));
+            }
+            else
+            {
+                nodesAndSeparators.Add(ParseExpression());
+            }
+
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -1262,6 +1274,14 @@ public partial class Parser
         suppressStructLiteral = 0;
         try
         {
+            // Native spread element `...source`.
+            if (Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                var ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+                var spread = new SpreadElementExpressionSyntax(syntaxTree, ellipsis, ParseExpression());
+                return new ExpressionCollectionElementSyntax(syntaxTree, spread);
+            }
+
             // Indexed entry `[key] = value`.
             if (Current.Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeIndexedCollectionElement())
             {

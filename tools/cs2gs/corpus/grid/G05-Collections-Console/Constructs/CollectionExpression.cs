@@ -23,13 +23,11 @@ namespace Corpus.Grid05
             List<int> list = [10, 20];
             Console.WriteLine($"CollectionExpression: list={string.Join(",", list)} count={list.Count}");
 
-            // SpreadElement (issue #1897): lowers to a build-and-append
-            // temporary List populated via Add/AddRange, converted back with
-            // ToArray() for the array target.
+            // SpreadElement (issues #1897/#3096): maps to native G#
+            // ellipsis-spread syntax inside the array literal.
             int[] rest = [2, 3];
             int[] spread = [1, .. rest, 9];
             Console.WriteLine($"CollectionExpression: spread={string.Join(",", spread)}");
         }
     }
 }
-

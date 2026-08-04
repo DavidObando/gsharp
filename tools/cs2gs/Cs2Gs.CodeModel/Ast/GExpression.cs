@@ -383,7 +383,8 @@ public sealed class AnonymousClassLiteralExpression : GExpression
 /// <summary>
 /// A single element of a <see cref="CollectionInitializerExpression"/>:
 /// a bare element, a <c>key: value</c> pair, or an <c>[key] = value</c>
-/// indexer entry (ADR-0117).
+/// indexer entry (ADR-0117). A native spread is represented as a bare
+/// <see cref="SpreadElementExpression"/> value.
 /// </summary>
 public sealed class CollectionInitializerElement : GNode
 {
@@ -475,6 +476,25 @@ public sealed class CollectionInitializerExpression : GExpression
 
     /// <summary>Gets the collection elements.</summary>
     public IReadOnlyList<CollectionInitializerElement> Elements { get; }
+}
+
+/// <summary>
+/// An ellipsis spread element <c>...source</c> inside an array or collection
+/// initializer.
+/// </summary>
+public sealed class SpreadElementExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SpreadElementExpression"/> class.
+    /// </summary>
+    /// <param name="source">The enumerable source expression.</param>
+    public SpreadElementExpression(GExpression source)
+    {
+        Source = source;
+    }
+
+    /// <summary>Gets the enumerable source expression.</summary>
+    public GExpression Source { get; }
 }
 
 /// <summary>

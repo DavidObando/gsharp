@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 239 |
+| Translated | 240 |
 | Lowered | 19 |
 | UnsupportedByDesign | 56 |
-| Gap | 7 |
+| Gap | 6 |
 
-## Translated (239)
+## Translated (240)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -207,6 +207,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | SingleVariableDesignation | SingleVariableDesignationSyntax | ADR-0115 §B.30 |  | tools/cs2gs/corpus/grid/G09-Functions-Console/Constructs/DeclarationExpression.cs |  |  |
 | SizeOfExpression | SizeOfExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/SizeOfExpression.cs |  |  |
 | SlicePattern | SlicePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/ListPattern.cs |  | is-test path materializes the slice-bound value via native G# range slicing (`receiver[prefix..^suffix]`, using new `RangeIndexExpression`/`FromEndIndexExpression` CodeModel nodes) and binds it by substitution; switch-arm path emits a native G# `SlicePattern` (`..rest`/`..`) since gsc has real runtime slice-capture support (issue #1889, resolved). |
+| SpreadElement | SpreadElementSyntax | ADR-0117 / ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs | https://github.com/DavidObando/gsharp/issues/1897, https://github.com/DavidObando/gsharp/issues/3096 | Maps to native G# `...source` inside array/collection initializers; valid in field/property initializers with no translator spill. |
 | StackAllocArrayCreationExpression | StackAllocArrayCreationExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G12-Unsafe-Console/Constructs/StackAllocArrayCreationExpression.cs | https://github.com/DavidObando/gsharp/issues/1933 | Compiles end-to-end under the ilverify allow-unsafe policy (issue #1933); stackalloc's localloc IL is unverifiable by design, not a gsc defect. |
 | StringLiteralExpression | LiteralExpressionSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G01-Literals-Console/Constructs/StringLiteralExpression.cs |  |  |
 | StructConstraint | ClassOrStructConstraintSyntax | ADR-0115 §B.7 |  | tools/cs2gs/corpus/grid/G08-Generics-Console/Constructs/StructConstraint.cs |  |  |
@@ -340,7 +341,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (7)
+## Gap (6)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -350,4 +351,3 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |
-| SpreadElement | SpreadElementSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
