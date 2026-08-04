@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -46,8 +47,7 @@ public class Issue2943LoopBackEdgeNarrowingInterpreterTests
             run()
             """;
 
-        var result = new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0159");
     }
@@ -104,8 +104,7 @@ public class Issue2943LoopBackEdgeNarrowingInterpreterTests
                 run()
                 """;
 
-        var result = new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
         Assert.True(
             result.Diagnostics.IsEmpty,
@@ -135,8 +134,7 @@ public class Issue2943LoopBackEdgeNarrowingInterpreterTests
             run()
             """;
 
-        var result = new Compilation(SyntaxTree.Parse(Source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(Source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);

@@ -8,6 +8,7 @@ using System.IO;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -75,20 +76,8 @@ public class Issue2894LambdaBodyGenericClosureInterpreterTests
 
     private static string Evaluate(string source)
     {
-        using var output = new StringWriter();
-        var previous = Console.Out;
-        Console.SetOut(output);
-        try
-        {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
-            Assert.Empty(result.Diagnostics);
-        }
-        finally
-        {
-            Console.SetOut(previous);
-        }
-
-        return output.ToString().Replace("\r\n", "\n");
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        return result.Output.Replace("\r\n", "\n");
     }
 }

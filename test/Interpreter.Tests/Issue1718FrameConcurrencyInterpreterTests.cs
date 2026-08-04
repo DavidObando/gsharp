@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -192,13 +193,11 @@ public class Issue1718FrameConcurrencyInterpreterTests
         Assert.Empty(outOfRangeResults);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
         var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(fullSource);
     }
 
     /// <summary>
@@ -207,7 +206,7 @@ public class Issue1718FrameConcurrencyInterpreterTests
     /// that use it for readability, which GS0286 (ADR-0066 D5) flags as a
     /// warning, not an error.
     /// </summary>
-    private static void AssertNoRealDiagnostics(EvaluationResult result)
+    private static void AssertNoRealDiagnostics(EmittedOracleResult result)
     {
         Assert.DoesNotContain(result.Diagnostics, d => d.Id != "GS0286");
     }

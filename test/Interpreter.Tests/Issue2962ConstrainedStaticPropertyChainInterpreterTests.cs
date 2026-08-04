@@ -9,6 +9,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -73,27 +74,12 @@ public class Issue2962ConstrainedStaticPropertyChainInterpreterTests
 
     private static string Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(source);
-        var compilation = new Compilation(tree);
-
-        using var output = new StringWriter();
-        var previousOut = Console.Out;
-        Console.SetOut(output);
-        try
-        {
-            var variables = new Dictionary<VariableSymbol, object>();
-            var result = compilation.Evaluate(variables);
-            var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToList();
-            Assert.True(
-                errors.Count == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
-
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToList();
+        Assert.True(
+            errors.Count == 0,
+            "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
+        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     private static string RunSubmission(string source)

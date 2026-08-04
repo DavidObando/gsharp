@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -88,9 +89,8 @@ public class Issue2999TargetInvocationExceptionInterpreterTests
         Assert.Empty(result.Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
-        => new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+    private static EmittedOracleResult Evaluate(string source)
+        => EmittedOracle.Evaluate(source);
 }
 
 /// <summary>

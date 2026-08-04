@@ -9,6 +9,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -175,10 +176,28 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("AIM\n", Evaluate(Source));
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — issue
+        // #3203 pins the divergence this test exposed: the EVALUATOR runs
+        // shared initializers eagerly at first static use ("AIM"), while
+        // emitted execution is CLR-beforefieldinit lazy and never runs the
+        // initializer here ("AM"). Realigns with #3203's resolution.
+        Assert.Equal("AIM\n", EvaluateWithEvaluator(Source));
     }
 
     private static string Evaluate(string source)
+    {
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        Assert.True(
+            errors.Length == 0,
+            "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
+
+        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3203 test above; delete with
+    // the evaluator (Phase 3c) or when #3203 aligns the engines.
+    private static string EvaluateWithEvaluator(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(source));
 

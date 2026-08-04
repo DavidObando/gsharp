@@ -8,6 +8,7 @@ using System.IO;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -107,21 +108,10 @@ public class Issue3003LambdaBodyLoweringTests
 
     private static string Evaluate(string source)
     {
-        using var outWriter = new StringWriter();
-        var previousOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
-            Assert.Empty(result.Diagnostics);
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
+        Assert.Empty(result.Diagnostics);
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return result.Output.Replace("\r\n", "\n");
     }
 }

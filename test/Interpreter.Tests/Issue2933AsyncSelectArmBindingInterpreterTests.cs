@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -34,8 +35,7 @@ public class Issue2933AsyncSelectArmBindingInterpreterTests
             Run().GetAwaiter().GetResult()
             """;
 
-        var result = new Compilation(SyntaxTree.Parse(Source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(Source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(10, result.Value);

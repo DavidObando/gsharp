@@ -45,6 +45,14 @@ namespace GSharp.Interpreter.Tests;
 /// differ from run to run. The fix sorts each frame's candidates by variable
 /// name (ordinal) before scanning, giving a stable, always-reproducible
 /// pick.
+///
+/// ADR-0156 Phase 3b (#3176): this file stays on <c>Compilation.Evaluate</c>
+/// deliberately — it pins the EVALUATOR's per-instance map lock and locals-scan
+/// determinism, guarantees the emitted engines do not provide (plain
+/// <c>Dictionary&lt;,&gt;</c> IL loses concurrent writes and can corrupt; the
+/// emitted binder picks a different — also deterministic — interface-slot
+/// implementer). See issue #3205 for the language-level decision these tests
+/// await; they retire or are redefined with the evaluator in Phase 3c.
 /// </summary>
 public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
 {
