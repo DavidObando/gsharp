@@ -225,6 +225,19 @@ public class Compilation
     }
 
     /// <summary>
+    /// Gets or sets the interactive submission options (ADR-0156 Phase 2).
+    /// When set, the compilation binds as one REPL submission: prior
+    /// submissions' functions, globals, and types resolve as metadata-backed
+    /// imports over their emitted assemblies, syntax trees without a
+    /// <c>package</c> declaration fall into the submission's own package,
+    /// session imports are replayed, and the trailing expression value is
+    /// captured into the synthesized
+    /// <see cref="SubmissionImports.ResultFieldName"/> global for the cell
+    /// echo. Defaults to <see langword="null"/> (ordinary compilation).
+    /// </summary>
+    public SubmissionBindingOptions Submission { get; set; }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -240,7 +253,7 @@ public class Compilation
                 // Emit.
                 PrepareReferencesForBinding(assemblyName);
                 var globalScope = ReusedGlobalScope
-                    ?? Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary);
+                    ?? Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 

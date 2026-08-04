@@ -308,6 +308,15 @@ public sealed class BoundGlobalScope
     public ImmutableArray<BoundAttribute> ModuleAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
 
     /// <summary>
+    /// Gets the interactive submission import set this scope was bound with
+    /// (ADR-0156 Phase 2), or <see langword="null"/> for an ordinary
+    /// compilation. Carried on the scope so <c>BindProgram</c>'s
+    /// freshly-derived scope chain rehydrates prior-submission metadata
+    /// lookup when binding member bodies.
+    /// </summary>
+    public SubmissionImports SubmissionImports { get; internal set; }
+
+    /// <summary>
     /// Gets or sets every anonymous-class type (issue #2224) synthesized
     /// while binding this compilation's top-level statements and (once
     /// <c>Binder.BindProgram</c> runs) its function/method bodies.

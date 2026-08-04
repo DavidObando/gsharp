@@ -394,6 +394,16 @@ internal sealed partial class ExpressionBinder
                     return BindAccessorStep(inheritedClrHead, null, rightPart);
                 }
             }
+            else if (TryBindSubmissionStaticMember(leftName, out var submissionHead)
+                && submissionHead is not BoundErrorExpression)
+            {
+                // ADR-0156 Phase 2: an accessor chain whose head names a
+                // top-level global (or function) of a prior interactive
+                // submission — e.g. `p.Sum()` where `p` was declared in an
+                // earlier cell — binds the head as the submission's static
+                // field read and continues the chain on that value.
+                return BindAccessorStep(submissionHead, null, rightPart);
+            }
             else if (scope.TryLookupImport(name, out var matchedImport)
                 && TryBindImportAccessor(matchedImport, ref rightPart, out var typeFromImport))
             {
@@ -2857,6 +2867,38 @@ internal sealed partial class ExpressionBinder
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2: attempts to resolve an unqualified identifier
+    /// against the static members of a prior interactive submission's
+    /// <c>&lt;Program&gt;</c> container — a top-level global (static field)
+    /// or function (static method group). Submissions are consulted newest
+    /// first, so a redefinition in a later cell shadows earlier cells; the
+    /// first submission declaring the name wins outright (no ambiguity
+    /// diagnostics, mirroring the evaluator's scope-chain shadowing).
+    /// </summary>
+    /// <param name="syntax">The identifier syntax naming the prospective submission member.</param>
+    /// <param name="result">The bound submission-member access, when one is produced.</param>
+    /// <returns><c>true</c> when a prior submission declared the member.</returns>
+    private bool TryBindSubmissionStaticMember(NameExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var submissionImports = scope.SubmissionImports;
+        if (submissionImports is null)
+        {
+            return false;
+        }
+
+        var name = syntax.IdentifierToken.Text;
+        if (!submissionImports.TryFindMemberContainer(scope.References, name, out var programType))
+        {
+            return false;
+        }
+
+        var classSymbol = new ImportedClassSymbol(programType, syntax, references: scope.References);
+        result = BindAccessorStep(receiver: null, classSymbol, syntax);
+        return true;
     }
 
     /// <summary>

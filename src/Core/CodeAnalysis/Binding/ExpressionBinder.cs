@@ -511,6 +511,17 @@ internal sealed partial class ExpressionBinder
                 return methodGroup;
             }
 
+            // ADR-0156 Phase 2: a bare identifier may name a top-level global
+            // (static field) or function (static method group) of a prior
+            // interactive submission's <Program> container, newest submission
+            // first. Runs before the static-import fallbacks so prior cells'
+            // declarations shadow static-import members, mirroring the
+            // evaluator scope chain.
+            if (TryBindSubmissionStaticMember(syntax, out var submissionMember))
+            {
+                return submissionMember;
+            }
+
             // Issue #1201 (C# `using static`): an unqualified identifier may
             // name a `shared` (static) field, property, or method group of a
             // type brought into scope by a type import (`import Ns.Type`). This
