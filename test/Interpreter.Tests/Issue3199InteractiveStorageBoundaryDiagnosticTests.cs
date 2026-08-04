@@ -8,7 +8,12 @@ using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issue #3199: interactive compiled-only storage boundaries use GS0513.</summary>
+/// <summary>
+/// Issue #3199: interactive compiled-only storage boundaries use GS0513.
+/// ADR-0156 Phase 3a: these tests explicitly pin the deprecated tree-walking
+/// <see cref="SessionEngine"/> behind <c>--engine evaluator</c>; they retire
+/// with that escape hatch in Phase 3c.
+/// </summary>
 public class Issue3199InteractiveStorageBoundaryDiagnosticTests
 {
     public static TheoryData<string, string> Boundaries => new()
