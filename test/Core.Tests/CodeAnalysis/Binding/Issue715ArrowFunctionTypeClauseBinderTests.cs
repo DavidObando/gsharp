@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -136,9 +137,7 @@ f(0) + g(0) + h(0) + i(0)
         var source = @"
 let f (int32) -> int32 = ""not a function""
 ";
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(syntaxTree);
-        var diagnostics = compilation.Evaluate(new Dictionary<VariableSymbol, object>()).Diagnostics;
+        var diagnostics = EmittedOracle.Evaluate(source).Diagnostics;
 
         Assert.Contains(diagnostics, d => d.IsError && d.Message.Contains("(int32) -> int32"));
     }
@@ -221,10 +220,8 @@ let n ((int32) -> int32)? = nil
         Assert.Equal(1, result.Value);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(syntaxTree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }

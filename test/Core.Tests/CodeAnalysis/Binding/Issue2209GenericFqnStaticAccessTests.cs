@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -31,9 +32,7 @@ public class Issue2209GenericFqnStaticAccessTests
 {
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
         return result.Diagnostics;
     }
 

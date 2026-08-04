@@ -12,6 +12,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -34,9 +35,7 @@ public class Issue671UserTypeAsClrGenericArgTests
 {
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
         return result.Diagnostics;
     }
 
@@ -45,6 +44,9 @@ public class Issue671UserTypeAsClrGenericArgTests
         var trees = sources
             .Select(s => SyntaxTree.Parse(SourceText.From(s)))
             .ToArray();
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
+        // compilation; the EmittedOracle takes a single source. Disposition
+        // in 3b.2.
         var compilation = new Compilation(trees);
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
         return result.Diagnostics;
