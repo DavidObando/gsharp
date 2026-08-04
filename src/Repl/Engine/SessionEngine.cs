@@ -22,7 +22,7 @@ namespace GSharp.Repl.Engine;
 /// Owns the incremental compilation state and the transcript of evaluated cells.
 /// Replaces the eval core of the old <c>GSharpRepl</c> without any console output.
 /// </summary>
-public sealed class SessionEngine
+public sealed class SessionEngine : ISessionEngine
 {
     private readonly Dictionary<VariableSymbol, object> variables = new();
     private readonly List<Cell> cells = new();

@@ -23,13 +23,7 @@ public static class Program
     {
         if (args.Length == 0)
         {
-            if (Console.IsInputRedirected)
-            {
-                Console.Error.WriteLine("gsi requires an interactive terminal");
-                return 1;
-            }
-
-            return ReplHost.Run();
+            return RunInteractive(EngineChoiceFromEnvironment(), new List<string>());
         }
 
         switch (args[0])
@@ -37,9 +31,11 @@ public static class Program
             case "--help":
             case "-h":
             case "/?":
-                Console.WriteLine("Usage: gsi [file.gs] [/r:<assembly> ...] [--help] [--version]");
+                Console.WriteLine("Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]");
                 Console.WriteLine("  file.gs                Run the given G# script and exit.");
-                Console.WriteLine("  /r:<file>              Reference an assembly in script mode (alias: /reference:<file>; repeatable).");
+                Console.WriteLine("  /r:<file>              Reference an assembly (alias: /reference:<file>; repeatable).");
+                Console.WriteLine("  --engine <name>        Interactive engine: 'evaluator' (default) or 'emit'");
+                Console.WriteLine("                         (ADR-0156 Phase 2 opt-in; also via GSI_ENGINE).");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
                 Console.WriteLine("  --version              Show the gsi version and exit.");
                 Console.WriteLine("  (no args)              Start the interactive REPL.");
@@ -51,11 +47,25 @@ public static class Program
 
         var references = new List<string>();
         string? scriptPath = null;
-        foreach (var arg in args)
+        string? engineChoice = null;
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
             if (TryParseReferenceSwitch(arg, out var referencePath))
             {
                 references.Add(referencePath);
+                continue;
+            }
+
+            if (arg is "--engine" && i + 1 < args.Length)
+            {
+                engineChoice = args[++i];
+                continue;
+            }
+
+            if (arg.StartsWith("--engine=", StringComparison.Ordinal))
+            {
+                engineChoice = arg.Substring("--engine=".Length);
                 continue;
             }
 
@@ -69,10 +79,16 @@ public static class Program
             return 1;
         }
 
+        engineChoice ??= EngineChoiceFromEnvironment();
+        if (engineChoice is not null and not "evaluator" and not "emit")
+        {
+            Console.Error.WriteLine($"Unknown engine '{engineChoice}'. Expected 'evaluator' or 'emit'.");
+            return 1;
+        }
+
         if (scriptPath is null)
         {
-            Console.Error.WriteLine("Must specify a .gs script file.");
-            return 1;
+            return RunInteractive(engineChoice, references);
         }
 
         if (!File.Exists(scriptPath))
@@ -82,6 +98,36 @@ public static class Program
         }
 
         return RunScript(scriptPath, references);
+    }
+
+    private static string? EngineChoiceFromEnvironment()
+        => Environment.GetEnvironmentVariable("GSI_ENGINE") is { Length: > 0 } env ? env.ToLowerInvariant() : null;
+
+    /// <summary>
+    /// Starts the interactive TUI. ADR-0156 Phase 2: <c>--engine emit</c> (or
+    /// <c>GSI_ENGINE=emit</c>) selects the emitted submission-chaining engine;
+    /// the default remains the tree-walking evaluator until the flip lands.
+    /// </summary>
+    private static int RunInteractive(string? engineChoice, List<string> references)
+    {
+        if (Console.IsInputRedirected)
+        {
+            Console.Error.WriteLine("gsi requires an interactive terminal");
+            return 1;
+        }
+
+        if (engineChoice == "emit")
+        {
+            return ReplHost.Run(new Engine.EmittedSessionEngine(references));
+        }
+
+        if (references.Count > 0)
+        {
+            Console.Error.WriteLine("/r: references in interactive mode require --engine emit (ADR-0156 Phase 2).");
+            return 1;
+        }
+
+        return ReplHost.Run();
     }
 
     /// <summary>

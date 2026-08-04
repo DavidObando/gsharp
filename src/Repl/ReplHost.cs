@@ -15,7 +15,16 @@ namespace GSharp.Repl;
 /// <summary>Owns the alt-screen lifecycle and the AppShell. Restores the terminal on exit.</summary>
 public static class ReplHost
 {
-    public static int Run()
+    public static int Run() => Run(new SessionEngine());
+
+    /// <summary>
+    /// Runs the interactive TUI over the given evaluation engine (ADR-0156
+    /// Phase 2: the tree-walking <see cref="SessionEngine"/> or the emitted
+    /// <see cref="EmittedSessionEngine"/>).
+    /// </summary>
+    /// <param name="engine">The evaluation engine driving the session.</param>
+    /// <returns>The process exit code.</returns>
+    public static int Run(ISessionEngine engine)
     {
         // The TUI renders Unicode glyphs (box-drawing rules, status dots, prompt
         // chevrons, ellipses). On Windows the console defaults to a legacy OEM code
@@ -29,7 +38,6 @@ public static class ReplHost
             // Output is redirected or the encoding can't be changed; ignore.
         }
 
-        var engine = new SessionEngine();
         var tabs = new List<ITabScreen>
         {
             new ReplScreen(engine),
@@ -64,6 +72,8 @@ public static class ReplHost
             {
                 // ignore
             }
+
+            (engine as IDisposable)?.Dispose();
         }
     }
 
