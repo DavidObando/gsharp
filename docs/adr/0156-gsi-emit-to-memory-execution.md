@@ -1,6 +1,6 @@
 # ADR-0156: Emit-to-memory execution for gsi and bare gsc
 
-- **Status**: Accepted
+- **Status**: Accepted — Phases 1–3c implemented (Phase 3c, [#3176](https://github.com/DavidObando/gsharp/issues/3176): the tree-walking evaluator, `Compilation.Evaluate`, the evaluator SessionEngine, and the `--engine evaluator` escape hatch are deleted; the conformance gate is the two-host emitted parity gate); Phase 3d (docs sweep) remains
 - **Date**: 2026-08-03
 - **Phase**: Interpreter conformance / execution architecture
 - **Related**: #3176 (tracking), #3163 (code-health P2 headline item), ADR-0152

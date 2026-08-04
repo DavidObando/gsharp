@@ -1,6 +1,6 @@
 # ADR-0152: Interpreter native-call boundary
 
-- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phases 1–3a; remains accepted for direct tree evaluation and the deprecated evaluator compatibility path
+- **Status**: Superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) — the tree-walking evaluator (and with it this boundary and GS0514) was deleted in Phase 3c ([#3176](https://github.com/DavidObando/gsharp/issues/3176)); every driver executes emitted code, where P/Invoke runs natively
 - **Date**: 2026-07-31
 - **Phase**: Interpreter conformance
 - **Related**: ADR-0086 (P/Invoke), ADR-0153 (interpreter compiled-only storage boundary), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issue [#2986](https://github.com/DavidObando/gsharp/issues/2986)

@@ -312,7 +312,7 @@ These diagnostics indicate a fatal compiler or evaluator failure. If you encount
 | GS9996 | Error | Source generator execution failure. `gsc` could not locate or launch `gsgen`, `gsgen` timed out, or it exited nonzero without producing its own diagnostics. |
 | GS9997 | Error | Fatal compiler I/O error. An unrecoverable file-system error occurred (permission denied, disk full, etc.) before or during assembly writing. |
 | GS9998 | Error | Internal compiler error (emit-time failure). The emit pipeline encountered an unexpected state and could not produce valid IL. The diagnostic message includes the exception type and a brief description of the failure. |
-| GS9999 | Error | Historical: an unexpected exception caught by the tree-walking evaluator. Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 3c no product driver produces it; the emitted test oracle synthesizes it as the assertion surface for uncaught runtime exceptions. |
+| GS9999 | Error | Historical: an unexpected exception caught by the tree-walking evaluator. Since ADR-0156 Phase 3c no product driver produces it; the emitted test oracle synthesizes it as the assertion surface for uncaught runtime exceptions. |
 
 #### Interpreter compiled-only boundaries (retired)
 
