@@ -64,17 +64,6 @@ namespace GSharp.Tests;
 public static class EmittedOracle
 {
     private static readonly object ConsoleGate = new();
-
-    // One process-wide host-reference snapshot, taken on first oracle use.
-    // ReferenceResolver.Default() rescans AppDomain.CurrentDomain.GetAssemblies()
-    // on every call, so a fresh per-call resolver would see the still-loaded
-    // collectible assemblies of EARLIER oracle runs — and their emitted types
-    // would shadow same-named source packages in later compilations
-    // (issue #3235). Snapshotting once keeps every oracle compilation's
-    // reference surface identical and oracle-emission-free.
-    private static readonly Lazy<ReferenceResolver> SharedDefaultResolver =
-        new(() => ReferenceResolver.Default(), LazyThreadSafetyMode.ExecutionAndPublication);
-
     private static int submissionCounter;
 
     /// <summary>
@@ -137,9 +126,14 @@ public static class EmittedOracle
         var packageName = "oracle" + n;
 
         var trees = sources.Select(s => SyntaxTree.Parse(SourceText.From(s))).ToArray();
+
+        // A fresh default resolver per call is safe: ReferenceResolver
+        // excludes collectible-ALC assemblies from its host scan, so earlier
+        // oracle runs' still-loaded emitted assemblies can never shadow this
+        // compilation's source packages (issue #3235).
         var resolver = referencePaths.Length > 0
             ? ReferenceResolver.WithReferences(referencePaths)
-            : SharedDefaultResolver.Value;
+            : ReferenceResolver.Default();
 
         var compilation = new Compilation(resolver, trees);
         if (options.ImplicitSystemImport is bool implicitSystemImport)
