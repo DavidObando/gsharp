@@ -234,6 +234,9 @@ class Success : IResult {
     func Ok() bool { return true }
 }
 "));
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
+        // compilation; the EmittedOracle takes a single source. Disposition
+        // in 3b.2.
         var compilation = new Compilation(t1, t2);
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed interface"));

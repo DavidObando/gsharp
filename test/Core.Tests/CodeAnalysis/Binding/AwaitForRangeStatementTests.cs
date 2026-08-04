@@ -33,7 +33,9 @@ await for v in AsyncStreamFixture.Counts() {
 }
 total
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3214 tracks top-level 'await' support in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1 + 2 + 3, result.Value);
     }
@@ -57,7 +59,9 @@ await for v in AsyncStreamFixture.Counts().ConfigureAwait(false) {
 }
 total
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3214 tracks top-level 'await' support in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1 + 2 + 3, result.Value);
     }
@@ -86,7 +90,9 @@ import GSharp.Core.Tests.CodeAnalysis.Binding
 await for v in AsyncStreamFixture.Empty() {
 }
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3214 tracks top-level 'await' support in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
     }
 
@@ -107,7 +113,9 @@ await for v in AsyncStreamFixture.Counts() {
 }
 evens
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3214 tracks top-level 'await' support in the emitter.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
     }
@@ -115,6 +123,16 @@ evens
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3214 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3214 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
 

@@ -131,25 +131,13 @@ scope {
         // the failure surfaces from the runtime, which is what this test
         // actually exercises.
         source = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        EvaluationResult result = null;
-        Exception thrown = null;
-        try
-        {
-            result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        }
-        catch (Exception ex)
-        {
-            thrown = ex;
-        }
+        var result = EmittedOracle.Evaluate(source);
 
-        // The failure may surface either as a raw exception escaping
-        // the evaluator or as an evaluator-reported diagnostic — both
-        // are acceptable, what matters is that the failure was not
-        // silently swallowed.
+        // The failure may surface either as an unhandled runtime exception
+        // or as a reported diagnostic — both are acceptable, what matters
+        // is that the failure was not silently swallowed.
         Assert.True(
-            thrown != null || (result != null && !result.Diagnostics.IsEmpty),
+            result.UnhandledException != null || !result.Diagnostics.IsEmpty,
             "Scope did not surface the failure from the scoped goroutine.");
     }
 

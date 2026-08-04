@@ -63,7 +63,10 @@ x!!
 var x int32? = nil
 x!!
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
+        // with 'nil value !!'; emitted throws the raw CLR exception).
+        var result = EvaluateWithEvaluator(source);
         Assert.NotEmpty(result.Diagnostics);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
     }
@@ -141,7 +144,10 @@ import System
 var s string? = nil
 s!!.Length
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
+        // with 'nil value !!'; emitted throws the raw CLR exception).
+        var result = EvaluateWithEvaluator(source);
         Assert.NotEmpty(result.Diagnostics);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
     }
@@ -208,7 +214,10 @@ import System.IO
 let dir = DirectoryInfo(""{literal}"")
 dir.Parent!!.Name
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3216 tracks the '!!'-on-nil failure contract (evaluator panics
+        // with 'nil value !!'; emitted throws the raw CLR exception).
+        var result = EvaluateWithEvaluator(source);
         Assert.NotEmpty(result.Diagnostics);
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("nil value"));
     }
@@ -219,5 +228,15 @@ dir.Parent!!.Name
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3216 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3216 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

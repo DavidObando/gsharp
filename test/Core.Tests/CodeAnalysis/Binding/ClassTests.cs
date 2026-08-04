@@ -412,6 +412,9 @@ open class A {
     open func F() int32 { return 1 }
 }
 "));
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
+        // compilation; the EmittedOracle takes a single source. Disposition
+        // in 3b.2.
         var result = new Compilation(derived, baseType)
             .Evaluate(new Dictionary<VariableSymbol, object>());
 

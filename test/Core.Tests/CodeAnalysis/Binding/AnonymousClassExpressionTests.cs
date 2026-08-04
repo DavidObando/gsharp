@@ -100,6 +100,9 @@ let a = object { let Id int32 = 1; let Alias string = ""x"" }
 let b = object { let Id int32 = 2; let Alias string = ""y"" }
 1
 ";
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
+        // inspects this Compilation's bound state afterwards, which the
+        // EmittedOracle does not expose; disposition in 3b.2.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
@@ -115,6 +118,9 @@ let a = object { let Id int32 = 1 }
 let b = object { let Id int32 = 1; let Alias string = ""x"" }
 1
 ";
+        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
+        // inspects this Compilation's bound state afterwards, which the
+        // EmittedOracle does not expose; disposition in 3b.2.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
         var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
