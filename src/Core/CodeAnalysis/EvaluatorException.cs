@@ -83,6 +83,12 @@ public class EvaluatorException : Exception
     internal DiagnosticSeverity Severity { get; private set; } = DiagnosticSeverity.Error;
 
     /// <summary>
+    /// Gets a value indicating whether this exception marks a deliberate
+    /// compiled-only storage boundary.
+    /// </summary>
+    internal bool IsCompiledOnlyStorageBoundary { get; private set; }
+
+    /// <summary>
     /// Creates an evaluator exception for a deliberate diagnostic.
     /// </summary>
     /// <param name="descriptor">The diagnostic descriptor.</param>
@@ -98,6 +104,20 @@ public class EvaluatorException : Exception
         {
             DiagnosticId = descriptor.Id,
             Severity = descriptor.Severity,
+        };
+    }
+
+    /// <summary>
+    /// Creates an evaluator exception for a deliberate compiled-only storage boundary.
+    /// </summary>
+    /// <param name="message">The self-contained boundary message.</param>
+    /// <param name="node">The bound node associated with the exception.</param>
+    /// <returns>The evaluator exception.</returns>
+    internal static EvaluatorException CreateCompiledOnlyStorageBoundary(string message, BoundNode node)
+    {
+        return new EvaluatorException(message, node)
+        {
+            IsCompiledOnlyStorageBoundary = true,
         };
     }
 

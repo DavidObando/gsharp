@@ -415,7 +415,11 @@ public class Compilation
             }
 
             var message = Evaluator.UnwrapDiagnosticException(ex).Message;
-            var diagnostic = new Diagnostic(location.Value, ex.DiagnosticId, ex.Severity, message);
+            var storageBoundary = DiagnosticDescriptors.InterpreterPointerOperationsNotSupported;
+            var (diagnosticId, severity) = ex.IsCompiledOnlyStorageBoundary
+                ? (storageBoundary.Id, storageBoundary.Severity)
+                : (ex.DiagnosticId, ex.Severity);
+            var diagnostic = new Diagnostic(location.Value, diagnosticId, severity, message);
             return new EvaluationResult(allWarnings.Add(diagnostic), null);
         }
     }

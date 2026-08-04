@@ -220,7 +220,9 @@ public sealed partial class Evaluator
                     // yields a raw unmanaged pointer — it requires the CIL
                     // pinned-local / pointer emit path and is not modelled by
                     // the tree-walking interpreter.
-                    throw new EvaluatorException("'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.", s);
+                    throw EvaluatorException.CreateCompiledOnlyStorageBoundary(
+                        "'fixed' (pinning) statements are not supported in the interpreter; they require the CIL pinned-local emit path.",
+                        s);
                 case BoundNodeKind.AwaitForRangeStatement:
                     EvaluateAwaitForRangeStatement((BoundAwaitForRangeStatement)s);
                     index++;
