@@ -63,6 +63,14 @@ public class DebugInformationOptionsTests
         Assert.True(compilation.DebugInformation.Deterministic);
     }
 
+    /// <summary>
+    /// CHAIN-MACHINERY PIN (ADR-0156 Phase 3b.3, #3176): pins the
+    /// <see cref="Compilation.ContinueWith"/> options-cloning contract, not
+    /// the evaluator oracle (nothing here evaluates). The API's only product
+    /// consumer is the tree-walking REPL <c>SessionEngine</c>, so Phase 3c
+    /// must revisit this test alongside any decision to delete
+    /// <c>ContinueWith</c> with that engine.
+    /// </summary>
     [Fact]
     public void DebugInformation_IsClonedThroughContinueWith()
     {
