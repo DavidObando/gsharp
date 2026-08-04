@@ -550,9 +550,28 @@ internal sealed partial class MethodBodyEmitter
         // to the constraint, one of its bases, or an implemented interface.
         // For a reference-type instantiation `box !T` is a runtime no-op, while
         // giving the verifier the constrained reference shape it requires.
-        if (from is TypeParameterSymbol classConstrainedParameter
+        //
+        // Issue #3236: the same widening reaches emit through reference-
+        // nullable wrappers on either side — `T? → Animal?`, `T → Animal?`
+        // under `[T Animal]`. A class-base-constrained T is provably a
+        // reference type, so its `T?` is a binder-level annotation over the
+        // bare `!!T` slot (never `Nullable<!!T>` — that shape is value-type-
+        // constrained and excluded by IsValueTypeNullable), and a nullable
+        // reference target likewise erases to its underlying representation.
+        // The lifted conversion therefore degenerates to the identical
+        // `box !!T`: a null reference boxes to null, so nil flows through
+        // unchanged, and a live reference is a runtime no-op box.
+        var classConstrainedBoxSource = from is NullableTypeSymbol fromRefLiftBox
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(fromRefLiftBox)
+            ? fromRefLiftBox.UnderlyingType
+            : from;
+        var classConstrainedBoxTarget = to is NullableTypeSymbol toRefLiftBox
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(toRefLiftBox)
+            ? toRefLiftBox.UnderlyingType
+            : to;
+        if (classConstrainedBoxSource is TypeParameterSymbol classConstrainedParameter
             && classConstrainedParameter.ClassConstraint is TypeSymbol classConstraint
-            && IsReferenceCompatible(classConstraint, to))
+            && IsReferenceCompatible(classConstraint, classConstrainedBoxTarget))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(classConstrainedParameter));
