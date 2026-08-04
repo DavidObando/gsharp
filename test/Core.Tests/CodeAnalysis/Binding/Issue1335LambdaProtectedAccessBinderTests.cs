@@ -134,7 +134,7 @@ class C {
         Assert.Contains(diagnostics, d => d.Id == "GS0379");
     }
 
-    private static void AssertNoGS0379(EvaluationResult result)
+    private static void AssertNoGS0379(EmittedOracleResult result)
     {
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0379");
     }

@@ -184,7 +184,9 @@ open class Deriv() : Mid {
 var d = Deriv()
 d.RenderSize
 ";
-        var result = Evaluate(source);
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
+        // #3223 tracks the unloadable MethodImpl emitted for base[Base].Prop.
+        var result = EvaluateWithEvaluator(source);
         Assert.Empty(result.Diagnostics);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0157");
 
@@ -300,5 +302,15 @@ open class Deriv() : Base {
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3223 test above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3223 aligns the
+    // engines.
+    private static EvaluationResult EvaluateWithEvaluator(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

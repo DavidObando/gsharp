@@ -115,7 +115,7 @@ class MyMem : MemoryStream {
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0384");
     }
 
-    private static void AssertNoErrors(EvaluationResult result)
+    private static void AssertNoErrors(EmittedOracleResult result)
     {
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }

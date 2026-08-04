@@ -185,7 +185,7 @@ class D {
         AssertNoErrors(Evaluate(source));
     }
 
-    private static void AssertNoErrors(EvaluationResult result)
+    private static void AssertNoErrors(EmittedOracleResult result)
     {
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));
     }
