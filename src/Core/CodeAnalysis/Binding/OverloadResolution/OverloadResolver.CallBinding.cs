@@ -1706,7 +1706,8 @@ internal sealed partial class OverloadResolver
             else if (argument.Type != expectedType
                 && !(substitution != null && parameter.Type is TypeParameterSymbol)
                 && (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
-                    || Conversion.Classify(argument.Type, expectedType).IsImplicit))
+                    || (Conversion.Classify(argument.Type, expectedType).IsImplicit
+                        && structuralArgumentType is not FunctionTypeSymbol)))
             {
                 // Issue #2335 (audit follow-up): every OTHER implicit
                 // conversion reaches this point already classified
@@ -1743,7 +1744,14 @@ internal sealed partial class OverloadResolver
                 // InvalidProgramException at the call site. Substituted
                 // non-bare slots whose conversion is NOT implicit keep the
                 // historical skip (status quo) rather than surfacing new
-                // diagnostics from this branch.
+                // diagnostics from this branch. A FUNCTION-shaped argument
+                // (lambda/method group into a substituted delegate slot like
+                // `Func[A, T]`) also keeps the historical skip: the emitter's
+                // delegate-materialization path already builds the accurate
+                // nullable-preserving `Func<…,Nullable<T>>` shape (#1518), and
+                // re-materializing it here rebuilt the delegate from the
+                // collapsed structural shape (`Func<int32,int32>`), tripping
+                // ilverify's DelegateCtor check.
                 var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
