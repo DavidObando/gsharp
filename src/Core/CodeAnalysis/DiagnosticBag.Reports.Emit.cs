@@ -138,7 +138,7 @@ public sealed partial class DiagnosticBag
 
     /// <summary>
     /// GS0519: a default interpolated-string hole has a ByRefLike type without
-    /// an available CLR <c>ToString()</c> method. Generic
+    /// a usable parameterless <c>ToString()</c> method. Generic
     /// <c>AppendFormatted&lt;T&gt;</c> cannot close over stack-only values.
     /// </summary>
     /// <param name="location">The source location of the interpolation hole.</param>

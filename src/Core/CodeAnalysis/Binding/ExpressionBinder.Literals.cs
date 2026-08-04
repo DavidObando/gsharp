@@ -462,6 +462,20 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
+                if (bound.Type is StructSymbol { IsRefStruct: true } structType
+                    && structType.TryGetMethod("ToString", out _))
+                {
+                    var toString = BindAccessorCall(
+                        bound,
+                        classSymbol: null,
+                        SynthesizeInstanceCall(segment.Expression, "ToString", ImmutableArray<ExpressionSyntax>.Empty));
+                    if (toString is BoundUserInstanceCallExpression { Type: var returnType }
+                        && returnType == TypeSymbol.String)
+                    {
+                        bound = toString;
+                    }
+                }
+
                 parts.Add(BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format));
             }
             else

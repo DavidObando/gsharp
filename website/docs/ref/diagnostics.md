@@ -1790,12 +1790,13 @@ Phase 3c; deinitializers run as real CLR finalizers on every driver.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0519 | Error | A ByRefLike value without an available CLR `ToString()` method cannot be used as an interpolation hole on emitted execution paths. |
+| GS0519 | Error | A ByRefLike value without a usable parameterless `ToString()` method cannot be used as an interpolation hole on emitted execution paths. |
 
-Emitted interpolation routes ByRefLike holes through their CLR `ToString()`
-method because `DefaultInterpolatedStringHandler.AppendFormatted<T>` rejects
-ByRefLike generic arguments. GS0519 is the source-anchored fallback when no
-such method is available, preventing a GS9998 reflection exception.
+Emitted interpolation routes ByRefLike holes through their user-declared or
+CLR `ToString()` method because
+`DefaultInterpolatedStringHandler.AppendFormatted<T>` rejects ByRefLike
+generic arguments. GS0519 is the source-anchored fallback when no usable
+parameterless method is available, preventing a GS9998 reflection exception.
 
 ## Additional current and reserved diagnostics
 

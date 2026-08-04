@@ -171,6 +171,9 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 Console.WriteLine("writableChars=${writableChars}")
                 Console.WriteLine("chars=${readOnlyChars}")
                 Console.WriteLine("aligned=${readOnlyChars,8}")
+                Console.WriteLine("format=${readOnlyChars:X}")
+                Console.WriteLine("alignedFormat=${readOnlyChars,8:X}")
+                Console.WriteLine("left=${readOnlyChars,-8}")
             }
             """;
 
@@ -195,8 +198,8 @@ public class Issue3114ReadOnlySpanInterpreterTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEmitToMemory
-                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nSuccess.\n"
-                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\n",
+                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nformat=hello\nalignedFormat=   hello\nleft=hello   \nSuccess.\n"
+                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nformat=hello\nalignedFormat=   hello\nleft=hello   \n",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -244,6 +247,78 @@ public class Issue3114ReadOnlySpanInterpreterTests
                     : "value=42\n",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Drivers))]
+    public void UserRefStructInterpolation_UsesDeclaredToStringAcrossFileDrivers(Driver driver)
+    {
+        const string Source = """
+            import System
+
+            ref struct ReceiverToken {
+                var value int32
+            }
+
+            func (token ReceiverToken) ToString() string -> String.Format("Receiver#{0}", token.value)
+
+            ref struct InBodyToken {
+                var value int32
+                func ToString() string -> String.Format("InBody#{0}", value)
+            }
+
+            func Main() {
+                var receiver ReceiverToken = ReceiverToken{value: 42}
+                var inBody InBodyToken = InBodyToken{value: 43}
+                Console.WriteLine("receiver=${receiver}")
+                Console.WriteLine("inbody=${inBody}")
+            }
+            """;
+
+        const string Expected = "receiver=Receiver#42\ninbody=InBody#43\n";
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var sourcePath = Path.Combine(root, "user-ref-struct-tostring.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = driver switch
+            {
+                Driver.CompilerEmitToMemory => CaptureConsole(
+                    () => GSharp.Compiler.Program.Main([sourcePath])),
+                Driver.CompilerEmitToFile => CompileAndRun(root, "user-ref-struct-tostring.gs", sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
+                    () => GSharp.Repl.Program.Main([sourcePath])),
+                _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
+            };
+
+            Assert.Equal(0, result.ExitCode);
+            if (driver == Driver.CompilerEmitToMemory)
+            {
+                Assert.StartsWith(Expected, result.StandardOutput, StringComparison.Ordinal);
+                Assert.Contains("warning GS0314:", result.StandardOutput, StringComparison.Ordinal);
+                Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, result.StandardError);
+            }
+            else
+            {
+                Assert.Equal(Expected, result.StandardOutput);
+                if (driver == Driver.ReplEmitToMemory)
+                {
+                    Assert.Contains("warning GS0314:", result.StandardError, StringComparison.Ordinal);
+                }
+                else
+                {
+                    Assert.Equal(string.Empty, result.StandardError);
+                }
+            }
         }
         finally
         {
@@ -312,7 +387,7 @@ public class Issue3114ReadOnlySpanInterpreterTests
         Assert.StartsWith($"{sourcePath}({startLine},", line, StringComparison.Ordinal);
         Assert.Contains(": error GS0519:", line, StringComparison.Ordinal);
         Assert.Contains(typeName, line, StringComparison.Ordinal);
-        Assert.Contains("has no available CLR ToString method", line, StringComparison.Ordinal);
+        Assert.Contains("has no usable parameterless ToString method", line, StringComparison.Ordinal);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CompileOnly(
