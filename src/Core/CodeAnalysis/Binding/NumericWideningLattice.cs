@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -17,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// Previously this lattice was hand-copied into three places — the conversion
 /// classifier (<see cref="Conversion"/>), the overload "better conversion"
-/// ranker (<see cref="OverloadResolution"/>), and the binary-operator binder.
+/// ranker (<see cref="ClrOverloadResolution"/>), and the binary-operator binder.
 /// The copies had already DIVERGED: the overload-resolution copy was missing
 /// every native-width integer (<c>nint</c>/<c>nuint</c> = <c>System.IntPtr</c>/
 /// <c>System.UIntPtr</c>) row, so <c>Conversion.Classify</c> and overload

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -368,12 +369,12 @@ public sealed class InterpolatedStringHandlerInfo
                 argumentTypes[index] = stringType;
             }
 
-            var resolution = OverloadResolution.Resolve<MethodInfo>(candidates, argumentTypes);
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            var resolution = ClrOverloadResolution.Resolve<MethodInfo>(candidates, argumentTypes);
+            if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
                 method = resolution.Best;
             }
-            else if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+            else if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
             {
                 foreach (var candidate in resolution.Ambiguous)
                 {
@@ -523,7 +524,7 @@ public sealed class InterpolatedStringHandlerInfo
 
                 var argType = forwardedArgs[i].Type?.ClrType;
                 if (argType != null
-                    && OverloadResolution.ClassifyImplicit(paramType, argType) == OverloadResolution.ImplicitConversionKind.None)
+                    && ClrOverloadResolution.ClassifyImplicit(paramType, argType) == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
                     ok = false;
                     break;

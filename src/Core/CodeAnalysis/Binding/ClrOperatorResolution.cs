@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -16,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// values to CLR operator method names (<c>op_Addition</c>, <c>op_Equality</c>,
 /// <c>op_UnaryNegation</c>, ...) and performs the actual public-static lookup
 /// across the two operand types. The "better function member" tie-break is
-/// delegated to <see cref="OverloadResolution.Resolve{T}"/> so user-defined
+/// delegated to <see cref="ClrOverloadResolution.Resolve{T}"/> so user-defined
 /// operators participate in the same conversion ranking as method calls and
 /// constructors (Stream A).
 /// </summary>
@@ -116,14 +117,14 @@ internal static class ClrOperatorResolution
         // only operand types, not the bound operand expressions needed to prove
         // an integer value is a compile-time constant and in range.
         var argTypes = new[] { leftType?.ClrType, rightType?.ClrType };
-        var outcome = OverloadResolution.Resolve(candidates, argTypes);
-        if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+        var outcome = ClrOverloadResolution.Resolve(candidates, argTypes);
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             method = outcome.Best;
             return true;
         }
 
-        if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
         {
             isAmbiguous = true;
         }
@@ -160,14 +161,14 @@ internal static class ClrOperatorResolution
         // Constant-narrowing is also unavailable for the same reason: the
         // literal value is not present in this type-only helper.
         var argTypes = new[] { operandType.ClrType };
-        var outcome = OverloadResolution.Resolve(candidates, argTypes);
-        if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+        var outcome = ClrOverloadResolution.Resolve(candidates, argTypes);
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             method = outcome.Best;
             return true;
         }
 
-        if (outcome.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
         {
             isAmbiguous = true;
         }

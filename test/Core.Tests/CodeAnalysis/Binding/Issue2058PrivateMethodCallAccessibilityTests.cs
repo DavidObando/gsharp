@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -13,7 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #2058: <see cref="GSharp.Core.CodeAnalysis.Binding.OverloadResolver.BindUserInstanceCall"/>
+/// Issue #2058: <see cref="OverloadResolver.BindUserInstanceCall"/>
 /// previously only consulted <see cref="AccessibilityChecker.IsAccessible"/>
 /// when a called method's accessibility was exactly <c>protected</c>, so a
 /// <c>private</c> method called from outside its declaring type was never

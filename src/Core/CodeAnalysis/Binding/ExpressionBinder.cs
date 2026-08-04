@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -1598,7 +1599,7 @@ internal sealed partial class ExpressionBinder
         Func<TypeSymbol, Type> projectType,
         int argumentOffset = 0)
     {
-        if (arguments == null || !arguments.Any(OverloadResolution.IsUnresolvedMethodGroupArgument))
+        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsUnresolvedMethodGroupArgument))
         {
             return null;
         }
@@ -1619,7 +1620,7 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<BoundExpression> arguments,
         int argumentOffset = 0)
     {
-        if (arguments == null || !arguments.Any(OverloadResolution.IsUnresolvedMethodGroupArgument))
+        if (arguments == null || !arguments.Any(ClrOverloadResolution.IsUnresolvedMethodGroupArgument))
         {
             return null;
         }
@@ -1629,7 +1630,7 @@ internal sealed partial class ExpressionBinder
             var sourceIndex = argumentIndex - argumentOffset;
             return sourceIndex >= 0
                 && sourceIndex < arguments.Count
-                && OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[sourceIndex]);
+                && ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[sourceIndex]);
         };
     }
 
@@ -1659,8 +1660,8 @@ internal sealed partial class ExpressionBinder
                 resolutionArguments[i + (closesExtensionReceiver ? 1 : 0)] = delegateParameterTypes[i];
             }
 
-            var resolution = OverloadResolution.Resolve(clrGroup.Candidates, resolutionArguments);
-            if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+            var resolution = ClrOverloadResolution.Resolve(clrGroup.Candidates, resolutionArguments);
+            if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
                 return null;
             }
@@ -1682,7 +1683,7 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var matches = new List<(Tuple<Type[], Type> Signature, OverloadResolution.ImplicitConversionKind[] Conversions)>();
+        var matches = new List<(Tuple<Type[], Type> Signature, ClrOverloadResolution.ImplicitConversionKind[] Conversions)>();
         foreach (var candidate in userGroup.Candidates)
         {
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -1702,15 +1703,15 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameterTypes = new Type[delegateParameterTypes.Count];
-            var conversions = new OverloadResolution.ImplicitConversionKind[delegateParameterTypes.Count];
+            var conversions = new ClrOverloadResolution.ImplicitConversionKind[delegateParameterTypes.Count];
             var compatible = true;
             for (var i = 0; i < parameterTypes.Length; i++)
             {
                 parameterTypes[i] = projectType(closedParameters[i]);
                 conversions[i] = parameterTypes[i] == null
-                    ? OverloadResolution.ImplicitConversionKind.None
-                    : OverloadResolution.ClassifyImplicit(parameterTypes[i], delegateParameterTypes[i]);
-                if (conversions[i] == OverloadResolution.ImplicitConversionKind.None)
+                    ? ClrOverloadResolution.ImplicitConversionKind.None
+                    : ClrOverloadResolution.ClassifyImplicit(parameterTypes[i], delegateParameterTypes[i]);
+                if (conversions[i] == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
                     compatible = false;
                     break;
@@ -1804,8 +1805,8 @@ internal sealed partial class ExpressionBinder
     }
 
     private static bool IsBetterMethodGroupConversion(
-        IReadOnlyList<OverloadResolution.ImplicitConversionKind> candidate,
-        IReadOnlyList<OverloadResolution.ImplicitConversionKind> other)
+        IReadOnlyList<ClrOverloadResolution.ImplicitConversionKind> candidate,
+        IReadOnlyList<ClrOverloadResolution.ImplicitConversionKind> other)
     {
         var strictlyBetter = false;
         for (var i = 0; i < candidate.Count; i++)

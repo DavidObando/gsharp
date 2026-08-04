@@ -15,6 +15,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -658,8 +659,8 @@ public sealed class ReferenceResolver : IDisposable
         // without being rebound. Fail with an actionable internal-compiler-error
         // that names the bug instead of the opaque MetadataLoadContext projection
         // failure it would otherwise cause.
-        if (ReferenceEquals(hostType, GSharp.Core.CodeAnalysis.Binding.OverloadResolution.InlineOutVarArgumentType)
-            || ReferenceEquals(hostType, GSharp.Core.CodeAnalysis.Binding.OverloadResolution.DefaultLiteralArgumentType))
+        if (ReferenceEquals(hostType, ClrOverloadResolution.InlineOutVarArgumentType)
+            || ReferenceEquals(hostType, ClrOverloadResolution.DefaultLiteralArgumentType))
         {
             throw new InvalidOperationException(
                 $"Internal compiler error: the overload-resolution sentinel '{hostType.FullName}' escaped the " +
@@ -1455,7 +1456,7 @@ public sealed class ReferenceResolver : IDisposable
 
             // Returning null lets MetadataLoadContext raise a load failure only
             // if a member actually depends on this assembly; the per-member
-            // tolerance in OverloadResolution then skips that member rather than
+            // tolerance in ClrOverloadResolution then skips that member rather than
             // aborting the whole lookup.
             return null;
         }

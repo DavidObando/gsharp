@@ -24,12 +24,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// with no fixed <c>MethodInfo</c>/<c>FunctionType</c> yet) carries the
 /// <c>TypeSymbol.Error</c> sentinel as its natural type, and every CLR
 /// call-binding path that builds the argument-type vector for
-/// <c>OverloadResolution.Resolve</c>/<c>TryInferTypeArguments</c> (imported
+/// <c>ClrOverloadResolution.Resolve</c>/<c>TryInferTypeArguments</c> (imported
 /// extension calls, static/instance CLR calls, constructors, constrained
 /// interface/object-member calls) treated that as a hard "argument not typed"
 /// failure — aborting the whole candidate instead of deferring the method
 /// group the same way an untyped arrow lambda is deferred. The fix recognises
-/// this shape everywhere (<c>OverloadResolution.IsUnresolvedMethodGroupArgument</c>),
+/// this shape everywhere (<c>ClrOverloadResolution.IsUnresolvedMethodGroupArgument</c>),
 /// lets generic inference/applicability proceed using the other arguments (the
 /// receiver, in the LINQ case), and resolves the method group against the
 /// winning candidate's parameter type afterwards via the existing

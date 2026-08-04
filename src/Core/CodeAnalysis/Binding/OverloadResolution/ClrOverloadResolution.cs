@@ -1,4 +1,4 @@
-// <copyright file="OverloadResolution.cs" company="GSharp">
+// <copyright file="ClrOverloadResolution.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -10,7 +10,7 @@ using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 /// <summary>
 /// Shared C#-style "better function member" overload resolution used by the
@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <see cref="UserDefinedImplicitConversionLookup"/> callback so this file can
 /// land before the conversion work.
 /// </remarks>
-internal static class OverloadResolution
+internal static class ClrOverloadResolution
 {
     // C# §7.5.3.4 "Better conversion target" — signed integral T1 beats unsigned
     // integral T2 in this map. Used only as a secondary signed/unsigned tie-break

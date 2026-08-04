@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -63,20 +64,20 @@ public class Issue2516SliceCovarianceBindingTests
     public void ClrOverloadClassification_UsesDeclaredVarianceOnly()
     {
         Assert.Equal(
-            OverloadResolution.ImplicitConversionKind.Reference,
-            OverloadResolution.ClassifyImplicit(typeof(IEnumerable<object>), typeof(string[])));
+            ClrOverloadResolution.ImplicitConversionKind.Reference,
+            ClrOverloadResolution.ClassifyImplicit(typeof(IEnumerable<object>), typeof(string[])));
         Assert.Equal(
-            OverloadResolution.ImplicitConversionKind.None,
-            OverloadResolution.ClassifyImplicit(typeof(IList<object>), typeof(string[])));
+            ClrOverloadResolution.ImplicitConversionKind.None,
+            ClrOverloadResolution.ClassifyImplicit(typeof(IList<object>), typeof(string[])));
         Assert.Equal(
-            OverloadResolution.ImplicitConversionKind.None,
-            OverloadResolution.ClassifyImplicit(typeof(object[]), typeof(string[])));
+            ClrOverloadResolution.ImplicitConversionKind.None,
+            ClrOverloadResolution.ClassifyImplicit(typeof(object[]), typeof(string[])));
         Assert.Equal(
-            OverloadResolution.ImplicitConversionKind.None,
-            OverloadResolution.ClassifyImplicit(typeof(IEnumerable<object>), typeof(int[])));
+            ClrOverloadResolution.ImplicitConversionKind.None,
+            ClrOverloadResolution.ClassifyImplicit(typeof(IEnumerable<object>), typeof(int[])));
         Assert.Equal(
-            OverloadResolution.ImplicitConversionKind.None,
-            OverloadResolution.ClassifyImplicit(typeof(ICovariant<object>), typeof(string[])));
+            ClrOverloadResolution.ImplicitConversionKind.None,
+            ClrOverloadResolution.ClassifyImplicit(typeof(ICovariant<object>), typeof(string[])));
     }
 
     private interface ICovariant<out T>

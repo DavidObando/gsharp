@@ -16,7 +16,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// type parameter carries a real <c>System.Enum</c> base-class constraint
 /// (<c>Enum.IsDefined&lt;TEnum&gt;</c>) must be rejected by the compiler with a
 /// clear <c>GS0152</c> constraint-violation diagnostic at bind time. Before the
-/// fix, <c>OverloadResolution.SatisfiesGenericConstraints</c> unconditionally
+/// fix, <c>ClrOverloadResolution.SatisfiesGenericConstraints</c> unconditionally
 /// treated any <c>System.Enum</c>-named base constraint as satisfied once the
 /// argument was classified as a value-type-erased symbol, so the candidate
 /// bound through overload resolution and only failed later — at CLR

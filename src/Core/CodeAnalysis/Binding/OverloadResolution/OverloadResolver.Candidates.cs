@@ -17,7 +17,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 internal sealed partial class OverloadResolver
 {
@@ -385,9 +385,9 @@ internal sealed partial class OverloadResolver
 
         // Phase 2 (issue #1631): rank by C# §7.5.3.2 "better function member"
         // pairwise domination over per-argument conversion kind, reusing the
-        // SAME OverloadResolution.ImplicitConversionKind ranking (and numeric "better conversion
+        // SAME ClrOverloadResolution.ImplicitConversionKind ranking (and numeric "better conversion
         // target" tie-break) the CLR-reflection resolver
-        // (OverloadResolution.RankApplicable/CompareConversions) uses for
+        // (ClrOverloadResolution.RankApplicable/CompareConversions) uses for
         // imported-method overloads. This replaces the previous ad-hoc linear
         // score, under which any two candidates that both needed an implicit
         // conversion tied at score 0 (e.g. F(int64) / F(float64) called with an
@@ -426,7 +426,7 @@ internal sealed partial class OverloadResolver
             // parameters). Map each argument to its real slot before
             // classifying, so a named call still ranks against the correct
             // parameter type.
-            var kinds = new OverloadResolution.ImplicitConversionKind[boundArguments.Count];
+            var kinds = new ClrOverloadResolution.ImplicitConversionKind[boundArguments.Count];
             var paramTypes = new TypeSymbol[boundArguments.Count];
             var isTailSlot = new bool[boundArguments.Count];
             var elementType = isVariadic && cand.Parameters[cand.Parameters.Length - 1].Type is SliceTypeSymbol variadicSlice
@@ -439,7 +439,7 @@ internal sealed partial class OverloadResolver
                 {
                     // Unmapped (shouldn't happen for an applicable candidate) —
                     // neutral: contributes no per-argument preference.
-                    kinds[i] = OverloadResolution.ImplicitConversionKind.Identity;
+                    kinds[i] = ClrOverloadResolution.ImplicitConversionKind.Identity;
                     continue;
                 }
 
@@ -460,7 +460,7 @@ internal sealed partial class OverloadResolver
                     isTailSlot[i] = true;
                     var tailArgType = boundArguments[i]?.Type;
                     kinds[i] = elementType == null
-                        ? OverloadResolution.ImplicitConversionKind.Identity
+                        ? ClrOverloadResolution.ImplicitConversionKind.Identity
                         : ClassifyUserArgumentConversionKind(tailArgType, elementType);
                     continue;
                 }
@@ -483,7 +483,7 @@ internal sealed partial class OverloadResolver
                 // C#'s "better conversion from a method group" rule — instead
                 // of tying and reporting a spurious GS0266.
                 kinds[i] = IsValueReturnDiscardedToVoidDelegate(argType, paramType, candSubstitution)
-                    ? OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+                    ? ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
                     : ClassifyUserArgumentConversionKind(argType, paramType);
             }
 
@@ -576,7 +576,7 @@ internal sealed partial class OverloadResolver
         // so neither dominates on conversion kind and the earlier tie-breaks
         // cannot choose. Mirrors C#'s preference for the task-returning delegate
         // overload for an async/task-returning lambda argument, and the parallel
-        // rule in OverloadResolution.RankApplicable for imported (BCL) overloads.
+        // rule in ClrOverloadResolution.RankApplicable for imported (BCL) overloads.
         // Generalised: fires for ANY user overload set differing by `(...) -> X`
         // vs `(...) -> Task[X]` at a task-returning-lambda argument slot.
         if (pool.Count > 1)
@@ -698,7 +698,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private readonly struct UserCandidateRankData
     {
-        public UserCandidateRankData(FunctionSymbol candidate, OverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
+        public UserCandidateRankData(FunctionSymbol candidate, ClrOverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
         {
             Candidate = candidate;
             Kinds = kinds;
@@ -710,7 +710,7 @@ internal sealed partial class OverloadResolver
 
         public FunctionSymbol Candidate { get; }
 
-        public OverloadResolution.ImplicitConversionKind[] Kinds { get; }
+        public ClrOverloadResolution.ImplicitConversionKind[] Kinds { get; }
 
         public TypeSymbol[] ParamTypes { get; }
 
@@ -728,7 +728,7 @@ internal sealed partial class OverloadResolver
 
     /// <summary>
     /// Issue #1631: C# §7.5.3.2 "better function member" pairwise comparison —
-    /// mirrors <c>OverloadResolution.IsAtLeastAsGoodAs</c> for user-symbolic
+    /// mirrors <c>ClrOverloadResolution.IsAtLeastAsGoodAs</c> for user-symbolic
     /// candidates. Returns <see langword="true"/> when <paramref name="a"/> is
     /// not worse than <paramref name="b"/> on any argument and strictly better
     /// on at least one.
@@ -755,15 +755,15 @@ internal sealed partial class OverloadResolver
 
     /// <summary>
     /// Issue #1631: compares two candidate conversions for the SAME argument,
-    /// mirroring <c>OverloadResolution.CompareConversions</c>. Different
-    /// <see cref="OverloadResolution.ImplicitConversionKind"/>s rank by their declared ordinal
+    /// mirroring <c>ClrOverloadResolution.CompareConversions</c>. Different
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind"/>s rank by their declared ordinal
     /// (lower is better); same-kind numeric widenings tie-break via the
-    /// shared <see cref="OverloadResolution.CompareNumericTargets"/> "better
+    /// shared <see cref="ClrOverloadResolution.CompareNumericTargets"/> "better
     /// conversion target" rule (C# §7.5.3.4), reusing the exact CLR-path
     /// helper rather than reimplementing the numeric/signed-vs-unsigned
     /// lattice a second time.
     /// </summary>
-    private static int CompareUserConversions(OverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, OverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
+    private static int CompareUserConversions(ClrOverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, ClrOverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
     {
         // Issue #1631 (B1'): per C# §7.5.3.2, "non-expanded form preferred
         // over expanded form" is a LATE tie-break applied only when per-arg
@@ -778,9 +778,9 @@ internal sealed partial class OverloadResolver
             return ((int)ka).CompareTo((int)kb);
         }
 
-        if (ka == OverloadResolution.ImplicitConversionKind.NumericWidening)
+        if (ka == ClrOverloadResolution.ImplicitConversionKind.NumericWidening)
         {
-            return OverloadResolution.CompareNumericTargets(paramA?.ClrType, paramB?.ClrType, source?.ClrType);
+            return ClrOverloadResolution.CompareNumericTargets(paramA?.ClrType, paramB?.ClrType, source?.ClrType);
         }
 
         // Issue #2146: reference "better conversion target" tie-break
@@ -795,7 +795,7 @@ internal sealed partial class OverloadResolver
         // more-derived reference parameter win (Animal over object; Type? over
         // object). If neither target converts to the other (genuinely unrelated
         // reference types), leave the tie (0) so real ambiguity is preserved.
-        if (ka == OverloadResolution.ImplicitConversionKind.Reference && paramA != null && paramB != null && !ReferenceEquals(paramA, paramB))
+        if (ka == ClrOverloadResolution.ImplicitConversionKind.Reference && paramA != null && paramB != null && !ReferenceEquals(paramA, paramB))
         {
             return CompareReferenceTargets(paramA, paramB);
         }
@@ -839,8 +839,8 @@ internal sealed partial class OverloadResolver
     /// <summary>
     /// Issue #1631: classifies the implicit conversion from a user-symbolic
     /// argument type to a user-symbolic parameter type using the SAME
-    /// <see cref="OverloadResolution.ImplicitConversionKind"/> ranking the CLR-reflection
-    /// resolver (<see cref="OverloadResolution.ClassifyImplicit"/>) uses for
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind"/> ranking the CLR-reflection
+    /// resolver (<see cref="ClrOverloadResolution.ClassifyImplicit"/>) uses for
     /// imported-method overloads, so both resolvers agree on which conversion
     /// is "better". Bounded to the conversion shapes the user-symbolic
     /// <see cref="Conversion"/> classifier actually distinguishes: identity,
@@ -848,28 +848,28 @@ internal sealed partial class OverloadResolver
     /// shared <see cref="NumericWideningLattice"/>). Every other implicit
     /// conversion (reference upcast, interface satisfaction, boxing,
     /// user-defined <c>op_Implicit</c>, …) folds into
-    /// <see cref="OverloadResolution.ImplicitConversionKind.Reference"/> — the user-symbolic type
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind.Reference"/> — the user-symbolic type
     /// model does not carry enough structure to rank those sub-kinds
     /// separately, but they still rank strictly better than the numeric/
     /// delegate special cases ranked worse below.
     /// </summary>
-    private OverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
+    private ClrOverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
     {
         if (argType == null || paramType == null)
         {
-            return OverloadResolution.ImplicitConversionKind.None;
+            return ClrOverloadResolution.ImplicitConversionKind.None;
         }
 
         if (argType == paramType)
         {
-            return OverloadResolution.ImplicitConversionKind.Identity;
+            return ClrOverloadResolution.ImplicitConversionKind.Identity;
         }
 
         if (Conversion.Classify(argType, paramType).IsStructuralProjection)
         {
             return conversions.HasUserDefinedImplicitConversion(argType, paramType)
-                ? OverloadResolution.ImplicitConversionKind.UserDefinedImplicit
-                : OverloadResolution.ImplicitConversionKind.StructuralProjection;
+                ? ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+                : ClrOverloadResolution.ImplicitConversionKind.StructuralProjection;
         }
 
         if (paramType is NullableTypeSymbol nullableParam && argType == nullableParam.UnderlyingType)
@@ -885,10 +885,10 @@ internal sealed partial class OverloadResolver
             // target over `object`.
             if (NullableLifting.IsValueTypeNullable(nullableParam))
             {
-                return OverloadResolution.ImplicitConversionKind.NullableWrap;
+                return ClrOverloadResolution.ImplicitConversionKind.NullableWrap;
             }
 
-            return OverloadResolution.ImplicitConversionKind.Reference;
+            return ClrOverloadResolution.ImplicitConversionKind.Reference;
         }
 
         // ponytail: widening-then-wrap (e.g. int32 -> int64?) is not caught by
@@ -904,7 +904,7 @@ internal sealed partial class OverloadResolver
             && NumericWideningLattice.IsNumericPrimitive(paramClr.FullName)
             && NumericWideningLattice.IsWidening(argClr, paramClr))
         {
-            return OverloadResolution.ImplicitConversionKind.NumericWidening;
+            return ClrOverloadResolution.ImplicitConversionKind.NumericWidening;
         }
 
         // ponytail: object vs. an implemented interface (e.g. f(object) vs.
@@ -914,7 +914,7 @@ internal sealed partial class OverloadResolver
         // #1631 regression. Upgrade path: split Reference into sub-kinds
         // (exact-interface-satisfaction vs. base-class/object upcast) sharing
         // more of Conversion.Classify's structure, if this surfaces in practice.
-        return OverloadResolution.ImplicitConversionKind.Reference;
+        return ClrOverloadResolution.ImplicitConversionKind.Reference;
     }
 
     /// <summary>

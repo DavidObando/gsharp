@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -511,7 +512,7 @@ internal sealed partial class ExpressionBinder
         var receiverClr = closesReceiver
             ? NullableTypeSymbol.GetEffectiveClrType(group.Receiver.Type)
             : null;
-        var matches = new List<(MethodInfo Method, OverloadResolution.ImplicitConversionKind ReceiverConversion)>();
+        var matches = new List<(MethodInfo Method, ClrOverloadResolution.ImplicitConversionKind ReceiverConversion)>();
 
         foreach (var candidate in group.Candidates)
         {
@@ -528,9 +529,9 @@ internal sealed partial class ExpressionBinder
             }
 
             var receiverConversion = closesReceiver
-                ? OverloadResolution.ClassifyImplicit(parameters[0].ParameterType, receiverClr)
-                : OverloadResolution.ImplicitConversionKind.Identity;
-            if (receiverConversion != OverloadResolution.ImplicitConversionKind.None)
+                ? ClrOverloadResolution.ClassifyImplicit(parameters[0].ParameterType, receiverClr)
+                : ClrOverloadResolution.ImplicitConversionKind.Identity;
+            if (receiverConversion != ClrOverloadResolution.ImplicitConversionKind.None)
             {
                 matches.Add((candidate, receiverConversion));
             }
@@ -635,7 +636,7 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// ADR-0055 Tier 4 (#369): builds the per-argument flags consumed by
-    /// <see cref="OverloadResolution.Resolve{T}"/>,
+    /// <see cref="ClrOverloadResolution.Resolve{T}"/>,
     /// marking each positional argument whose syntax is an interpolated-string
     /// literal. These arguments may convert to an
     /// <c>IFormattable</c>/<c>FormattableString</c> parameter in addition to
@@ -706,7 +707,7 @@ internal sealed partial class ExpressionBinder
 
             var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount]);
             if (argSyntax is InterpolatedStringExpressionSyntax interpolated
-                && OverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
+                && ClrOverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
             {
                 builder ??= arguments.ToBuilder();
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);

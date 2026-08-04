@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -139,7 +140,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var candidate in candidates)
         {
-            if (OverloadResolution.TryDescribeValueTypeBaseConstraintViolation(candidate, explicitTypeArgs, typeArgSymbols, out var typeParameterName, out var typeArgument, out var constraintDescription))
+            if (ClrOverloadResolution.TryDescribeValueTypeBaseConstraintViolation(candidate, explicitTypeArgs, typeArgSymbols, out var typeParameterName, out var typeArgument, out var constraintDescription))
             {
                 Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(location, typeParameterName, typeArgument, constraintDescription);
                 return true;
@@ -164,7 +165,7 @@ internal sealed partial class ExpressionBinder
     private static TypeSymbol ResolveImportedGenericReturnType(System.Reflection.MethodInfo closed, ImmutableArray<TypeSymbol> typeArgSymbols)
     {
         if (!typeArgSymbols.IsDefaultOrEmpty
-            && OverloadResolution.TryGetGenericMethodParameterReturnPosition(closed, out var position)
+            && ClrOverloadResolution.TryGetGenericMethodParameterReturnPosition(closed, out var position)
             && position >= 0
             && position < typeArgSymbols.Length)
         {
@@ -1194,13 +1195,13 @@ internal sealed partial class ExpressionBinder
             // correctly overall.
             IReadOnlyList<string> deferredArgumentNames =
                 BuildDeferredArgumentNames(ce, offset);
-            var resolution = OverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve(
                 methods,
                 argTypes,
                 explicitTypeArgs,
                 scope.References.MapClrTypeToReferences,
                 argumentNames: deferredArgumentNames);
-            if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+            if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
                 continue;
             }
@@ -1408,7 +1409,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (!OverloadResolution.TryInferDeferredLambdaParameterTypes(method, argTypes, lambdaParamIndices, arities, out var closed))
+            if (!ClrOverloadResolution.TryInferDeferredLambdaParameterTypes(method, argTypes, lambdaParamIndices, arities, out var closed))
             {
                 continue;
             }
@@ -2106,7 +2107,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<TypeSymbol> typeArgSymbols)
     {
         if (!typeArgSymbols.IsDefaultOrEmpty
-            && OverloadResolution.TryGetGenericMethodParameterPosition(resolvedMethod, parameterIndex, out var position)
+            && ClrOverloadResolution.TryGetGenericMethodParameterPosition(resolvedMethod, parameterIndex, out var position)
             && position >= 0
             && position < typeArgSymbols.Length)
         {
@@ -2431,7 +2432,7 @@ internal sealed partial class ExpressionBinder
                 // Issue #505: surface the competing candidate signatures so the
                 // caller can pick a disambiguation (typically an explicit
                 // type-argument list).
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, staticAmbiguousMethods.Length, staticAmbiguousMethods.Select(OverloadResolution.FormatMethodSignature));
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, staticAmbiguousMethods.Length, staticAmbiguousMethods.Select(ClrOverloadResolution.FormatMethodSignature));
                 return new BoundErrorExpression(null);
             }
 
@@ -2858,7 +2859,7 @@ internal sealed partial class ExpressionBinder
                 // the local's type is inferred from the chosen overload below.
                 if (TryGetInlineOutVarArgument(ce, i, out _))
                 {
-                    argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                    argTypes[i] = ClrOverloadResolution.InlineOutVarArgumentType;
                     continue;
                 }
 
@@ -2880,7 +2881,7 @@ internal sealed partial class ExpressionBinder
                     // candidate set; it is resolved against the winning
                     // overload's parameter type afterwards by
                     // BindClrParameterConversions.
-                    if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                    if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                     {
                         argsAllTyped = false;
                         break;
@@ -2907,7 +2908,7 @@ internal sealed partial class ExpressionBinder
                 var preResolutionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
                     null,
                     ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-                var resolution = OverloadResolution.Resolve(
+                var resolution = ClrOverloadResolution.Resolve(
                     candidates,
                     argTypes,
                     explicitTypeArgs,
@@ -2927,7 +2928,7 @@ internal sealed partial class ExpressionBinder
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
                 switch (resolution.Outcome)
                 {
-                    case OverloadResolution.ResolutionOutcome.Resolved:
+                    case ClrOverloadResolution.ResolutionOutcome.Resolved:
                         // Issue #2193: a CLR/imported instance method that shares a
                         // name with a user extension function must not automatically
                         // win overload resolution when it is only applicable through
@@ -3011,8 +3012,8 @@ internal sealed partial class ExpressionBinder
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
                         BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
                         return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
-                    case OverloadResolution.ResolutionOutcome.Ambiguous:
-                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                    case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
+                        Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                         return new BoundErrorExpression(null);
                     default:
                         break;

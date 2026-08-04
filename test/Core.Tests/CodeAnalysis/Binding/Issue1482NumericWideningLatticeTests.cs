@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -15,7 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #1482: the implicit numeric-widening lattice (ADR-0044 / C# §6.1.2)
 /// used to be hand-copied into <see cref="Conversion"/> and
-/// <see cref="OverloadResolution"/>, and the two copies had DIVERGED — the
+/// <see cref="ClrOverloadResolution"/>, and the two copies had DIVERGED — the
 /// overload-resolution copy was missing every native-width integer
 /// (<c>nint</c>/<c>nuint</c> = <c>System.IntPtr</c>/<c>System.UIntPtr</c>) row.
 /// These tests pin the now-single source of truth
@@ -88,8 +89,8 @@ public class Issue1482NumericWideningLatticeTests
                 var latticeWidens = NumericWideningLattice.IsWidening(source.ClrName, target.ClrName);
                 var conversionImplicit = Conversion.Classify(source.Symbol, target.Symbol).IsImplicit;
                 var overloadWidens =
-                    OverloadResolution.ClassifyImplicit(target.ClrType, source.ClrType)
-                    == OverloadResolution.ImplicitConversionKind.NumericWidening;
+                    ClrOverloadResolution.ClassifyImplicit(target.ClrType, source.ClrType)
+                    == ClrOverloadResolution.ImplicitConversionKind.NumericWidening;
 
                 if (latticeWidens != conversionImplicit || latticeWidens != overloadWidens)
                 {
@@ -155,8 +156,8 @@ public class Issue1482NumericWideningLatticeTests
         Assert.Equal(expectedWidens, Conversion.Classify(source.Symbol, target.Symbol).IsImplicit);
 
         var overloadWidens =
-            OverloadResolution.ClassifyImplicit(target.ClrType, source.ClrType)
-            == OverloadResolution.ImplicitConversionKind.NumericWidening;
+            ClrOverloadResolution.ClassifyImplicit(target.ClrType, source.ClrType)
+            == ClrOverloadResolution.ImplicitConversionKind.NumericWidening;
         Assert.Equal(expectedWidens, overloadWidens);
     }
 
@@ -175,13 +176,13 @@ public class Issue1482NumericWideningLatticeTests
         Assert.False(Conversion.Classify(TypeSymbol.Float64, TypeSymbol.Int64).IsImplicit);
 
         // int64 is the better conversion target than double for a nint source.
-        Assert.True(OverloadResolution.CompareNumericTargets(typeof(long), typeof(double), typeof(nint)) < 0);
+        Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(long), typeof(double), typeof(nint)) < 0);
 
         var int64Overload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeInt64), BindingFlags.Public | BindingFlags.Static);
         var doubleOverload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeDouble), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { int64Overload, doubleOverload }, new[] { typeof(nint) });
+        var result = ClrOverloadResolution.Resolve(new[] { int64Overload, doubleOverload }, new[] { typeof(nint) });
 
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(NIntFixture.TakeInt64), result.Best.Name);
     }
 
@@ -191,13 +192,13 @@ public class Issue1482NumericWideningLatticeTests
         // Symmetric nuint case: nuint → uint64 → double, so uint64 wins.
         Assert.True(Conversion.Classify(TypeSymbol.NUInt, TypeSymbol.UInt64).IsImplicit);
         Assert.True(Conversion.Classify(TypeSymbol.NUInt, TypeSymbol.Float64).IsImplicit);
-        Assert.True(OverloadResolution.CompareNumericTargets(typeof(ulong), typeof(double), typeof(nuint)) < 0);
+        Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(ulong), typeof(double), typeof(nuint)) < 0);
 
         var uint64Overload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeUInt64), BindingFlags.Public | BindingFlags.Static);
         var doubleOverload = typeof(NIntFixture).GetMethod(nameof(NIntFixture.TakeDouble), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { uint64Overload, doubleOverload }, new[] { typeof(nuint) });
+        var result = ClrOverloadResolution.Resolve(new[] { uint64Overload, doubleOverload }, new[] { typeof(nuint) });
 
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(NIntFixture.TakeUInt64), result.Best.Name);
     }
 

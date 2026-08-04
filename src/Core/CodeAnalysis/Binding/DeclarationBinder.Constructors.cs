@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -192,7 +193,7 @@ internal sealed partial class DeclarationBinder
             // interpolated-string literals (base-ctor arguments are always
             // positional, never named).
             var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(argSyntax, boundArguments.Count);
-            var resolution = OverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve(
                 ctors,
                 argTypes,
                 interpolatedStringArgs: interpolatedStringArgs,
@@ -201,12 +202,12 @@ internal sealed partial class DeclarationBinder
                 delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
-                case OverloadResolution.ResolutionOutcome.Resolved:
+                case ClrOverloadResolution.ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best as ConstructorInfo;
                     isExpanded = resolution.IsExpanded;
                     break;
-                case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(location, clrBase.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                     return null;
                 default:
                     break;
@@ -236,7 +237,7 @@ internal sealed partial class DeclarationBinder
             for (var i = 0; i < limit; i++)
             {
                 if (argSyntax(i) is InterpolatedStringExpressionSyntax interpolated
-                    && OverloadResolution.IsFormattableStringTarget(bestCtorParams[i].ParameterType))
+                    && ClrOverloadResolution.IsFormattableStringTarget(bestCtorParams[i].ParameterType))
                 {
                     boundArguments[i] = bindInterpolatedStringAsFormattable(interpolated, targetType: null);
                 }

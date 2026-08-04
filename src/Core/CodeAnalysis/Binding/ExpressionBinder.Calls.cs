@@ -14,6 +14,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -1572,7 +1573,7 @@ internal sealed partial class ExpressionBinder
                 // the other arguments) instead of aborting resolution
                 // outright; it is resolved against the winning constructor's
                 // parameter type afterwards by BindClrParameterConversions.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(boundArguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(boundArguments[i]))
                 {
                     argsAllTyped = false;
                     break;
@@ -1602,7 +1603,7 @@ internal sealed partial class ExpressionBinder
                 ? (source, target) => IsUserClassAssignableToInterface(boundArguments, argTypes, source, target)
                 : null;
 
-            var resolution = OverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve(
                 ctors,
                 argTypes,
                 interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count),
@@ -1613,13 +1614,13 @@ internal sealed partial class ExpressionBinder
                 delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
-                case OverloadResolution.ResolutionOutcome.Resolved:
+                case ClrOverloadResolution.ResolutionOutcome.Resolved:
                     bestCtor = resolution.Best;
                     ctorMapping = resolution.ParameterMapping;
                     ctorIsExpanded = resolution.IsExpanded;
                     break;
-                case OverloadResolution.ResolutionOutcome.Ambiguous:
-                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
+                    Diagnostics.ReportAmbiguousOverload(syntax.Location, clrType.Name, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                     return false;
                 default:
                     break;

@@ -17,7 +17,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Regression tests for issue #2126: the overload-resolution sentinel type
-/// <c>OverloadResolution+InlineOutVarArgumentMarker</c> must never escape the
+/// <c>ClrOverloadResolution+InlineOutVarArgumentMarker</c> must never escape the
 /// binder into type projection or emit.
 /// <para>
 /// When an inline <c>out var</c> (or a pre-declared <c>out</c> whose pointee is a

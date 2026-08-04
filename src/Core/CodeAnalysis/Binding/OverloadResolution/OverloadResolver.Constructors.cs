@@ -17,7 +17,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 internal sealed partial class OverloadResolver
 {
@@ -1569,7 +1569,7 @@ internal sealed partial class OverloadResolver
         TextLocation location,
         out BoundExpression converted)
     {
-        if (OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+        if (ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
         {
             converted = conversions.BindConversion(location, argument, targetType);
             return true;
