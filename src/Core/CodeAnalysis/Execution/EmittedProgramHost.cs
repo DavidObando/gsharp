@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Threading;
+using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Execution;
 
@@ -137,10 +138,12 @@ public static class EmittedProgramHost
             // The CLR host validates the managed entry point's signature
             // before running a single user statement; mirror its check (and
             // its exact crash text) so an invalid Main crashes identically
-            // under `dotnet exec` and the in-memory drivers.
-            if (entryPoint.ReturnType != typeof(void)
-                && entryPoint.ReturnType != typeof(int)
-                && entryPoint.ReturnType != typeof(uint))
+            // under `dotnet exec` and the in-memory drivers. IsSameAs keeps
+            // the issue-#835 typeof-identity guard clean even though these
+            // are runtime-loaded (never MetadataLoadContext) types.
+            if (!entryPoint.ReturnType.IsSameAs(typeof(void))
+                && !entryPoint.ReturnType.IsSameAs(typeof(int))
+                && !entryPoint.ReturnType.IsSameAs(typeof(uint)))
             {
                 var invalidEntryPoint = new MethodAccessException(
                     "Entry point must have a return type of void, integer, or unsigned integer.");
