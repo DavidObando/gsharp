@@ -23,7 +23,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
 {
     private const int MaxPopup = 7;
 
-    private readonly SessionEngine engine;
+    private readonly ISessionEngine engine;
     private readonly MultilineEditor editor = new();
     private readonly ScrollState scroll = new();
     private IAppShellNavigator? navigator;
@@ -36,7 +36,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
     private int evalFrame;
     private bool cancelRequested;
 
-    public ReplScreen(SessionEngine engine)
+    public ReplScreen(ISessionEngine engine)
     {
         this.engine = engine;
         engine.CaptureConsole = true;

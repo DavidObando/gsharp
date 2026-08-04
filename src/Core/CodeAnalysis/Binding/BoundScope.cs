@@ -23,6 +23,10 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder functionKeys;
     private ImmutableArray<ImportSymbol>.Builder imports;
     private ImmutableDictionary<string, TypeSymbol>.Builder typeAliases;
+
+    // ADR-0156 Phase 2: registered on the root scope of an interactive
+    // submission's scope chain; exposed via SubmissionImports.
+    private SubmissionImports submissionImports;
     private ImmutableArray<string>.Builder typeAliasKeys;
     private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
 
@@ -147,6 +151,13 @@ public sealed class BoundScope
     /// by the function's <c>[Conditional]</c> applications is in this set.
     /// </summary>
     public ImmutableHashSet<string> PreprocessorSymbols { get; }
+
+    /// <summary>
+    /// Gets the interactive submission import set (ADR-0156 Phase 2) visible
+    /// from this scope, walking the parent chain to the root scope it was
+    /// registered on; <see langword="null"/> for ordinary compilations.
+    /// </summary>
+    public SubmissionImports SubmissionImports => submissionImports ?? Parent?.SubmissionImports;
 
     /// <summary>
     /// Tries to add an import to this scope.
@@ -626,6 +637,16 @@ public sealed class BoundScope
             return false;
         }
 
+        // ADR-0156 Phase 2: a generic type declared by a prior interactive
+        // submission resolves over that submission's emitted assembly,
+        // newest submission first (see TryLookupImportedClass).
+        if (SubmissionImports is { } submissionImports
+            && submissionImports.TryResolveType(References, name, arity, out var submissionType))
+        {
+            type = submissionType;
+            return true;
+        }
+
         var mangled = name + "`" + arity;
         foreach (var import in EnumerateImports())
         {
@@ -650,6 +671,19 @@ public sealed class BoundScope
     public bool TryLookupImportedClass(string name, ExpressionSyntax declaration, out ImportedClassSymbol importedClass)
     {
         importedClass = null;
+
+        // ADR-0156 Phase 2: a type declared by a prior interactive submission
+        // resolves as an imported class over that submission's emitted
+        // assembly, newest submission first. Consulted before ordinary
+        // imports so a session-defined type shadows a same-named imported
+        // type, mirroring the evaluator scope chain (source lookups have
+        // already had their chance before any caller reaches this method).
+        if (SubmissionImports is { } submissionImports
+            && submissionImports.TryResolveType(References, name, preferredArity: 0, out var submissionType))
+        {
+            importedClass = new ImportedClassSymbol(submissionType, declaration, references: References);
+            return true;
+        }
 
         foreach (var import in EnumerateImports())
         {
@@ -771,7 +805,7 @@ public sealed class BoundScope
     /// submission's own imports (issue #2101): that field is later re-seeded,
     /// one historical <see cref="BoundGlobalScope"/> per chained REPL
     /// submission, into a fresh per-level <see cref="BoundScope"/> by
-    /// <see cref="Binder.CreateParentScope"/>. Using the walking/cumulative
+    /// <see cref="Binder.CreateParentScope(BoundGlobalScope, ReferenceResolver, ImmutableHashSet{string}, bool)"/>. Using the walking/cumulative
     /// <see cref="GetDeclaredImports"/> there previously made every submission
     /// re-import the ENTIRE flattened history of every prior submission into
     /// its own scope layer, which was then itself re-flattened on the next
@@ -1321,6 +1355,13 @@ public sealed class BoundScope
     /// <returns>The named delegate types in declaration order.</returns>
     public ImmutableArray<DelegateTypeSymbol> GetDeclaredDelegates()
         => GetDeclaredTypeSymbols<DelegateTypeSymbol>();
+
+    /// <summary>
+    /// Registers the interactive submission import set (ADR-0156 Phase 2) on
+    /// this (root) scope; exposed to child scopes via <see cref="SubmissionImports"/>.
+    /// </summary>
+    /// <param name="imports">The submission import set; may be <see langword="null"/>.</param>
+    internal void SetSubmissionImports(SubmissionImports imports) => submissionImports = imports;
 
     /// <summary>
     /// Gets the per-compile-pass anonymous-class-literal type cache (issue

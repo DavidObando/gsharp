@@ -708,9 +708,40 @@ public sealed class Binder
     /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
     /// <returns>The new chained bound global scope.</returns>
     public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary)
+        => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols, isLibrary, submission: null);
+
+    /// <summary>
+    /// Binds a set of syntax trees to the previous global scope, with full
+    /// control over implicit-import seeding, the active preprocessor symbol
+    /// set, whether the compilation is a library, and — ADR-0156 Phase 2 —
+    /// optional interactive submission options that bind prior REPL
+    /// submissions as metadata-backed imports.
+    /// </summary>
+    /// <param name="previous">The previous global scope.</param>
+    /// <param name="syntaxTrees">The new syntax trees.</param>
+    /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
+    /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
+    /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
+    /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
+    /// <param name="submission">Interactive submission options, or <c>null</c> for an ordinary compilation.</param>
+    /// <returns>The new chained bound global scope.</returns>
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary, SubmissionBindingOptions submission)
     {
-        var parentScope = CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees: false);
+        var parentScope = CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees: false, submissionImports: submission?.Imports);
         var binder = new Binder(parentScope, function: null);
+
+        // ADR-0156 Phase 2: replay the session's accumulated imports so an
+        // `import` evaluated in an earlier cell keeps its effect in this one
+        // (each submission is a fresh compilation with no source chaining).
+        // TryImport short-circuits on the first same-name import, so replayed
+        // duplicates and the implicit System seed below coexist harmlessly.
+        if (submission?.ReplayImports.IsDefaultOrEmpty == false)
+        {
+            foreach (var replayed in submission.ReplayImports)
+            {
+                binder.scope.TryImport(new ImportSymbol(replayed.Name, replayed.Target, declaration: null));
+            }
+        }
 
         if (implicitSystemImport && previous == null)
         {
@@ -729,12 +760,13 @@ public sealed class Binder
         var packagesByName = new Dictionary<string, PackageSymbol>(StringComparer.Ordinal);
         var packagesInOrder = ImmutableArray.CreateBuilder<PackageSymbol>();
         var packageByTree = new Dictionary<SyntaxTree, PackageSymbol>();
+        var defaultPackageName = submission?.DefaultPackageName ?? "Default";
         foreach (var tree in syntaxTrees)
         {
             var packageSyntax = tree.Root.Members.OfType<PackageSyntax>().FirstOrDefault();
             var packageName = packageSyntax != null
                 ? string.Concat(packageSyntax.IdentifiersWithDots.Select(t => t.Text))
-                : "Default";
+                : defaultPackageName;
             if (!packagesByName.TryGetValue(packageName, out var packageSymbol))
             {
                 packageSymbol = new PackageSymbol(packageName, packageSyntax);
@@ -1178,6 +1210,49 @@ public sealed class Binder
                     binder.scope.TryDeclareVariable(v);
                 }
             }
+
+            // ADR-0156 Phase 2: capture the submission's trailing value into
+            // the synthesized `<Result>$` global so the REPL echoes it. The
+            // evaluator's historical echo is its `LastValue` after the block;
+            // the two statically-capturable shapes are a trailing expression
+            // statement (its value) and a trailing variable declaration (its
+            // initialized value). ByRefLike values cannot live in a static
+            // field and are skipped (no echo), as are `void`/error results.
+            if (submission?.CaptureTrailingExpression == true && statements.Count > 0)
+            {
+                GlobalVariableSymbol resultVariable = null;
+                var trailing = statements[statements.Count - 1];
+                if (trailing is BoundExpressionStatement trailingExpression
+                    && IsCapturableEchoType(trailingExpression.Expression.Type))
+                {
+                    resultVariable = new GlobalVariableSymbol(
+                        SubmissionImports.ResultFieldName,
+                        isReadOnly: false,
+                        trailingExpression.Expression.Type,
+                        Accessibility.Public);
+                    statements[statements.Count - 1] = new BoundVariableDeclaration(
+                        trailing.Syntax, resultVariable, trailingExpression.Expression);
+                }
+                else if (trailing is BoundVariableDeclaration trailingDeclaration
+                    && trailingDeclaration.Initializer is not BoundAddressOfExpression
+                    && IsCapturableEchoType(trailingDeclaration.Variable.Type))
+                {
+                    resultVariable = new GlobalVariableSymbol(
+                        SubmissionImports.ResultFieldName,
+                        isReadOnly: false,
+                        trailingDeclaration.Variable.Type,
+                        Accessibility.Public);
+                    statements.Add(new BoundVariableDeclaration(
+                        trailing.Syntax,
+                        resultVariable,
+                        new BoundVariableExpression(trailing.Syntax, trailingDeclaration.Variable)));
+                }
+
+                if (resultVariable != null)
+                {
+                    binder.scope.TryDeclareVariable(resultVariable);
+                }
+            }
         }
 
         var imports = binder.scope.GetOwnDeclaredImports();
@@ -1284,8 +1359,21 @@ public sealed class Binder
             };
         }
 
+        // ADR-0156 Phase 2: carry the submission import set on the scope so
+        // BindProgram's freshly-derived scope chain (CreateParentScope) can
+        // rehydrate prior-submission metadata lookup for member bodies.
+        result.SubmissionImports = submission?.Imports;
+
         return result;
     }
+
+    // ADR-0156 Phase 2: whether a submission's trailing value can be stored
+    // in the synthesized `<Result>$` static field for the REPL echo.
+    private static bool IsCapturableEchoType(TypeSymbol type)
+        => type != null
+            && type != TypeSymbol.Void
+            && type != TypeSymbol.Error
+            && !TypeSymbol.IsByRefLike(type);
 
     /// <summary>
     /// Produces a bound program from the specified global scope.
@@ -2550,6 +2638,14 @@ public sealed class Binder
         ReferenceResolver references,
         ImmutableHashSet<string> preprocessorSymbols,
         bool preserveLatestImportSyntaxTrees)
+        => CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees, previous?.SubmissionImports);
+
+    private static BoundScope CreateParentScope(
+        BoundGlobalScope previous,
+        ReferenceResolver references,
+        ImmutableHashSet<string> preprocessorSymbols,
+        bool preserveLatestImportSyntaxTrees,
+        SubmissionImports submissionImports)
     {
         var stack = new Stack<BoundGlobalScope>();
         while (previous != null)
@@ -2559,6 +2655,7 @@ public sealed class Binder
         }
 
         var parent = CreateRootScope(references, preprocessorSymbols);
+        parent.SetSubmissionImports(submissionImports);
 
         while (stack.Count > 0)
         {
@@ -6064,6 +6161,22 @@ public sealed class Binder
             // possibly be what a colliding SOURCE type reference means — and
             // let the caller report the dedicated ambiguity diagnostic.
             return null;
+        }
+
+        // ADR-0156 Phase 2: a type declared by a prior interactive submission
+        // resolves as an imported CLR type over that submission's emitted
+        // assembly, newest submission first. Consulted after this
+        // compilation's own source types (the current cell shadows history)
+        // and before ordinary imports.
+        if (scope.SubmissionImports is { } submissionImports
+            && submissionImports.TryResolveType(scope.References, name, preferredArity, out var submissionClrType))
+        {
+            if (ImportedTypeSymbol.TryCreateSemanticAggregate(submissionClrType, scope.References, out var submissionAggregate))
+            {
+                return submissionAggregate;
+            }
+
+            return TypeSymbol.FromClrType(submissionClrType);
         }
 
         if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass))

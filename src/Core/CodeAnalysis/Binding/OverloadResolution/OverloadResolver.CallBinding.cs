@@ -819,6 +819,30 @@ internal sealed partial class OverloadResolver
                     }
                 }
 
+                // ADR-0156 Phase 2: an unqualified call may resolve to a
+                // top-level function of a prior interactive submission — a
+                // static method on that submission's <Program> container.
+                // Submissions are consulted newest first and the first one
+                // declaring the name wins outright (scope-chain shadowing,
+                // not using-static ambiguity).
+                if (Scope.SubmissionImports is { } submissionImports)
+                {
+                    if (bindImportedClrStaticCall != null
+                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType))
+                    {
+                        return bindImportedClrStaticCall(submissionProgramType, syntax);
+                    }
+
+                    // A function-typed global from a prior submission (e.g. a
+                    // closure stored with `let inc = func() { ... }`) invokes
+                    // through the indirect-call path: load the static field,
+                    // then dispatch its Func/Action shape.
+                    if (TryBindSubmissionDelegateGlobalCall(syntax, submissionImports, out var submissionDelegateCall))
+                    {
+                        return submissionDelegateCall;
+                    }
+                }
+
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.Text);
                 return new BoundErrorExpression(null);
             }
@@ -1860,5 +1884,81 @@ internal sealed partial class OverloadResolver
         }
 
         return new BoundCallExpression(null, function, arguments, returnType) { MethodTypeArguments = methodTypeArguments };
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2: binds an unqualified call whose name matches a
+    /// function-typed global (a <c>System.Func</c>/<c>System.Action</c>-shaped
+    /// static field) declared by a prior interactive submission. The field is
+    /// loaded from the submission's <c>&lt;Program&gt;</c> container and the
+    /// invocation dispatches through the ordinary indirect-call path.
+    /// </summary>
+    /// <param name="syntax">The call syntax.</param>
+    /// <param name="submissionImports">The active submission import set.</param>
+    /// <param name="result">The bound invocation, when the name matched an invocable global.</param>
+    /// <returns><c>true</c> when the call was bound (or errored) against a submission global.</returns>
+    private bool TryBindSubmissionDelegateGlobalCall(CallExpressionSyntax syntax, SubmissionImports submissionImports, out BoundExpression result)
+    {
+        result = null;
+        var name = syntax.Identifier.Text;
+        if (!submissionImports.TryFindGlobalVariable(Scope.References, name, out var programType, out _))
+        {
+            return false;
+        }
+
+        var field = programType.GetField(name, BindingFlags.Public | BindingFlags.Static);
+        if (field is null || !TryMapClrDelegateToFunctionType(field.FieldType, out var functionType))
+        {
+            return false;
+        }
+
+        var calleeLoad = new BoundClrPropertyAccessExpression(syntax, receiver: null, field, functionType);
+        result = BindIndirectCallExpression(syntax, calleeLoad, name, syntax.Identifier.Location, nullSafeInvocation: null);
+        return true;
+    }
+
+    // Maps a System.Func`N / System.Action`N CLR delegate shape back to the
+    // equivalent G# function type so the indirect-call binder (and the
+    // emitter's Invoke dispatch) can consume it. Other delegate shapes (named
+    // G# delegates, custom CLR delegates) are not mapped here.
+    private static bool TryMapClrDelegateToFunctionType(Type clrType, out FunctionTypeSymbol functionType)
+    {
+        functionType = null;
+        if (clrType is null || !ClrTypeUtilities.IsDelegateType(clrType))
+        {
+            return false;
+        }
+
+        var fullName = clrType.IsGenericType ? clrType.GetGenericTypeDefinition().FullName : clrType.FullName;
+        var isAction = string.Equals(fullName, "System.Action", StringComparison.Ordinal)
+            || (fullName?.StartsWith("System.Action`", StringComparison.Ordinal) ?? false);
+        var isFunc = fullName?.StartsWith("System.Func`", StringComparison.Ordinal) ?? false;
+        if (!isAction && !isFunc)
+        {
+            return false;
+        }
+
+        var args = clrType.IsGenericType ? clrType.GetGenericArguments() : Type.EmptyTypes;
+        var parameterCount = isFunc ? args.Length - 1 : args.Length;
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameterCount);
+        for (var i = 0; i < parameterCount; i++)
+        {
+            var mapped = TypeSymbol.FromClrType(args[i]);
+            if (mapped is null || mapped == TypeSymbol.Error)
+            {
+                return false;
+            }
+
+            parameterTypes.Add(mapped);
+        }
+
+        var returnType = isFunc ? TypeSymbol.FromClrType(args[^1]) : TypeSymbol.Void;
+        if (returnType is null || returnType == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        functionType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), returnType);
+        return true;
     }
 }

@@ -48,6 +48,14 @@ internal sealed partial class ExpressionBinder
                 return inheritedWrite;
             }
 
+            // ADR-0156 Phase 2: a bare write to a top-level global declared by
+            // a prior interactive submission stores to the static field on
+            // that submission's <Program> container (newest submission first).
+            if (TryBindSubmissionStaticFieldWrite(name, syntax.Expression, syntax.EqualsToken.Location, out var submissionWrite))
+            {
+                return submissionWrite;
+            }
+
             // Surface the diagnostic suppressed above (GS0125) only when the
             // name is genuinely unresolved; a non-variable symbol already
             // reported its own diagnostic.
@@ -1123,6 +1131,15 @@ internal sealed partial class ExpressionBinder
                 {
                     return inheritedCompound;
                 }
+            }
+
+            // ADR-0156 Phase 2: a bare compound write (`counter += 1`) to a
+            // top-level global declared by a prior interactive submission
+            // reads and stores the static field on that submission's
+            // <Program> container (newest submission first).
+            if (TryBindSubmissionStaticFieldCompound(name, bareName, syntax, out var submissionCompound))
+            {
+                return submissionCompound;
             }
 
             // Surface the diagnostic suppressed above (GS0125) only when the
@@ -2378,5 +2395,114 @@ internal sealed partial class ExpressionBinder
             compoundRhsSyntax: syntax.Value,
             diagnosticLocation: syntax.OperatorToken.Location,
             outerSyntax: syntax);
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2: binds a bare simple write (<c>name = value</c>) to a
+    /// top-level global declared by a prior interactive submission as a store
+    /// to the static field on that submission's <c>&lt;Program&gt;</c>
+    /// container, newest submission first. Read-only (<c>let</c>) globals —
+    /// known from the submission's source-side scope, since the emitted field
+    /// intentionally omits <c>InitOnly</c> — report GS0203.
+    /// </summary>
+    /// <param name="name">The bare identifier being assigned.</param>
+    /// <param name="valueSyntax">The right-hand-side expression syntax.</param>
+    /// <param name="operatorLocation">The assignment operator's location for diagnostics.</param>
+    /// <param name="result">The bound assignment, when the name matched a prior submission's global.</param>
+    /// <returns><c>true</c> when a prior submission declared the global.</returns>
+    private bool TryBindSubmissionStaticFieldWrite(string name, ExpressionSyntax valueSyntax, TextLocation operatorLocation, out BoundExpression result)
+    {
+        result = null;
+        var submissionImports = scope.SubmissionImports;
+        if (submissionImports is null
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+        {
+            return false;
+        }
+
+        var classSymbol = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        if (!classSymbol.TryLookupMember(name, ne: null, out var member)
+            || !TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(operatorLocation, name);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (declared.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(operatorLocation, name);
+        }
+
+        var value = BindAssignmentRhs(valueSyntax, targetSymbol);
+        var converted = conversions.BindConversion(valueSyntax.Location, value, targetSymbol);
+        result = new BoundClrPropertyAssignmentExpression(null, receiver: null, member, converted, targetSymbol, staticContainerType: null);
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2: binds a bare compound write (<c>name op= value</c>)
+    /// to a top-level global declared by a prior interactive submission as a
+    /// read-modify-store of the static field on that submission's
+    /// <c>&lt;Program&gt;</c> container, newest submission first.
+    /// </summary>
+    /// <param name="name">The bare identifier being assigned.</param>
+    /// <param name="bareName">The identifier's name-expression syntax (for the read half).</param>
+    /// <param name="syntax">The compound assignment syntax.</param>
+    /// <param name="result">The bound assignment, when the name matched a prior submission's global.</param>
+    /// <returns><c>true</c> when a prior submission declared the global.</returns>
+    private bool TryBindSubmissionStaticFieldCompound(string name, NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var submissionImports = scope.SubmissionImports;
+        if (submissionImports is null
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+        {
+            return false;
+        }
+
+        var classSymbol = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        if (!classSymbol.TryLookupMember(name, ne: null, out var member)
+            || !TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (declared.IsReadOnly)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
+        }
+
+        // Read half: bind the same bare name through the submission member
+        // read fallback so the leftExpr is the field load.
+        if (!TryBindSubmissionStaticMember(bareName, out var leftExpr))
+        {
+            return false;
+        }
+
+        var boundRhs = BindExpression(syntax.Value);
+        SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
+
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind, leftExpr, boundRhs, syntax.Value.Location);
+        if (userCompound != null)
+        {
+            result = userCompound;
+            return true;
+        }
+
+        var binaryResult = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftExpr, boundRhs, syntax.Value.Location);
+        if (binaryResult == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, leftExpr.Type, boundRhs.Type);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var converted = conversions.BindConversion(syntax.Value.Location, binaryResult, targetSymbol);
+        result = new BoundClrPropertyAssignmentExpression(null, receiver: null, member, converted, targetSymbol, staticContainerType: null);
+        return true;
     }
 }
