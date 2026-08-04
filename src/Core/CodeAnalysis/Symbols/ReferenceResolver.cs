@@ -378,11 +378,12 @@ public sealed class ReferenceResolver : IDisposable
         {
             try
             {
+                // Deliberately load here: BuildHostAssemblies excludes DriverReferenceLoadContext assemblies.
                 _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
             }
-            catch (FileLoadException)
+            catch (Exception ex) when (ex is FileLoadException or BadImageFormatException)
             {
-                // Already loaded into the default context.
+                // Already loaded or corrupt; leave it unavailable to the resolver.
             }
         }
 

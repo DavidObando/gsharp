@@ -15,6 +15,7 @@ using Xunit;
 namespace GSharp.LanguageServer.Tests;
 
 /// <summary>Issue #3198: loose files resolve bundled extension references.</summary>
+[Collection("Issue3198AppContext")]
 public sealed class Issue3198LooseFileExtensionDiagnosticsTests
 {
     [Fact]
@@ -59,6 +60,39 @@ public sealed class Issue3198LooseFileExtensionDiagnosticsTests
         Assert.True(
             diagnostics.Count == 0,
             string.Join(Environment.NewLine, diagnostics.Select(d => $"{d.Code.Value}: {d.Message}")));
+    }
+
+    [Fact]
+    public void CorruptBundledExtension_PublishesDiagnosticInsteadOfThrowing()
+    {
+        var originalBaseDirectory = AppContext.GetData("APP_CONTEXT_BASE_DIRECTORY");
+        var directory = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue3198LooseFileExtensionDiagnosticsTests),
+            "corrupt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        Assert.Empty(Directory.GetFileSystemEntries(directory));
+
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "Gsharp.Extensions.dll"), "not a managed assembly");
+            AppContext.SetData("APP_CONTEXT_BASE_DIRECTORY", directory);
+
+            var syntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+                "package Issue3198.Corrupt\nlet broken TotallyUndefinedType = nil");
+            var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(syntaxTree);
+            var diagnostics = compilation.GlobalScope.Diagnostics
+                .Concat(compilation.BoundProgram.Diagnostics);
+
+            Assert.Contains(
+                diagnostics,
+                diagnostic => diagnostic.Message.Contains("TotallyUndefinedType", StringComparison.Ordinal));
+        }
+        finally
+        {
+            AppContext.SetData("APP_CONTEXT_BASE_DIRECTORY", originalBaseDirectory);
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static async Task<IReadOnlyList<Diagnostic>> GetPublishedDiagnosticsAsync(string name, string source)
@@ -116,4 +150,9 @@ public sealed class Issue3198LooseFileExtensionDiagnosticsTests
 
         throw new DirectoryNotFoundException("Unable to locate samples directory");
     }
+}
+
+[CollectionDefinition("Issue3198AppContext", DisableParallelization = true)]
+public sealed class Issue3198AppContextCollection
+{
 }
