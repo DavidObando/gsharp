@@ -2324,9 +2324,7 @@ internal static class ClrOverloadResolution
                         if (gmi.GetParameters().Any(static p =>
                                 p.ParameterType.ContainsGenericParameters
                                 && ClrTypeUtilities.IsDelegateType(
-                                    p.ParameterType.IsArray
-                                        ? p.ParameterType.GetElementType()
-                                        : p.ParameterType)))
+                                    UnwrapArrayElement(p.ParameterType))))
                         {
                             var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, false) ?? default;
                             if (TryCloseOverUserReferenceTypePlaceholders(
@@ -4440,6 +4438,16 @@ internal static class ClrOverloadResolution
         {
             return false;
         }
+    }
+
+    private static Type UnwrapArrayElement(Type type)
+    {
+        while (type is not null && type.IsArray)
+        {
+            type = type.GetElementType();
+        }
+
+        return type;
     }
 
     private static Type FindReferenceTypeConstraintPlaceholder(Type importedBase, Type genericParameter)

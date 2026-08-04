@@ -118,6 +118,56 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
     }
 
     [Theory]
+    [InlineData("i3178jagged2", 2, 7)]
+    [InlineData("i3178jagged3", 3, 8)]
+    public void ExplicitGenericTypeArgument_WithJaggedDelegateArrayAcrossReference_Runs(
+        string packageName,
+        int arrayDepth,
+        int expected)
+    {
+        var libraryArrayType = string.Concat(Enumerable.Repeat("[]", arrayDepth)) + "((T) -> void)";
+        var consumerDelegateType = "((Derived) -> void)";
+        var consumerArrayType = string.Concat(Enumerable.Repeat("[]", arrayDepth)) + consumerDelegateType;
+        var callback = $"(item Derived) -> {{ item.Value = {expected} }}";
+        for (var depth = 1; depth < arrayDepth; depth++)
+        {
+            var nestedType = string.Concat(Enumerable.Repeat("[]", depth)) + consumerDelegateType;
+            callback = $"{nestedType}{{ {callback} }}";
+        }
+
+        var indices = string.Concat(Enumerable.Repeat("[0]", arrayDepth));
+        var library = $$"""
+            package {{packageName}}
+
+            open class Base {
+                var Value int32
+
+                shared {
+                    func Make[T Base init()](configure {{libraryArrayType}}) T {
+                        let value = T()
+                        configure{{indices}}(value)
+                        return value
+                    }
+                }
+            }
+            """;
+        var consumer = $$"""
+            package {{packageName}}use
+            import System
+
+            class Derived : {{packageName}}.Base {}
+
+            func Main() {
+                let value = {{packageName}}.Base.Make[Derived](
+                    {{consumerArrayType}}{ {{callback}} })
+                Console.WriteLine(value.Value)
+            }
+            """;
+
+        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+    }
+
+    [Theory]
     [InlineData("i2857arity0", 0, 22)]
     [InlineData("i2857arity1", 1, 11)]
     [InlineData("i2857arity2", 2, 33)]
@@ -297,6 +347,46 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             """;
 
         var output = CompileExpectingFailure(library, consumer, packageName);
+        var diagnosticIds = Regex.Matches(output, @"\berror (GS\d{4}):")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+        Assert.Equal(new[] { "GS0159" }, diagnosticIds);
+    }
+
+    [Fact]
+    public void ExplicitGenericTypeArgument_WithDelegateInConstructedGenericAcrossReference_IsRejected()
+    {
+        const string PackageName = "i3178constructedgeneric";
+        var library = $$"""
+            package {{PackageName}}
+            import System.Collections.Generic
+
+            open class Base {
+                var Value int32
+
+                shared {
+                    func Make[T Base init()](configure List[((T) -> void)]) T {
+                        let value = T()
+                        configure[0](value)
+                        return value
+                    }
+                }
+            }
+            """;
+        var consumer = $$"""
+            package {{PackageName}}use
+            import System.Collections.Generic
+
+            class Derived : {{PackageName}}.Base {}
+
+            func Main() {
+                let configure = List[((Derived) -> void)]()
+                configure.Add((item Derived) -> { item.Value = 9 })
+                {{PackageName}}.Base.Make[Derived](configure)
+            }
+            """;
+
+        var output = CompileExpectingFailure(library, consumer, PackageName);
         var diagnosticIds = Regex.Matches(output, @"\berror (GS\d{4}):")
             .Select(match => match.Groups[1].Value)
             .ToArray();
