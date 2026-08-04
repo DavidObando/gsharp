@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -53,10 +47,10 @@ public class Issue1923PatternMatchingSeamsTests
 let answer object = 42
 answer == 42
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3224 tracks the boxed-constant equality seam (emitted compares
-        // box references and yields false).
-        var result = EvaluateWithEvaluator(source);
+        // Issue #3224: the emitted comparison dispatches through
+        // Object.Equals (value semantics), matching the evaluator; it
+        // previously compared two distinct box references and yielded false.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(true, result.Value);
     }
@@ -190,15 +184,5 @@ check(Person{Name: ""x""})
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3224 test above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3224 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

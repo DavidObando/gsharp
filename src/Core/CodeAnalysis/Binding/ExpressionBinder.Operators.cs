@@ -2021,7 +2021,11 @@ internal sealed partial class ExpressionBinder
         // 'int32'" even though C# boxes the value-type operand and compares
         // by reference identity. When exactly one side is `object` and the
         // OTHER side has an implicit (boxing) conversion to `object`, box it
-        // and rebind the homogeneous `object == object` operator.
+        // and bind the boxed-VALUE equality operator: the bound semantics
+        // compare the boxed value (the evaluator's historical behavior), so
+        // the emitter must dispatch through `Object.Equals(object, object)`
+        // rather than compare two distinct box references with `ceq`, which
+        // silently yielded `false` for equal values (issue #3224).
         if (boundOperator == null && (operatorKind == SyntaxKind.EqualsEqualsToken || operatorKind == SyntaxKind.BangEqualsToken))
         {
             if (boundLeft.Type == TypeSymbol.Object
@@ -2029,14 +2033,14 @@ internal sealed partial class ExpressionBinder
                 && Conversion.Classify(boundRight.Type, TypeSymbol.Object).IsImplicit)
             {
                 boundRight = conversions.BindConversion(rightLocation, boundRight, TypeSymbol.Object);
-                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+                boundOperator = BoundBinaryOperator.MakeBoxedValueEquality(operatorKind);
             }
             else if (boundRight.Type == TypeSymbol.Object
                 && boundLeft.Type != TypeSymbol.Object
                 && Conversion.Classify(boundLeft.Type, TypeSymbol.Object).IsImplicit)
             {
                 boundLeft = conversions.BindConversion(leftLocation, boundLeft, TypeSymbol.Object);
-                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+                boundOperator = BoundBinaryOperator.MakeBoxedValueEquality(operatorKind);
             }
         }
 
