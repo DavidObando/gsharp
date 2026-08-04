@@ -56,7 +56,7 @@ namespace GSharp.Interpreter.Tests;
 /// </summary>
 public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
 {
-    [Fact]
+    [Fact(Skip = "Implicit map synchronization retired with the evaluator (ADR-0156 Phase 3, #3205); re-enable when #3209 lands.")]
     public void ManyGoroutines_WriteDistinctKeysOnSharedMap_AllWritesSurvive()
     {
         // A single map literal is captured by N goroutines, each writing a
@@ -108,7 +108,7 @@ public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
         Assert.Equal(expectedSum, result.Value);
     }
 
-    [Fact]
+    [Fact(Skip = "Implicit map synchronization retired with the evaluator (ADR-0156 Phase 3, #3205); re-enable when #3209 lands.")]
     public void ManyConcurrentRuns_GoroutinesWritingSharedMap_NeverCorruptsOrCrashes()
     {
         // Same stress shape as
@@ -173,7 +173,7 @@ public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
         Assert.Empty(outOfRangeResults);
     }
 
-    [Fact]
+    [Fact(Skip = "Implicit map synchronization retired with the evaluator (ADR-0156 Phase 3, #3205); re-enable when #3209 lands.")]
     public void ManyConcurrentRuns_OneGoroutineRangesWhileOthersWrite_NeverThrowsCollectionModified()
     {
         // Opus review follow-up (blocking gap B1): the language sugar
@@ -248,7 +248,7 @@ public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
         Assert.Empty(exceptions);
     }
 
-    [Fact]
+    [Fact(Skip = "Implicit map synchronization retired with the evaluator (ADR-0156 Phase 3, #3205); re-enable when #3209 lands.")]
     public void ManyConcurrentRuns_LenAndContainsKeyAndKeysReadWhileWriting_NeverThrows()
     {
         // Same gap as above (B1) but for the other reflection-dispatched
