@@ -59,6 +59,40 @@ public class EmittedProgramHostTests
     }
 
     [Fact]
+    public void TopLevelAwaitFor_DrainsAsyncEnumerable_TotalBecomesExitCode()
+    {
+        // Issue #3214: the statement-level `await for` form makes the
+        // synthesized entry point async (ADR-0066 D3); the #1904 kickoff
+        // drive keeps the CLR entry signature synchronous, so the gsi
+        // file-mode host runs it like any other program.
+        var (result, stdout, _) = Run("""
+            import System
+            import System.Collections.Generic
+            import System.Threading.Tasks
+
+            async func Counts() IAsyncEnumerable[int32] {
+                yield 1
+                await Task.Yield()
+                yield 2
+                await Task.Yield()
+                yield 3
+            }
+
+            var total = 0
+            await for v in Counts() {
+                total = total + v
+            }
+            Console.WriteLine(total)
+            return total
+            """);
+
+        Assert.True(result.Success);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(6, result.ExitCode);
+        Assert.Equal("6\n", stdout);
+    }
+
+    [Fact]
     public void VoidProgram_ExitsZero()
     {
         var (result, stdout, _) = Run("""

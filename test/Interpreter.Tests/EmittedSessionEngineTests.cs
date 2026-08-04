@@ -742,4 +742,61 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Contains(state.Types, t => t.Display.Contains("Point", StringComparison.Ordinal));
         Assert.DoesNotContain(state.Variables, v => v.Display.Contains("<Result>$", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void TopLevelAwaitCell_EchoesAwaitedValue()
+    {
+        // Issue #3214: a top-level `await` in an interactive cell makes the
+        // cell's synthesized entry point async; the awaited trailing value
+        // still lands in `<Result>$` for the echo.
+        var cell = engine.Evaluate("""
+            import System.Threading.Tasks
+            await Task.FromResult(42)
+            """);
+
+        Assert.False(cell.HasError);
+        Assert.Equal(42, cell.Value);
+    }
+
+    [Fact]
+    public void AwaitForCell_DrainsAsyncIteratorFromEarlierCell()
+    {
+        // Issue #3214: the statement-level `await for` form in a cell, over
+        // an async iterator declared in a PRIOR cell.
+        Assert.False(engine.Evaluate("""
+            import System.Collections.Generic
+            import System.Threading.Tasks
+
+            async func Counts() IAsyncEnumerable[int32] {
+                yield 1
+                await Task.Yield()
+                yield 2
+                await Task.Yield()
+                yield 3
+            }
+            """).HasError);
+
+        var cell = engine.Evaluate("""
+            var total = 0
+            await for v in Counts() {
+                total = total + v
+            }
+            total
+            """);
+
+        Assert.False(cell.HasError);
+        Assert.Equal(6, cell.Value);
+    }
+
+    [Fact]
+    public void TrailingIfCell_EchoesTakenBranchValue()
+    {
+        // Issue #3227: a trailing value-producing `if` statement in a cell
+        // echoes the taken branch's value through `<Result>$`.
+        Assert.False(engine.Evaluate("let x string? = nil").HasError);
+
+        var cell = engine.Evaluate("if x == nil { 1 } else { 0 }");
+        Assert.False(cell.HasError);
+        Assert.Equal(1, cell.Value);
+    }
 }
