@@ -154,6 +154,12 @@ public static class EmittedOracle
             {
                 Imports = SubmissionImports.Create(ImmutableArray<SubmissionReference>.Empty),
                 DefaultPackageName = packageName,
+
+                // The oracle preserves Compilation.Evaluate's script
+                // semantics: an explicit `func Main` runs and its return
+                // value is the result (interactive cells leave this off —
+                // ADR-0156 Phase 3c, #3176).
+                RunUserEntryPoint = true,
             };
         }
 

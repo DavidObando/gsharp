@@ -16,10 +16,14 @@ using Xunit;
 namespace GSharp.Compiler.Tests.LanguageConformance;
 
 /// <summary>
-/// Runs every golden sample through the emitted runtime and every single-file
-/// sample through the in-process emit-to-memory drivers (bare <c>gsc</c> and
-/// <c>gsi</c>, ADR-0156 Phase 1), comparing all three byte-wise. Since Phase 1
-/// there are no expected per-driver differences: the historical
+/// The ADR-0156 §"What the conformance gate becomes" two-host parity gate,
+/// final form since Phase 3c (#3176, the tree-walking evaluator is deleted):
+/// emit-to-file + out-of-process <c>dotnet exec</c> remains the oracle for
+/// every golden sample, and the in-process emit-to-memory hosts (bare
+/// <c>gsc</c> and <c>gsi</c> script mode) are compared against it byte-wise —
+/// pinning host mechanics (ALC resolution, reference closure, console and
+/// exit-code protocol, unhandled-exception shape) rather than codegen. There
+/// are no expected per-driver differences: the historical
 /// <c>ExpectedDifferences</c> table (interpreter boundaries GS0510/GS0511/GS0514
 /// and the missing gsi reference channel, #3130) was deleted with the
 /// boundaries that caused it, and per the ADR no new entries may be added.
@@ -97,21 +101,21 @@ public class SampleConformanceTests
         var extensionsReference = usesExtensions
             ? "/r:" + extensionsAssembly.Location
             : null;
-        var compilerArguments = usesExtensions
+        var gscArguments = usesExtensions
             ? new[] { extensionsReference, "/nowarn:GS9100", sourcePath }
             : new[] { sourcePath };
-        var interpreterArguments = usesExtensions
+        var gsiArguments = usesExtensions
             ? new[] { extensionsReference, sourcePath }
             : new[] { sourcePath };
 
         var emitted = await RunEmittedAsync(new[] { sourcePath }, goldenPath, Path.GetFileNameWithoutExtension(sampleName));
-        var evaluatingCompiler = await RunDriverProcessAsync("Compiler", "gsc", sourcePath, compilerProtocol: true, compilerArguments);
-        var interpreter = await RunDriverProcessAsync("Repl", "gsi", sourcePath, compilerProtocol: false, interpreterArguments);
+        var gscInProcessHost = await RunDriverProcessAsync("Compiler", "gsc", sourcePath, compilerProtocol: true, gscArguments);
+        var gsiInProcessHost = await RunDriverProcessAsync("Repl", "gsi", sourcePath, compilerProtocol: false, gsiArguments);
 
         AssertResults(
             sampleName,
-            ("gsc", emitted, evaluatingCompiler),
-            ("gsi", emitted, interpreter));
+            ("gsc", emitted, gscInProcessHost),
+            ("gsi", emitted, gsiInProcessHost));
     }
 
     [Theory]

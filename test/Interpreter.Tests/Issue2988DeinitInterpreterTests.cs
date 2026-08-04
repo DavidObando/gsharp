@@ -4,82 +4,28 @@
 
 using System;
 using System.IO;
-using System.Linq;
-using GSharp.Core.CodeAnalysis;
 using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter boundary coverage for CLR GC finalizers declared with <c>deinit</c>.
-/// ADR-0156 Phase 3a: the GS0510 tests here pin the LEGACY tree-walking
-/// evaluator engine, constructed explicitly as <see cref="SessionEngine"/> —
-/// never the interactive default, which is now the emitted engine that runs
-/// deinitializers for real without GS0510 (see
-/// <c>EmittedSessionEngineTests.InteractiveDeinitializerRunsWithoutBoundaryWarning</c>).
-/// The evaluator engine is reachable only via the deprecated
-/// <c>--engine evaluator</c> escape hatch; these evaluator-pinned tests
-/// retire with it in Phase 3c.
+/// Coverage for CLR GC finalizers declared with <c>deinit</c>. The GS0510
+/// interpreter-boundary warning ("deinitializer will not run under the
+/// interpreter") retired with the tree-walking evaluator in ADR-0156 Phase 3c
+/// (#3176): every driver executes emitted code and runs deinitializers as
+/// real CLR finalizers, so the remaining tests assert positive finalizer
+/// behavior — including that a still-reachable instance's deinitializer does
+/// NOT run — with no boundary diagnostic anywhere.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2988DeinitInterpreterTests
 {
-    [Fact]
-    public void DeinitializersWarnOncePerDeclaringClassWithoutRunning()
-    {
-        var source = """
-            import System
-
-            class First {
-                deinit {
-                    Console.WriteLine("deinit-11")
-                }
-
-                func Touch() {
-                }
-            }
-
-            class Second {
-                deinit {
-                    Console.WriteLine("deinit-22")
-                }
-            }
-
-            var first = First()
-            var second = Second()
-            Console.WriteLine("body-33")
-            GC.KeepAlive(first)
-            GC.KeepAlive(second)
-            """;
-
-        var engine = new SessionEngine { CaptureConsole = true };
-        var cell = engine.Evaluate(source);
-
-        Assert.False(cell.HasError);
-        Assert.Equal("body-33\n", cell.Output);
-        var warnings = cell.Diagnostics
-            .Where(diagnostic => diagnostic.Id == "GS0510")
-            .OrderBy(diagnostic => diagnostic.Message)
-            .ToArray();
-        Assert.Collection(
-            warnings,
-            warning => AssertWarning(warning, "First"),
-            warning => AssertWarning(warning, "Second"));
-
-        var next = engine.Evaluate("""Console.WriteLine("next-44")""");
-        Assert.Equal("next-44\n", next.Output);
-        Assert.DoesNotContain(next.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
-    }
-
     /// <summary>
     /// ADR-0156 Phase 1: bare <c>gsc</c> and script-mode <c>gsi</c> execute
     /// emitted code, so deinitializers run as real CLR finalizers on every
-    /// driver — derived-then-base, per declaring class — and the GS0510
-    /// boundary warning no longer fires on any of them. Since Phase 3a the
-    /// interactive default is emitted too, so the warning survives only under
-    /// the deprecated <c>--engine evaluator</c> escape hatch (see the
-    /// evaluator-pinned SessionEngine tests above).
+    /// driver — derived-then-base, per declaring class — and no GS0510
+    /// boundary warning fires on any of them.
     /// </summary>
     /// <param name="driver">The driver under test.</param>
     [Theory]
@@ -135,14 +81,26 @@ public class Issue2988DeinitInterpreterTests
     }
 
     [Fact]
-    public void ReachableInstanceReportsGS0510WithoutRunningDeinitializer()
+    public void ReachableInstanceDoesNotRunDeinitializer()
     {
+        // Historically also pinned the evaluator's GS0510 warning; the
+        // engine-independent core survives emitted: a still-reachable
+        // instance's deinitializer must not run, even across a forced
+        // collection (ADR-0156 Phase 3c, #3176). The deinit records into a
+        // counter rather than printing so that the finalizer — which runs on
+        // the process-global finalizer thread when the session ALC is later
+        // reclaimed — can never leak output into another test's captured
+        // console.
         var source = """
             import System
 
             class Res(Tag string) {
+                shared {
+                    var Runs int32
+                }
+
                 deinit {
-                    Console.WriteLine("deinit-11: " + Tag)
+                    Res.Runs = Res.Runs + 1
                 }
             }
 
@@ -159,37 +117,22 @@ public class Issue2988DeinitInterpreterTests
             Console.WriteLine(held.Tag)
             """;
 
-        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(source);
 
         Assert.False(cell.HasError);
         Assert.Equal("made-22\nafter-collect-33\nkept\n", cell.Output);
-        var warning = Assert.Single(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
-        AssertWarning(warning, "Res");
-    }
-
-    [Fact]
-    public void CompilationErrorsSuppressDeinitializerBoundaryWarning()
-    {
-        var source = """
-            class Resource {
-                deinit {
-                }
-            }
-
-            var broken =
-            """;
-
-        var cell = new SessionEngine().Evaluate(source);
-
-        Assert.True(cell.HasError);
         Assert.DoesNotContain(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
+
+        var counterRead = engine.Evaluate("Res.Runs");
+        Assert.False(counterRead.HasError);
+        Assert.Equal(0, counterRead.Value);
     }
 
     /// <summary>
     /// ADR-0156 Phase 1: script-mode <c>gsi</c> runs emitted code, so a class
     /// deinitializer executes as a real CLR finalizer — asserted positively by
-    /// forcing a collection — and the GS0510 boundary warning that used to
-    /// accompany file mode no longer fires there.
+    /// forcing a collection — with no boundary warning.
     /// </summary>
     [Fact]
     public void ScriptRunnerRunsDeinitializersWithoutBoundaryWarning()
@@ -239,12 +182,4 @@ public class Issue2988DeinitInterpreterTests
         }
     }
 
-    private static void AssertWarning(Diagnostic warning, string className)
-    {
-        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
-        Assert.Contains($"class '{className}'", warning.Message, StringComparison.Ordinal);
-        Assert.Contains("will not run under the interpreter", warning.Message, StringComparison.Ordinal);
-        Assert.NotNull(warning.Location.Text);
-        Assert.Equal("deinit", warning.Location.Text.ToString(warning.Location.Span));
-    }
 }

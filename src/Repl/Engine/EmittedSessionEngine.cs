@@ -178,6 +178,20 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         }
     }
 
+    /// <summary>Whether the text is a complete submission (balanced, parses fully).</summary>
+    /// <param name="text">The submission source.</param>
+    /// <returns><see langword="true"/> when the text parses as a complete submission.</returns>
+    public static bool IsComplete(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        var tree = SyntaxTree.Parse(text);
+        return tree.Root.Members.Length > 0 && !tree.Root.Members[^1].GetLastToken().IsMissing;
+    }
+
     /// <inheritdoc/>
     public void Reset()
     {

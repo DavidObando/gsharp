@@ -30,7 +30,8 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_TypingAndCompletions_RendersWithoutThrow()
     {
-        var screen = new ReplScreen(new SessionEngine());
+        using var engine = new EmittedSessionEngine();
+        var screen = new ReplScreen(engine);
         foreach (var ch in "func Greet() string { return \"hi\" }")
         {
             screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
@@ -44,14 +45,14 @@ public class ReplLayoutTests
     [Fact]
     public void Snapshot_Empty_BeforeAnyEvaluation()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         Assert.True(engine.Snapshot().IsEmpty);
     }
 
     [Fact]
     public void Snapshot_CapturesFunctionsVariablesAndImports()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         engine.Evaluate("import \"System\"");
         engine.Evaluate("var answer = 42");
         engine.Evaluate("func Twice(n int) int { return n * 2 }");
@@ -66,7 +67,7 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_WithState_RendersSidebarOnWideTerminal()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         engine.Evaluate("var answer = 42");
         var screen = new ReplScreen(engine);
         Assert.NotNull(screen.Render(120, 30));
@@ -95,7 +96,7 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_Enter_EvaluatesAsynchronouslyAndClearsBusyOnCompletion()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         var screen = new ReplScreen(engine);
         foreach (var ch in "1 + 1")
         {
@@ -119,7 +120,7 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_TranscriptAndInput_EmitBackgroundFills()
     {
-        var engine = new SessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
         engine.Evaluate("var answer = 42");
         var screen = new ReplScreen(engine);
 
@@ -136,7 +137,7 @@ public class ReplLayoutTests
     [InlineData(70, 18)]
     public void Screen_Render_FillsExactHeight_EvenWhenCellsOverflow(int width, int height)
     {
-        var engine = new SessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
         for (var i = 0; i < 12; i++)
         {
             engine.Evaluate($"var x{i} = {i}");
@@ -149,7 +150,8 @@ public class ReplLayoutTests
     [Fact]
     public void Screen_Render_FillsExactHeight_WithMultiLineInput()
     {
-        var screen = new ReplScreen(new SessionEngine());
+        using var engine = new EmittedSessionEngine();
+        var screen = new ReplScreen(engine);
         foreach (var ch in "func F() {")
         {
             screen.HandleKey(new ConsoleKeyInfo(ch, ConsoleKey.NoName, false, false, false));
@@ -225,7 +227,7 @@ public class ReplLayoutTests
         // incremental compiler's (unrelated) per-submission cost rather than the scroll logic
         // under test, so keep the count modest.
         const int count = 12;
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         for (var i = 0; i < count; i++)
         {
             engine.Evaluate($"var x{i} = {i}");

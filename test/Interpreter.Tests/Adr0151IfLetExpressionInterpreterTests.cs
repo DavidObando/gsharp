@@ -224,7 +224,9 @@ public class Adr0151IfLetExpressionInterpreterTests
 
     private static string RunSubmission(string text)
     {
-        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(text);
+        // ADR-0156 Phase 3c (#3176): submissions run on the emitted engine.
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(text);
         Assert.DoesNotContain(cell.Diagnostics, d => d.Id != "GS0286");
         return cell.Output.Replace("\r\n", "\n");
     }

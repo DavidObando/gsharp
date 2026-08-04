@@ -1296,6 +1296,19 @@ public sealed class Binder
             ?? ResolveEntryPointPackage(packageByTree, globalStatements, functions, packagesInOrder);
         var entryPoint = ResolveEntryPoint(binder, functions, structs, globalStatements, syntaxTrees, entryPointPackage, synthesizedEntryPoint);
 
+        // ADR-0156 Phase 3c (#3176): an interactive submission never runs a
+        // user-declared entry point — `func Main()` in a cell is an ordinary
+        // function declaration (the evaluator engine's RunEntryPoint=false
+        // contract, preserved under emitted execution). Only the synthesized
+        // top-level-statements <Main>$ is invokable, so a declaration-only
+        // submission emits no entry point at all. One-shot script-shaped
+        // submissions (the emitted test oracle) opt back in via
+        // SubmissionBindingOptions.RunUserEntryPoint.
+        if (submission is { RunUserEntryPoint: false })
+        {
+            entryPoint = synthesizedEntryPoint;
+        }
+
         // Issue #2237/#2815: bind every file-level annotation EXCEPT
         // InternalsVisibleTo (which keeps its own early, syntactic
         // fast path below via FriendAssemblyDeclarations.Collect) through

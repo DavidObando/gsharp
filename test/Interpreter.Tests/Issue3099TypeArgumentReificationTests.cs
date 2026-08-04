@@ -194,7 +194,10 @@ public class Issue3099TypeArgumentReificationTests
 
     private static string RunInteractive(string source)
     {
-        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+        // ADR-0156 Phase 3c (#3176): the interactive column runs on the
+        // emitted submission-chaining engine.
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(source);
         Assert.False(cell.HasError, string.Join(Environment.NewLine, cell.Diagnostics));
         return cell.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
     }

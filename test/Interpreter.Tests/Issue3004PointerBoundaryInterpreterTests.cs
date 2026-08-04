@@ -2,73 +2,64 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #3004: unmanaged pointer evaluation must fail loudly without breaking
-/// managed-byref auto-dereference used by ordinary CLR members (GS0513,
-/// ADR-0153). ADR-0156 Phase 3a: the interactive cells here pin the LEGACY
-/// tree-walking evaluator engine, constructed explicitly as
-/// <see cref="SessionEngine"/> — never the interactive default, which is now
-/// the emitted engine where the compiled storage model runs natively. These
-/// evaluator-pinned tests retire with the deprecated
-/// <c>--engine evaluator</c> escape hatch in Phase 3c.
+/// Issue #3004 residue after the tree-walking evaluator retired (ADR-0156
+/// Phase 3c, #3176). The GS0513 unmanaged-pointer boundary (ADR-0153)
+/// existed because the evaluator had no real storage locations to point at;
+/// emitted execution runs the compiled storage model natively, so the exact
+/// programs the boundary refused now execute — and must produce the CORRECT
+/// pointer semantics the evaluator could not (true aliasing, address capture
+/// at the moment of the address-of). Managed-byref auto-dereference and
+/// ref/out address-of, which always worked, stay covered too.
 /// </summary>
 public class Issue3004PointerBoundaryInterpreterTests
 {
-    public static TheoryData<string> UnsupportedPointerCases => new()
+    [Fact]
+    public void PointerAlias_ObservesLaterWriteThroughDereference()
     {
-        """
-        import System
+        const string Source = """
+            import System
 
-        unsafe {
-            var x int32 = 7
-            var p *int32 = &x
-            x = 42
-            Console.WriteLine(*p)
-        }
-        """,
-        """
-        import System
+            unsafe {
+                var x int32 = 7
+                var p *int32 = &x
+                x = 42
+                Console.WriteLine(*p)
+            }
+            """;
 
-        unsafe {
-            var p *int32 = nil
-            Console.WriteLine(*p)
-        }
-        """,
-    };
-
-    public static TheoryData<string, int> ManagedByRefCases => new()
-    {
-        { "ManagedByRefAutoDereferenceFixture().Property", 40 },
-        { "ManagedByRefAutoDereferenceFixture()[1]", 41 },
-        { "ManagedByRefAutoDereferenceFixture().GetValue(2)", 42 },
-    };
-
-    [Theory]
-    [InlineData("""
-        import System
-
-        unsafe {
-            var a int32 = 5
-            var b int32 = 5
-            var pa *int32 = &a
-            var pb *int32 = &b
-            Console.WriteLine(pa == pb)
-        }
-        """)]
-    [MemberData(nameof(UnsupportedPointerCases))]
-    public void UnmanagedPointerOperation_ReportsGs0513(string source)
-    {
-        AssertPointerOperationIsRefused(source);
+        AssertOutput(Source, "42\n");
     }
 
     [Fact]
-    public void IndexedAddress_CorrectValue10_IsRefusedRatherThanReevaluatedTo30()
+    public void DistinctLocals_HaveDistinctAddresses()
     {
+        const string Source = """
+            import System
+
+            unsafe {
+                var a int32 = 5
+                var b int32 = 5
+                var pa *int32 = &a
+                var pb *int32 = &b
+                Console.WriteLine(pa == pb)
+            }
+            """;
+
+        AssertOutput(Source, "False\n");
+    }
+
+    [Fact]
+    public void IndexedAddress_CapturesElementAtAddressOfTime()
+    {
+        // The exact program the evaluator refused (it would have re-evaluated
+        // the index expression and printed 30); the emitted pointer pins
+        // &arr[0] at address-of time and prints 10.
         const string Source = """
             import System
 
@@ -81,11 +72,13 @@ public class Issue3004PointerBoundaryInterpreterTests
             }
             """;
 
-        AssertPointerOperationIsRefused(Source);
+        AssertOutput(Source, "10\n");
     }
 
     [Theory]
-    [MemberData(nameof(ManagedByRefCases))]
+    [InlineData("ManagedByRefAutoDereferenceFixture().Property", 40)]
+    [InlineData("ManagedByRefAutoDereferenceFixture()[1]", 41)]
+    [InlineData("ManagedByRefAutoDereferenceFixture().GetValue(2)", 42)]
     public void ManagedByRefAutoDereference_RemainsSupported(string expression, int expected)
     {
         var source = $"""
@@ -94,10 +87,10 @@ public class Issue3004PointerBoundaryInterpreterTests
             {expression}
             """;
 
-        var cell = new SessionEngine().Evaluate(source);
+        var result = EmittedOracle.Evaluate(source);
 
-        Assert.False(cell.HasError, string.Join("\n", cell.Diagnostics));
-        Assert.Equal(expected, cell.Value);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(expected, result.Value);
     }
 
     [Fact]
@@ -117,19 +110,17 @@ public class Issue3004PointerBoundaryInterpreterTests
             (slot, ok)
             """;
 
-        var cell = new SessionEngine().Evaluate(Source);
+        var result = EmittedOracle.Evaluate(Source);
 
-        Assert.False(cell.HasError, string.Join("\n", cell.Diagnostics));
-        Assert.Equal((42, true), cell.Value);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal((42, true), result.Value);
     }
 
-    private static void AssertPointerOperationIsRefused(string source)
+    private static void AssertOutput(string source, string expected)
     {
-        var cell = new SessionEngine().Evaluate(source);
+        var result = EmittedOracle.Evaluate(source);
 
-        var diagnostic = Assert.Single(cell.Diagnostics);
-        Assert.True(cell.HasError);
-        Assert.Equal("GS0513", diagnostic.Id);
-        Assert.Contains("compile this program with 'gsc' instead", diagnostic.Message);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(expected, result.Output.Replace("\r\n", "\n"));
     }
 }

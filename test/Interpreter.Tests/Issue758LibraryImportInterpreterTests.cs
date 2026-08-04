@@ -9,50 +9,15 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// ADR-0092 / issue #758: interpreter coverage for the
-/// <c>@LibraryImport</c> source-generator-shaped P/Invoke attribute.
-/// The interpreter has no native-call transition, so valid declarations
-/// report the intentional GS0514 boundary and direct users to <c>gsc</c>.
-/// Binder diagnostics for invalid declarations still take precedence.
+/// ADR-0092 / issue #758: coverage for the <c>@LibraryImport</c>
+/// source-generator-shaped P/Invoke attribute in the REPL. The GS0514
+/// interpreter boundary pins retired with the tree-walking evaluator
+/// (ADR-0156 Phase 3c, #3176) — P/Invoke runs natively on the emitted
+/// engine, with positive native-call coverage in the PInvoke* conformance
+/// samples. Binder diagnostics for invalid declarations remain.
 /// </summary>
 public class Issue758LibraryImportInterpreterTests
 {
-    [Fact]
-    public void LibraryImport_WithoutStringArgs_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @LibraryImport("libc", EntryPoint: "getpid")
-            func getpid_native() int32;
-
-            var pid = getpid_native()
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void LibraryImport_WithStringArg_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @LibraryImport("libc", EntryPoint: "strlen", StringMarshalling: StringMarshalling.Utf8)
-            func strlen_native(text string) nint;
-
-            var n = strlen_native("Hello")
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
     [Fact]
     public void LibraryImport_PoorlyTypedSurface_StillProducesBinderDiagnostics()
     {

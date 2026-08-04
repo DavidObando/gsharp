@@ -9,6 +9,11 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2984: interactive declarations do not execute a script entry point.
+/// A second test (<c>ScriptEntryPointRunsOnlyOnDeclaringSubmission</c>) was
+/// deleted in ADR-0156 Phase 3c (#3176): it exercised the evaluator
+/// SessionEngine's script-mode <c>RunEntryPoint</c> switch, which retired with
+/// that engine; script-mode entry-point behavior is covered by
+/// <see cref="Issue2984MainEntryPointInterpreterTests"/> (EmittedProgramHost).
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2984ReplEntryPointTests
@@ -16,7 +21,7 @@ public class Issue2984ReplEntryPointTests
     [Fact]
     public void DeclarationOnlySubmissionsDoNotRunMain()
     {
-        var engine = new SessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
 
         var mainDeclaration = engine.Evaluate(
             """
@@ -33,34 +38,5 @@ public class Issue2984ReplEntryPointTests
         Assert.Equal(
             (string.Empty, string.Empty),
             (mainDeclaration.Output, nextDeclaration.Output));
-    }
-
-    [Fact]
-    public void ScriptEntryPointRunsOnlyOnDeclaringSubmission()
-    {
-        var engine = new SessionEngine { CaptureConsole = true, RunEntryPoint = true };
-
-        var mainDeclaration = engine.Evaluate(
-            """
-            import System
-
-            func Main() int32 {
-                Console.WriteLine("main-once")
-                return 7
-            }
-            """);
-        var nextDeclaration = engine.Evaluate("func Helper() { }");
-        var nextExpression = engine.Evaluate("40 + 2");
-
-        Assert.False(mainDeclaration.HasError);
-        Assert.False(nextDeclaration.HasError);
-        Assert.False(nextExpression.HasError);
-        Assert.Equal(7, mainDeclaration.Value);
-        Assert.Null(nextDeclaration.Value);
-        Assert.Null(nextExpression.Value);
-        Assert.Equal("main-once\n", mainDeclaration.Output);
-        Assert.Equal(
-            (string.Empty, string.Empty),
-            (nextDeclaration.Output, nextExpression.Output));
     }
 }

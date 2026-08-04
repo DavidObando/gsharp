@@ -15,7 +15,7 @@ public class SessionEngineCancellationTests
     [Fact]
     public async Task EvaluateAsync_CancelledBeforeCommit_DoesNotAppendCellOrMutateState()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
@@ -33,7 +33,7 @@ public class SessionEngineCancellationTests
     [Fact]
     public async Task EvaluateAsync_NotCancelled_CommitsCellNormally()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
         var cell = await engine.EvaluateAsync("1 + 1", CancellationToken.None);
 
         Assert.Single(engine.Cells);

@@ -207,7 +207,11 @@ public class Issue2924TupleElementDelegateCallTests
             t.0(1)
             """);
 
-        Assert.Contains("Non-static method requires a target.", output);
+        // Emitted execution surfaces the nil-delegate invocation as the real
+        // CLR NullReferenceException (the evaluator's reflection-invoke
+        // "Non-static method requires a target." message retired with it,
+        // ADR-0156 Phase 3c, #3176).
+        Assert.Contains("NullReferenceException", output);
     }
 
     [Fact]

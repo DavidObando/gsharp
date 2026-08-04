@@ -406,17 +406,17 @@ public sealed class Issue3130DriverReferenceTests
     [Fact]
     public void SessionEngine_UsesProvidedRuntimeReferences()
     {
+        // ADR-0156 Phase 3c (#3176): the interactive /r: channel now belongs
+        // to the emitted engine; same probe, same reference path contract.
         var directory = CreateEmptyTestDirectory("session-reference");
         try
         {
             var referencePath = Path.Combine(directory, "ExternalProbe.dll");
             EmitProbeAssembly(referencePath);
 
-            using var references = ReferenceResolver.WithRuntimeReferences([referencePath]);
-            var engine = new SessionEngine(references);
+            using var engine = new EmittedSessionEngine([referencePath]);
             var cell = engine.Evaluate(
-                "package SessionReference\nimport ExternalProbe\nvar answer = Values.Answer()",
-                Path.Combine(directory, "probe.gs"));
+                "package SessionReference\nimport ExternalProbe\nvar answer = Values.Answer()");
 
             Assert.False(cell.HasError, string.Join(Environment.NewLine, cell.Diagnostics));
         }

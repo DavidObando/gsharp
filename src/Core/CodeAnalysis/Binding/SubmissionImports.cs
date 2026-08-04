@@ -292,4 +292,17 @@ public sealed class SubmissionBindingOptions
     /// the REPL's cell-value echo. Defaults to <see langword="true"/>.
     /// </summary>
     public bool CaptureTrailingExpression { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a user-declared entry point
+    /// (<c>func Main</c>) becomes the submission assembly's entry point.
+    /// Interactive cells leave this <see langword="false"/> — declaring
+    /// <c>Main</c> in a REPL cell is an ordinary function declaration with no
+    /// side effect (ADR-0156 Phase 3c, #3176; the evaluator engine's
+    /// <c>RunEntryPoint=false</c> contract). One-shot script-shaped
+    /// submissions (the emitted test oracle) opt in to preserve
+    /// <c>Compilation.Evaluate</c>'s historical script semantics, where an
+    /// explicit <c>Main</c> runs and its return value is the result.
+    /// </summary>
+    public bool RunUserEntryPoint { get; set; }
 }

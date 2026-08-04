@@ -122,11 +122,6 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabcde\nabcde\nbcd\n",
                 emitted.StandardOutput);
 
-            var evaluated = new GSharp.Repl.Engine.SessionEngine { CaptureConsole = true, RunEntryPoint = true }
-                .Evaluate(Source);
-            Assert.False(evaluated.HasError);
-            Assert.Equal(emitted.StandardOutput, evaluated.Output);
-
             var result = driver switch
             {
                 Driver.CompilerEmitToMemory => CaptureConsole(
@@ -149,56 +144,6 @@ public class Issue3114ReadOnlySpanInterpreterTests
         {
             Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Fact]
-    public void ClrProducedSpan_RemainsLoudlyRefusedInteractively()
-    {
-        const string Source = """
-            import System
-
-            func Main() {
-                var text = "hello"
-                var span = text.AsSpan()
-            }
-            """;
-
-        var cell = new GSharp.Repl.Engine.SessionEngine { RunEntryPoint = true }.Evaluate(Source);
-
-        var diagnostic = Assert.Single(cell.Diagnostics);
-        Assert.True(cell.HasError);
-        Assert.Equal("GS0511", diagnostic.Id);
-        Assert.DoesNotContain("GS9999", diagnostic.Message);
-    }
-
-    /// <summary>
-    /// The evaluator's public-name span interpolation (#3128) remains pinned
-    /// while file drivers use emitted execution.
-    /// </summary>
-    [Fact]
-    public void SpanInterpolation_UsesPublicSpanNameInteractively()
-    {
-        const string Source = """
-            import System
-
-            func Main() {
-                var values = []int32{11, 22, 33}
-                var writable Span[int32] = values
-                var readOnly ReadOnlySpan[int32] = writable
-                Console.WriteLine("writable=${writable}")
-                Console.WriteLine("readonly=${readOnly}")
-            }
-            """;
-
-        // ByRefLike values cannot be top-level session variables (GS0219), so
-        // the interpolation runs inside an entry point, exactly as the file
-        // drivers used to evaluate it.
-        var cell = new GSharp.Repl.Engine.SessionEngine { CaptureConsole = true, RunEntryPoint = true }.Evaluate(Source);
-
-        Assert.False(cell.HasError);
-        Assert.Equal(
-            "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\n",
-            cell.Output);
     }
 
     /// <summary>

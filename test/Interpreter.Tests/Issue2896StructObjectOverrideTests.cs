@@ -155,13 +155,17 @@ public class Issue2896StructObjectOverrideTests
         var source = BuildIssue3173Source(specimen, suffix);
         var emitted = await RunDriverAsync(source, suffix + "Emit", "gsc-emit");
 
+        // ADR-0156 Phase 3c (#3176): #3195 pinned the emitted output first
+        // and required the tree-walking evaluator and evaluator SessionEngine
+        // to match it; those engines are deleted, so the goldens stand as
+        // emitted assertions across the surviving hosts (bare gsc script,
+        // gsi script, and the interactive emitted engine).
         Assert.Equal(expected + "\n", emitted);
         Assert.All(
             new[]
             {
                 await RunDriverAsync(source, suffix + "Evaluate", "gsc-script"),
                 await RunDriverAsync(source, suffix + "Gsi", "gsi"),
-                EvaluateWithEvaluator(source),
                 EvaluateWithSessionEngine(source),
             },
             output => Assert.Equal(emitted, output));
@@ -724,10 +728,12 @@ public class Issue2896StructObjectOverrideTests
 
     private static string EvaluateWithSessionEngine(string source)
     {
-        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source);
+        // The interactive emitted engine (ADR-0156 Phase 3c, #3176).
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        var cell = engine.Evaluate(source);
         Assert.False(
             cell.HasError,
-            "gsi evaluator failed:\n" + string.Join("\n", cell.Diagnostics.Select(diagnostic => diagnostic.ToString())));
+            "interactive engine failed:\n" + string.Join("\n", cell.Diagnostics.Select(diagnostic => diagnostic.ToString())));
         Assert.Equal(string.Empty, cell.StandardError);
         return cell.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
     }

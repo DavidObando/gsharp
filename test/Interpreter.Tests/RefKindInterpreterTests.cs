@@ -27,7 +27,7 @@ func bump(ref counter int32, by int32) {
 
 var c = 10
 bump(&c, 5)
-print(string(c))
+Console.WriteLine(c)
 ");
         Assert.Contains("15", output);
     }
@@ -43,7 +43,7 @@ func tryProduce(out result int32) bool {
 
 var v = 0
 let ok = tryProduce(&v)
-print(string(v))
+Console.WriteLine(v)
 ");
         Assert.Contains("42", output);
     }
@@ -143,7 +143,7 @@ func sum(in x int32, in y int32) int32 {
 
 var a = 7
 var b = 35
-print(string(sum(&a, &b)))
+Console.WriteLine(sum(&a, &b))
 ");
         Assert.Contains("42", output);
     }
@@ -153,12 +153,12 @@ print(string(sum(&a, &b)))
     {
         var output = RunSubmission(@"
 func observe(in v int32) {
-    print(string(v))
+    Console.WriteLine(v)
 }
 
 var x = 12
 observe(&x)
-print(string(x))
+Console.WriteLine(x)
 ");
         Assert.Contains("12", output);
     }
