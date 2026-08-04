@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -59,7 +60,7 @@ public class InterpolatedStringTests
         var source = "let name = \"world\"\nlet msg = \"hello $name\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("hello world", msg.Value);
     }
 
@@ -69,7 +70,7 @@ public class InterpolatedStringTests
         var source = "let n = 42\nlet msg = \"answer=$n\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("answer=42", msg.Value);
     }
 
@@ -79,7 +80,7 @@ public class InterpolatedStringTests
         var source = "let msg = \"sum=${1 + 2}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("sum=3", msg.Value);
     }
 
@@ -89,7 +90,7 @@ public class InterpolatedStringTests
         var source = "let a = 1\nlet b = 2\nlet msg = \"$a + $b = ${a + b}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("1 + 2 = 3", msg.Value);
     }
 
@@ -112,7 +113,7 @@ public class InterpolatedStringTests
         var source = "let n = 255\nlet msg = \"${n:X4}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("00FF", msg.Value);
     }
 
@@ -122,7 +123,7 @@ public class InterpolatedStringTests
         var source = "let s = \"hi\"\nlet msg = \"[${s,5}]\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("[   hi]", msg.Value);
     }
 
@@ -132,7 +133,7 @@ public class InterpolatedStringTests
         var source = "let s = \"hi\"\nlet msg = \"[${s,-5}]\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("[hi   ]", msg.Value);
     }
 
@@ -142,7 +143,7 @@ public class InterpolatedStringTests
         var source = "let n = 255\nlet msg = \"[${n,6:X2}]\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("[    FF]", msg.Value);
     }
 
@@ -154,7 +155,7 @@ public class InterpolatedStringTests
         var source = "let n = 1\nlet msg = \"${n.GetType()}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("System.Int32", msg.Value);
     }
 
@@ -167,7 +168,7 @@ public class InterpolatedStringTests
         var source = "let total = 1234.5\nlet msg = \"amount: ${total:N2}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("amount: " + (1234.5).ToString("N2", System.Globalization.CultureInfo.CurrentCulture), msg.Value);
     }
 
@@ -177,7 +178,7 @@ public class InterpolatedStringTests
         var source = "let name = \"Acme\"\nlet msg = \"[${name,8}][${name,-8}]\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("[    Acme][Acme    ]", msg.Value);
     }
 
@@ -190,7 +191,7 @@ public class InterpolatedStringTests
         var source = "let total = 1234.5\nlet fs FormattableString = \"amount: ${total:N2}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var fs = result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+        var fs = result.Variables.Single(kv => kv.Key == "fs").Value;
         Assert.IsAssignableFrom<System.FormattableString>(fs);
     }
 
@@ -202,7 +203,7 @@ public class InterpolatedStringTests
         var source = "let total = 1234.5\nlet fs FormattableString = \"amount: ${total:N2}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key == "fs").Value;
 
         Assert.Equal("amount: 1,234.50", fs.ToString(System.Globalization.CultureInfo.InvariantCulture));
         Assert.Equal("amount: 1.234,50", fs.ToString(System.Globalization.CultureInfo.GetCultureInfo("de-DE")));
@@ -216,7 +217,7 @@ public class InterpolatedStringTests
         var source = "let total = 1234.5\nlet qty = 7\nlet fs FormattableString = \"a ${total:N2} b ${qty,4} c\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key.Name == "fs").Value;
+        var fs = (System.FormattableString)result.Variables.Single(kv => kv.Key == "fs").Value;
 
         Assert.Equal("a {0:N2} b {1,4} c", fs.Format);
         Assert.Equal(2, fs.ArgumentCount);
@@ -229,7 +230,7 @@ public class InterpolatedStringTests
         var source = "let n = 42\nlet f IFormattable = \"n=${n:D3}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var f = result.Variables.Single(kv => kv.Key.Name == "f").Value;
+        var f = result.Variables.Single(kv => kv.Key == "f").Value;
         Assert.IsAssignableFrom<System.IFormattable>(f);
         Assert.Equal("n=042", ((System.IFormattable)f).ToString(null, System.Globalization.CultureInfo.InvariantCulture));
     }
@@ -250,7 +251,7 @@ public class InterpolatedStringTests
             "let msg = render(\"amount: ${total:N2}\")\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        var msg = result.Variables.Single(kv => kv.Key == "msg").Value;
         Assert.Equal("amount: 1.234,50", msg);
     }
 
@@ -268,7 +269,7 @@ public class InterpolatedStringTests
             "let msg = render(\"n=${n:D3}\")\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        var msg = result.Variables.Single(kv => kv.Key == "msg").Value;
         Assert.IsAssignableFrom<System.IFormattable>(msg);
         Assert.Equal("n=042", ((System.IFormattable)msg).ToString(null, System.Globalization.CultureInfo.InvariantCulture));
     }
@@ -287,7 +288,7 @@ public class InterpolatedStringTests
             "let msg = echo(\"amount: ${total:N2}\")\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        var msg = result.Variables.Single(kv => kv.Key == "msg").Value;
         Assert.IsType<string>(msg);
         Assert.Equal("amount: " + (1234.5).ToString("N2", System.Globalization.CultureInfo.CurrentCulture), msg);
     }
@@ -308,7 +309,7 @@ public class InterpolatedStringTests
             "}\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        var msg = result.Variables.Single(kv => kv.Key == "msg").Value;
         Assert.IsType<string>(msg);
         Assert.Equal("x", msg);
     }
@@ -326,7 +327,7 @@ public class InterpolatedStringTests
             "let msg = FormattableString.Invariant(\"amount: ${total:N2}\")\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg").Value;
+        var msg = result.Variables.Single(kv => kv.Key == "msg").Value;
         Assert.Equal("amount: 1,234.50", msg);
     }
 
@@ -345,7 +346,7 @@ public class InterpolatedStringTests
         var source = "let msg = \"x=${\"inner\"}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("x=inner", msg.Value);
     }
 
@@ -357,7 +358,7 @@ public class InterpolatedStringTests
         var source = "let msg = \"${\"a,b:c\".Length}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("5", msg.Value);
     }
 
@@ -368,7 +369,7 @@ public class InterpolatedStringTests
         var source = "let msg = \"sum=${1 +\n2}\"\n";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        var msg = result.Variables.Single(kv => kv.Key.Name == "msg");
+        var msg = result.Variables.Single(kv => kv.Key == "msg");
         Assert.Equal("sum=3", msg.Value);
     }
 
@@ -415,10 +416,7 @@ public class InterpolatedStringTests
         // point at the expression's true offset in the outer file, not at the
         // whole string token (or offset 0).
         var source = "let x = 1\nlet msg = \"val=${undefinedThing}\"\n";
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var vars = new System.Collections.Generic.Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(vars);
+        var result = EmittedOracle.Evaluate(source);
 
         var expectedStart = source.IndexOf("undefinedThing", System.StringComparison.Ordinal);
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Location.Span.Start == expectedStart);
@@ -433,10 +431,7 @@ public class InterpolatedStringTests
         // right for a hole many lines into the file.
         var source = string.Concat(System.Linq.Enumerable.Repeat("let a = 1\n", 20))
             + "let msg = \"val=${undefinedThing}\"\n";
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var vars = new System.Collections.Generic.Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(vars);
+        var result = EmittedOracle.Evaluate(source);
 
         var expectedStart = source.IndexOf("undefinedThing", System.StringComparison.Ordinal);
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Location.Span.Start == expectedStart);
@@ -501,12 +496,12 @@ public class InterpolatedStringTests
         Assert.True(large < small * 50, $"expected near-linear scaling, got small={small} large={large} ratio={(double)large / small}");
     }
 
-    private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
+    private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var vars = new System.Collections.Generic.Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(vars);
-        return (result.Diagnostics, vars);
+        // Post-run globals read back through the oracle (issue #3176 Phase
+        // 3b.2): the emitted equivalent of the evaluator's variables
+        // dictionary.
+        var result = EmittedOracle.Evaluate(source);
+        return (result.Diagnostics, result.ReadGlobals());
     }
 }

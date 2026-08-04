@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -180,19 +181,12 @@ var n = nameof(List[List[int32]])
         throw new Xunit.Sdk.XunitException($"variable '{name}' not found");
     }
 
-    private static (EvaluationResult Result, Dictionary<string, object> Variables) EvaluateWithVariables(string source)
+    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object> Variables) EvaluateWithVariables(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var variables = new Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(variables);
-
-        var namedVars = new Dictionary<string, object>();
-        foreach (var kvp in variables)
-        {
-            namedVars[kvp.Key.Name] = kvp.Value;
-        }
-
-        return (result, namedVars);
+        // Post-run globals read back through the oracle (issue #3176 Phase
+        // 3b.2): the emitted equivalent of the evaluator's variables
+        // dictionary.
+        var result = EmittedOracle.Evaluate(source);
+        return (result, result.ReadGlobals());
     }
 }

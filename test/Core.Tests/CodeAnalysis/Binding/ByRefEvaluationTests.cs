@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -48,12 +49,16 @@ var ok = Int32.TryParse(""notanumber"", &result)
     [Fact]
     public void Dereference_Returns_Original_Value()
     {
+        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — a
+        // pointer-typed top-level global trips the #3215 signature-encoding
+        // failure under emit ("Cannot encode '*int32' as a non-byref
+        // signature slot"); realigns with that issue's resolution.
         var source = @"
 var x = 100
 var p = &x
 var y = *p
 ";
-        var (eval, vars) = EvaluateWithVariables(source);
+        var (eval, vars) = EvaluateWithEvaluatorVariables(source);
         Assert.Empty(eval.Diagnostics);
         Assert.Equal(100, vars["y"]);
     }
@@ -61,17 +66,31 @@ var y = *p
     [Fact]
     public void AddressOf_Evaluates_To_Value_In_Interpreter()
     {
+        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — same
+        // #3215 pointer-global emit failure as above, and the asserted
+        // semantics ("&x evaluates to the value") are the interpreter's
+        // pointer model by design (ADR-0039); retires with the evaluator.
         var source = @"
 var x = 55
 var p = &x
 ";
-        var (eval, vars) = EvaluateWithVariables(source);
+        var (eval, vars) = EvaluateWithEvaluatorVariables(source);
         Assert.Empty(eval.Diagnostics);
         // In the interpreter, &x just evaluates to the value of x.
         Assert.Equal(55, vars["p"]);
     }
 
-    private static (EvaluationResult Result, Dictionary<string, object> Variables) EvaluateWithVariables(string source)
+    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object> Variables) EvaluateWithVariables(string source)
+    {
+        // Post-run globals read back through the oracle (issue #3176 Phase
+        // 3b.2): the emitted equivalent of the evaluator's variables
+        // dictionary.
+        var result = EmittedOracle.Evaluate(source);
+        return (result, result.ReadGlobals());
+    }
+
+    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3215-pinned tests.
+    private static (EvaluationResult Result, Dictionary<string, object> Variables) EvaluateWithEvaluatorVariables(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
