@@ -374,11 +374,42 @@ internal sealed partial class ExpressionBinder
             && !ReceiverTypeIsReference(bve.Variable.Type);
     }
 
+    /// <summary>
+    /// ADR-0156 Phase 2 (issue #3185): classification of a member-write
+    /// receiver whose chain bottoms out at a prior interactive submission's
+    /// top-level global (an addressable static field on that submission's
+    /// <c>&lt;Program&gt;</c> container). <c>None</c> for every other shape,
+    /// so non-REPL binding behavior is unchanged.
+    /// </summary>
+    private enum SubmissionWriteReceiverKind
+    {
+        /// <summary>Not a submission-global-rooted value-type receiver.</summary>
+        None,
+
+        /// <summary>An addressable field chain — the write mutates the stored global in place.</summary>
+        Addressable,
+
+        /// <summary>The chain roots at a read-only (<c>let</c>) value-typed global — the write must be rejected.</summary>
+        ReadOnlyRoot,
+
+        /// <summary>The chain crosses a computed (property) link — an in-place write is impossible.</summary>
+        NotAddressable,
+    }
+
     private bool IsWritableStructFieldReceiver(BoundExpression receiver)
     {
         if (receiver is BoundVariableExpression)
         {
             return !ReceiverBlocksValueTypeMemberWrite(receiver);
+        }
+
+        // Issue #3185: a prior-cell submission global (or a value-type CLR
+        // field chain rooted at one) is writable storage exactly when the
+        // chain is addressable and its root is not a read-only global.
+        if (receiver is BoundClrPropertyAccessExpression submissionReceiver)
+        {
+            return ClassifySubmissionGlobalWriteReceiver(submissionReceiver)
+                == SubmissionWriteReceiverKind.Addressable;
         }
 
         if (receiver is BoundDereferenceExpression dereference)
@@ -650,6 +681,16 @@ internal sealed partial class ExpressionBinder
 
             Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
             return new BoundErrorExpression(null);
+        }
+
+        // ADR-0156 Phase 2 (issue #3185): `name.Member = value` where `name`
+        // is a top-level global declared by a prior interactive submission.
+        // Consulted before the imported-class probe so a prior cell's global
+        // shadows a same-named imported type, mirroring the read fallback's
+        // ordering in BindAccessorExpression.
+        if (TryBindSubmissionGlobalMemberAssignment(syntax, out var submissionMemberWrite))
+        {
+            return submissionMemberWrite;
         }
 
         // Stream B: imported class name on LHS → static field/property write.
@@ -1586,6 +1627,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // ADR-0156 Phase 2 (issue #3185): a compound write through a
+        // prior-cell submission global (`p.X += v`, `a.B.C *= v`) enforces
+        // the read-only root and addressable-chain rules; non-submission
+        // receivers are untouched.
+        if (ReportSubmissionGlobalMemberWriteBlocked(boundReceiver, memberName, syntax.OperatorToken.Location))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
         var boundRhs = BindExpression(syntax.Value);
         var leftRead = new BoundClrPropertyAccessExpression(null, boundReceiver, instanceMember, targetSymbol);
         var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
@@ -2262,6 +2312,16 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
+
+            // ADR-0156 Phase 2 (issue #3185): a chained write through a
+            // prior-cell submission global (`a.B.C = v`) enforces the
+            // read-only root and addressable-chain rules; non-submission
+            // receivers are untouched.
+            if (ReportSubmissionGlobalMemberWriteBlocked(receiver, fieldName, syntax.EqualsToken.Location))
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
             var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, instConverted, instTargetSymbol, staticContainerType: null);
         }
@@ -2504,5 +2564,211 @@ internal sealed partial class ExpressionBinder
         var converted = conversions.BindConversion(syntax.Value.Location, binaryResult, targetSymbol);
         result = new BoundClrPropertyAssignmentExpression(null, receiver: null, member, converted, targetSymbol, staticContainerType: null);
         return true;
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2 (issue #3185): binds a member write
+    /// (<c>name.Member = value</c>) where <c>name</c> is a top-level global
+    /// declared by a prior interactive submission. The receiver is the
+    /// submission's static field marked addressable, so the emitter stores
+    /// through the field's address (<c>ldsflda</c>) for a struct-typed global
+    /// (mutating the stored global in place, mirroring the same-cell
+    /// global-variable write) and through the object reference for a
+    /// class-typed global. A read-only (<c>let</c>) value-typed global
+    /// rejects the write with the same diagnostic the local-variable rule
+    /// (issue #1132) produces.
+    /// </summary>
+    /// <param name="syntax">The <c>name.field = value</c> assignment syntax.</param>
+    /// <param name="result">The bound assignment when the receiver named a prior submission's global.</param>
+    /// <returns><c>true</c> when a prior submission declared the global (and the current cell does not shadow it).</returns>
+    private bool TryBindSubmissionGlobalMemberAssignment(FieldAssignmentExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var submissionImports = scope.SubmissionImports;
+        var name = syntax.Receiver.Text;
+        if (submissionImports is null
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+        {
+            return false;
+        }
+
+        // The current cell's own declarations shadow prior cells: when the
+        // receiver name resolves as a variable in this compilation, the
+        // regular variable path below must bind it.
+        if (BindVariableReference(name, syntax.Receiver.Location, suppressNotAVariable: true, suppressUndefinedVariable: true) != null)
+        {
+            return false;
+        }
+
+        var container = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        if (!container.TryLookupMember(name, ne: null, out var globalMember) || globalMember is not FieldInfo globalField)
+        {
+            return false;
+        }
+
+        var globalType = ClrNullability.GetFieldTypeSymbol(globalField);
+        if (globalType?.ClrType == null)
+        {
+            return false;
+        }
+
+        var receiver = new BoundClrPropertyAccessExpression(
+            null,
+            receiver: null,
+            globalField,
+            globalType,
+            isAddressableStaticField: true,
+            isReadOnlySubmissionGlobal: declared?.IsReadOnly == true);
+
+        var clrReceiverType = globalType.ClrType;
+        var memberName = syntax.FieldIdentifier.Text;
+        MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (instanceMember is PropertyInfo indexedProperty && indexedProperty.GetIndexParameters().Length != 0)
+        {
+            instanceMember = null;
+        }
+
+        instanceMember ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        if (instanceMember == null)
+        {
+            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (!TryGetWritableClrMember(instanceMember, out _, out var targetSymbol, out _))
+        {
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        // Issue #1132's read-only rule, mirrored for a prior-cell global: a
+        // member write through a `let` VALUE-typed global would mutate the
+        // value stored in the read-only binding — reject it. A class-typed
+        // `let` global mutates the heap object and stays writable.
+        if (declared?.IsReadOnly == true && !ReceiverTypeIsReference(globalType))
+        {
+            Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
+        }
+
+        var value = BindAssignmentRhs(syntax.Value, targetSymbol);
+        var converted = conversions.BindConversion(syntax.Value.Location, value, targetSymbol);
+        result = new BoundClrPropertyAssignmentExpression(null, receiver, instanceMember, converted, targetSymbol, staticContainerType: null);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3185: classifies a member-write receiver against the
+    /// submission-global chain rules. Walks CLR member-access links from the
+    /// receiver down to the chain root; only a chain that bottoms out at an
+    /// addressable submission static field classifies as anything but
+    /// <see cref="SubmissionWriteReceiverKind.None"/>. Crossing a
+    /// reference-typed link makes the remaining chain heap-rooted (writable
+    /// regardless of the root's read-only flag); crossing a computed
+    /// (property) link makes an in-place write impossible.
+    /// </summary>
+    /// <param name="receiver">The bound member-write receiver.</param>
+    /// <returns>The chain classification.</returns>
+    private static SubmissionWriteReceiverKind ClassifySubmissionGlobalWriteReceiver(BoundExpression receiver)
+    {
+        if (receiver is not BoundClrPropertyAccessExpression access || ReceiverTypeIsReference(access.Type))
+        {
+            return SubmissionWriteReceiverKind.None;
+        }
+
+        var sawComputedLink = false;
+        while (true)
+        {
+            if (access.Receiver == null)
+            {
+                if (!access.IsAddressableStaticField)
+                {
+                    return SubmissionWriteReceiverKind.None;
+                }
+
+                if (access.IsReadOnlySubmissionGlobal)
+                {
+                    return SubmissionWriteReceiverKind.ReadOnlyRoot;
+                }
+
+                return sawComputedLink
+                    ? SubmissionWriteReceiverKind.NotAddressable
+                    : SubmissionWriteReceiverKind.Addressable;
+            }
+
+            if (access.Member is not FieldInfo)
+            {
+                sawComputedLink = true;
+            }
+
+            if (ReceiverTypeIsReference(access.Receiver.Type))
+            {
+                // Heap-rooted from here on: the write mutates the referenced
+                // object, so the root's read-only flag no longer applies —
+                // but the value-typed links walked so far must all have been
+                // real fields for the address chain to reach the storage.
+                if (access.Receiver is BoundClrPropertyAccessExpression referenceLink
+                    && ChainHasSubmissionGlobalRoot(referenceLink))
+                {
+                    return sawComputedLink
+                        ? SubmissionWriteReceiverKind.NotAddressable
+                        : SubmissionWriteReceiverKind.Addressable;
+                }
+
+                return SubmissionWriteReceiverKind.None;
+            }
+
+            if (access.Receiver is not BoundClrPropertyAccessExpression inner)
+            {
+                return SubmissionWriteReceiverKind.None;
+            }
+
+            access = inner;
+        }
+    }
+
+    /// <summary>
+    /// Issue #3185: whether a CLR member-access chain bottoms out at a prior
+    /// submission's addressable global static field.
+    /// </summary>
+    /// <param name="access">The chain's innermost inspected link.</param>
+    /// <returns><c>true</c> when the chain root is a flagged submission global.</returns>
+    private static bool ChainHasSubmissionGlobalRoot(BoundClrPropertyAccessExpression access)
+    {
+        while (access.Receiver is BoundClrPropertyAccessExpression inner)
+        {
+            access = inner;
+        }
+
+        return access.Receiver == null && access.IsAddressableStaticField;
+    }
+
+    /// <summary>
+    /// Issue #3185: applies the gated submission-global diagnostics to a
+    /// CLR member write (simple or compound) through a possibly
+    /// submission-rooted receiver chain. Reports the read-only rejection
+    /// (report-and-continue, mirroring issue #1132's handling) or the
+    /// struct-temporary rejection (blocking — emitting it would silently
+    /// write a copy, the exact wrong-value class ADR-0156 exists to kill).
+    /// A non-submission receiver never produces a diagnostic here.
+    /// </summary>
+    /// <param name="receiver">The bound member-write receiver.</param>
+    /// <param name="memberName">The written member's name (for diagnostics).</param>
+    /// <param name="location">The assignment operator's location.</param>
+    /// <returns><c>true</c> when the write must be blocked (caller returns an error expression).</returns>
+    private bool ReportSubmissionGlobalMemberWriteBlocked(BoundExpression receiver, string memberName, TextLocation location)
+    {
+        switch (ClassifySubmissionGlobalWriteReceiver(receiver))
+        {
+            case SubmissionWriteReceiverKind.ReadOnlyRoot:
+                Diagnostics.ReportCannotAssign(location, memberName);
+                return false;
+            case SubmissionWriteReceiverKind.NotAddressable:
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(location, memberName, receiver.Type);
+                return true;
+            default:
+                return false;
+        }
     }
 }

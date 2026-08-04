@@ -203,7 +203,12 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
     {
         var rewritten = (BoundPropertyAssignmentExpression)base.RewritePropertyAssignmentExpression(node);
 
-        var spillReceiver = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver);
+        // ADR-0156 Phase 2 (issue #3185): a prior-cell submission global (or
+        // a field chain rooted at one) is pure, re-evaluable, addressable
+        // storage — spilling it to a temp would silently redirect the write
+        // into the copy.
+        var spillReceiver = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
+            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver);
         var value = rewritten.Value;
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -247,8 +252,11 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
     {
         var rewritten = (BoundClrPropertyAssignmentExpression)base.RewriteClrPropertyAssignmentExpression(node);
 
+        // ADR-0156 Phase 2 (issue #3185): see RewritePropertyAssignmentExpression —
+        // an addressable submission-global receiver chain must not be spilled.
         var spillReceiver = rewritten.Receiver != null
-            && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver);
+            && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
+            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver);
         var value = rewritten.Value;
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 

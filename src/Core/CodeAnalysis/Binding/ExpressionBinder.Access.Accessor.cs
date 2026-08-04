@@ -2899,6 +2899,25 @@ internal sealed partial class ExpressionBinder
         var classSymbol = new ImportedClassSymbol(programType, syntax, references: scope.References);
         result = BindAccessorStep(receiver: null, classSymbol, syntax);
 
+        // Issue #3185: a prior-cell GLOBAL surfaces as a static-field read.
+        // Mark it addressable (and carry the source-side read-only flag) so
+        // member writes and mutating method calls through this receiver load
+        // the field's address (`ldsflda`) and mutate the stored global in
+        // place — never a silently-dropped struct copy — mirroring how a
+        // same-cell global (a static field of the current <Program>) behaves.
+        if (result is BoundClrPropertyAccessExpression { Receiver: null, Member: System.Reflection.FieldInfo } fieldRead
+            && submissionImports.TryFindGlobalVariable(scope.References, name, out _, out var declaredGlobal))
+        {
+            result = new BoundClrPropertyAccessExpression(
+                fieldRead.Syntax,
+                receiver: null,
+                fieldRead.Member,
+                fieldRead.Type,
+                fieldRead.StaticContainerType,
+                isAddressableStaticField: true,
+                isReadOnlySubmissionGlobal: declaredGlobal?.IsReadOnly == true);
+        }
+
         // Issue #3184: a prior-cell top-level FUNCTION referenced as a value
         // (`let g = addOne`) surfaces as an imported CLR method group on the
         // prior submission's <Program> container. Mirror the same-cell
