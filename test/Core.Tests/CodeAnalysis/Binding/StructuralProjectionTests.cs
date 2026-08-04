@@ -304,9 +304,9 @@ target.Number
     [Fact]
     public void ImportedMethodOverloadAcceptsStructuralProjection()
     {
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3218 tracks the imported-nullable structural-projection emit gap.
-        var result = EvaluateWithEvaluator(@"
+        // #3218: emitted — the projection into the imported `System.Uri?`
+        // parameter lowers at bind time and the nullable wrap is a no-op.
+        var result = Evaluate(@"
 import System.Net.Http
 class Source { var uriString string }
 func Probe(client HttpClient, source Source) {
@@ -565,8 +565,8 @@ Touch(ref source)
         return EmittedOracle.Evaluate(source);
     }
 
-    // Evaluator-pinned twin of Evaluate for the #3218/#3219 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3218/#3219 aligns the
+    // Evaluator-pinned twin of Evaluate for the #3219 tests above; delete
+    // with the evaluator (ADR-0156 Phase 3c) or when #3219 aligns the
     // engines.
     private static EvaluationResult EvaluateWithEvaluator(string source)
     {

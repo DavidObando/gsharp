@@ -630,13 +630,27 @@ internal sealed class ConversionClassifier
                 return new BoundClrConversionCallExpression(null, expression, projectionConvMethod, type);
             }
 
-            return BindStructuralProjectionCore(
+            // Issue #3218: a nullable annotation over a reference-like target
+            // (e.g. an imported method's `System.Uri?` parameter) is
+            // metadata-only — the projection constructs the bare underlying
+            // type, and the `T → T?` widening is a representation-preserving
+            // no-op both engines already lower. The planner itself only
+            // understands concrete targets, so unwrap before planning and
+            // re-wrap the projected value to keep the bound tree's type honest.
+            var projectionTargetType = type is NullableTypeSymbol projectionNullableTarget
+                && Conversion.IsReferenceLikeTarget(projectionNullableTarget.UnderlyingType)
+                ? projectionNullableTarget.UnderlyingType
+                : type;
+            var projected = BindStructuralProjectionCore(
                 diagnosticLocation,
                 expression,
-                type,
+                projectionTargetType,
                 strict: true,
                 explicitValues: null,
                 explicitOrder: default);
+            return ReferenceEquals(projectionTargetType, type) || projected is BoundErrorExpression
+                ? projected
+                : new BoundConversionExpression(null, type, projected);
         }
 
         // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to

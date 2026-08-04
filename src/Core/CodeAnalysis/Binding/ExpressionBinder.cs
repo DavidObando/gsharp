@@ -1268,6 +1268,23 @@ internal sealed partial class ExpressionBinder
                     return null;
                 }
 
+                // Issue #3215: a top-level `var p = &x` holds a managed pointer
+                // (`*T`). ECMA-335 forbids a byref field signature, so such a
+                // variable can never be hoisted to a static field — it lives
+                // only as a local slot of the synthesized entry point (see the
+                // matching PlanFieldRows carve-out). A declared function or
+                // method body therefore has no storage to reach it through;
+                // reject the reference with the byref-escape diagnostic instead
+                // of failing deep inside emit.
+                if (variable is GlobalVariableSymbol && variable.Type is ByRefTypeSymbol
+                    && this.function is { IsTopLevelEntryPoint: false })
+                {
+                    Diagnostics.ReportByRefCannotEscape(
+                        location,
+                        $"the top-level pointer variable '{name}' cannot be referenced from a function body; a managed pointer (*T) cannot be stored in a global field");
+                    return null;
+                }
+
                 reportObsoleteUseIfApplicable(location, variable, variable.Name);
                 return variable;
 

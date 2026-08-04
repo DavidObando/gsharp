@@ -560,10 +560,21 @@ public sealed class Conversion
             // so numeric nullable lifting (e.g. int32 → int64?) is unaffected.
             if (IsReferenceLikeTarget(toNullable.UnderlyingType))
             {
-                var underlyingConversion = Classify(from, toNullable.UnderlyingType);
+                // Issue #3218: honor the caller's structural-projection
+                // eligibility and PRESERVE the projection classification when
+                // the underlying `T → U` conversion is one. Returning a plain
+                // Implicit here erased the IsStructuralProjection flag, so
+                // BindConversion skipped the ADR-0148 bind-time lowering and
+                // emitted a raw BoundConversionExpression the emitter has no
+                // arm for (NotSupportedException at emit for e.g.
+                // `Source → System.Uri?`). ClassifyNonStructural callers now
+                // also stop classifying a projection-only pair as implicit.
+                var underlyingConversion = ClassifyCore(from, toNullable.UnderlyingType, allowStructuralProjection);
                 if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
                 {
-                    return Conversion.Implicit;
+                    return underlyingConversion.IsStructuralProjection
+                        ? Conversion.StructuralProjection
+                        : Conversion.Implicit;
                 }
             }
         }
