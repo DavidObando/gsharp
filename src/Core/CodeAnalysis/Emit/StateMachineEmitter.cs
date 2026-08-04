@@ -1355,8 +1355,7 @@ internal sealed class StateMachineEmitter
         // Builder: AsyncIteratorMethodBuilder.Create()
         var createMethod = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)
             .GetMethod("Create", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, Type.EmptyTypes, null);
-        initializers.Add(new BoundFieldInitializer(
-            builderField,
+        initializers.Add(new BoundFieldInitializer(builderField,
             new BoundClrStaticCallExpression(null, createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
 
         foreach (var parameter in parameters)

@@ -61,6 +61,43 @@ public class Issue3034NullableNarrowingDiagnosticTests
         Assert.DoesNotContain("re-narrow", diagnostic.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [MemberData(nameof(GuidanceRemedyCases))]
+    public void NullableReceiverGuidance_SuggestedRemediesCompile(
+        string receiverKind,
+        string sourceTemplate,
+        string receiver,
+        string call,
+        bool isLibrary)
+    {
+        var diagnosticSource = sourceTemplate.Replace("/*CALL*/", $"{receiver}.{call}", StringComparison.Ordinal);
+        var diagnosticResult = Compile(diagnosticSource, isLibrary);
+        var diagnostic = Assert.Single(diagnosticResult.Diagnostics, diagnostic => diagnostic.Id == "GS0159");
+        var expectedDiagnosticIds = diagnosticResult.Diagnostics
+            .Where(diagnostic => diagnostic.Id != "GS0159")
+            .Select(diagnostic => diagnostic.Id)
+            .Order()
+            .ToArray();
+        var (nullSafeOperator, bindingKeyword) = GetSuggestedRemedies(diagnostic.Message);
+        var remedies = new[]
+        {
+            (Name: nullSafeOperator, Code: $"{receiver}{nullSafeOperator}{call}"),
+            (Name: bindingKeyword, Code: $"{bindingKeyword} narrowed = {receiver} {{\n    narrowed.{call}\n}}"),
+        };
+
+        foreach (var remedy in remedies)
+        {
+            var source = sourceTemplate.Replace("/*CALL*/", remedy.Code, StringComparison.Ordinal);
+            var result = Compile(source, isLibrary);
+            Assert.True(
+                result.Success,
+                $"{receiverKind}/{remedy.Name}: {string.Join(Environment.NewLine, result.Diagnostics.Select(d => $"{d.Id}: {d.Message}"))}");
+            Assert.Equal(
+                expectedDiagnosticIds,
+                result.Diagnostics.Select(diagnostic => diagnostic.Id).Order());
+        }
+    }
+
     [Fact]
     public void ExpiredBranchNarrowing_ExplainsNeedToRenarrow()
     {
@@ -358,14 +395,15 @@ public class Issue3034NullableNarrowingDiagnosticTests
         => Assert.Single(GetDiagnostics(source), diagnostic => diagnostic.Id == "GS0159");
 
     private static Diagnostic[] GetDiagnostics(string source, bool isLibrary = true)
+        => Compile(source, isLibrary).Diagnostics.ToArray();
+
+    private static EmitResult Compile(string source, bool isLibrary)
     {
         var sourceText = SourceText.From(source, "issue3034.gs");
         var tree = SyntaxTree.Parse(sourceText);
         var compilation = new Compilation(ReferenceResolver.Default(), tree) { IsLibrary = isLibrary };
-
         using var peStream = new MemoryStream();
-        var result = compilation.Emit(peStream, refStream: null);
-        return result.Diagnostics.ToArray();
+        return compilation.Emit(peStream, refStream: null);
     }
 
     public static TheoryData<string, string, string, bool> ReceiverKindCases => new()
@@ -387,6 +425,153 @@ public class Issue3034NullableNarrowingDiagnosticTests
         { "let", "never-narrowed", "function", true },
         { "let", "narrowed-before-call", "function", true },
     };
+
+    public static TheoryData<string, string, string, string, bool> GuidanceRemedyCases => new()
+    {
+        {
+            "local",
+            """
+            class C { func M() { } }
+            func Run() {
+                var c C? = nil
+                /*CALL*/
+            }
+            """,
+            "c",
+            "M()",
+            true
+        },
+        {
+            "parameter",
+            """
+            class C { func M() { } }
+            func Run(c C?) {
+                /*CALL*/
+            }
+            """,
+            "c",
+            "M()",
+            true
+        },
+        {
+            "field",
+            """
+            class C { func M() { } }
+            class Box { var Inner C? }
+            func Run() {
+                var b Box = Box()
+                /*CALL*/
+            }
+            """,
+            "b.Inner",
+            "M()",
+            true
+        },
+        {
+            "global",
+            """
+            class C { func M() { } }
+            var c C? = nil
+            func Run() {
+                /*CALL*/
+            }
+            """,
+            "c",
+            "M()",
+            false
+        },
+        {
+            "let",
+            """
+            class C { func M() { } }
+            func Run() {
+                let c C? = nil
+                /*CALL*/
+            }
+            """,
+            "c",
+            "M()",
+            true
+        },
+        {
+            "struct",
+            """
+            struct S { func M() { } }
+            func Run() {
+                var value S? = nil
+                /*CALL*/
+            }
+            """,
+            "value",
+            "M()",
+            true
+        },
+        {
+            "interface",
+            """
+            interface I { func M(); }
+            func Run(value I?) {
+                /*CALL*/
+            }
+            """,
+            "value",
+            "M()",
+            true
+        },
+        {
+            "enum",
+            """
+            enum E { A }
+            func Run() {
+                var value E? = nil
+                /*CALL*/
+            }
+            """,
+            "value",
+            "ToString()",
+            true
+        },
+        {
+            "constrained-type-parameter",
+            """
+            interface I { func M(); }
+            func Run[T I](value T?) {
+                /*CALL*/
+            }
+            """,
+            "value",
+            "M()",
+            true
+        },
+        {
+            "extension",
+            """
+            class C { }
+            func (value C) M() { }
+            func Run() {
+                var c C? = nil
+                /*CALL*/
+            }
+            """,
+            "c",
+            "M()",
+            true
+        },
+    };
+
+    private static (string NullSafeOperator, string BindingKeyword) GetSuggestedRemedies(string message)
+    {
+        const string useMarker = "Use '";
+        const string bindMarker = "bind it with '";
+        var nullSafeStart = message.IndexOf(useMarker, StringComparison.Ordinal) + useMarker.Length;
+        var nullSafeEnd = message.IndexOf('\'', nullSafeStart);
+        var bindingStart = message.IndexOf(bindMarker, StringComparison.Ordinal) + bindMarker.Length;
+        var bindingEnd = message.IndexOf('\'', bindingStart);
+
+        Assert.True(nullSafeStart >= useMarker.Length && nullSafeEnd > nullSafeStart);
+        Assert.True(bindingStart >= bindMarker.Length && bindingEnd > bindingStart);
+        return (message[nullSafeStart..nullSafeEnd], message[bindingStart..bindingEnd]);
+    }
 
     private static string CreateReceiverKindSource(string receiverKind, string state, string scope)
     {

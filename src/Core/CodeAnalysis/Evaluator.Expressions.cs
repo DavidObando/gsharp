@@ -611,6 +611,12 @@ public sealed partial class Evaluator
     {
         foreach (var statement in node.Statements)
         {
+            if (statement is BoundBlockStatement block)
+            {
+                EvaluateStatement(block);
+                continue;
+            }
+
             if (statement is BoundVariableDeclaration declaration)
             {
                 EvaluateVariableDeclaration(declaration);
@@ -1010,6 +1016,13 @@ public sealed partial class Evaluator
 
     private object EvaluateConstructorCallExpression(BoundConstructorCallExpression node)
     {
+        var argumentValues = new object[node.Arguments.Length];
+        for (var i = 0; i < node.Arguments.Length; i++)
+        {
+            argumentValues[i] = EvaluateExpression(node.Arguments[i]);
+        }
+
+        EnsureStaticTypeInitialized(node.StructType);
         var sv = CreateStructValue(node.StructType);
 
         // Default-initialize all fields first (including inherited), then bind primary-ctor args.
@@ -1045,7 +1058,7 @@ public sealed partial class Evaluator
                 var primaryParams = node.StructType.PrimaryConstructorParameters;
                 for (var i = 0; i < primaryParams.Length; i++)
                 {
-                    sv.Fields[PrimaryCtorStorageFieldName(node.StructType, primaryParams[i].Name)] = EvaluateExpression(node.Arguments[i]);
+                    sv.Fields[PrimaryCtorStorageFieldName(node.StructType, primaryParams[i].Name)] = argumentValues[i];
                 }
 
                 // Forward an explicit class-level base initializer if present
@@ -1082,7 +1095,7 @@ public sealed partial class Evaluator
 
             for (var i = 0; i < ctorFunction.Parameters.Length; i++)
             {
-                frame2[ctorFunction.Parameters[i]] = EvaluateExpression(node.Arguments[i]);
+                frame2[ctorFunction.Parameters[i]] = argumentValues[i];
             }
 
             using (PushFrame(frame2))
@@ -1112,7 +1125,7 @@ public sealed partial class Evaluator
         var parameters = node.StructType.PrimaryConstructorParameters;
         for (var i = 0; i < parameters.Length; i++)
         {
-            sv.Fields[PrimaryCtorStorageFieldName(node.StructType, parameters[i].Name)] = EvaluateExpression(node.Arguments[i]);
+            sv.Fields[PrimaryCtorStorageFieldName(node.StructType, parameters[i].Name)] = argumentValues[i];
         }
 
         // Issue #306: forward an explicit base-constructor initializer to a GSharp
@@ -2011,6 +2024,7 @@ public sealed partial class Evaluator
             // (per closed construction for a generic interface).
             if (node.InterfaceType != null)
             {
+                EnsureStaticTypeInitialized(node.InterfaceType);
                 if (TryGetInterfaceStaticField(node.InterfaceType, node.Field, out var ifaceValue))
                 {
                     return ifaceValue;
@@ -2019,6 +2033,7 @@ public sealed partial class Evaluator
                 return ClrDefaultValue(node.Field.Type);
             }
 
+            EnsureStaticTypeInitialized(node.StructType);
             if (TryGetStaticField(node.StructType, node.Field, out var staticValue))
             {
                 return staticValue;
@@ -2043,6 +2058,14 @@ public sealed partial class Evaluator
         if (node.Receiver == null && node.ReceiverExpression == null)
         {
             var value = EvaluateExpression(node.Value);
+            if (node.InterfaceType != null)
+            {
+                EnsureStaticTypeInitialized(node.InterfaceType);
+            }
+            else
+            {
+                EnsureStaticTypeInitialized(node.StructType);
+            }
 
             // Issue #1030: interface static field — keyed per owning interface
             // (per closed construction for a generic interface).
@@ -2109,6 +2132,7 @@ public sealed partial class Evaluator
         // ADR-0053: static property access — receiver is null.
         if (node.Receiver == null)
         {
+            EnsureStaticTypeInitialized(node.StructType);
             if (node.Property.IsAutoProperty && node.Property.BackingField != null)
             {
                 if (TryGetStaticField(node.StructType, node.Property.BackingField, out var staticValue))
@@ -2200,6 +2224,10 @@ public sealed partial class Evaluator
     private object EvaluatePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
     {
         var value = EvaluateExpression(node.Value);
+        if (node.Receiver == null)
+        {
+            EnsureStaticTypeInitialized(node.StructType);
+        }
 
         // Issue #263: static property assignment (receiver is null).
         if (node.Receiver == null)

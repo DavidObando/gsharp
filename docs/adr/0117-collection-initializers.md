@@ -4,7 +4,7 @@
 - **Date**: 2026-06-22
 - **Phase**: v0.2 — language surface
 - **Related**: ADR-0020 (Generic type-parameter brackets — Go-style `[T]`), ADR-0104 (Map type clause — canonical `map[K,V]`), issue #522 (object initializers `T(args){ Prop = v }`), ADR-0115 (C#→G# migration tool)
-- **Issue**: [#479](https://github.com/DavidObando/gsharp/issues/479)
+- **Issue**: [#479](https://github.com/DavidObando/gsharp/issues/479), [#3096](https://github.com/DavidObando/gsharp/issues/3096)
 
 ## Context
 
@@ -163,6 +163,7 @@ ConstructionTarget    ::= identifier TypeArgList                 (* List[int32] 
                         | identifier '(' Arguments? ')'           (* non-generic ctor + collection *)
 CollectionElementList ::= CollectionElement (',' CollectionElement)* ','?
 CollectionElement     ::= Expression                             (* bare:    1            *)
+                        | '...' Expression                       (* spread:  ...items     *)
                         | Expression ':' Expression              (* keyed:   "a": 1       *)
                         | '[' Expression ']' '=' Expression      (* indexed: ["a"] = 1    *)
 ```
@@ -177,11 +178,21 @@ xs := List[int32]{ 1, 2, 3 }
 d  := Dictionary[string, int32]{ "a": 1, "b": 2 }        // key: value (Swift-style pair)
 d2 := Dictionary[string, int32]{ ["a"] = 1, ["b"] = 2 }  // [key] = value (C#-style indexer)
 ci := Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }  // ctor args
+ys := List[int32](){ 0, ...xs, 9 }                              // spread
 ```
 
 The no-parentheses spelling `List[int32]{…}` is sugar for
 `List[int32](){…}`: the parser synthesizes a zero-argument constructor
 call as the initializer target.
+
+A spread uses G#'s existing ellipsis spelling: `...source`. Because a leading
+ellipsis in `Type[T]{ ...source }` already denotes structural projection on a
+generic composite literal, collection spreads retain the explicit empty
+constructor parentheses: `List[T](){ ...source }`. Array/slice literals are
+unambiguous and use `[]T{ ...source }`. The target must expose a usable
+single-element `Add` contract; dictionary spreads therefore consume
+`KeyValuePair[K,V]` elements through the dictionary's collection-interface
+`Add(KeyValuePair[K,V])` implementation.
 
 ### 2. Disambiguation from struct literals and object initializers
 
@@ -213,6 +224,8 @@ A collection initializer binds to a `BoundBlockExpression` that:
    (`$collinit«n»`),
 2. lowers each element in source order against that local:
    - **bare** `e` → `self.Add(e)`,
+   - **spread** `...source` → iterate `source` once and call `self.Add(item)`
+     for each element,
    - **keyed** `k: v` → `self.Add(k, v)`,
    - **indexed** `[k] = v` → indexer set `self[k] = v` (overwrite
      semantics; later duplicate keys win, matching C#'s indexed element
@@ -226,12 +239,26 @@ ordinary overload-resolution and conversion machinery — the synthesized
 hand-written `coll.Add(…)`, so generic-argument inference, params
 expansion, user-defined conversions, and diagnostics are identical.
 
-Because the lowering uses only pre-existing bound nodes
-(`BoundBlockExpression`, `BoundVariableDeclaration`,
-`BoundImportedInstanceCallExpression`, `BoundClrIndexAssignmentExpression`),
-**both** the IL emitter and the tree-walking interpreter execute it with
-no new bound-node kind, visitor, rewriter, or printer changes, and the
-emitted IL is verifiable.
+The lowering uses only pre-existing bound nodes
+(`BoundBlockExpression`, `BoundVariableDeclaration`, native for-range and
+function-literal calls, `BoundImportedInstanceCallExpression`, and
+`BoundClrIndexAssignmentExpression`). No new bound-node kind or IL opcode is
+required; the evaluator routes nested synthetic blocks through its ordinary
+statement evaluator, and emitted IL remains verifiable.
+
+Issue #3096 applies the same lowering to count-inferred array/slice literals.
+`[]T{ before, ...source, after }` builds elements in lexical order, applies
+the ordinary `Add(T)` conversion to each fixed or spread value, and yields the
+runtime `T[]` backing the G# slice. Empty and multiple spreads are legal;
+each source expression is evaluated exactly once. The binder normally keeps
+each iteration loop inside an immediately-invoked non-capturing synthesized
+lambda, so the outer literal remains a composable, verifiable expression even
+as a later call argument or field/property-assignment value. Interface static
+initializers use the loop directly because their `.cctor` starts with an empty
+evaluation stack. Ref-like sources are materialized through their native
+`ToArray()` before becoming helper arguments. Interpreter static-field access
+now runs class/struct/interface initializers once, in declaration order,
+matching emitted `.cctor` behavior; a failed initializer remains faulted.
 
 ### 4. Diagnostics (no ICE)
 

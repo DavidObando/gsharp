@@ -412,6 +412,9 @@ public enum SyntaxKind
     // A bare element of a sequence/set collection initializer (`expr`).
     ExpressionCollectionElement,
 
+    // An ellipsis spread used as an array/collection initializer element (`...expr`).
+    SpreadElementExpression,
+
     // A key/value element of a dictionary collection initializer (`key: value`).
     KeyedCollectionElement,
 

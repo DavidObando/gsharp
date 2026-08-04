@@ -2051,9 +2051,12 @@
   {
     "kind": "SpreadElement",
     "nodeType": "SpreadElementSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0117 / ADR-0115 \u00A7B.36",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1897"
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/CollectionExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/1897, https://github.com/DavidObando/gsharp/issues/3096",
+    "notes": "Maps to native G# \u0060...source\u0060 inside array/collection initializers; valid in field/property initializers with no translator spill."
   },
   {
     "kind": "StackAllocArrayCreationExpression",
