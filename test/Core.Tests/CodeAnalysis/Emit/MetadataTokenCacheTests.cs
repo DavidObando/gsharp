@@ -21,17 +21,29 @@ public class MetadataTokenCacheTests
         var typeArgs = ImmutableArray<TypeSymbol>.Empty;
         var classRemap = new Dictionary<TypeParameterSymbol, int>();
         var methodRemap = new Dictionary<TypeParameterSymbol, int>();
-        var key = new MetadataTokenCache.CtorRefSymbolKey(ctor, typeArgs, classRemap, methodRemap);
+        var key = new MetadataTokenCache.CtorRefSymbolKey(ctor, typeArgs, new RemapScope(classRemap, methodRemap));
 
         Assert.False(key.Equals(new MetadataTokenCache.CtorRefSymbolKey(
             ctor,
             typeArgs,
-            new Dictionary<TypeParameterSymbol, int>(),
-            methodRemap)));
+            new RemapScope(new Dictionary<TypeParameterSymbol, int>(), methodRemap))));
         Assert.False(key.Equals(new MetadataTokenCache.CtorRefSymbolKey(
             ctor,
             typeArgs,
-            classRemap,
-            new Dictionary<TypeParameterSymbol, int>())));
+            new RemapScope(classRemap, new Dictionary<TypeParameterSymbol, int>()))));
+    }
+
+    [Fact]
+    public void RemapScope_EqualityIsReferenceIdentityPerChannel()
+    {
+        var classRemap = new Dictionary<TypeParameterSymbol, int>();
+        var methodRemap = new Dictionary<TypeParameterSymbol, int>();
+        var scope = new RemapScope(classRemap, methodRemap);
+
+        Assert.True(scope.Equals(new RemapScope(classRemap, methodRemap)));
+        Assert.Equal(scope.GetHashCode(), new RemapScope(classRemap, methodRemap).GetHashCode());
+        Assert.False(scope.Equals(new RemapScope(new Dictionary<TypeParameterSymbol, int>(), methodRemap)));
+        Assert.False(scope.Equals(new RemapScope(classRemap, new Dictionary<TypeParameterSymbol, int>())));
+        Assert.True(default(RemapScope).Equals(new RemapScope(null, null)));
     }
 }
