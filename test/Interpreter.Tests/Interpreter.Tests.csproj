@@ -11,6 +11,7 @@
     <ProjectReference Include="@(GsharpRepl)" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
     <Compile Include="..\Shared\Issue3081CompositeLiteralCases.cs" Link="Issue3081CompositeLiteralCases.cs" />
+    <ProjectReference Include="..\..\test-assets\Issue3119.CrossConstants\Issue3119.CrossConstants.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

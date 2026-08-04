@@ -136,6 +136,15 @@ internal sealed class GenericRemapState
     internal Dictionary<TypeParameterSymbol, int> ActiveLambdaMethodTypeParamRemap => this.activeLambdaMethodTypeParamRemap;
 
     /// <summary>
+    /// Gets the current generic-remap scope identity (issue #3163): both
+    /// active remap channels captured as a single equatable value for use in
+    /// Emit-layer cache keys. Capture at the point of key construction —
+    /// never across a push/pop boundary.
+    /// </summary>
+    internal RemapScope CurrentScope
+        => new RemapScope(this.activeIteratorStateMachineRemap, this.activeLambdaMethodTypeParamRemap);
+
+    /// <summary>
     /// Issue #810: push the SM remap for <paramref name="smClass"/> so that
     /// every <see cref="SignatureEncoder.EncodeTypeSymbol"/> call made
     /// before the returned disposable is disposed translates outer-method
