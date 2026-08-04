@@ -16,7 +16,7 @@ The grammar fragments use EBNF. Terminals are quoted. `identifier`, `number`, `s
 
 Source files are Unicode text. The compiler consumes source through .NET strings; in normal use files are UTF-8. Line terminators are LF, CR, or CRLF. Outside strings, whitespace is insignificant except where it separates tokens. Comments and whitespace are skipped before parsing.
 
-A compilation unit consists of an optional package declaration, zero or more imports, and declarations or top-level statements. The production compiler path is `gsc` with an `/out:` option, which emits managed assemblies and optional Portable PDBs. Without `/out:`, `gsc` uses the interpreter path. Both paths share parsing and binding, but features involving metadata emission, state machines, and byref/pointer interop are most complete in the emit path.
+A compilation unit consists of an optional package declaration, zero or more imports, and declarations or top-level statements. Every driver executes emitted code by default: `gsc` runs the emitted program immediately without `/out:`, saves an assembly with `/out:`, and `gsi file.gs` emits and runs the script. The interactive `gsi` REPL also uses the emitter. `gsi --engine evaluator` or `GSI_ENGINE=evaluator` selects its deprecated evaluator, which is scheduled for removal.
 
 ## Lexical elements
 

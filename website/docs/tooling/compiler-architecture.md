@@ -6,7 +6,7 @@ draft: false
 
 # Compiler architecture
 
-G# has a shared front end and two execution backends: an interpreter used by no-output `gsc` runs and the REPL, and an emit pipeline used by `dotnet build`, libraries, packages, and debugging.
+G# has a shared front end and two execution backends: an emit pipeline used by every command-line driver by default, including the interactive REPL, and a deprecated evaluator exposed through opt-in REPL settings and the `Compilation.Evaluate` embedding API.
 
 ## End-to-end pipeline
 
@@ -34,9 +34,9 @@ G# stays on the bespoke emitter and does not use Roslyn to write assemblies at r
 
 Roslyn is used only by sibling tooling. `cs2gs` uses Roslyn to read C# projects for migration, and `gsgen` hosts Roslyn source generators out of process, projects G# declarations to C# stubs, translates generator output back to G#, and then hands generated `.g.gs` files to `gsc`. The compiler process itself remains Roslyn-free.
 
-## Interpreter backend
+## Interactive evaluator backend
 
-When `gsc` is called without `/out:<path>`, it evaluates the program in-process. The interpreter shares the same syntax, binding, and lowering stages, then walks bound nodes with `Evaluator` instead of emitting IL. This path is also used by the REPL and many language tests. It is useful for quick execution and semantic validation, while emitted assemblies are the production path.
+Every command-line driver uses the emitter by default, including the interactive `gsi` REPL. Passing `--engine evaluator` or setting `GSI_ENGINE=evaluator` selects the deprecated evaluator, which walks bound nodes in-process and is scheduled for removal. The `Compilation.Evaluate` embedding API also invokes this evaluator directly. `/out:<path>` controls whether `gsc` saves the assembly or runs the emitted program immediately.
 
 ## Lowering and generated code
 
@@ -74,7 +74,7 @@ Constraints (`any`, `comparable`, sealed-interface bounds) round-trip as `Generi
 | Lexer/parser/syntax | `src/Core/CodeAnalysis/Syntax/` |
 | Binding and symbols | `src/Core/CodeAnalysis/Binding/`, `src/Core/CodeAnalysis/Symbols/` |
 | Lowering | `src/Core/CodeAnalysis/Lowering/` |
-| Interpreter | `src/Core/CodeAnalysis/Evaluator.cs`, `src/Repl/` (gsi REPL host) |
+| Interactive evaluator | `src/Core/CodeAnalysis/Evaluator.cs`, `src/Repl/` (gsi REPL host) |
 | PE emit | `src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs` |
 | Portable PDB emit | `src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs` |
 | SDK integration | `src/Sdk/Gsharp.NET.Sdk/` |

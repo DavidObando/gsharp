@@ -33,13 +33,17 @@ dotnet tool uninstall --global Gsharp.Repl
 ## Command-line usage
 
 ```text
-Usage: gsi [options] [file.gs]
-  file.gs                       Run the given G# script and exit.
-  /r:<file>, /reference:<file>  Reference an assembly (repeatable).
-  -r:<file>, --reference:<file> Reference an assembly (repeatable).
-  --help, -h                    Show this help and exit.
-  --version                     Show the gsi version and exit.
-  (no file)                     Start the interactive REPL.
+Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]
+  file.gs                Run the given G# script and exit.
+  /r:<file>              Reference an assembly (repeatable).
+  /reference:<file>      Alias for /r: (also -r: and --reference:).
+  --engine <name>        Interactive engine: 'emit' (default) or 'evaluator'
+                         (also via GSI_ENGINE). 'evaluator' selects the legacy
+                         tree-walking engine; it is deprecated and will be
+                         removed in ADR-0156 Phase 3c.
+  --help, -h             Show this help and exit.
+  --version              Show the gsi version and exit.
+  (no args)              Start the interactive REPL.
 ```
 
 ### Interactive REPL
@@ -78,7 +82,7 @@ with a message instead of starting the UI.
 
 ### Run a script and exit
 
-Pass a `.gs` file to evaluate it in-process and print the final value.
+Pass a `.gs` file to emit and run it.
 This is handy for quick experiments and shell one-offs — no `.gsproj`
 required:
 
@@ -115,11 +119,10 @@ without adding an explicit reference.
 
 ## How it relates to `gsc`
 
-`gsi` and the compiler share lexing, parsing, binding, and lowering. The
-REPL always runs on the **interpreter** path (the same in-process
-evaluation `gsc` uses when you omit `/out:`), which is ideal for
-exploration and tests. When you are ready to produce a managed assembly,
-switch to a `.gsproj` project or invoke `gsc` with `/out:`. Some CLR
-interop features are emit-only; see the [`gsc` reference](./gsc.md) and
-the [introduction](../intro.md) for the differences between the
-interpreter and emit paths.
+Every driver uses the emitter by default, including `gsi file.gs` and
+the interactive REPL. Pass `--engine evaluator` or set
+`GSI_ENGINE=evaluator` to select the deprecated in-process evaluator,
+which is scheduled for removal. `--engine emit` explicitly selects the
+default. Both direct `gsc` modes use the emitter, with `/out:` only
+controlling whether the assembly is saved. See the
+[`gsc` reference](./gsc.md) and [introduction](../intro.md) for details.

@@ -86,7 +86,7 @@ cd gsharp
 dotnet build GSharp.sln
 ```
 
-After the build, run the compiler DLL with `dotnet`. In direct `gsc` mode, passing `/out:path` emits an assembly; omitting `/out` runs the interpreter compatibility path.
+After the build, run the compiler DLL with `dotnet`. Both direct `gsc` modes use the emitter: passing `/out:path` saves an assembly, while omitting `/out` runs the emitted program immediately.
 
 ```bash
 dotnet src/Compiler/bin/Debug/net10.0/gsc.dll samples/HelloWorld.gs

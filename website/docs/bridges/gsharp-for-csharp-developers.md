@@ -139,7 +139,7 @@ let evens = nums.Where(x -> x % 2 == 0)   // canonical: inferred, bare single pa
 let twice = func (x int32) int32 { return x * 2 }   // explicit alternative
 ```
 
-Passing G# lambdas to imported CLR methods is supported when you build through the SDK or `gsc /out`. The interpreter path does not support that conversion.
+Passing G# lambdas to imported CLR methods works in every file mode: bare `gsc`, `gsc /out`, and `gsi file.gs`. `/out` is not required for the conversion.
 
 ## Low-level interop syntax is G#-shaped
 

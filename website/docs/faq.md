@@ -45,7 +45,8 @@ G# combines a structured concurrency surface with .NET primitives. `go f` starts
 
 ## How does `async` work?
 
-`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. In emitted code, G# lowers async functions and lambdas to .NET state machines; in the interpreter, awaits block on the awaiter for simple test and REPL behavior. 
+`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. Emitted code lowers async functions and lambdas to .NET state machines; the deprecated evaluator instead blocks on the awaiter.
+
 ## How do optional parameters, named arguments, and overloading work in G# functions?
 
 User-defined G# functions support all three:
@@ -68,9 +69,9 @@ A `struct` is value-like, while a `class` is reference-like and can participate 
 
 Import the relevant CLR namespace or reference the assembly through the compiler or SDK project, then call the .NET type members from G#. Imported constructors, overloads, properties, fields, events, delegates, extension methods, operators, conversions, generics, and optional CLR arguments are part of the interop surface. See the [CLR interop reference](/docs/ref/clr-interop).
 
-## What is the difference between the `gsc` interpreter path and emit path?
+## What is the difference between the direct `gsc` modes?
 
-`gsc` shares lexing, parsing, binding, and lowering between both paths. If you invoke it without `/out:`, it interprets the program in-process; if you provide `/out:`, it emits a managed executable or library, with optional PDBs and reference assemblies. The interpreter is useful for REPL-style execution and tests, while emit is the production compilation path. See the [`gsc` reference](/docs/tooling/gsc).
+Every driver uses the emitter by default, including bare `gsc`, file-mode `gsi`, and the interactive REPL. Without `/out:`, `gsc` runs the emitted program immediately and prints `Success.` afterward; with `/out:`, it saves the assembly for later use. `gsi --engine evaluator` or `GSI_ENGINE=evaluator` selects the deprecated interactive evaluator, which is scheduled for removal. See the [`gsc` reference](/docs/tooling/gsc).
 
 ## Does G# have a Playground?
 

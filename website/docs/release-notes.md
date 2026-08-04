@@ -124,7 +124,7 @@ The `0.1` version base identifies the first pre-1.0 line. This is not a dated st
 
 ### Tooling
 
-- `gsc` compiler driver with an interpreter path when no `/out:` is supplied and an emit path for managed executables or libraries.
+- `gsc` compiler driver with immediate execution when no `/out:` is supplied and saved managed executables or libraries with `/out:`.
 - Managed PE and metadata emission without Roslyn, optional reference assemblies, target-framework-aware reference resolution, runtime configuration output, and Portable PDB support.
 - MSBuild SDK support through `Gsharp.NET.Sdk`, `.gsproj` projects, `dotnet build`, `dotnet run`, templates, and SDK-side response-file invocation.
 - VS Code extension and language server support for diagnostics, hover, definitions, references, symbols, formatting, completions, signature help, rename, code actions, CodeLens, semantic tokens, inlay hints, and debugging integration.

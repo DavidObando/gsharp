@@ -5,7 +5,7 @@ draft: false
 
 # Playground (status)
 
-A live browser Playground is intentionally deferred for this release. The current documentation site is static and hosted on GitHub Pages, while running G# code requires `gsc` to parse, bind, and either interpret code in a .NET process or compile it to a managed assembly.
+A live browser Playground is intentionally deferred for this release. The current documentation site is static and hosted on GitHub Pages, while running G# code requires `gsc` to parse, bind, emit, and execute the program in a .NET process.
 
 ## Why it is deferred
 
@@ -34,7 +34,7 @@ One practical shape would be:
 
 1. A static React or Docusaurus frontend embedded in the docs site.
 2. A separately hosted API, for example on Azure Container Apps, Fly.io, or another container platform.
-3. Per-request workers that invoke `gsc` in interpreter mode or emit mode inside a locked-down container.
+3. Per-request workers that invoke `gsc` for immediate emitted execution inside a locked-down container.
 4. Strict resource budgets and no ambient network or filesystem access from the user program.
 5. Optional snippet sharing through encoded URLs or a small persistent store.
 

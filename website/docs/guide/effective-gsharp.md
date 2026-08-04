@@ -123,4 +123,4 @@ Import CLR namespaces directly, pass function values to delegates, and rely on i
 
 ## Document implementation differences
 
-The interpreter is useful for REPL-style execution and quick feedback, but the emit path is the production path. If a feature depends on metadata emission, async or iterator state machines, Portable PDBs, or byref/pointer interop, verify it with `gsc /out:` or the SDK build path before presenting it as production behavior.
+Every driver emits CIL by default, including the interactive REPL. `gsi --engine evaluator` and `GSI_ENGINE=evaluator` are deprecated escape hatches scheduled for removal. Add `gsc /out:` when you need to inspect the saved assembly, metadata, or Portable PDB rather than run it immediately.

@@ -6,7 +6,7 @@ draft: false
 
 # The gsc compiler
 
-`gsc` is the command-line compiler driver for G#. It accepts one or more `.gs` source files, parses and binds them with the shared compiler front end, and then either runs the program in-process or emits a managed .NET assembly.
+`gsc` is the command-line compiler driver for G#. It accepts one or more `.gs` source files, parses and binds them with the shared compiler front end, emits the program, and either runs it immediately or saves a managed .NET assembly.
 
 ## Basic usage
 
@@ -14,7 +14,7 @@ draft: false
 gsc Program.gs
 ```
 
-With no `/out:<path>` option, `gsc` uses interpreter mode. The program is evaluated in the current process. If diagnostics contain errors, they are printed and the process exits with failure; otherwise `gsc` prints `Success.`.
+With no `/out:<path>` option, `gsc` runs the emitted program immediately. If diagnostics contain errors, they are printed and the process exits with failure; otherwise `gsc` prints `Success.`.
 
 ```bash
 gsc Program.gs /out:bin/Hello.dll
@@ -54,7 +54,7 @@ This option list was checked against `dotnet out\bin\Release\Compiler\gsc.dll --
 
 | Option | Accepted values and behavior |
 | --- | --- |
-| `/out:<file>` | Emit a PE assembly to `<file>`. Its presence selects emit mode; absence selects interpreter mode. |
+| `/out:<file>` | Save the emitted PE assembly to `<file>`. Without this option, `gsc` runs the emitted program immediately. |
 | `/refout:<file>` | Emit a metadata-only reference assembly to `<file>` in the same compiler invocation. |
 | `/assemblyname:<name>` | Override the emitted assembly name. |
 | `/version:<string>` | Set the informational version stamped on the output assembly. |
@@ -132,8 +132,6 @@ XML documentation output is selected independently with `/doc:<file>` and is use
 
 Use `/embed+` when you intentionally want all primary source bytes embedded in the PDB. This is useful for self-contained debugging artifacts but is opt-in because it ships source text inside symbols.
 
-## Interpreter mode versus emit mode
+## Immediate execution versus saved output
 
-Interpreter mode is useful for quick checks and compatibility with the REPL path. It shares parsing, binding, and lowering with the compiler but executes bound nodes in-process through `Evaluator`.
-
-Emit mode is the production path for `dotnet build`, NuGet packaging, and debugging. It writes standard managed PE metadata through `ReflectionMetadataEmitter`; for executables it also writes `.runtimeconfig.json`, so the result can be launched with `dotnet`. If `/analyzer` is supplied, the driver first runs the sibling `gsgen` tool and adds its generated `.g.gs` files to the same compilation.
+Both `gsc` modes use the emitter. Without `/out`, `gsc` runs the result immediately; with `/out`, it saves standard managed PE metadata and, for executables, a `.runtimeconfig.json` that can be launched with `dotnet`. If `/analyzer` is supplied, the driver first runs the sibling `gsgen` tool and adds its generated `.g.gs` files to the same compilation.
