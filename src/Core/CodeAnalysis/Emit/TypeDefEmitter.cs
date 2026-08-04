@@ -106,6 +106,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
+    private readonly Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
     private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
@@ -133,6 +134,7 @@ internal sealed class TypeDefEmitter
         Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
+        Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
         Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
@@ -159,6 +161,7 @@ internal sealed class TypeDefEmitter
         this.getCtorReferenceForType = getCtorReferenceForType ?? throw new ArgumentNullException(nameof(getCtorReferenceForType));
         this.emitStaticConstructorBodyBytes = emitStaticConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitStaticConstructorBodyBytes));
         this.emitClassDefaultConstructorBodyBytes = emitClassDefaultConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassDefaultConstructorBodyBytes));
+        this.emitValueStructDefaultConstructorBodyBytes = emitValueStructDefaultConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitValueStructDefaultConstructorBodyBytes));
         this.emitClassPrimaryConstructorBodyBytes = emitClassPrimaryConstructorBodyBytes ?? throw new ArgumentNullException(nameof(emitClassPrimaryConstructorBodyBytes));
         this.emitClassConstructorWithBaseInitializerBodyBytes = emitClassConstructorWithBaseInitializerBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBaseInitializerBodyBytes));
         this.emitClassConstructorWithBodyBodyBytes = emitClassConstructorWithBodyBodyBytes ?? throw new ArgumentNullException(nameof(emitClassConstructorWithBodyBodyBytes));
@@ -1401,6 +1404,39 @@ internal sealed class TypeDefEmitter
                 il.OpCode(ILOpCode.Ret);
                 bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(il, maxStack: MaxStackTracker.ComputeMaxStack(il));
             }
+        }
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        return this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName
+                | MethodAttributes.RTSpecialName,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(ctorSig),
+            bodyOffset: bodyOffset,
+            parameterList: this.nextParameterHandle());
+    }
+
+    /// <summary>
+    /// Issue #3219: emits the synthesized public parameterless <c>.ctor</c>
+    /// for a value-kind struct whose declared field initializers include a
+    /// non-public field (see
+    /// <see cref="ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor"/>).
+    /// The body zero-initializes <c>this</c> and runs the declared instance
+    /// field initializers in-type, so struct-literal sites can construct
+    /// through it instead of storing private fields from the call site.
+    /// </summary>
+    /// <param name="structSym">The struct whose synthesized default constructor is being emitted.</param>
+    /// <returns>The emitted constructor's MethodDef handle.</returns>
+    public MethodDefinitionHandle EmitValueStructDefaultConstructor(StructSymbol structSym)
+    {
+        int bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            bodyOffset = this.emitValueStructDefaultConstructorBodyBytes(structSym);
         }
 
         var ctorSig = new BlobBuilder();

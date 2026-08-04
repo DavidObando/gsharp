@@ -444,10 +444,10 @@ let box Box[int32] = source
     [Fact]
     public void ConstructedGenericTargetsPreserveDeclaredFieldInitializers()
     {
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3219 tracks projection's private-field materialization
-        // (FieldAccessException on the constructed generic target).
-        var classResult = EvaluateWithEvaluator(@"
+        // #3219: the struct target's private declared initializer now runs
+        // through the synthesized parameterless ctor (in-type) instead of a
+        // call-site stfld, so the emitted oracle matches the evaluator.
+        var classResult = Evaluate(@"
 class Source { var Value int32 }
 class Box[T] {
     var Value T
@@ -461,7 +461,7 @@ box.ReadMarker()
         Assert.Empty(classResult.Diagnostics);
         Assert.Equal(9, classResult.Value);
 
-        var structResult = EvaluateWithEvaluator(@"
+        var structResult = Evaluate(@"
 struct Source { var Value int32 }
 struct Box[T] {
     var Value T
