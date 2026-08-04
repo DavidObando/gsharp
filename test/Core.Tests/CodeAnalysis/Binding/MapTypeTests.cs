@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -141,13 +142,11 @@ len(m)
         Assert.Equal(1, result.Value);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0083 / issue #723: prepend the Go extensions import so tests
         // that exercise map `len` and `delete` keep binding/lowering rather
         // than tripping the GS0317 gate.
-        var syntaxTree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
-        var compilation = new Compilation(syntaxTree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
     }
 }

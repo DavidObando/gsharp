@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -152,14 +153,12 @@ scope {
             "Scope did not surface the failure from the scoped goroutine.");
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: prepend the Go-extensions import so
         // existing scope-with-go tests continue to exercise scope
         // semantics rather than the import gate.
         var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(fullSource);
     }
 }

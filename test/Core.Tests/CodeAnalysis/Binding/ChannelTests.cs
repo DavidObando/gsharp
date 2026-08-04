@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -97,7 +98,7 @@ close(x)
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("channel"));
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: every Go-flavored concurrency form is
         // gated behind `import Gsharp.Extensions.Go`. These tests focus on
@@ -105,8 +106,6 @@ close(x)
         // import once for the whole class. The dedicated
         // Issue722GoExtensionsImportGateTests cover the gate explicitly.
         var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(fullSource);
     }
 }

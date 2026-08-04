@@ -6,6 +6,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -40,9 +41,7 @@ public class KotlinStyleDeclarationGrammarTests
             src += " { }";
         }
 
-        var tree = SyntaxTree.Parse(SourceText.From(src + "\n0\n"));
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new System.Collections.Generic.Dictionary<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(src + "\n0\n");
 
         // The matrix row must parse and bind. Some rows (e.g. a class with
         // an unused param) emit warnings; only assert no parser-level
@@ -59,18 +58,14 @@ public class KotlinStyleDeclarationGrammarTests
     [InlineData("type Foo interface { }", "GS0306")]
     public void LegacyTypeKindHead_Rejected(string src, string expected)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(src + "\n0\n"));
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new System.Collections.Generic.Dictionary<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(src + "\n0\n");
         Assert.Contains(result.Diagnostics, d => d.Id == expected);
     }
 
     [Fact]
     public void LegacyRecordKeyword_Rejected()
     {
-        var tree = SyntaxTree.Parse(SourceText.From("record Foo { var X int32 }\n0\n"));
-        var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new System.Collections.Generic.Dictionary<GSharp.Core.CodeAnalysis.Symbols.VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate("record Foo { var X int32 }\n0\n");
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0307");
     }
 }

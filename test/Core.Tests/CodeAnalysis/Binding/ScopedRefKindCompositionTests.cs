@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -24,11 +25,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </summary>
 public class ScopedRefKindCompositionTests
 {
-    private static EvaluationResult Compile(string source)
+    private static EmittedOracleResult Compile(string source)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 
     private static FunctionSymbol GetFunction(string source, string name)

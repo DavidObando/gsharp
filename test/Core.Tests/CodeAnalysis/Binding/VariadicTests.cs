@@ -11,6 +11,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -442,15 +443,13 @@ bad()
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0363");
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0083 / issue #723: prepend the Go extensions import so the
         // `len(...)` calls inside variadic-helper test sources keep
         // binding rather than tripping the GS0317 gate. The unused import
         // is silent when a test happens not to call any gated built-in.
-        var syntaxTree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
-        var compilation = new Compilation(syntaxTree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)
