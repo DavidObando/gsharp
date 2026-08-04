@@ -1704,7 +1704,9 @@ internal sealed partial class OverloadResolver
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
             else if (argument.Type != expectedType
-                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type)))
+                && !(substitution != null && parameter.Type is TypeParameterSymbol)
+                && (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
+                    || Conversion.Classify(argument.Type, expectedType).IsImplicit))
             {
                 // Issue #2335 (audit follow-up): every OTHER implicit
                 // conversion reaches this point already classified
@@ -1726,14 +1728,22 @@ internal sealed partial class OverloadResolver
                 // (`StackUnexpected: found Int32, expected ref 'object'`).
                 // The same gap silently dropped numeric widening
                 // (`int32 → int64`) and other representation-changing
-                // implicit conversions. `parameter.Type` (the UNSUBSTITUTED
-                // declared type) is checked — not `expectedType` — so an
-                // open erased slot in a generic callee (paramType containing
-                // a type parameter of THIS call's own substitution) is still
-                // skipped and left for the emitter's type-erasure boxing at
-                // the call boundary, exactly mirroring the equivalent guard
-                // in `BindUserInstanceCall`'s per-argument loop
+                // implicit conversions.
+                //
+                // Issue #3222: only a BARE erased slot (`parameter.Type is
+                // TypeParameterSymbol`, the `!!T` MVAR the emitter erases at
+                // the call boundary) is skipped — mirroring the equivalent
+                // guard in `BindUserInstanceCall`'s per-argument loop
                 // (`if (paramType is TypeParameterSymbol) { …; continue; }`).
+                // A parameter that merely CONTAINS a type parameter (e.g. a
+                // constructed generic interface `IHolder[T]`) emits as a real
+                // constructed slot (`IHolder<!!T>`), so a value-type argument
+                // still needs its materialized conversion (`box StringBox` →
+                // `IHolder<string>`); skipping it produced
+                // InvalidProgramException at the call site. Substituted
+                // non-bare slots whose conversion is NOT implicit keep the
+                // historical skip (status quo) rather than surfacing new
+                // diagnostics from this branch.
                 var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
