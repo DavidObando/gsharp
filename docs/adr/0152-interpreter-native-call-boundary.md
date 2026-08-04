@@ -1,6 +1,6 @@
 # ADR-0152: Interpreter native-call boundary
 
-- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 1; remains accepted for the default interactive evaluator
+- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phases 1–3a; remains accepted for direct tree evaluation and the deprecated evaluator compatibility path
 - **Date**: 2026-07-31
 - **Phase**: Interpreter conformance
 - **Related**: ADR-0086 (P/Invoke), ADR-0153 (interpreter compiled-only storage boundary), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issue [#2986](https://github.com/DavidObando/gsharp/issues/2986)
@@ -32,19 +32,17 @@ declaration at the shared evaluation boundary is deterministic, prevents both
 fabricated results and delayed `GS9999` failures, and adds no native or
 reflection dispatch path.
 
-Since ADR-0156 Phase 1, this boundary applies to `SessionEngine`,
-`Compilation.Evaluate`, and default interactive `gsi`, not to file drivers.
-Bare `gsc` and `gsi <file>` emit and run the native call; `gsc /out:` emits it
-to disk. Interactive `gsi --engine emit` also uses emitted execution.
+Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
+`Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
+default drivers. Bare `gsc`, `gsi <file>`, and the default interactive REPL
+emit and run the native call; `gsc /out:` emits it to disk.
 
 ## Consequences
 
-- The default interactive evaluator never loads a native library for a
-  P/Invoke declaration.
+- The tree evaluator never loads a native library for a P/Invoke declaration.
 - P/Invoke cannot silently return zero, `nil`, or another fabricated default.
-- File-mode programs and the opt-in emitted interactive engine run P/Invoke
-  through the CLR; evaluator submissions report GS0514 even when a particular
-  execution would not call the declaration.
+- Default drivers run P/Invoke through the CLR; evaluator submissions report
+  GS0514 even when a particular execution would not call the declaration.
 - `GS9999` remains an unexpected evaluator-exception diagnostic, not a
   deliberate capability boundary.
 

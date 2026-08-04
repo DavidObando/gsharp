@@ -152,10 +152,10 @@ The existing GS0323 (generic "type is not supported for marshalling") continues 
 Blittable / explicit-layout structs are bound and constructable identically to
 other G# structs — the layout annotations do not change tree evaluation. For a
 valid P/Invoke declaration, ADR-0152 supersedes the original "return default"
-behavior: the default interactive evaluator reports GS0514 before evaluation.
-ADR-0156 file-mode drivers emit and run the native transition. Interpreter
-tests cover managed layout behavior and confirm that diagnostics GS0346–GS0351
-still fire before execution where applicable.
+behavior: the tree evaluator reports GS0514 before evaluation. ADR-0156 default
+drivers emit and run the native transition. Interpreter tests cover managed
+layout behavior and confirm that diagnostics GS0346–GS0351 still fire before
+execution where applicable.
 
 ## Consequences
 

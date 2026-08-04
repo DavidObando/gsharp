@@ -99,24 +99,25 @@ protocol.
 
 ### Implementation status (2026-08-04)
 
-Phase 1 shipped in #3182. Phase 2's emitted submission engine shipped in #3186
-as an opt-in; the evaluator remains the interactive default. Phase 3 is not
-complete.
+Phase 1 shipped in #3182. Phase 2's emitted submission engine shipped in #3186,
+and Phase 3a made it the interactive default in #3201. The evaluator remains
+available through the deprecated `--engine evaluator` compatibility path and
+direct `Compilation.Evaluate` consumers until Phase 3c.
 
 | Invocation | Current execution path |
 |---|---|
 | bare `gsc file.gs` | `EmittedProgramHost.Run` |
 | `gsc /out:program.dll file.gs` | emit PE to disk; the CLR runs it separately |
 | `gsi file.gs` | `EmittedProgramHost.Run` |
-| interactive `gsi` | `SessionEngine` → `Compilation.Evaluate` (default) |
-| interactive `gsi --engine emit` | `EmittedSessionEngine` |
+| interactive `gsi` | `EmittedSessionEngine` (default) |
+| interactive `gsi --engine evaluator` | `SessionEngine` → `Compilation.Evaluate` |
 
 Therefore the former "three-driver" model no longer identifies three
-execution semantics: all file-mode columns compile through the emitter. The
-default interactive REPL is the remaining shipped evaluator harness. This
-partially supersedes ADR-0068's original `deinit` interpreter boundary (and
-ADR-0152/ADR-0153) for migrated drivers, while leaving those boundaries in
-force for the evaluator residue.
+execution semantics: every default driver compiles through the emitter. The
+tree evaluator remains reachable only through its deprecated interactive
+escape hatch and direct API/test consumers. This partially supersedes
+ADR-0068's original `deinit` interpreter boundary (and ADR-0152/ADR-0153) for
+default drivers, while leaving those boundaries in force for evaluator residue.
 
 ### Phased migration plan
 
@@ -270,10 +271,10 @@ The gate's post-migration definition:
   resolution, `/r:` closure, Console/exit-code protocol, unhandled-exception
   shape, TFM/runtimeconfig differences between `dotnet exec` and in-proc
   loading;
-- while any interpreter surface remains reachable (between Phases 1 and 3,
-  the interactive REPL), the interpreter column stays in the gate for that
-  surface, with the `ExpectedDifferences` table shrinking monotonically —
-  entries are deleted with the boundary that caused them, never added.
+- while any interpreter surface remains reachable before Phase 3c, the
+  interpreter column stays in the gate for that surface, with the
+  `ExpectedDifferences` table shrinking monotonically — entries are deleted
+  with the boundary that caused them, never added.
 
 After Phase 3 the gate is a two-column host-parity gate plus the golden
 files, and the standing obligation to hand-maintain a table of known

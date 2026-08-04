@@ -323,9 +323,9 @@ Unmanaged `&`/`*` operations surface through `GS0513`. Older guards for
 self-contained boundary messages through legacy `GS9999`; issue
 [#3199](https://github.com/DavidObando/gsharp/issues/3199) tracks moving those
 deliberate failures out of the internal-error category. Since
-[ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 1 the boundary
-applies only to the interactive REPL — `gsi <file>` and bare `gsc` execute
-emitted code, where these constructs run natively.
+[ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 3a the boundary
+applies only to direct tree evaluation and `gsi --engine evaluator`; all
+default drivers execute emitted code, where these constructs run natively.
 
 ## Documentation diagnostics (GS0227–GS0231)
 

@@ -114,11 +114,11 @@ changed which invocations use that backend. Current routing is:
 | bare `gsc file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
 | `gsc /out:program.dll file.gs`, then run the assembly | emit to file, then CLR host | real CLR finalizer; no GS0510 |
 | `gsi file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
-| interactive `gsi` (default) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
-| interactive `gsi --engine emit` | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
+| interactive `gsi` (default) | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
+| interactive `gsi --engine evaluator` | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
 
 The old two-column `gsc`/`gsi` table made object reachability appear to be the
-discriminating axis. It is not. Driving the default interactive
+discriminating axis. It is not. Driving the legacy evaluator-backed
 `SessionEngine` across the old rows produces the same boundary regardless of
 liveness:
 
@@ -133,6 +133,13 @@ lifetime to the CLR; the tree evaluator has no emitted `Finalize` override and
 does not invent scope-exit cleanup. GS0510 remains a warning on that evaluator
 surface because the program can complete while omitting a nondeterministic
 GC-scheduled side effect.
+
+Matching CLR behavior requires tying finalization to `StructValue` lifetime
+and re-entering `Evaluator` from a finalizer thread, risking shutdown deadlock
+and timing-dependent output that golden-sample comparison cannot pin. In
+contrast, unsafe storage and P/Invoke boundaries are errors because interpreted
+execution cannot proceed correctly without emitted storage or would fabricate a
+deterministic native return value.
 
 ## Considered alternatives
 
@@ -165,5 +172,5 @@ Two new diagnostics are allocated:
 ## Status
 
 The `deinit` language and emission design remain accepted. ADR-0156 partially
-supersedes only this ADR's original driver-boundary model: all file-mode
-drivers now emit, while the default interactive evaluator retains GS0510.
+supersedes only this ADR's original driver-boundary model: all default drivers
+now emit, while the evaluator compatibility path retains GS0510.

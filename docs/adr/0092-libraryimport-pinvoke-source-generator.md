@@ -141,8 +141,8 @@ ADR-0152 supersedes the original evaluator behavior described here. A valid
 `@LibraryImport` declaration now reports GS0514 before tree evaluation instead
 of returning a fabricated default value. ADR-0156 Phase 1 moved bare `gsc` and
 `gsi <file>` to emitted execution, where the generated wrapper performs the
-real native transition. The boundary remains on the default interactive
-evaluator.
+real native transition. The boundary remains on direct tree evaluation and
+the deprecated `gsi --engine evaluator` compatibility path.
 
 ### 5. Diagnostics (new)
 
@@ -183,9 +183,9 @@ The inner P/Invoke is emitted before the outer body to keep the row order in syn
 
 - Programs that need AOT-friendly native interop no longer have to wrap the call in a hand-written C# `[LibraryImport]` partial method. The same surface is available directly in G# source.
 - The emitter delta is modest: one new bound-tree flag (`PInvokeMetadata.IsLibraryImport`), one new emit dispatch, and an explicit IL-stub generator. There is no new bound-node kind, so the BoundTree exhaustiveness allowlist is unaffected.
-- The default interactive evaluator reports ADR-0152's GS0514 boundary for
-  valid declarations; it does not fabricate a return value. File-mode drivers
-  execute the emitted wrapper under ADR-0156.
+- The tree evaluator reports ADR-0152's GS0514 boundary for valid declarations;
+  it does not fabricate a return value. Default drivers execute the emitted
+  wrapper under ADR-0156.
 - ADR-0086 §4 is now superseded; cross-links from the v1 P/Invoke ADR point to ADR-0092 for the modern attribute. The historical rationale for deferring the work is preserved in ADR-0086 for context.
 - A full source-generator infrastructure is **not** added in this ADR. The trigger conditions for revisiting that decision are recorded in §4.
 

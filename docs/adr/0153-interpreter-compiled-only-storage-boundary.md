@@ -1,6 +1,6 @@
 # ADR-0153: Interpreter compiled-only storage boundary
 
-- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 1; remains accepted for the default interactive evaluator
+- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phases 1–3a; remains accepted for direct tree evaluation and the deprecated evaluator compatibility path
 - **Date**: 2026-08-01
 - **Phase**: Phase 9 — low-level / interop depth
 - **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), [#3022](https://github.com/DavidObando/gsharp/issues/3022), [#3028](https://github.com/DavidObando/gsharp/pull/3028), [#3032](https://github.com/DavidObando/gsharp/pull/3032), [#2939](https://github.com/DavidObando/gsharp/issues/2939), and [#3199](https://github.com/DavidObando/gsharp/issues/3199)
@@ -38,10 +38,10 @@ cannot rely on surrounding rendering for meaning.
 Constructs whose interpreter behavior requires real address identity —
 including pinning, stack allocation, unmanaged-pointer storage or dereference,
 and function-pointer execution — are **compiled-only in the tree evaluator**.
-Default interactive `gsi` must report a self-contained boundary diagnostic
-instead of attempting a value-only approximation. Since ADR-0156 Phase 1,
-bare `gsc` and `gsi <file>` use emitted execution and run these constructs
-natively; `gsc /out:` emits them to disk.
+Interactive `gsi --engine evaluator` must report a self-contained boundary
+diagnostic instead of attempting a value-only approximation. Since ADR-0156
+Phases 1–3a, all default drivers use emitted execution and run these constructs
+natively.
 
 This ADR governs only the evaluator's storage-model boundary. It does not
 redefine unsafe/native language validity or CIL emission.
@@ -52,7 +52,7 @@ value operations continues to evaluate normally.
 
 The current implementation status is:
 
-| Construct | Current default interactive-evaluator behavior | Contract status |
+| Construct | Current tree-evaluator behavior | Contract status |
 |---|---|---|
 | `unsafe { ... }` without a storage-only construct | Evaluates normally | Supported |
 | `fixed` over array/slice, string, or a pinnable-reference source | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
@@ -73,9 +73,8 @@ Outside those named legacy guards, `GS9999` remains a failure.
 
 ## Consequences
 
-- The default interactive evaluator does not promise parity for
-  storage-dependent unsafe constructs; file-mode drivers use emitted
-  execution.
+- The tree evaluator does not promise parity for storage-dependent unsafe
+  constructs; default drivers use emitted execution.
 - Existing ref/out argument write-back at call sites remains supported; this
   does not provide stable ref-local aliasing.
 - Boundary tests pin non-zero exit status, empty standard output, and the
