@@ -9,6 +9,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -105,24 +106,12 @@ public class Issue2993StructLiteralConstructionTests
 
     private static string Evaluate(string source)
     {
-        var compilation = new Compilation(SyntaxTree.Parse(source));
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.True(
+            errors.Length == 0,
+            "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
 
-        using var outWriter = new StringWriter();
-        var previousOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            var errors = result.Diagnostics.Where(d => d.IsError).ToArray();
-            Assert.True(
-                errors.Length == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
-
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return result.Output.Replace("\r\n", "\n");
     }
 }

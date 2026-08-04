@@ -199,7 +199,8 @@ public static class EmittedOracle
                     stderr.ToString(),
                     EmittedProgramHost.UnhandledExceptionExitCode,
                     unhandledException,
-                    weakContext);
+                    weakContext,
+                    assembly);
             }
 
             // Prefer the synthesized trailing-expression capture; fall back to
@@ -221,7 +222,8 @@ public static class EmittedOracle
                 stderr.ToString(),
                 exitCode,
                 unhandledException: null,
-                weakContext);
+                weakContext,
+                assembly);
         }
         finally
         {

@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -172,13 +173,11 @@ public class Issue1651GoroutineIsolationInterpreterTests
 
             run()
             """;
-        var tree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
-        var compilation = new Compilation(tree);
-        EvaluationResult result = null;
+        EmittedOracleResult result = null;
         System.Exception thrown = null;
         try
         {
-            result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+            result = EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
         }
         catch (System.Exception ex)
         {
@@ -268,13 +267,11 @@ public class Issue1651GoroutineIsolationInterpreterTests
         Assert.Empty(exceptions);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
         var fullSource = "import Gsharp.Extensions.Go\n" + source;
-        var tree = SyntaxTree.Parse(SourceText.From(fullSource));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(fullSource);
     }
 
     /// <summary>
@@ -285,7 +282,7 @@ public class Issue1651GoroutineIsolationInterpreterTests
     /// <c>ScopeStatementTests.Scope_WithSendInsideGo_Binds</c> does so
     /// these tests exercise goroutine isolation, not the layout warning.
     /// </summary>
-    private static void AssertNoRealDiagnostics(EvaluationResult result)
+    private static void AssertNoRealDiagnostics(EmittedOracleResult result)
     {
         Assert.DoesNotContain(result.Diagnostics, d => d.Id != "GS0286");
     }

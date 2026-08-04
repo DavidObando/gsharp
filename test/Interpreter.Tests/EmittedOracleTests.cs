@@ -222,6 +222,24 @@ public class EmittedOracleTests
     }
 
     [Fact]
+    public void ReadGlobal_ReadsTopLevelVariablesPostRun()
+    {
+        // The emitted stand-in for reading the evaluator's variables
+        // dictionary after Compilation.Evaluate: top-level globals are
+        // static fields on the submission's <Program> container.
+        var result = EmittedOracle.Evaluate("""
+            var counter = 40
+            counter += 2
+            let label = "tag-44"
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.ReadGlobal("counter"));
+        Assert.Equal("tag-44", result.ReadGlobal("label"));
+        Assert.Null(result.ReadGlobal("missing"));
+    }
+
+    [Fact]
     public void Value_RemainsUsableAfterUnloadInitiated()
     {
         var result = EmittedOracle.Evaluate("""

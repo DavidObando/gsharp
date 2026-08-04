@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 using CompilerProgram = GSharp.Compiler.Program;
 
@@ -283,13 +284,31 @@ public class Issue2896StructObjectOverrideTests
             Console.WriteLine(boxedDefault.ToString())
             """;
 
+        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — issue
+        // #3204 pins the divergence this control exposed: the EVALUATOR gives
+        // a plain struct without a ToString override the record-style
+        // rendering, while emitted execution falls to ValueType.ToString (the
+        // CLR type name). Retires or realigns with #3204's resolution.
         Assert.Equal(
             "DataValue(Number=7)\nDataValue(Number=7)\n"
                 + "DefaultValue(Number=7)\nDefaultValue(Number=7)\n",
-            Evaluate(Source));
+            EvaluateWithEvaluator(Source));
     }
 
     private static string Evaluate(string source)
+    {
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        Assert.True(
+            errors.Length == 0,
+            "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
+
+        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    // Evaluator-pinned twin of Evaluate for the #3204 control above; delete
+    // with the evaluator (Phase 3c) or when #3204 aligns the engines.
+    private static string EvaluateWithEvaluator(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(source));
 

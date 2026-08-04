@@ -8,6 +8,7 @@ using System.IO;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -67,22 +68,11 @@ public class Issue3030LocalFunctionDeclarationInterpreterTests
     [MemberData(nameof(Cases))]
     public void GenericLocalFunctionDeclaration_EvaluatesCalls(string source, string expectedOutput)
     {
-        using var writer = new StringWriter();
-        var previousOut = Console.Out;
-        Console.SetOut(writer);
-        try
-        {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
-            Assert.Empty(result.Diagnostics);
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
+        Assert.Empty(result.Diagnostics);
 
-        Assert.Equal(expectedOutput, writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(expectedOutput, result.Output.Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 
     private static object[] Case(string source, string expectedOutput)

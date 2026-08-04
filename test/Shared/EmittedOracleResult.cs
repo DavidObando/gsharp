@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding;
 
 namespace GSharp.Tests;
 
@@ -24,7 +26,8 @@ public sealed class EmittedOracleResult
         string errorOutput,
         int exitCode,
         Exception unhandledException,
-        WeakReference loadContext)
+        WeakReference loadContext,
+        Assembly assembly = null)
     {
         Diagnostics = diagnostics;
         Value = value;
@@ -33,6 +36,7 @@ public sealed class EmittedOracleResult
         ExitCode = exitCode;
         UnhandledException = unhandledException;
         LoadContext = loadContext;
+        Assembly = assembly;
     }
 
     /// <summary>
@@ -115,4 +119,56 @@ public sealed class EmittedOracleResult
     /// product tests should not consume this.
     /// </summary>
     internal WeakReference LoadContext { get; }
+
+    /// <summary>
+    /// Gets the executed submission assembly (<see langword="null"/> when the
+    /// program never ran). Holding the result keeps it loaded; see the
+    /// lifetime note on <see cref="Value"/>.
+    /// </summary>
+    internal Assembly Assembly { get; }
+
+    /// <summary>
+    /// Reads a top-level global's post-run value by name — the emitted
+    /// equivalent of reading the historical evaluator's variables dictionary
+    /// after <c>Compilation.Evaluate</c>: top-level <c>var</c>/<c>let</c>
+    /// emit as static fields on the submission's <c>&lt;Program&gt;</c>
+    /// container. Returns <see langword="null"/> when the program never ran
+    /// or no such global exists. The <see cref="Value"/> identity caveat
+    /// applies to values of submission-declared types.
+    /// </summary>
+    /// <param name="name">The top-level variable's source name.</param>
+    /// <returns>The global's current value, or <see langword="null"/>.</returns>
+    public object ReadGlobal(string name)
+    {
+        if (Assembly is null || string.IsNullOrEmpty(name))
+        {
+            return null;
+        }
+
+        Type[] types;
+        try
+        {
+            types = Assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            types = ex.Types;
+        }
+
+        foreach (var type in types)
+        {
+            if (type is null || !string.Equals(type.Name, SubmissionImports.ProgramTypeName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (field is not null)
+            {
+                return field.GetValue(null);
+            }
+        }
+
+        return null;
+    }
 }

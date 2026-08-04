@@ -9,6 +9,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -81,27 +82,12 @@ public class Issue818AnonymousFunctionTypeVariadicInterpreterTests
 
     private static string Evaluate(string source)
     {
-        var tree = SyntaxTree.Parse(source);
-        var compilation = new Compilation(tree);
+        var result = EmittedOracle.Evaluate(source);
 
-        using var outWriter = new StringWriter();
-        var prevOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var variables = new Dictionary<VariableSymbol, object>();
-            var result = compilation.Evaluate(variables);
-
-            var errors = result.Diagnostics.Where(d => d.IsError).ToList();
-            Assert.True(
-                errors.Count == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(prevOut);
-        }
-
-        return outWriter.ToString().Replace("\r\n", "\n");
+        var errors = result.Diagnostics.Where(d => d.IsError).ToList();
+        Assert.True(
+            errors.Count == 0,
+            "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
+        return result.Output.Replace("\r\n", "\n");
     }
 }

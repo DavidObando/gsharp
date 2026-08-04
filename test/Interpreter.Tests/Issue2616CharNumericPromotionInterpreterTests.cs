@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -30,8 +31,7 @@ public class Issue2616CharNumericPromotionInterpreterTests
             lifted -= 'A'
             """;
 
-        var variables = new Dictionary<VariableSymbol, object>();
-        var result = new Compilation(SyntaxTree.Parse(SourceText.From(Source))).Evaluate(variables);
+        var result = EmittedOracle.Evaluate(Source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(4, Value("difference"));
@@ -39,7 +39,7 @@ public class Issue2616CharNumericPromotionInterpreterTests
         Assert.Equal('C', Value("value"));
         Assert.Equal((char)2, Value("lifted"));
 
-        object Value(string name) => variables.Single(pair => pair.Key.Name == name).Value;
+        object Value(string name) => result.ReadGlobal(name);
     }
 
     [Fact]
@@ -69,14 +69,12 @@ public class Issue2616CharNumericPromotionInterpreterTests
             }
             """;
 
-        var variables = new Dictionary<VariableSymbol, object>();
-        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(Source)));
-        var result = compilation.Evaluate(variables);
+        var result = EmittedOracle.Evaluate(Source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("yes", Value("narrowingCaught"));
         Assert.Equal("yes", Value("operatorCaught"));
         Assert.Equal("yes", Value("decimalCaught"));
 
-        object Value(string name) => variables.Single(pair => pair.Key.Name == name).Value;
+        object Value(string name) => result.ReadGlobal(name);
     }
 }

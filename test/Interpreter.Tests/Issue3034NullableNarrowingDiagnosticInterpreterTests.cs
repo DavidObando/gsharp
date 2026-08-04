@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -47,8 +48,7 @@ public class Issue3034NullableNarrowingDiagnosticInterpreterTests
                 }
                 """;
 
-        var evaluation = new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var evaluation = EmittedOracle.Evaluate(source);
         var diagnostic = Assert.Single(evaluation.Diagnostics.Where(diagnostic => diagnostic.Id == "GS0159"));
 
         Assert.Equal(expectedMessage, diagnostic.Message);

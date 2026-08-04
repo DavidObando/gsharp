@@ -14,6 +14,14 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// Issue #2953: protected-region return funnels must not manufacture a default
 /// return value when an exhaustive enum switch misses an unnamed runtime value.
+///
+/// ADR-0156 Phase 3b (#3176): stays on <c>Compilation.Evaluate</c> deliberately
+/// — it pins the EVALUATOR's runtime-diagnostic protocol for the fallthrough
+/// guard (a GS0100 diagnostic with <c>NonVoidFallthroughGuardMessage</c>).
+/// Under emitted execution the same guard fires as the compiler-generated
+/// <c>InvalidOperationException</c> (surfacing as GS9999 through the emitted
+/// oracle; see #3006 for the compiled shape) — behavior agrees, only the
+/// reporting channel differs. Retires with the evaluator in Phase 3c.
 /// </summary>
 public class Issue2953ProtectedReturnFallthroughInterpreterTests
 {
