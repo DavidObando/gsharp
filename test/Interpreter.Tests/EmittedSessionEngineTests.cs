@@ -387,6 +387,56 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Equal(2, cell.Value);
     }
 
+    /// <summary>
+    /// Issue #3184: a prior cell's top-level function referenced as a value
+    /// (`let g = addOne`) binds to a delegate over the emitted static method,
+    /// exactly like the same-cell method-group-to-function-value conversion.
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsValueBindsAndInvokes()
+    {
+        Assert.False(engine.Evaluate("func addOne(n int) int {\n    return n + 1\n}").HasError);
+
+        var let = engine.Evaluate("let g = addOne");
+        Assert.False(let.HasError);
+
+        var call = engine.Evaluate("g(41)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3184 (typed form): a prior cell's function converts to an
+    /// explicitly typed function-value slot.
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsValueWithExplicitFunctionType()
+    {
+        Assert.False(engine.Evaluate("func double(n int) int {\n    return n * 2\n}").HasError);
+
+        var let = engine.Evaluate("let g func(int) int = double");
+        Assert.False(let.HasError);
+
+        var call = engine.Evaluate("g(21)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3184: a prior cell's function passed directly as a delegate
+    /// argument (a value context other than a declaration initializer).
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsArgumentToHigherOrderFunction()
+    {
+        Assert.False(engine.Evaluate("func addOne(n int) int {\n    return n + 1\n}").HasError);
+        Assert.False(engine.Evaluate("func apply(f func(int) int, v int) int {\n    return f(v)\n}").HasError);
+
+        var call = engine.Evaluate("apply(addOne, 41)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
     [Fact]
     public void SnapshotListsAccumulatedSymbolsWithValues()
     {

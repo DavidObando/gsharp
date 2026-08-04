@@ -2898,6 +2898,23 @@ internal sealed partial class ExpressionBinder
 
         var classSymbol = new ImportedClassSymbol(programType, syntax, references: scope.References);
         result = BindAccessorStep(receiver: null, classSymbol, syntax);
+
+        // Issue #3184: a prior-cell top-level FUNCTION referenced as a value
+        // (`let g = addOne`) surfaces as an imported CLR method group on the
+        // prior submission's <Program> container. Mirror the same-cell
+        // method-group rule (TryBindSingleMethodGroup binds a single
+        // non-generic candidate eagerly with its natural function type):
+        // resolve a single-candidate group to a delegate of its natural
+        // `FunctionTypeSymbol` so an untyped `let` infers a callable type.
+        // Overloaded/generic groups stay unresolved for target-typed
+        // conversion, exactly like their same-cell counterparts.
+        if (result is BoundClrMethodGroupExpression { ResolvedMethod: null } submissionGroup
+            && submissionGroup.Candidates.Length == 1
+            && TryGetNaturalClrMethodGroupType(submissionGroup, out var naturalFunctionType))
+        {
+            result = conversions.BindConversion(syntax.Location, submissionGroup, naturalFunctionType);
+        }
+
         return true;
     }
 

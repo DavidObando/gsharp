@@ -95,6 +95,18 @@ public sealed class EmittedSessionEngineParityTests
                 "m[\"a\"]",
             }
         },
+        {
+            // Issue #3184: a prior cell's top-level function used as a value —
+            // untyped `let`, direct invocation, and delegate-argument passing.
+            "prior-cell-function-as-value",
+            new[]
+            {
+                "func addOne(n int) int {\n    return n + 1\n}",
+                "let g = addOne\ng(41)",
+                "func apply(f func(int) int, v int) int {\n    return f(v)\n}",
+                "apply(addOne, 1) + g(0)",
+            }
+        },
     };
 
     [Theory]
