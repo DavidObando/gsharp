@@ -115,7 +115,7 @@ changed which invocations use that backend. Current routing is:
 | `gsc /out:program.dll file.gs`, then run the assembly | emit to file, then CLR host | real CLR finalizer; no GS0510 |
 | `gsi file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
 | interactive `gsi` (default) | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
-| interactive `gsi --engine evaluator` (deprecated; removed in Phase 3c) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
+| `gsi --engine evaluator` (script or interactive; deprecated; removed in Phase 3c) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
 
 The old two-column `gsc`/`gsi` table made object reachability appear to be the
 discriminating axis. It is not. Driving the legacy evaluator-backed

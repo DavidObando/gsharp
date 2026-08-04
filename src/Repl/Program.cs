@@ -35,10 +35,10 @@ public static class Program
                 Console.WriteLine("  file.gs                Run the given G# script and exit.");
                 Console.WriteLine("  /r:<file>              Reference an assembly (repeatable).");
                 Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).");
-                Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (default) or 'evaluator'");
-                Console.WriteLine("                         (also via GSI_ENGINE). 'evaluator' selects the legacy");
-                Console.WriteLine("                         tree-walking engine; it is deprecated and will be");
-                Console.WriteLine("                         removed in ADR-0156 Phase 3c.");
+                Console.WriteLine("  --engine <name>        Script and interactive engine: 'emit' (default)");
+                Console.WriteLine("                         or 'evaluator' (also via GSI_ENGINE).");
+                Console.WriteLine("                         'evaluator' selects the legacy tree-walking engine;");
+                Console.WriteLine("                         it is deprecated and will be removed in Phase 3c.");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
                 Console.WriteLine("  --version              Show the gsi version and exit.");
                 Console.WriteLine("  (no args)              Start the interactive REPL.");
@@ -106,13 +106,12 @@ public static class Program
             return 1;
         }
 
-        return RunScript(scriptPath, references);
+        return RunScript(scriptPath, references, engineChoice);
     }
 
     /// <summary>
-    /// Decides whether an interactive engine choice selects the legacy
-    /// tree-walking evaluator. ADR-0156 Phase 3a: the emitted
-    /// submission-chaining engine is the interactive default, so only an
+    /// Decides whether an engine choice selects the legacy tree-walking
+    /// evaluator. ADR-0156 Phase 3a: emitted execution is the default, so only an
     /// explicit <c>--engine evaluator</c> (or <c>GSI_ENGINE=evaluator</c>)
     /// selects the evaluator — a deprecated escape hatch that retires with
     /// the evaluator in Phase 3c.
@@ -152,17 +151,39 @@ public static class Program
     }
 
     /// <summary>
-    /// ADR-0156 Phase 1: script execution compiles with the real emitter into
-    /// memory and runs in-process via <see cref="EmittedProgramHost"/> instead
-    /// of the tree-walking evaluator. The driver protocol is unchanged:
-    /// diagnostics render to standard error, the program's output streams
-    /// straight through, and its integer result is the exit code.
+    /// Runs a script through emitted execution by default, or through the
+    /// legacy tree-walking evaluator when explicitly requested. The driver
+    /// protocol is unchanged: diagnostics render to standard error, the
+    /// program's output streams straight through, and its integer result is
+    /// the exit code.
     /// </summary>
-    private static int RunScript(string scriptPath, List<string> references)
+    private static int RunScript(string scriptPath, List<string> references, string? engineChoice)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(scriptPath), scriptPath));
+        var source = File.ReadAllText(scriptPath);
         var effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references);
         using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
+        if (UsesEvaluatorEngine(engineChoice))
+        {
+            var cell = new Engine.SessionEngine(resolver) { RunEntryPoint = true }.Evaluate(source, scriptPath);
+            if (cell.Diagnostics.Length > 0)
+            {
+                Console.Error.WriteDiagnostics(cell.Diagnostics);
+            }
+
+            if (cell.HasError)
+            {
+                return 1;
+            }
+
+            return cell.Value switch
+            {
+                int exitCode => exitCode,
+                uint unsignedExitCode => unchecked((int)unsignedExitCode),
+                _ => 0,
+            };
+        }
+
+        var tree = SyntaxTree.Parse(SourceText.From(source, scriptPath));
         var compilation = new Compilation(resolver, tree);
         EmittedProgramResult result;
         try

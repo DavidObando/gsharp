@@ -324,9 +324,10 @@ self-contained boundary messages through legacy `GS9999`; issue
 [#3199](https://github.com/DavidObando/gsharp/issues/3199) tracks moving those
 deliberate failures out of the internal-error category. Since
 [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) Phase 3a the boundary
-applies only to direct tree evaluation and `gsi --engine evaluator`; all
-default drivers execute emitted code, where these constructs run natively.
-The evaluator path is deprecated and scheduled for removal in Phase 3c.
+applies only to direct tree evaluation and `gsi --engine evaluator` in script
+or interactive mode; all default drivers execute emitted code, where these
+constructs run natively. The evaluator path is deprecated and scheduled for
+removal in Phase 3c.
 
 ## Documentation diagnostics (GS0227–GS0231)
 

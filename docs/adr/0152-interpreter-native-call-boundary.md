@@ -33,10 +33,10 @@ fabricated results and delayed `GS9999` failures, and adds no native or
 reflection dispatch path.
 
 Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
-`Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
-default drivers. Bare `gsc`, `gsi <file>`, and the default interactive REPL
-emit and run the native call; `gsc /out:` emits it to disk. The evaluator path
-is deprecated and scheduled for removal in Phase 3c.
+`Compilation.Evaluate`, and `gsi --engine evaluator` in script or interactive
+mode, not to default drivers. Bare `gsc`, `gsi <file>`, and the default
+interactive REPL emit and run the native call; `gsc /out:` emits it to disk.
+The evaluator path is deprecated and scheduled for removal in Phase 3c.
 
 ## Consequences
 

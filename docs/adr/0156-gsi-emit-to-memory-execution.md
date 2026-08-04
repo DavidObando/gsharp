@@ -109,15 +109,17 @@ direct `Compilation.Evaluate` consumers until Phase 3c.
 | bare `gsc file.gs` | `EmittedProgramHost.Run` |
 | `gsc /out:program.dll file.gs` | emit PE to disk; the CLR runs it separately |
 | `gsi file.gs` | `EmittedProgramHost.Run` |
+| `gsi --engine evaluator file.gs` | `SessionEngine` → `Compilation.Evaluate` |
 | interactive `gsi` | `EmittedSessionEngine` (default) |
 | interactive `gsi --engine evaluator` | `SessionEngine` → `Compilation.Evaluate` |
 
 Therefore the former "three-driver" model no longer identifies three
 execution semantics: every default driver compiles through the emitter. The
-tree evaluator remains reachable only through its deprecated interactive
-escape hatch and direct API/test consumers. This partially supersedes
-ADR-0068's original `deinit` interpreter boundary (and ADR-0152/ADR-0153) for
-default drivers, while leaving those boundaries in force for evaluator residue.
+tree evaluator remains reachable only through its deprecated script or
+interactive escape hatch and direct API/test consumers. This partially
+supersedes ADR-0068's original `deinit` interpreter boundary (and
+ADR-0152/ADR-0153) for default drivers, while leaving those boundaries in
+force for evaluator residue.
 
 ### Phased migration plan
 

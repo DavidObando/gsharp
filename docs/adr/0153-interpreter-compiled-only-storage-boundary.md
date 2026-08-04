@@ -38,11 +38,11 @@ cannot rely on surrounding rendering for meaning.
 Constructs whose interpreter behavior requires real address identity —
 including pinning, stack allocation, unmanaged-pointer storage or dereference,
 and function-pointer execution — are **compiled-only in the tree evaluator**.
-Interactive `gsi --engine evaluator` must report a self-contained boundary
-diagnostic instead of attempting a value-only approximation. Since ADR-0156
-Phases 1–3a, all default drivers use emitted execution and run these constructs
-natively. The evaluator path is deprecated and scheduled for removal in
-Phase 3c.
+`gsi --engine evaluator` in script or interactive mode must report a
+self-contained boundary diagnostic instead of attempting a value-only
+approximation. Since ADR-0156 Phases 1–3a, all default drivers use emitted
+execution and run these constructs natively. The evaluator path is deprecated
+and scheduled for removal in Phase 3c.
 
 This ADR governs only the evaluator's storage-model boundary. It does not
 redefine unsafe/native language validity or CIL emission.
