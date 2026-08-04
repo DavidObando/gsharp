@@ -5375,7 +5375,7 @@ internal sealed class MemberLookup
         switch (t)
         {
             case StructSymbol { IsClass: true } userClass:
-                clr = userClass.ImportedBaseType?.ClrType ?? typeof(object);
+                clr = TypeMemberModel.GetNearestImportedBase(userClass)?.ClrType ?? typeof(object);
                 return true;
             case EnumSymbol:
                 clr = typeof(int);
