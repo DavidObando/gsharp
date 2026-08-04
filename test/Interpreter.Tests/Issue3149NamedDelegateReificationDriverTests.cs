@@ -21,14 +21,6 @@ public delegate int Issue3149Greeter(string value);
 /// <typeparam name="T">Delegate argument type.</typeparam>
 public delegate int Issue3149Mapper<T>(T value);
 
-/// <summary>Open generic extension candidate mixed with <see cref="List{T}.Add(T)"/>.</summary>
-public static class Issue3149MixedDelegateExtensions
-{
-    /// <summary>Must lose to the closed instance <c>Add</c> candidate.</summary>
-    public static void Add<T>(this List<Issue3149Greeter> callbacks, Func<T, int> callback) =>
-        throw new InvalidOperationException("Open generic extension candidate was selected.");
-}
-
 /// <summary>Mixed overloads whose second parameter selects open or closed candidate.</summary>
 public static class Issue3149MixedDelegateOverloads
 {
@@ -90,6 +82,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
                 import System
                 import System.Collections.Generic
                 import GSharp.Interpreter.Tests
+                import GSharp.Interpreter.Tests.Issue3149Mixed
 
                 public class Probe {
                     shared {
@@ -116,12 +109,12 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
             var emitted = emitCompile.ExitCode == 0
                 ? await RunAssemblyAsync(directory, assemblyPath)
                 : emitCompile;
-            var interpreted = RunInterpreter(sourcePath);
+            var script = RunScriptDriver(sourcePath);
 
             var failures = new List<string>();
             CheckBareDriver(bare, expectedOutput, failures);
             CheckDriver("gsc /out:", emitted, expectedOutput, failures);
-            CheckDriver("gsi", interpreted, expectedOutput, failures);
+            CheckDriver("gsi", script, expectedOutput, failures);
             Assert.True(failures.Count == 0, string.Join("\n\n", failures));
         }
         finally
@@ -133,7 +126,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task CrossAssemblyNamedDelegateThroughErasedListSlot_AllDriversReifyAndInvoke(bool generic)
+    public async Task SingleCandidateNamedDelegateThroughErasedListSlot_AllDriversReifyAndInvoke(bool generic)
     {
         var suffix = generic ? "Generic" : "NonGeneric";
         var consumerPackage = "Issue3149Consumer" + suffix;
@@ -167,7 +160,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
                 ? await RunAssemblyAsync(directory, assemblyPath)
                 : emitCompile;
 
-            var interpreted = RunInterpreter(sourcePath);
+            var script = RunScriptDriver(sourcePath);
 
             var inspection = emitCompile.ExitCode == 0
                 ? InspectProducedDelegate(
@@ -180,7 +173,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
             AssertAllResults(
                 bare,
                 emitted,
-                interpreted,
+                script,
                 inspection,
                 expectedOutput,
                 generic);
@@ -319,7 +312,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     private static void AssertAllResults(
         DriverResult bare,
         DriverResult emitted,
-        DriverResult interpreted,
+        DriverResult script,
         InspectionResult inspection,
         string expectedOutput,
         bool generic)
@@ -327,7 +320,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         var failures = new List<string>();
         CheckBareDriver(bare, expectedOutput, failures);
         CheckDriver("gsc /out:", emitted, expectedOutput, failures);
-        CheckDriver("gsi", interpreted, expectedOutput, failures);
+        CheckDriver("gsi", script, expectedOutput, failures);
 
         var expectedDefinition = generic
             ? typeof(Issue3149Mapper<>).FullName
@@ -357,32 +350,8 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     private static void CheckBareDriver(
         DriverResult result,
         string expectedOutput,
-        List<string> failures)
-    {
-        // Bare evaluation currently hits an unrelated MetadataLoadContext
-        // invocation boundary. Accept that GS9999 or the expected successful
-        // result when the boundary is removed.
-        var normalizedOutput = Normalize(result.StandardOutput);
-        var succeeded = result.ExitCode == 0
-            && string.Equals(normalizedOutput, expectedOutput + "Success.\n", StringComparison.Ordinal)
-            && result.StandardError.Length == 0;
-        var hitBoundary = result.ExitCode == 1
-            && normalizedOutput.Contains(
-                "GS9999: Cannot invoke a method on objects loaded by a MetadataLoadContext.",
-                StringComparison.Ordinal)
-            && !normalizedOutput.Contains("ArgumentException", StringComparison.Ordinal)
-            && (expectedOutput.Contains("System.Func", StringComparison.Ordinal)
-                || !normalizedOutput.Contains("System.Func", StringComparison.Ordinal))
-            && string.Equals(Normalize(result.StandardError), "Failed.\n", StringComparison.Ordinal);
-        if (!succeeded && !hitBoundary)
-        {
-            failures.Add(
-                "gsc failed:"
-                + $"\n  exit: {result.ExitCode}"
-                + $"\n  stdout:\n{normalizedOutput}"
-                + $"\n  stderr:\n{result.StandardError}");
-        }
-    }
+        List<string> failures) =>
+        CheckDriver("gsc", result, expectedOutput + "Success.\n", failures);
 
     private static void CheckDriver(
         string name,
@@ -405,7 +374,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     private static DriverResult RunCompiler(params string[] arguments) =>
         Capture(() => GSharp.Compiler.Program.Main(arguments));
 
-    private static DriverResult RunInterpreter(string sourcePath) =>
+    private static DriverResult RunScriptDriver(string sourcePath) =>
         Capture(() => GSharp.Repl.Program.Main(new[] { sourcePath }));
 
     private static DriverResult Capture(Func<int> action)
