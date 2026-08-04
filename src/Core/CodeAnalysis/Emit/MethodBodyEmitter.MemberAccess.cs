@@ -1441,10 +1441,26 @@ internal sealed partial class MethodBodyEmitter
             // value on the evaluation stack produces invalid IL
             // (InvalidProgramException at JIT time).
             if (receiver is BoundFieldAccessExpression fa
-                && this.outer.cache.StructFieldDefs.ContainsKey(fa.Field)
+                && (this.outer.cache.StructFieldDefs.ContainsKey(fa.Field)
+                    || IsSubmissionRootedFieldChain(fa))
                 && this.IsAddressableFieldAccess(fa))
             {
                 this.EmitFieldAddress(fa);
+                return;
+            }
+
+            // ADR-0156 Phase 2 (issue #3185): a prior-cell submission global
+            // (a public static field on that submission's <Program>
+            // container), or a value-type CLR field chain rooted at one, is
+            // real addressable storage. Load its address (`ldsflda` [+
+            // `ldflda`…]) so member writes and mutating instance calls hit
+            // the stored global in place instead of a spilled copy — the
+            // silent-wrong-value class ADR-0156 exists to kill. The flag is
+            // only ever set by the submission-import binder fallbacks, so
+            // non-REPL receiver spilling is unchanged.
+            if (receiver is BoundClrPropertyAccessExpression clrChain
+                && this.TryEmitAddressableClrFieldAddress(clrChain))
+            {
                 return;
             }
 
@@ -1612,12 +1628,133 @@ internal sealed partial class MethodBodyEmitter
         }
 
         if (fa.Receiver is BoundFieldAccessExpression nested
-            && this.outer.cache.StructFieldDefs.ContainsKey(nested.Field))
+            && (this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
+                || IsSubmissionRootedFieldChain(nested)))
         {
             return this.IsAddressableFieldAccess(nested);
         }
 
+        // Issue #3185: a prior-cell submission global (or a value-type CLR
+        // field chain rooted at one) is addressable storage.
+        if (fa.Receiver is BoundClrPropertyAccessExpression clrReceiver)
+        {
+            return this.IsAddressableClrFieldChain(clrReceiver);
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2 (issue #3185): whether <paramref name="access"/> is a
+    /// CLR field chain whose address can be loaded in place — the chain must
+    /// consist of real <see cref="FieldInfo"/> links over value-type
+    /// receivers and bottom out either at a submission global static field
+    /// flagged addressable by the binder, or at a reference-typed link of a
+    /// submission-rooted chain (the object reference is then the storage
+    /// root). Never true outside the interactive submission gate, since only
+    /// the submission binder fallbacks set the flag.
+    /// </summary>
+    /// <param name="access">The candidate CLR member access.</param>
+    /// <returns><see langword="true"/> when the chain's address is loadable.</returns>
+    private bool IsAddressableClrFieldChain(BoundClrPropertyAccessExpression access)
+    {
+        if (access.Member is not FieldInfo)
+        {
+            return false;
+        }
+
+        if (access.Receiver == null)
+        {
+            return access.IsAddressableStaticField;
+        }
+
+        if (access.Receiver is not BoundClrPropertyAccessExpression inner)
+        {
+            return false;
+        }
+
+        if (!ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type))
+        {
+            return IsSubmissionRootedFieldChain(inner);
+        }
+
+        return this.IsAddressableClrFieldChain(inner);
+    }
+
+    /// <summary>
+    /// Issue #3185: emits the managed-pointer address of an addressable CLR
+    /// field chain (see <see cref="IsAddressableClrFieldChain"/>):
+    /// <c>ldsflda</c> for the submission-global root, <c>ldflda</c> per
+    /// value-type field link, and a plain object-reference load for a
+    /// reference-typed link. Returns <see langword="false"/> without emitting
+    /// when the chain is not addressable.
+    /// </summary>
+    /// <param name="access">The CLR member access whose address to load.</param>
+    /// <returns><see langword="true"/> once the address is on the stack.</returns>
+    private bool TryEmitAddressableClrFieldAddress(BoundClrPropertyAccessExpression access)
+    {
+        if (!this.IsAddressableClrFieldChain(access))
+        {
+            return false;
+        }
+
+        this.EmitClrFieldAddressCore(access);
+        return true;
+    }
+
+    private void EmitClrFieldAddressCore(BoundClrPropertyAccessExpression access)
+    {
+        var field = (FieldInfo)access.Member;
+        if (access.Receiver == null)
+        {
+            this.il.OpCode(ILOpCode.Ldsflda);
+            this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+            return;
+        }
+
+        var inner = (BoundClrPropertyAccessExpression)access.Receiver;
+        if (!ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type))
+        {
+            // Reference-typed link: the loaded object reference is the
+            // storage root for the remaining `ldflda` chain.
+            this.EmitExpression(inner);
+        }
+        else
+        {
+            this.EmitClrFieldAddressCore(inner);
+        }
+
+        this.il.OpCode(ILOpCode.Ldflda);
+        this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+    }
+
+    /// <summary>
+    /// Issue #3185: whether a member-access chain (mixed CLR reflection links
+    /// and imported-aggregate field links) bottoms out at a prior-cell
+    /// submission global flagged addressable by the binder. Used to gate the
+    /// imported-field addressing paths so shapes outside the interactive
+    /// submission gate keep their existing spill behavior.
+    /// </summary>
+    /// <param name="node">The chain's outermost link.</param>
+    /// <returns><see langword="true"/> when the chain root is a flagged submission global.</returns>
+    private static bool IsSubmissionRootedFieldChain(BoundExpression node)
+    {
+        while (true)
+        {
+            switch (node)
+            {
+                case BoundClrPropertyAccessExpression clr when clr.Receiver == null:
+                    return clr.IsAddressableStaticField;
+                case BoundClrPropertyAccessExpression clr:
+                    node = clr.Receiver;
+                    continue;
+                case BoundFieldAccessExpression fieldAccess when fieldAccess.Receiver != null:
+                    node = fieldAccess.Receiver;
+                    continue;
+                default:
+                    return false;
+            }
+        }
     }
 
     private bool CanLoadVariableAddress(VariableSymbol variable)
@@ -1791,10 +1928,18 @@ internal sealed partial class MethodBodyEmitter
         }
         else if (!receiverIsClass
             && fa.Receiver is BoundFieldAccessExpression nested
-            && this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
+            && (this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
+                || IsSubmissionRootedFieldChain(nested))
             && this.IsAddressableFieldAccess(nested))
         {
             this.EmitFieldAddress(nested);
+        }
+        else if (!receiverIsClass
+            && fa.Receiver is BoundClrPropertyAccessExpression clrChainReceiver
+            && this.TryEmitAddressableClrFieldAddress(clrChainReceiver))
+        {
+            // Issue #3185: the receiver is a prior-cell submission global (or
+            // a CLR field chain rooted at one); its address is on the stack.
         }
         else
         {

@@ -387,6 +387,343 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Equal(2, cell.Value);
     }
 
+    /// <summary>
+    /// Issue #3184: a prior cell's top-level function referenced as a value
+    /// (`let g = addOne`) binds to a delegate over the emitted static method,
+    /// exactly like the same-cell method-group-to-function-value conversion.
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsValueBindsAndInvokes()
+    {
+        Assert.False(engine.Evaluate("func addOne(n int) int {\n    return n + 1\n}").HasError);
+
+        var let = engine.Evaluate("let g = addOne");
+        Assert.False(let.HasError);
+
+        var call = engine.Evaluate("g(41)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3184 (typed form): a prior cell's function converts to an
+    /// explicitly typed function-value slot.
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsValueWithExplicitFunctionType()
+    {
+        Assert.False(engine.Evaluate("func double(n int) int {\n    return n * 2\n}").HasError);
+
+        var let = engine.Evaluate("let g func(int) int = double");
+        Assert.False(let.HasError);
+
+        var call = engine.Evaluate("g(21)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3184: a prior cell's function passed directly as a delegate
+    /// argument (a value context other than a declaration initializer).
+    /// </summary>
+    [Fact]
+    public void PriorCellFunctionAsArgumentToHigherOrderFunction()
+    {
+        Assert.False(engine.Evaluate("func addOne(n int) int {\n    return n + 1\n}").HasError);
+        Assert.False(engine.Evaluate("func apply(f func(int) int, v int) int {\n    return f(v)\n}").HasError);
+
+        var call = engine.Evaluate("apply(addOne, 41)");
+        Assert.False(call.HasError);
+        Assert.Equal(42, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 1): a prior-cell struct converts to a prior-cell
+    /// interface it (nominally) implements, and dispatch through the
+    /// interface-typed global works from yet another cell.
+    /// </summary>
+    [Fact]
+    public void CrossCellInterfaceConversionAndDispatch()
+    {
+        Assert.False(engine.Evaluate("""
+            interface Shape {
+                func Area() int;
+            }
+            struct Sq : Shape {
+                var S int
+                func Area() int {
+                    return S * S
+                }
+            }
+            """).HasError);
+
+        var assign = engine.Evaluate("var sh Shape = Sq{S: 3}");
+        Assert.False(assign.HasError);
+
+        var call = engine.Evaluate("sh.Area()");
+        Assert.False(call.HasError);
+        Assert.Equal(9, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 1): a struct declared in a LATER cell whose base
+    /// clause names an interface from an EARLIER cell converts and
+    /// dispatches across further cells.
+    /// </summary>
+    [Fact]
+    public void LaterCellStructImplementsEarlierCellInterface()
+    {
+        Assert.False(engine.Evaluate("""
+            interface Shape {
+                func Area() int;
+            }
+            """).HasError);
+        Assert.False(engine.Evaluate("""
+            struct Sq : Shape {
+                var S int
+                func Area() int {
+                    return S * S
+                }
+            }
+            """).HasError);
+
+        var assign = engine.Evaluate("var sh Shape = Sq{S: 4}");
+        Assert.False(assign.HasError);
+
+        var call = engine.Evaluate("sh.Area()");
+        Assert.False(call.HasError);
+        Assert.Equal(16, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 1, both types from the same prior cell used in a
+    /// later assignment to an existing interface-typed global).
+    /// </summary>
+    [Fact]
+    public void CrossCellInterfaceConversionIntoExistingGlobal()
+    {
+        Assert.False(engine.Evaluate("""
+            interface Shape {
+                func Area() int;
+            }
+            struct Sq : Shape {
+                var S int
+                func Area() int {
+                    return S * S
+                }
+            }
+            var sh Shape = Sq{S: 2}
+            """).HasError);
+
+        var write = engine.Evaluate("sh = Sq{S: 5}");
+        Assert.False(write.HasError);
+
+        var call = engine.Evaluate("sh.Area()");
+        Assert.False(call.HasError);
+        Assert.Equal(25, call.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 1, negative): a struct with NO base clause does not
+    /// satisfy an interface across cells — G# interface conformance is
+    /// nominal, and the emitted engine reports the same GS0155 the evaluator
+    /// engine (and a same-cell conversion) reports.
+    /// </summary>
+    [Fact]
+    public void CrossCellInterfaceConversionWithoutBaseClauseStillErrors()
+    {
+        Assert.False(engine.Evaluate("""
+            interface Shape {
+                func Area() int;
+            }
+            struct Sq {
+                var S int
+                func Area() int {
+                    return S * S
+                }
+            }
+            """).HasError);
+
+        var assign = engine.Evaluate("var sh Shape = Sq{S: 3}");
+        Assert.True(assign.HasError);
+        Assert.Contains(assign.Diagnostics, d => d.Id == "GS0155");
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): member writes through a struct-typed prior-cell
+    /// global mutate the stored global in place (no silent struct-copy write).
+    /// </summary>
+    [Fact]
+    public void MemberWriteThroughPriorCellStructGlobalPersists()
+    {
+        Assert.False(engine.Evaluate("""
+            struct P {
+                var X int
+            }
+            var p = P{X: 1}
+            """).HasError);
+
+        var write = engine.Evaluate("p.X = 5");
+        Assert.False(write.HasError);
+
+        var read = engine.Evaluate("p.X");
+        Assert.False(read.HasError);
+        Assert.Equal(5, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): compound member writes through a struct-typed
+    /// prior-cell global.
+    /// </summary>
+    [Fact]
+    public void CompoundMemberWriteThroughPriorCellStructGlobalPersists()
+    {
+        Assert.False(engine.Evaluate("""
+            struct P {
+                var X int
+            }
+            var p = P{X: 40}
+            """).HasError);
+
+        var write = engine.Evaluate("p.X += 2");
+        Assert.False(write.HasError);
+
+        var read = engine.Evaluate("p.X");
+        Assert.False(read.HasError);
+        Assert.Equal(42, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): nested member writes (`a.B.C = x`) through a
+    /// struct-typed prior-cell global mutate the innermost field in place.
+    /// </summary>
+    [Fact]
+    public void NestedMemberWriteThroughPriorCellStructGlobalPersists()
+    {
+        Assert.False(engine.Evaluate("""
+            struct Inner {
+                var C int
+            }
+            struct Outer {
+                var B Inner
+            }
+            var a = Outer{B: Inner{C: 1}}
+            """).HasError);
+
+        var write = engine.Evaluate("a.B.C = 7");
+        Assert.False(write.HasError);
+
+        var read = engine.Evaluate("a.B.C");
+        Assert.False(read.HasError);
+        Assert.Equal(7, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): a member write through a read-only (`let`)
+    /// struct-typed prior-cell global is rejected with the same read-only
+    /// diagnostic the same-cell rule (issue #1132) produces — never a
+    /// silent copy write.
+    /// </summary>
+    [Fact]
+    public void MemberWriteThroughPriorCellLetStructGlobalIsRejected()
+    {
+        Assert.False(engine.Evaluate("""
+            struct P {
+                var X int
+            }
+            let p = P{X: 1}
+            """).HasError);
+
+        var write = engine.Evaluate("p.X = 5");
+        Assert.True(write.HasError);
+        Assert.Contains(write.Diagnostics, d => d.Id == "GS0127");
+
+        var compound = engine.Evaluate("p.X += 1");
+        Assert.True(compound.HasError);
+        Assert.Contains(compound.Diagnostics, d => d.Id == "GS0127");
+
+        var read = engine.Evaluate("p.X");
+        Assert.False(read.HasError);
+        Assert.Equal(1, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): a mutating method call on a struct-typed
+    /// prior-cell global mutates the stored global in place (the receiver is
+    /// the global's own address, mirroring the same-cell `ldsflda` shape).
+    /// </summary>
+    [Fact]
+    public void StructMethodMutationThroughPriorCellGlobalPersists()
+    {
+        Assert.False(engine.Evaluate("""
+            struct P {
+                var X int
+                func Bump() {
+                    X = X + 1
+                }
+            }
+            var p = P{X: 41}
+            """).HasError);
+
+        var call = engine.Evaluate("p.Bump()");
+        Assert.False(call.HasError);
+
+        var read = engine.Evaluate("p.X");
+        Assert.False(read.HasError);
+        Assert.Equal(42, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): a write into a struct field of a class-typed
+    /// prior-cell global (`c.Inner.X = v`) mutates the struct stored inside
+    /// the heap object in place.
+    /// </summary>
+    [Fact]
+    public void StructFieldOfClassGlobalMemberWritePersists()
+    {
+        Assert.False(engine.Evaluate("""
+            struct Inner {
+                var X int
+            }
+            class Holder {
+                var Data Inner
+            }
+            var c = Holder{Data: Inner{X: 1}}
+            """).HasError);
+
+        var write = engine.Evaluate("c.Data.X = 5");
+        Assert.False(write.HasError);
+
+        var read = engine.Evaluate("c.Data.X");
+        Assert.False(read.HasError);
+        Assert.Equal(5, read.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 (part 2): member writes through a class-typed prior-cell
+    /// global write through the stored reference.
+    /// </summary>
+    [Fact]
+    public void MemberWriteThroughPriorCellClassGlobalPersists()
+    {
+        Assert.False(engine.Evaluate("""
+            class Counter {
+                var N int
+            }
+            var c = Counter{N: 1}
+            """).HasError);
+
+        var write = engine.Evaluate("c.N = 41");
+        Assert.False(write.HasError);
+
+        var compound = engine.Evaluate("c.N += 1");
+        Assert.False(compound.HasError);
+
+        var read = engine.Evaluate("c.N");
+        Assert.False(read.HasError);
+        Assert.Equal(42, read.Value);
+    }
+
     [Fact]
     public void SnapshotListsAccumulatedSymbolsWithValues()
     {

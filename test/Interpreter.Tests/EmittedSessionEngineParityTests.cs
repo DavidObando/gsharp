@@ -95,6 +95,71 @@ public sealed class EmittedSessionEngineParityTests
                 "m[\"a\"]",
             }
         },
+        {
+            // Issue #3184: a prior cell's top-level function used as a value —
+            // untyped `let`, direct invocation, and delegate-argument passing.
+            "prior-cell-function-as-value",
+            new[]
+            {
+                "func addOne(n int) int {\n    return n + 1\n}",
+                "let g = addOne\ng(41)",
+                "func apply(f func(int) int, v int) int {\n    return f(v)\n}",
+                "apply(addOne, 1) + g(0)",
+            }
+        },
+        {
+            // Issue #3185 (part 1): cross-cell interface conversion for a
+            // nominally conforming struct — declaration-typed global, reuse
+            // from a later cell, and reassignment through the conversion.
+            "cross-cell-interface-conversion",
+            new[]
+            {
+                "interface Shape {\n    func Area() int;\n}\nstruct Sq : Shape {\n    var S int\n    func Area() int {\n        return S * S\n    }\n}",
+                "var sh Shape = Sq{S: 3}\nsh.Area()",
+                "sh.Area() * 2",
+                "sh = Sq{S: 5}\nsh.Area()",
+            }
+        },
+        {
+            // Issue #3185 (part 1, negative): G# interface conformance is
+            // nominal — without the base clause BOTH engines report GS0155.
+            "cross-cell-interface-nominal-required",
+            new[]
+            {
+                "interface Shape {\n    func Area() int;\n}\nstruct Sq {\n    var S int\n    func Area() int {\n        return S * S\n    }\n}",
+                "var sh Shape = Sq{S: 3}",
+            }
+        },
+        {
+            // Issue #3185 (part 2): member writes through prior-cell globals —
+            // struct simple/compound, nested struct chains, and class-typed
+            // globals (simple and compound).
+            "member-writes-through-prior-cell-globals",
+            new[]
+            {
+                "struct P {\n    var X int\n}\nvar p = P{X: 1}\np.X",
+                "p.X = 5",
+                "p.X",
+                "p.X += 2\np.X",
+                "struct Inner {\n    var C int\n}\nstruct Outer {\n    var B Inner\n}\nvar a = Outer{B: Inner{C: 1}}\na.B.C",
+                "a.B.C = 7\na.B.C",
+                "class Counter {\n    var N int\n}\nvar c = Counter{N: 1}\nc.N",
+                "c.N = 41\nc.N",
+                "c.N += 1\nc.N",
+            }
+        },
+        {
+            // Issue #3185 (part 2): a `let` struct global rejects member
+            // writes on both engines (issue #1132's read-only rule).
+            "let-global-member-writes-rejected",
+            new[]
+            {
+                "struct P {\n    var X int\n}\nlet p = P{X: 1}\np.X",
+                "p.X = 5",
+                "p.X += 1",
+                "p.X",
+            }
+        },
     };
 
     [Theory]
@@ -161,5 +226,35 @@ public sealed class EmittedSessionEngineParityTests
         var emittedCall = emitted.Evaluate("g()");
         Assert.False(emittedCall.HasError);
         Assert.Equal(2, emittedCall.Value);
+    }
+
+    /// <summary>
+    /// Issue #3185 follow-on, pinned on both engines: a mutating method call
+    /// on a struct-typed global. The tree-walking evaluator invokes struct
+    /// methods against a COPY of the receiver, so the mutation is lost — even
+    /// within a single cell — while the emitted engine passes the global's
+    /// real address (`ldsflda`) as the receiver, so the mutation persists,
+    /// matching what the same program compiled by `gsc` does. When the
+    /// emitted engine becomes the default, the evaluator half of this test
+    /// retires with it.
+    /// </summary>
+    [Fact]
+    public void StructMethodReceiverMutationDivergesByDesign()
+    {
+        const string declare = "struct P {\n    var X int\n    func Bump() {\n        X = X + 1\n    }\n}\nvar p = P{X: 41}";
+
+        var evaluator = new SessionEngine();
+        Assert.False(evaluator.Evaluate(declare).HasError);
+        Assert.False(evaluator.Evaluate("p.Bump()").HasError);
+        var evaluatorRead = evaluator.Evaluate("p.X");
+        Assert.False(evaluatorRead.HasError);
+        Assert.Equal(41, evaluatorRead.Value);
+
+        using var emitted = new EmittedSessionEngine();
+        Assert.False(emitted.Evaluate(declare).HasError);
+        Assert.False(emitted.Evaluate("p.Bump()").HasError);
+        var emittedRead = emitted.Evaluate("p.X");
+        Assert.False(emittedRead.HasError);
+        Assert.Equal(42, emittedRead.Value);
     }
 }
