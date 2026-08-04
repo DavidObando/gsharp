@@ -26,7 +26,15 @@ public sealed class SessionEngine : ISessionEngine
 {
     private readonly Dictionary<VariableSymbol, object> variables = new();
     private readonly List<Cell> cells = new();
+    private readonly ReferenceResolver? references;
     private Compilation? previous;
+
+    /// <summary>Initializes a new instance of the <see cref="SessionEngine"/> class.</summary>
+    /// <param name="references">Runtime references available to every cell.</param>
+    public SessionEngine(ReferenceResolver? references = null)
+    {
+        this.references = references;
+    }
 
     public IReadOnlyList<Cell> Cells => cells;
 
@@ -216,7 +224,9 @@ public sealed class SessionEngine : ISessionEngine
             try
             {
                 var tree = SyntaxTree.Parse(SourceText.From(text, fileName));
-                var compilation = previous == null ? new Compilation(tree) : previous.ContinueWith(tree);
+                var compilation = previous == null
+                    ? references is null ? new Compilation(tree) : new Compilation(references, tree)
+                    : previous.ContinueWith(tree);
                 var result = compilation.Evaluate(variables, evaluateEntryPoint: RunEntryPoint);
 
                 var hasError = result.Diagnostics.Any(d => d.IsError);

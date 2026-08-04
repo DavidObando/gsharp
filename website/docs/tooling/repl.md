@@ -33,11 +33,13 @@ dotnet tool uninstall --global Gsharp.Repl
 ## Command-line usage
 
 ```text
-Usage: gsi [file.gs] [--help] [--version]
-  file.gs      Run the given G# script and exit.
-  --help, -h   Show this help and exit.
-  --version    Show the gsi version and exit.
-  (no args)    Start the interactive REPL.
+Usage: gsi [options] [file.gs]
+  file.gs                       Run the given G# script and exit.
+  /r:<file>, /reference:<file>  Reference an assembly (repeatable).
+  -r:<file>, --reference:<file> Reference an assembly (repeatable).
+  --help, -h                    Show this help and exit.
+  --version                     Show the gsi version and exit.
+  (no file)                     Start the interactive REPL.
 ```
 
 ### Interactive REPL
@@ -99,6 +101,17 @@ Console.WriteLine(greet("world"))
 Diagnostics are written to standard error, and the process exits with a
 non-zero status if evaluation fails, so `gsi file.gs` composes cleanly in
 scripts and CI checks.
+
+Use `/r:<path>` or `/reference:<path>` to load an external runtime
+assembly before evaluation:
+
+```sh
+gsi /r:/path/to/MyLibrary.dll hello.gs
+```
+
+The installed `Gsharp.Repl` tool bundles and loads `Gsharp.Extensions`
+automatically, so scripts can use its optional and sequence helpers
+without adding an explicit reference.
 
 ## How it relates to `gsc`
 

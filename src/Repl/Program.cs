@@ -33,7 +33,8 @@ public static class Program
             case "/?":
                 Console.WriteLine("Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]");
                 Console.WriteLine("  file.gs                Run the given G# script and exit.");
-                Console.WriteLine("  /r:<file>              Reference an assembly (alias: /reference:<file>; repeatable).");
+                Console.WriteLine("  /r:<file>              Reference an assembly (repeatable).");
+                Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).");
                 Console.WriteLine("  --engine <name>        Interactive engine: 'evaluator' (default) or 'emit'");
                 Console.WriteLine("                         (ADR-0156 Phase 2 opt-in; also via GSI_ENGINE).");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
@@ -86,6 +87,12 @@ public static class Program
             return 1;
         }
 
+        if (!ReferenceResolver.TryValidateDriverReferencePaths(references, out var referenceError))
+        {
+            Console.Error.WriteLine(referenceError);
+            return 1;
+        }
+
         if (scriptPath is null)
         {
             return RunInteractive(engineChoice, references);
@@ -116,18 +123,14 @@ public static class Program
             return 1;
         }
 
+        var effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references);
         if (engineChoice == "emit")
         {
-            return ReplHost.Run(new Engine.EmittedSessionEngine(references));
+            return ReplHost.Run(new Engine.EmittedSessionEngine(effectiveReferences));
         }
 
-        if (references.Count > 0)
-        {
-            Console.Error.WriteLine("/r: references in interactive mode require --engine emit (ADR-0156 Phase 2).");
-            return 1;
-        }
-
-        return ReplHost.Run();
+        using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
+        return ReplHost.Run(new Engine.SessionEngine(resolver));
     }
 
     /// <summary>
@@ -140,49 +143,43 @@ public static class Program
     private static int RunScript(string scriptPath, List<string> references)
     {
         var tree = SyntaxTree.Parse(SourceText.From(File.ReadAllText(scriptPath), scriptPath));
-        var resolver = references.Count > 0 ? ReferenceResolver.WithReferences(references) : null;
+        var effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references);
+        using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
+        var compilation = new Compilation(resolver, tree);
+        EmittedProgramResult result;
         try
         {
-            var compilation = new Compilation(resolver, tree);
-            EmittedProgramResult result;
-            try
-            {
-                result = EmittedProgramHost.Run(compilation, references);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-            {
-                // 6.2 SilentEmitFailure invariant, gsi edition: a compiler
-                // exception that escapes the emit pipeline (e.g. #3183) must
-                // surface as gsc's canonical GS9998 line rather than a raw
-                // driver crash. User-code exceptions never reach here — the
-                // host reports those via UnhandledException below.
-                Console.Error.WriteLine($"{scriptPath}(1,1,1,1): error GS9998: {ex.GetType().Name}: {ex.Message}");
-                return 1;
-            }
-            if (result.Diagnostics.Any())
-            {
-                Console.Error.WriteDiagnostics(result.Diagnostics);
-            }
-
-            if (!result.Success)
-            {
-                return 1;
-            }
-
-            if (result.UnhandledException is not null)
-            {
-                // Mirror the CLR host's unhandled-exception protocol so gsi
-                // and `dotnet exec` render crashes identically.
-                Console.Error.WriteLine(EmittedProgramHost.FormatUnhandledException(result.UnhandledException));
-                return EmittedProgramHost.UnhandledExceptionExitCode;
-            }
-
-            return result.ExitCode;
+            result = EmittedProgramHost.Run(compilation, effectiveReferences);
         }
-        finally
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            resolver?.Dispose();
+            // 6.2 SilentEmitFailure invariant, gsi edition: a compiler
+            // exception that escapes the emit pipeline (e.g. #3183) must
+            // surface as gsc's canonical GS9998 line rather than a raw
+            // driver crash. User-code exceptions never reach here — the
+            // host reports those via UnhandledException below.
+            Console.Error.WriteLine($"{scriptPath}(1,1,1,1): error GS9998: {ex.GetType().Name}: {ex.Message}");
+            return 1;
         }
+        if (result.Diagnostics.Any())
+        {
+            Console.Error.WriteDiagnostics(result.Diagnostics);
+        }
+
+        if (!result.Success)
+        {
+            return 1;
+        }
+
+        if (result.UnhandledException is not null)
+        {
+            // Mirror the CLR host's unhandled-exception protocol so gsi
+            // and `dotnet exec` render crashes identically.
+            Console.Error.WriteLine(EmittedProgramHost.FormatUnhandledException(result.UnhandledException));
+            return EmittedProgramHost.UnhandledExceptionExitCode;
+        }
+
+        return result.ExitCode;
     }
 
     /// <summary>
@@ -197,7 +194,7 @@ public static class Program
             return false;
         }
 
-        var body = arg.Substring(1);
+        var body = arg.Substring(arg.StartsWith("--", StringComparison.Ordinal) ? 2 : 1);
         var separator = body.IndexOfAny(new[] { ':', '=' });
         if (separator <= 0)
         {

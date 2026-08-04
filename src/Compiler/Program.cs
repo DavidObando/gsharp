@@ -115,9 +115,18 @@ public class Program
                 syntaxTrees.Add(SyntaxTree.Load(fullPath));
             }
 
-            var references = parsed.References.Count > 0
-                ? ReferenceResolver.WithReferences(parsed.References)
-                : null;
+            if (!ReferenceResolver.TryValidateDriverReferencePaths(parsed.References, out var referenceError))
+            {
+                Console.Error.WriteLine(referenceError);
+                return Error;
+            }
+
+            var referencePaths = ReferenceResolver.ResolveDriverReferencePaths(parsed.References);
+            var references = parsed.OutputPath is null
+                ? ReferenceResolver.WithRuntimeReferences(referencePaths)
+                : parsed.References.Count > 0
+                    ? ReferenceResolver.WithReferences(referencePaths)
+                    : ReferenceResolver.WithRuntimeReferences(referencePaths);
             ILogger logger = parsed.LogPath is not null ? new FileLogger(parsed.LogPath) : NullLogger.Instance;
 
             try
@@ -157,7 +166,7 @@ public class Program
                     // Legacy / no-output mode (ADR-0156 Phase 1): compile with
                     // the real emitter into memory and execute in-process,
                     // preserving the historical evaluate-mode driver protocol.
-                    return ExecuteInMemory(compilation, parsed);
+                    return ExecuteInMemory(compilation, parsed, referencePaths);
                 }
 
                 return Emit(compilation, parsed);
@@ -316,9 +325,12 @@ public class Program
     // driver protocol: diagnostics to stdout, "Success."/"Failed." trailer,
     // exit code 0 on success (the program's own return value is discarded,
     // as evaluate mode always did — use /out: for a real executable).
-    private static int ExecuteInMemory(Compilation compilation, CommandLineArgs args)
+    private static int ExecuteInMemory(
+        Compilation compilation,
+        CommandLineArgs args,
+        IReadOnlyList<string> referencePaths)
     {
-        var result = EmittedProgramHost.Run(compilation, args.References);
+        var result = EmittedProgramHost.Run(compilation, referencePaths);
         if (result.Diagnostics.Any())
         {
             var effective = ApplySuppressPromote(result.Diagnostics, args);

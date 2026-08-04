@@ -210,6 +210,7 @@
         "type": "Project",
         "dependencies": {
           "GSharp.Core": "[1.0.0, )",
+          "GSharp.Gsharp.Extensions": "[1.0.0, )",
           "GSharp.LanguageServer": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )",
           "Spectre.Console": "[0.55.2, )"
