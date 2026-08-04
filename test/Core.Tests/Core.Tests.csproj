@@ -21,4 +21,9 @@
     <ProjectReference Include="@(GsharpCore)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
+    <Compile Include="..\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />
+  </ItemGroup>
+
 </Project>
