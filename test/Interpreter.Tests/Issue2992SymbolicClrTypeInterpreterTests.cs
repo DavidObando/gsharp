@@ -204,7 +204,7 @@ public class Issue2992SymbolicClrTypeInterpreterTests
         Assert.Equal("2\n", RunSubmission(source));
     }
 
-    [Fact(Skip = "Pre-existing emitter bug: a method group over an open-generic receiver method deferred through a generic function emits bad IL (BadImageFormatException at runtime; reproduces identically under `gsi <file>` script mode on main). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip with the emitter fix — flagged in the Phase 3c PR.")]
+    [Fact(Skip = "Issue #3248: a method group over an open-generic receiver method deferred through a generic function emits bad IL (BadImageFormatException at runtime). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip when #3248 lands.")]
     public void DeferredMethodGroupRetainsClassTypeArguments()
     {
         var source = """

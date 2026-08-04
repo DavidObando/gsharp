@@ -17,8 +17,8 @@ namespace GSharp.Interpreter.Tests;
 /// on the tree-walking evaluator; since ADR-0156 Phase 3c (#3176) submissions
 /// execute emitted, and the sources swapped the evaluator-only
 /// <c>print(string(x))</c> builtins for <c>Console.WriteLine</c> (the
-/// <c>print</c>/<c>string(T)</c> builtins have no emitted lowering — flagged
-/// in the Phase 3c PR).
+/// <c>print</c>/<c>string(T)</c> builtins have no emitted lowering — issues
+/// #3245 and #3246).
 /// </summary>
 public class RefLocalAliasingInterpreterTests
 {
@@ -160,7 +160,7 @@ probe()
         Assert.Equal($"99|99|20{Environment.NewLine}", output);
     }
 
-    [Fact(Skip = "Pre-existing emitter gap: `let ref r = xs[^1]` fails with GS9998 'Cannot take address of expression kind BoundBlockExpression' (the index-from-end lowering wraps the element access in a block; reproduces identically under `gsi <file>` script mode on main). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip with the emitter fix — flagged in the Phase 3c PR.")]
+    [Fact(Skip = "Issue #3247: `let ref r = xs[^1]` fails with GS9998 'Cannot take address of expression kind BoundBlockExpression' (the index-from-end lowering wraps the element access in a block). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip when #3247 lands.")]
     public void LetRef_BlockExpression_EvaluatesPrefixOnceAndCapturesElement()
     {
         var output = RunSubmission(@"
