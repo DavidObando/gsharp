@@ -1269,6 +1269,12 @@ public sealed partial class Evaluator
     {
         var clrBase = baseCtor.DeclaringType
             ?? throw new InvalidOperationException("Imported base constructor has no declaring type.");
+        var runtimeStructType = ResolveRuntimeTypeSymbol(structType);
+        if (!ReferenceEquals(runtimeStructType, structType))
+        {
+            structType = (StructSymbol)runtimeStructType;
+        }
+
         var backingType = ClrBackingTypes.GetValue(
             structType,
             _ => CreateClrBackingType(structType, clrBase));

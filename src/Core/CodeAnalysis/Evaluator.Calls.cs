@@ -1344,6 +1344,29 @@ public sealed partial class Evaluator
                 : NullableTypeSymbol.Get(underlying);
         }
 
+        if (type is StructSymbol structType)
+        {
+            var definition = structType.Definition ?? structType;
+            var ownArguments = ResolveRuntimeTypeArguments(structType.TypeArguments, out var ownChanged);
+            var enclosingArguments = ResolveRuntimeTypeArguments(
+                structType.EnclosingTypeArguments,
+                out var enclosingChanged);
+
+            if (!ownChanged && !enclosingChanged)
+            {
+                return type;
+            }
+
+            if (!enclosingArguments.IsDefaultOrEmpty)
+            {
+                return ownArguments.IsDefaultOrEmpty
+                    ? StructSymbol.ConstructNested(definition, enclosingArguments)
+                    : StructSymbol.ConstructNestedGeneric(definition, enclosingArguments, ownArguments);
+            }
+
+            return StructSymbol.Construct(definition, ownArguments);
+        }
+
         if (type is not ImportedTypeSymbol imported
             || imported.OpenDefinition == null
             || imported.TypeArguments.IsDefaultOrEmpty)
@@ -1351,18 +1374,33 @@ public sealed partial class Evaluator
             return type;
         }
 
-        var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(imported.TypeArguments.Length);
-        var changed = false;
-        foreach (var argument in imported.TypeArguments)
+        var arguments = ResolveRuntimeTypeArguments(imported.TypeArguments, out var changed);
+
+        return changed
+            ? ImportedTypeSymbol.GetConstructed(imported.ClrType, imported.OpenDefinition, arguments)
+            : type;
+    }
+
+    private ImmutableArray<TypeSymbol> ResolveRuntimeTypeArguments(
+        ImmutableArray<TypeSymbol> arguments,
+        out bool changed)
+    {
+        if (arguments.IsDefaultOrEmpty)
+        {
+            changed = false;
+            return arguments;
+        }
+
+        var resolvedArguments = ImmutableArray.CreateBuilder<TypeSymbol>(arguments.Length);
+        changed = false;
+        foreach (var argument in arguments)
         {
             var resolved = ResolveRuntimeTypeSymbol(argument);
             changed |= !ReferenceEquals(resolved, argument);
-            arguments.Add(resolved);
+            resolvedArguments.Add(resolved);
         }
 
-        return changed
-            ? ImportedTypeSymbol.GetConstructed(imported.ClrType, imported.OpenDefinition, arguments.MoveToImmutable())
-            : type;
+        return resolvedArguments.MoveToImmutable();
     }
 
     private T ResolveMemberForRuntimeType<T>(T member, Type runtimeType)

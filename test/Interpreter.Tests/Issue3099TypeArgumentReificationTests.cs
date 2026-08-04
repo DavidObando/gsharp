@@ -24,6 +24,83 @@ namespace GSharp.Interpreter.Tests;
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
 {
+    [Fact]
+    public void OpenEnclosingFunctionTypeArgument_MatchesEmittedFieldTypes()
+    {
+        const string Source = """
+            package Issue3197
+            import System
+
+            class Owner[T] {
+                class Payload[U] {
+                    let A T
+                    let B U
+                }
+            }
+
+            class Box[T] : EventArgs {
+            }
+
+            func Reify[T]() {
+                var value = Box[Owner[T].Payload[string]]()
+                var payload = value.GetType().GenericTypeArguments[0]
+                Console.WriteLine("G:" + payload.GetGenericTypeDefinition().GetGenericArguments().Length.ToString())
+                for field in payload.GetFields() {
+                    Console.WriteLine(field.Name + ":" + field.FieldType.FullName)
+                }
+            }
+
+            Reify[int32]()
+            Reify[bool]()
+            """;
+
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3197-{Guid.NewGuid():N}");
+
+        try
+        {
+            var emitDirectory = PrepareEmptyDirectory(Path.Combine(root, "gsc-emit"));
+            var sourcePath = Path.Combine(emitDirectory, "Probe.gs");
+            var assemblyPath = Path.Combine(emitDirectory, "Probe.dll");
+            File.WriteAllText(sourcePath, Source);
+            _ = CaptureDriver(() => Program.Main(new[]
+            {
+                "/out:" + assemblyPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                sourcePath,
+            }));
+
+            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
+            Assert.NotEmpty(assembly.GetTypes());
+            var entryPoint = assembly.EntryPoint
+                ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
+            var emitted = CaptureDriver(() =>
+            {
+                entryPoint.Invoke(
+                    null,
+                    entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
+                return 0;
+            });
+            var interactive = RunInteractive(Source);
+
+            Assert.Equal(
+                "G:2\nA:System.Int32\nB:System.String\nG:2\nA:System.Boolean\nB:System.String\n",
+                emitted);
+            Assert.Equal(emitted, interactive);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     public static IEnumerable<object[]> TypeArgumentCases()
     {
         yield return ["class", "class Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload"];
