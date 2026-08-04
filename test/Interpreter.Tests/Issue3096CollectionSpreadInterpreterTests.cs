@@ -3,12 +3,7 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
 using Xunit;
 
@@ -150,38 +145,36 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
         const string Source = """
             import System
 
-            var trace = ""
-
             func Argument() int32 {
-                trace = trace + "A"
+                Console.Write("A")
                 return 1
             }
 
             class Ordered {
                 shared {
-                    let Initialized int32 = Initialize()
-
-                    func Initialize() int32 {
-                        trace = trace + "I"
-                        return 0
+                    init {
+                        Console.Write("I")
                     }
 
                     func Use(value int32) {
-                        trace = trace + "M"
+                        Console.Write("M")
                     }
                 }
             }
 
             Ordered.Use(Argument())
-            Console.WriteLine(trace)
             """;
 
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — issue
-        // #3203 pins the divergence this test exposed: the EVALUATOR runs
-        // shared initializers eagerly at first static use ("AIM"), while
-        // emitted execution is CLR-beforefieldinit lazy and never runs the
-        // initializer here ("AM"). Realigns with #3203's resolution.
-        Assert.Equal("AIM\n", EvaluateWithEvaluator(Source));
+        // Issue #3203 resolution (ADR-0140 §4): an explicit `shared { init }`
+        // block emits a real `.cctor` with C# static-constructor timing —
+        // `beforefieldinit` cleared — so the initializer is guaranteed to run
+        // at the first static access (the `Use` invocation), after its call
+        // arguments. The original field-initializer-only form of this repro
+        // keeps `beforefieldinit` (aligned with C#) and its timing is
+        // CLR-unspecified; that half of the contract is pinned by the
+        // Issue3203SharedInitializerCctorTests metadata tests in Core.Tests.
+        // Migrated off the evaluator pin per ADR-0156 Phase 3b (#3176).
+        Assert.Equal("AIM", Evaluate(Source));
     }
 
     private static string Evaluate(string source)
@@ -193,30 +186,5 @@ public sealed class Issue3096CollectionSpreadInterpreterTests
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
 
         return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3203 test above; delete with
-    // the evaluator (Phase 3c) or when #3203 aligns the engines.
-    private static string EvaluateWithEvaluator(string source)
-    {
-        var compilation = new Compilation(SyntaxTree.Parse(source));
-
-        using var output = new StringWriter();
-        var previous = Console.Out;
-        Console.SetOut(output);
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
-            Assert.True(
-                errors.Length == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(previous);
-        }
-
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 }
