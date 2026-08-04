@@ -46,4 +46,17 @@ public static class DiagnosticDescriptors
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Strong static caches keyed by reflection Type, Assembly, or Module can pin MetadataLoadContexts.");
+
+    /// <summary>
+    /// Reports Emit-layer symbol-keyed metadata-reference caches whose key
+    /// omits the generic-remap scope.
+    /// </summary>
+    public static readonly DiagnosticDescriptor EmitCacheKeyMissingRemapScope = new(
+        "GSA0004",
+        "Include RemapScope in Emit-layer symbol-keyed metadata caches",
+        "Emit cache '{0}' maps symbols to scope-sensitive metadata rows but its key does not include RemapScope",
+        "GSharp.InternalAnalyzers",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "The same symbol encodes to different VAR/MVAR ordinals under different active generic remaps, so a TypeSpec/MemberRef/MethodSpec cache keyed on symbols without the RemapScope reuses rows across scopes and emits an invalid assembly (issues #2930, #3057, #3065; invariant #3163).");
 }
