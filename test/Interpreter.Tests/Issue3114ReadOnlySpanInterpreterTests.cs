@@ -99,9 +99,10 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 writable[1] = 44
                 var tail = readOnly.Slice(1)
                 var window = tail.Slice(0, 2)
-                var letters = []char{'a', 'b', 'c'}
+                var letters = []char{'a', 'b', 'c', 'd', 'e'}
                 var writableChars Span[char] = letters
                 var readOnlyChars ReadOnlySpan[char] = writableChars
+                var charWindow = readOnlyChars.Slice(1, 3)
                 Console.WriteLine(readOnly.Length)
                 Console.WriteLine(readOnly[1])
                 Console.WriteLine(window[1])
@@ -110,6 +111,7 @@ public class Issue3114ReadOnlySpanInterpreterTests
                 Console.WriteLine(window.ToString())
                 Console.WriteLine(writableChars.ToString())
                 Console.WriteLine(readOnlyChars.ToString())
+                Console.WriteLine(charWindow.ToString())
             }
             """;
 
@@ -121,11 +123,21 @@ public class Issue3114ReadOnlySpanInterpreterTests
 
         try
         {
+            var emitted = CompileAndRun(root, "span-operations.gs", sourcePath);
+            Assert.Equal(
+                "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabcde\nabcde\nbcd\n",
+                emitted.StandardOutput);
+
+            var evaluated = new GSharp.Repl.Engine.SessionEngine { CaptureConsole = true, RunEntryPoint = true }
+                .Evaluate(Source);
+            Assert.False(evaluated.HasError);
+            Assert.Equal(emitted.StandardOutput, evaluated.Output);
+
             var result = driver switch
             {
                 Driver.CompilerEvaluation => CaptureConsole(
                     () => GSharp.Compiler.Program.Main([sourcePath])),
-                Driver.CompilerEmission => CompileAndRun(root, "span-operations.gs", sourcePath),
+                Driver.CompilerEmission => emitted,
                 Driver.Interpreter => CaptureConsole(
                     () => GSharp.Repl.Program.Main([sourcePath])),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
@@ -134,8 +146,8 @@ public class Issue3114ReadOnlySpanInterpreterTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEvaluation
-                    ? "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabc\nabc\nSuccess.\n"
-                    : "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabc\nabc\n",
+                    ? emitted.StandardOutput + "Success.\n"
+                    : emitted.StandardOutput,
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -143,6 +155,26 @@ public class Issue3114ReadOnlySpanInterpreterTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ClrProducedSpan_RemainsLoudlyRefusedInteractively()
+    {
+        const string Source = """
+            import System
+
+            func Main() {
+                var text = "hello"
+                var span = text.AsSpan()
+            }
+            """;
+
+        var cell = new GSharp.Repl.Engine.SessionEngine { RunEntryPoint = true }.Evaluate(Source);
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.True(cell.HasError);
+        Assert.Equal("GS0511", diagnostic.Id);
+        Assert.DoesNotContain("GS9999", diagnostic.Message);
     }
 
     /// <summary>
