@@ -10,6 +10,10 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Repl.Engine;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -33,34 +37,39 @@ public class Issue3140OutParameterWriteBackParityTests
 
     [Theory]
     [MemberData(nameof(ReceiverShapeMatrix))]
-    public async Task OutParameterWriteBack_GscEvaluateAndGsiMatchEmit(
+    public async Task OutParameterWriteBack_EvaluatorAndSessionEngineMatchEmit(
         ReceiverKind receiver,
         ArgumentShape shape)
     {
-        var source = BuildSource(receiver, shape);
-        var root = CreateEmptyDirectory(receiver + "-" + shape);
-        try
-        {
-            var emitted = await RunEmittedAsync(source, CreateEmptyDirectory(root, "emit"));
-            var evaluated = RunSourceDriver(
-                source,
-                CreateEmptyDirectory(root, "evaluate"),
-                GSharp.Compiler.Program.Main,
-                stripCompilerSuccess: true);
-            var interpreted = RunSourceDriver(
-                source,
-                CreateEmptyDirectory(root, "gsi"),
-                GSharp.Repl.Program.Main,
-                stripCompilerSuccess: false);
+        await AssertDriverParityAsync(
+            BuildSource(receiver, shape),
+            GetExpectedOutput(shape),
+            receiver + "-" + shape);
+    }
 
-            Assert.NotEmpty(emitted);
-            Assert.Equal(emitted, evaluated);
-            Assert.Equal(emitted, interpreted);
-        }
-        finally
+    /// <summary>Gets receiver and write-back operand-kind rows.</summary>
+    /// <returns>Receiver and operand-kind rows.</returns>
+    public static IEnumerable<object[]> WriteBackOperandMatrix()
+    {
+        foreach (var receiver in Enum.GetValues<ReceiverKind>())
         {
-            DeleteDirectory(root);
+            foreach (var operand in Enum.GetValues<OperandKind>())
+            {
+                yield return new object[] { receiver, operand };
+            }
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(WriteBackOperandMatrix))]
+    public async Task OutParameterWriteBack_ReceiverAndOperandKindsMatchEmit(
+        ReceiverKind receiver,
+        OperandKind operand)
+    {
+        await AssertDriverParityAsync(
+            BuildOperandSource(receiver, operand),
+            "91",
+            receiver + "-" + operand);
     }
 
     /// <summary>Call receiver shape.</summary>
@@ -89,6 +98,12 @@ public class Issue3140OutParameterWriteBackParityTests
 
         /// <summary>Generic class instance method.</summary>
         GenericMethod,
+
+        /// <summary>Interface default method called through <c>base[IFiller]</c>.</summary>
+        BaseInterface,
+
+        /// <summary>Static interface method called through a constrained type parameter.</summary>
+        ConstrainedStatic,
     }
 
     /// <summary>Argument shape.</summary>
@@ -110,10 +125,35 @@ public class Issue3140OutParameterWriteBackParityTests
         ConditionalOut,
     }
 
-    private static string BuildSource(ReceiverKind receiver, ArgumentShape shape)
+    /// <summary>Caller storage kind used by a ref/out argument.</summary>
+    public enum OperandKind
     {
-        var spec = GetShape(shape);
-        var package = $"Issue3140{receiver}{shape}";
+        /// <summary>Local variable.</summary>
+        Variable,
+
+        /// <summary>Instance field.</summary>
+        Field,
+
+        /// <summary>Array element.</summary>
+        Index,
+
+        /// <summary>Dereferenced managed address.</summary>
+        Dereference,
+    }
+
+    private static string BuildSource(ReceiverKind receiver, ArgumentShape shape) =>
+        BuildSource(
+            receiver,
+            GetShape(shape),
+            $"Issue3140{receiver}{shape}",
+            string.Empty);
+
+    private static string BuildSource(
+        ReceiverKind receiver,
+        ShapeSpec spec,
+        string package,
+        string extraDeclaration)
+    {
         var method = $"func Fill({spec.Parameters}) {{\n{Indent(spec.Body, 4)}\n}}";
         string declarations;
         string target;
@@ -160,13 +200,30 @@ public class Issue3140OutParameterWriteBackParityTests
                 target = "target.Fill[string]";
                 callPrefix = "\"marker\", ";
                 break;
+            case ReceiverKind.BaseInterface:
+                declarations =
+                    $"interface Filler {{\n{Indent(method, 4)}\n}}\n"
+                    + $"class Target : Filler {{\n    func Fill({spec.Parameters}) {{\n"
+                    + $"        base[Filler].Fill({spec.ForwardArguments})\n    }}\n}}";
+                target = "target.Fill";
+                break;
+            case ReceiverKind.ConstrainedStatic:
+                declarations =
+                    $"interface Filler {{\n    shared {{\n        func Fill({spec.Parameters});\n    }}\n}}\n"
+                    + $"struct Target : Filler {{\n    shared {{\n{Indent(method, 8)}\n    }}\n}}\n"
+                    + $"func Invoke[T Filler](witness T, {spec.Parameters}) {{\n"
+                    + $"    T.Fill({spec.ForwardArguments})\n}}";
+                target = "Invoke";
+                callPrefix = "Target{}, ";
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(receiver), receiver, null);
         }
 
         var receiverLocal = receiver switch
         {
-            ReceiverKind.ClassInstance or ReceiverKind.BaseClass or ReceiverKind.GenericMethod =>
+            ReceiverKind.ClassInstance or ReceiverKind.BaseClass or ReceiverKind.GenericMethod
+                or ReceiverKind.BaseInterface =>
                 "var target = Target()",
             ReceiverKind.StructInstance => "var target = Target{}",
             ReceiverKind.Interface => "var target Filler = Target()",
@@ -183,10 +240,52 @@ public class Issue3140OutParameterWriteBackParityTests
 
             {declarations}
 
+            {extraDeclaration}
+
             {receiverLocal}
             {spec.Locals}
             {calls}
             """;
+    }
+
+    private static string BuildOperandSource(ReceiverKind receiver, OperandKind operand)
+    {
+        var (declaration, locals, argument, output) = operand switch
+        {
+            OperandKind.Variable => (
+                string.Empty,
+                "var value = 101",
+                "&value",
+                "value"),
+            OperandKind.Field => (
+                "class Holder { var Value int32 }",
+                "let holder = Holder{}\nholder.Value = 102",
+                "&holder.Value",
+                "holder.Value"),
+            OperandKind.Index => (
+                string.Empty,
+                "var values = []int32{101, 104}",
+                "&values[1]",
+                "values[1]"),
+            OperandKind.Dereference => (
+                string.Empty,
+                "var value = 105",
+                "&*(&value)",
+                "value"),
+            _ => throw new ArgumentOutOfRangeException(nameof(operand), operand, null),
+        };
+
+        var spec = new ShapeSpec(
+            "out value int32",
+            "value = 91",
+            locals,
+            "&value",
+            [new(argument, $"Console.WriteLine({output})")]);
+        return BuildSource(
+            receiver,
+            spec,
+            $"Issue3140Operand{receiver}{operand}",
+            declaration);
     }
 
     private static ShapeSpec GetShape(ArgumentShape shape) => shape switch
@@ -227,21 +326,72 @@ public class Issue3140OutParameterWriteBackParityTests
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
     };
 
-    private static string RunSourceDriver(
-        string source,
-        string directory,
-        Func<string[], int> driver,
-        bool stripCompilerSuccess)
+    private static string GetExpectedOutput(ArgumentShape shape) => shape switch
     {
-        var sourcePath = Path.Combine(directory, "probe.gs");
-        File.WriteAllText(sourcePath, source);
-        var result = CaptureConsole(() => driver([sourcePath]));
+        ArgumentShape.SingleOut => "11",
+        ArgumentShape.MultipleOut => "21\n22",
+        ArgumentShape.OutAndRef => "31\n37",
+        ArgumentShape.OutAndNormal => "44",
+        ArgumentShape.ConditionalOut => "51\n52",
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+    };
 
-        Assert.True(
-            result.ExitCode == 0,
-            $"driver failed ({result.ExitCode})\nstdout:\n{result.Stdout}\nstderr:\n{result.Stderr}");
-        Assert.Equal(string.Empty, result.Stderr);
-        return Normalize(result.Stdout, stripCompilerSuccess);
+    private static async Task AssertDriverParityAsync(string source, string expected, string name)
+    {
+        var root = CreateEmptyDirectory(name);
+        try
+        {
+            var emitted = await RunEmittedAsync(source, CreateEmptyDirectory(root, "emit"));
+            var evaluated = RunEvaluator(source);
+            var interpreted = RunSessionEngine(source);
+
+            Assert.Equal(expected, emitted);
+            Assert.NotEmpty(emitted);
+            Assert.Equal(emitted, evaluated);
+            Assert.Equal(emitted, interpreted);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    private static string RunEvaluator(string source)
+    {
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        try
+        {
+            var result = new Compilation(SyntaxTree.Parse(source))
+                .Evaluate(new Dictionary<VariableSymbol, object>());
+            var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+            Assert.True(
+                errors.Length == 0,
+                "evaluation failed:\n" + string.Join("\n", errors.Select(error => error.ToString())));
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+
+        Assert.Equal(string.Empty, stderr.ToString());
+        return Normalize(stdout.ToString(), stripCompilerSuccess: false);
+    }
+
+    private static string RunSessionEngine(string source)
+    {
+        var engine = new SessionEngine { CaptureConsole = true };
+        var result = engine.Evaluate(source);
+
+        Assert.False(
+            result.HasError,
+            "session evaluation failed:\n" + string.Join("\n", result.Diagnostics));
+        return Normalize(result.Output, stripCompilerSuccess: false);
     }
 
     private static async Task<string> RunEmittedAsync(string source, string directory)
