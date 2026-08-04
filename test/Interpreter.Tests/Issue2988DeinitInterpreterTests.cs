@@ -139,7 +139,7 @@ public class Issue2988DeinitInterpreterTests
     }
 
     [Fact]
-    public void EscapingInstanceIsNotFinalizedAtScopeExitOrWhileReachable()
+    public void ForcedCollectionSkipsDeinitializerAndWarnsOnce()
     {
         var source = """
             import System
@@ -190,7 +190,7 @@ public class Issue2988DeinitInterpreterTests
     }
 
     [Fact]
-    public void ScriptRunnerUsesRichRendererForBoundaryWarning()
+    public void ScriptRunnerWritesBoundaryWarningToStandardError()
     {
         var sourcePath = Path.Combine(AppContext.BaseDirectory, "issue2988-deinit.gs");
         File.WriteAllText(
