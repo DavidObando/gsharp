@@ -10,7 +10,7 @@ using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 /// <summary>
 /// Shared C#-style "better function member" overload resolution used by the

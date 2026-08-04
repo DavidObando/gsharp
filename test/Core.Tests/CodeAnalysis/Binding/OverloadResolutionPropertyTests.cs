@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using FsCheck.Xunit;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 

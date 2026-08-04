@@ -17,7 +17,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
-namespace GSharp.Core.CodeAnalysis.Binding;
+namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 /// <summary>
 /// PR-B-4: the binder-side facade for call-site overload resolution. Owns

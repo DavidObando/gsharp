@@ -10,6 +10,7 @@ using System.Reflection;
 using FsCheck;
 using FsCheck.Fluent;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 

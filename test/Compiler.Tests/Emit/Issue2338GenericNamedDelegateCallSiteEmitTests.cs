@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using GSharp.Compiler;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -19,7 +20,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// mismatch, independent of any closure/capture.
 /// <para>
 /// Root cause: <c>Binder.SubstituteType</c> — the substitution routine
-/// <see cref="GSharp.Core.CodeAnalysis.Binding.OverloadResolver"/> uses to
+/// <see cref="OverloadResolver"/> uses to
 /// compute a generic call's substituted parameter/return types (for source
 /// functions, methods, and extension methods alike, both instance and shared)
 /// — had no case for <c>DelegateTypeSymbol</c>, unlike its sibling

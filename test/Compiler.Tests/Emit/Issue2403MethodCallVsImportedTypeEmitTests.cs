@@ -5,6 +5,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -12,7 +13,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <summary>
 /// Issue #2403: compiled (gsc emit + IL verify + execute) coverage for the
 /// call-vs-imported-type precedence fix in
-/// <see cref="GSharp.Core.CodeAnalysis.Binding.OverloadResolver.BindCallExpression"/>.
+/// <see cref="OverloadResolver.BindCallExpression"/>.
 /// A user/same-compilation method (or implicit-<c>this</c> instance method)
 /// whose name collides with an imported CLR type (e.g.
 /// <c>System.Net.Http.HttpClient</c>) must be preferred over that type's
