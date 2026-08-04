@@ -162,6 +162,11 @@ public sealed class StructValue
             return (bool)result;
         }
 
+        if (StructType.IsClass && !StructType.IsData)
+        {
+            return ReferenceEquals(this, obj);
+        }
+
         if (obj is not StructValue other)
         {
             return false;
@@ -191,6 +196,11 @@ public sealed class StructValue
         if (TryInvokeObjectOverride(ObjectGetHashCodeMethod, [], out var result))
         {
             return (int)result;
+        }
+
+        if (StructType.IsClass && !StructType.IsData)
+        {
+            return RuntimeHelpers.GetHashCode(this);
         }
 
         var hash = default(HashCode);
