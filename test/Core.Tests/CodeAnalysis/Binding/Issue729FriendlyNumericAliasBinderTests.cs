@@ -2,13 +2,13 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -212,18 +212,15 @@ type {alias} = string
         return null;
     }
 
-    private static (EvaluationResult Result, Compilation Compilation) EvaluateInternal(string source)
+    // Binder-inspection helper (issue #3176 Phase 3b.2): bind via
+    // EmittedOracle.CompileDiagnostics and inspect this Compilation's bound
+    // state; nothing needs to run.
+    private static EvaluationResultWithCompilation Evaluate(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(syntaxTree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        return (result, compilation);
-    }
-
-    private static EvaluationResultWithCompilation Evaluate(string source)
-    {
-        var (result, compilation) = EvaluateInternal(source);
-        return new EvaluationResultWithCompilation(result, compilation);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        return new EvaluationResultWithCompilation(diagnostics, compilation);
     }
 
     /// <summary>
@@ -233,16 +230,14 @@ type {alias} = string
     /// </summary>
     private sealed class EvaluationResultWithCompilation
     {
-        public EvaluationResultWithCompilation(EvaluationResult inner, Compilation compilation)
+        public EvaluationResultWithCompilation(System.Collections.Immutable.ImmutableArray<Diagnostic> diagnostics, Compilation compilation)
         {
-            Inner = inner;
+            Diagnostics = diagnostics;
             Compilation = compilation;
         }
 
-        public EvaluationResult Inner { get; }
+        public System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics { get; }
 
         public Compilation Compilation { get; }
-
-        public System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics => Inner.Diagnostics;
     }
 }

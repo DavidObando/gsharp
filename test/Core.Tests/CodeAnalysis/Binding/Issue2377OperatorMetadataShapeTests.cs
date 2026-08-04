@@ -25,8 +25,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// only as an ordinary first parameter — exactly like
 /// <c>BindConversionOperatorDeclaration</c>'s <c>op_Implicit</c>/
 /// <c>op_Explicit</c> shape. These tests exercise the symbol shape directly
-/// (via <see cref="Compilation.GlobalScope"/>) and the interpreter-level
-/// (<see cref="Compilation.Evaluate"/>) behavior across binary, unary,
+/// (via <see cref="Compilation.GlobalScope"/>) and the executed behavior
+/// (via the emitted <c>EmittedOracle</c>, ADR-0156 Phase 3b) across binary, unary,
 /// comparison, generic, nested, inherited, duplicate-signature, and
 /// undefined-operator (negative) scenarios. Emission-level (reflection
 /// metadata, C#-consumer, ClrOperatorResolution re-import fallback,

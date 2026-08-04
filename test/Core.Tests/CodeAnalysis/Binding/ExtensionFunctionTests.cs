@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -22,14 +23,14 @@ public class ExtensionFunctionTests
     [Fact]
     public void Extension_OnCrossPackageUserStruct_Binds_And_Dispatches()
     {
-        var typeTree = SyntaxTree.Parse(SourceText.From(@"
+        var typeTree = @"
 package Geometry
 public struct Point {
     var X int32
     var Y int32
 }
-"));
-        var extensionTree = SyntaxTree.Parse(SourceText.From(@"
+";
+        var extensionTree = @"
 package GeometryExtensions
 func (p Point) SumXY() int32 {
     return p.X + p.Y
@@ -37,7 +38,7 @@ func (p Point) SumXY() int32 {
 
 var p = Point{X: 3, Y: 4}
 p.SumXY()
-"));
+";
         var result = Evaluate(typeTree, extensionTree);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
@@ -314,15 +315,13 @@ a
         Assert.NotEmpty(result.Diagnostics);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
-        return Evaluate(syntaxTree);
+        return EmittedOracle.Evaluate(source);
     }
 
-    private static EvaluationResult Evaluate(params SyntaxTree[] syntaxTrees)
+    private static EmittedOracleResult Evaluate(params string[] sources)
     {
-        var compilation = new Compilation(syntaxTrees);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(sources);
     }
 }

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis;
@@ -140,9 +141,54 @@ public sealed class EmittedOracleResult
     /// <returns>The global's current value, or <see langword="null"/>.</returns>
     public object ReadGlobal(string name)
     {
-        if (Assembly is null || string.IsNullOrEmpty(name))
+        if (string.IsNullOrEmpty(name))
         {
             return null;
+        }
+
+        foreach (var field in EnumerateGlobalFields())
+        {
+            if (string.Equals(field.Name, name, StringComparison.Ordinal))
+            {
+                return field.GetValue(null);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads every top-level global's post-run value by name — the emitted
+    /// equivalent of the historical evaluator's whole variables dictionary
+    /// after <c>Compilation.Evaluate</c>. Synthesized submission fields
+    /// (<c>&lt;Result&gt;$</c> and friends) are excluded. Empty when the
+    /// program never ran. The <see cref="Value"/> identity caveat applies to
+    /// values of submission-declared types.
+    /// </summary>
+    /// <returns>A name-to-value map of the top-level globals.</returns>
+    public IReadOnlyDictionary<string, object> ReadGlobals()
+    {
+        var globals = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var field in EnumerateGlobalFields())
+        {
+            if (field.Name.IndexOf('<') >= 0)
+            {
+                // Compiler-synthesized (e.g. the <Result>$ capture) — not a
+                // source global.
+                continue;
+            }
+
+            globals[field.Name] = field.GetValue(null);
+        }
+
+        return globals;
+    }
+
+    private IEnumerable<FieldInfo> EnumerateGlobalFields()
+    {
+        if (Assembly is null)
+        {
+            yield break;
         }
 
         Type[] types;
@@ -162,13 +208,10 @@ public sealed class EmittedOracleResult
                 continue;
             }
 
-            var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-            if (field is not null)
+            foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
             {
-                return field.GetValue(null);
+                yield return field;
             }
         }
-
-        return null;
     }
 }

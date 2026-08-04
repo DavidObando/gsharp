@@ -266,12 +266,9 @@ let n = len(42)
 let xs = []int32{1}
 let n = len(xs)
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate —
-        // ImplicitSystemImport is a Compilation-level knob the EmittedOracle
-        // does not expose; disposition in 3b.2.
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree) { ImplicitSystemImport = false };
-        var diags = compilation.Evaluate(new Dictionary<VariableSymbol, object>()).Diagnostics;
+        var diags = EmittedOracle.Evaluate(
+            new[] { source },
+            new EmittedOracleOptions { ImplicitSystemImport = false }).Diagnostics;
 
         Assert.Contains(diags, d => d.Id == BuiltinDiagnosticId);
     }

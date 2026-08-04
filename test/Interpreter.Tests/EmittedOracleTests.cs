@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Execution;
@@ -297,6 +298,218 @@ public class EmittedOracleTests
             Assert.Equal(marker, results[i].Value);
             Assert.Equal(marker + Environment.NewLine + marker + Environment.NewLine, results[i].Output);
         }
+    }
+
+    // ─── Phase 3b.2 capability additions (issue #3176) ───────────────────
+
+    [Fact]
+    public void MultiSource_CompilesAllTreesAndRunsTrailingExpression()
+    {
+        // The multi-tree Compilation.Evaluate shape: declarations in one
+        // tree, consuming top-level statements in another, distinct packages.
+        var result = EmittedOracle.Evaluate(new[]
+        {
+            """
+            package Geometry
+            public struct Point {
+                var X int32
+                var Y int32
+            }
+            """,
+            """
+            package GeometryUse
+            var p = Point{X: 40, Y: 2}
+            p.X + p.Y
+            """,
+        });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void MultiSource_DiagnosticsSurfaceFromEveryTree()
+    {
+        var result = EmittedOracle.Evaluate(new[]
+        {
+            "func Ok() int32 -> 1",
+            "let broken = undefinedName3b2",
+        });
+
+        Assert.Contains(result.Diagnostics, d => d.IsError);
+        Assert.Null(result.Value);
+    }
+
+    [Fact]
+    public void MultiSource_CrossTreeImportAlias_ResolvesAndRuns()
+    {
+        var holder = """
+            package Oracle3b2.Nested
+
+            class Holder3b2 {
+                prop Value int32
+
+                shared {
+                    func MakeOne() Holder3b2 {
+                        var h Holder3b2 = Holder3b2{Value: 42}
+                        return h
+                    }
+                }
+            }
+            """;
+        var main = """
+            package Oracle3b2Main
+
+            import R = Oracle3b2.Nested.Holder3b2
+
+            var h R = R.MakeOne()
+            h.Value
+            """;
+
+        var result = EmittedOracle.Evaluate(new[] { holder, main });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void OracleRuns_DoNotShadowLaterCompilationsOfTheSamePackage()
+    {
+        // Issue #3235: a finished oracle run's collectible assembly must not
+        // leak into later compilations' default reference scans — otherwise
+        // its emitted types shadow same-named source packages.
+        var first = EmittedOracle.Evaluate("""
+            package Oracle3b2.Shadow
+            class Probe3b2 {
+                shared {
+                    const Tag string = "first"
+                }
+            }
+            var t = Probe3b2.Tag
+            t
+            """);
+        Assert.Empty(first.Diagnostics);
+        Assert.Equal("first", first.Value);
+
+        // Same package, different shape: must bind against ITS OWN source,
+        // not the still-loaded assembly of the first run (kept alive by the
+        // held result above).
+        var second = EmittedOracle.Evaluate("""
+            package Oracle3b2.Shadow
+            class Probe3b2 {
+                shared {
+                    func Make() int32 -> 42
+                }
+            }
+            var r = Probe3b2.Make()
+            r
+            """);
+        Assert.Empty(second.Diagnostics);
+        Assert.Equal(42, second.Value);
+    }
+
+    [Fact]
+    public void IsLibrary_EmitsWithoutExecuting()
+    {
+        var result = EmittedOracle.Evaluate(
+            new[]
+            {
+                """
+                package Lib3b2
+                public func Answer() int32 -> 42
+                """,
+            },
+            new EmittedOracleOptions { IsLibrary = true });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.Value);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.Output);
+    }
+
+    [Fact]
+    public void IsLibrary_TopLevelStatementsStayAnError()
+    {
+        // IsLibrary's contract (ADR-0066 D4): top-level statements are an
+        // error, exactly as they were under Compilation.Evaluate.
+        var result = EmittedOracle.Evaluate(
+            new[] { "var leaked = 1" },
+            new EmittedOracleOptions { IsLibrary = true });
+
+        Assert.Contains(result.Diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void ImplicitSystemImport_CanBeDisabled()
+    {
+        const string Source = """
+            package Gate3b2
+            let t = typeof(Console)
+            """;
+
+        Assert.Empty(EmittedOracle.Evaluate(new[] { Source }).Diagnostics);
+
+        var gated = EmittedOracle.Evaluate(
+            new[] { Source },
+            new EmittedOracleOptions { ImplicitSystemImport = false });
+        Assert.Contains(gated.Diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void ReadGlobals_ReturnsEverySourceGlobalAndNoSynthesizedFields()
+    {
+        var result = EmittedOracle.Evaluate("""
+            var counter = 40
+            counter += 2
+            let label = "tag-44"
+            label
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        var globals = result.ReadGlobals();
+        Assert.Equal(42, globals["counter"]);
+        Assert.Equal("tag-44", globals["label"]);
+        Assert.All(globals.Keys, name => Assert.DoesNotContain("<", name));
+    }
+
+    [Fact]
+    public void CompileDiagnostics_BindsWithoutRunningAndKeepsBoundStateInspectable()
+    {
+        // The binder-inspection companion: the caller's own Compilation stays
+        // inspectable (GlobalScope/BoundProgram), diagnostics come back in
+        // Evaluate's pre-execution shape, and nothing ever executes.
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From("""
+                struct Pair {
+                    var A int32
+                    var B int32
+                }
+                let p = Pair{A: 1, B: 2}
+                """));
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree);
+
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+
+        Assert.Empty(diagnostics);
+        Assert.Contains(compilation.GlobalScope.Structs, s => s.Name == "Pair");
+    }
+
+    [Fact]
+    public void CompileDiagnostics_SurfacesBodyBindingErrorsWarningsFirst()
+    {
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From("""
+                func Broken() int32 {
+                    return undefinedName3b2
+                }
+                """));
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree);
+
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+
+        Assert.Contains(diagnostics, d => d.IsError);
+        var firstError = diagnostics.TakeWhile(d => !d.IsError).Count();
+        Assert.All(diagnostics.Skip(firstError), d => Assert.True(d.IsError));
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -190,16 +191,17 @@ public class Issue2856InterpolationTernaryTests
         Assert.Equal("[     3]", Value(result, "text"));
     }
 
-    private static (ImmutableArray<Diagnostic> Diagnostics, Dictionary<VariableSymbol, object> Variables) Evaluate(string source)
+    private static (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
     {
-        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
-        var variables = new Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(variables);
-        return (result.Diagnostics, variables);
+        // Post-run globals read back through the oracle (issue #3176 Phase
+        // 3b.2): the emitted equivalent of the evaluator's variables
+        // dictionary.
+        var result = EmittedOracle.Evaluate(source);
+        return (result.Diagnostics, result.ReadGlobals());
     }
 
     private static object Value(
-        (ImmutableArray<Diagnostic> Diagnostics, Dictionary<VariableSymbol, object> Variables) result,
+        (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) result,
         string name) =>
-        result.Variables.Single(pair => pair.Key.Name == name).Value;
+        result.Variables[name];
 }

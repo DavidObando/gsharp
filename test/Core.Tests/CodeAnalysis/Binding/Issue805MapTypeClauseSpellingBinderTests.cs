@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -24,11 +25,11 @@ public class Issue805MapTypeClauseSpellingBinderTests
     [Fact]
     public void CanonicalSpelling_BindsAsMapTypeSymbol_WithExpectedName()
     {
-        var (result, compilation) = Compile("""
+        var (diagnostics, compilation) = Compile("""
             var m map[string,int32] = map[string,int32]{"a": 1}
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
 
         var variable = LookupGlobalVariable(compilation, "m");
         Assert.NotNull(variable);
@@ -44,20 +45,20 @@ public class Issue805MapTypeClauseSpellingBinderTests
         // The legacy shape still parses (with GS0366) and binds to the
         // exact same cached MapTypeSymbol instance — the comma is purely
         // a surface-syntax change.
-        var (legacyResult, legacy) = Compile("""
+        var (legacyDiagnostics, legacy) = Compile("""
             var m map[string]int32 = map[string,int32]{"a": 1}
             """);
 
         // GS0366 fires once per legacy occurrence; no cascade.
-        Assert.Contains(legacyResult.Diagnostics, d => d.Id == "GS0366");
+        Assert.Contains(legacyDiagnostics, d => d.Id == "GS0366");
         Assert.All(
-            legacyResult.Diagnostics,
+            legacyDiagnostics,
             d => Assert.Equal("GS0366", d.Id));
 
-        var (canonicalResult, canonical) = Compile("""
+        var (canonicalDiagnostics, canonical) = Compile("""
             var m map[string,int32] = map[string,int32]{"a": 1}
             """);
-        Assert.Empty(canonicalResult.Diagnostics);
+        Assert.Empty(canonicalDiagnostics);
 
         var legacyVar = LookupGlobalVariable(legacy, "m");
         var canonicalVar = LookupGlobalVariable(canonical, "m");
@@ -73,11 +74,11 @@ public class Issue805MapTypeClauseSpellingBinderTests
     [Fact]
     public void CanonicalSpelling_NullableMap_BindsAsNullableMapTypeSymbol()
     {
-        var (result, compilation) = Compile("""
+        var (diagnostics, compilation) = Compile("""
             var m map[string,int32]? = nil
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
 
         var variable = LookupGlobalVariable(compilation, "m");
         Assert.NotNull(variable);
@@ -92,13 +93,13 @@ public class Issue805MapTypeClauseSpellingBinderTests
         // Use a function-parameter slot so we exercise the type clause
         // without having to invent a constructible expression of type
         // `sequence[map[K,V]]`.
-        var (result, compilation) = Compile("""
+        var (diagnostics, compilation) = Compile("""
             func receive(s sequence[map[string,int32]]) int32 {
                 return 0
             }
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
 
         var function = compilation.GlobalScope.Functions.FirstOrDefault(f => f.Name == "receive");
         Assert.NotNull(function);
@@ -111,13 +112,16 @@ public class Issue805MapTypeClauseSpellingBinderTests
     private static VariableSymbol LookupGlobalVariable(Compilation compilation, string name)
         => compilation.GlobalScope.Variables.FirstOrDefault(v => v.Name == name);
 
-    private static (EvaluationResult Result, Compilation Compilation) Compile(string source)
+    // Binder-inspection helper (issue #3176 Phase 3b.2): bind via
+    // EmittedOracle.CompileDiagnostics and inspect this Compilation's bound
+    // state; nothing needs to run.
+    private static (System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics, Compilation Compilation) Compile(string source)
     {
         // Prepend the Go-extensions import so map ops bind without
         // tripping ADR-0083's GS0317 import gate.
         var syntaxTree = SyntaxTree.Parse(SourceText.From("import Gsharp.Extensions.Go\n" + source));
         var compilation = new Compilation(syntaxTree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        return (result, compilation);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        return (diagnostics, compilation);
     }
 }

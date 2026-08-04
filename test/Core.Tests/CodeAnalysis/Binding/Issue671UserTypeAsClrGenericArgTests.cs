@@ -41,14 +41,7 @@ public class Issue671UserTypeAsClrGenericArgTests
 
     private static ImmutableArray<Diagnostic> BindMultiFile(params string[] sources)
     {
-        var trees = sources
-            .Select(s => SyntaxTree.Parse(SourceText.From(s)))
-            .ToArray();
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
-        // compilation; the EmittedOracle takes a single source. Disposition
-        // in 3b.2.
-        var compilation = new Compilation(trees);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(sources);
         return result.Diagnostics;
     }
 

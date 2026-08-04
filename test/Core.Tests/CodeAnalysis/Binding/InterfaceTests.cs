@@ -221,24 +221,20 @@ sealed interface IGood {
     [Fact]
     public void SealedInterface_DifferentPackage_Implementor_Diagnoses()
     {
-        var t1 = SyntaxTree.Parse(SourceText.From(@"
+        var t1 = @"
 package GSharp.Tests.Sealed.A
 public sealed interface IResult {
     func Ok() bool;
 }
-"));
-        var t2 = SyntaxTree.Parse(SourceText.From(@"
+";
+        var t2 = @"
 package GSharp.Tests.Sealed.B
 import GSharp.Tests.Sealed.A
 class Success : IResult {
     func Ok() bool { return true }
 }
-"));
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — multi-tree
-        // compilation; the EmittedOracle takes a single source. Disposition
-        // in 3b.2.
-        var compilation = new Compilation(t1, t2);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+";
+        var result = EmittedOracle.Evaluate(new[] { t1, t2 });
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("sealed interface"));
     }
 

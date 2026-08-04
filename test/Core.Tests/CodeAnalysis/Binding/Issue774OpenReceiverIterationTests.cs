@@ -10,6 +10,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -256,10 +257,12 @@ func (self IEnumerable[T]) Walk[T]() {
     }
 }
 ";
+        // Binder-inspection test (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state; nothing needs to run.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var diagnostics = compilation.Evaluate(new Dictionary<VariableSymbol, object>()).Diagnostics;
-        Assert.Empty(diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var walkSymbol = compilation.GlobalScope.Functions.Single(f => f.Name == "Walk");
         Assert.Single(walkSymbol.TypeParameters);

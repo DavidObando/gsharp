@@ -8,6 +8,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
@@ -299,8 +300,7 @@ enum Color {
     {
         var tree = SyntaxTree.Parse(SourceText.From(Source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         return (StructSymbol)compilation.GlobalScope.Structs.Single(s => s.Name == name);
     }
 
@@ -308,8 +308,7 @@ enum Color {
     {
         var tree = SyntaxTree.Parse(SourceText.From(Source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         return compilation.GlobalScope.Interfaces.Single(s => s.Name == name);
     }
 
@@ -317,8 +316,7 @@ enum Color {
     {
         var tree = SyntaxTree.Parse(SourceText.From(Source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         return compilation.GlobalScope.Enums.Single(s => s.Name == name);
     }
 }

@@ -1236,7 +1236,16 @@ public sealed class ReferenceResolver : IDisposable
 
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (asm.IsDynamic || AssemblyLoadContext.GetLoadContext(asm) is DriverReferenceLoadContext)
+            // Collectible load contexts hold execution artifacts — in-memory
+            // emitted programs and submissions (EmittedProgramHost,
+            // InteractiveSessionHost, the test oracle) awaiting unload — not
+            // references. Including them let a finished run's emitted types
+            // shadow same-named source packages in later compilations
+            // (issue #3235); driver reference contexts stay excluded as
+            // before.
+            if (asm.IsDynamic
+                || AssemblyLoadContext.GetLoadContext(asm) is DriverReferenceLoadContext
+                || (AssemblyLoadContext.GetLoadContext(asm)?.IsCollectible ?? false))
             {
                 continue;
             }

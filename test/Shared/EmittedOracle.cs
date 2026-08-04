@@ -90,24 +90,72 @@ public static class EmittedOracle
             throw new ArgumentNullException(nameof(source));
         }
 
-        var referencePaths = references?.Where(r => !string.IsNullOrWhiteSpace(r)).ToArray() ?? Array.Empty<string>();
+        return Evaluate(new[] { source }, new EmittedOracleOptions { References = references });
+    }
+
+    /// <summary>
+    /// Compiles all <paramref name="sources"/> as the syntax trees of one
+    /// compilation — the multi-tree equivalent of
+    /// <c>new Compilation(t1, t2, …).Evaluate(…)</c> — applying the given
+    /// compilation <paramref name="options"/>, and returns the full assertion
+    /// surface. Unless <see cref="EmittedOracleOptions.IsLibrary"/> is set the
+    /// sources compile as a one-shot submission and run emitted in-process;
+    /// a library compilation emits and returns diagnostics without executing
+    /// (there is no entry point to run — the historical evaluator likewise
+    /// had nothing to execute for a library).
+    /// </summary>
+    /// <param name="sources">The G# source texts, one per syntax tree, in compilation order.</param>
+    /// <param name="options">Compilation-level knobs; <see langword="null"/> for defaults.</param>
+    /// <returns>The oracle result.</returns>
+    public static EmittedOracleResult Evaluate(IReadOnlyList<string> sources, EmittedOracleOptions options = null)
+    {
+        if (sources is null)
+        {
+            throw new ArgumentNullException(nameof(sources));
+        }
+
+        if (sources.Count == 0 || sources.Any(s => s is null))
+        {
+            throw new ArgumentException("At least one non-null source is required.", nameof(sources));
+        }
+
+        options ??= new EmittedOracleOptions();
+        var referencePaths = options.References?.Where(r => !string.IsNullOrWhiteSpace(r)).ToArray() ?? Array.Empty<string>();
         var n = Interlocked.Increment(ref submissionCounter);
         var assemblyName = "oracle$" + n;
         var packageName = "oracle" + n;
 
-        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var trees = sources.Select(s => SyntaxTree.Parse(SourceText.From(s))).ToArray();
+
+        // A fresh default resolver per call is safe: ReferenceResolver
+        // excludes collectible-ALC assemblies from its host scan, so earlier
+        // oracle runs' still-loaded emitted assemblies can never shadow this
+        // compilation's source packages (issue #3235).
         var resolver = referencePaths.Length > 0
             ? ReferenceResolver.WithReferences(referencePaths)
             : ReferenceResolver.Default();
 
-        var compilation = new Compilation(resolver, tree)
+        var compilation = new Compilation(resolver, trees);
+        if (options.ImplicitSystemImport is bool implicitSystemImport)
         {
-            Submission = new SubmissionBindingOptions
+            compilation.ImplicitSystemImport = implicitSystemImport;
+        }
+
+        if (options.IsLibrary)
+        {
+            // A library has no entry point and forbids top-level statements,
+            // so there is nothing to wrap in a submission — and nothing to
+            // run afterwards.
+            compilation.IsLibrary = true;
+        }
+        else
+        {
+            compilation.Submission = new SubmissionBindingOptions
             {
                 Imports = SubmissionImports.Create(ImmutableArray<SubmissionReference>.Empty),
                 DefaultPackageName = packageName,
-            },
-        };
+            };
+        }
 
         using var peStream = new MemoryStream();
         var emitResult = compilation.Emit(peStream, pdbStream: null, refStream: null, assemblyName: assemblyName);
@@ -128,7 +176,49 @@ public static class EmittedOracle
                 loadContext: null);
         }
 
+        if (options.IsLibrary)
+        {
+            return new EmittedOracleResult(
+                warnings,
+                value: null,
+                output: string.Empty,
+                errorOutput: string.Empty,
+                exitCode: 0,
+                unhandledException: null,
+                loadContext: null);
+        }
+
         return Execute(peStream, referencePaths, warnings);
+    }
+
+    /// <summary>
+    /// Fully binds the caller's <paramref name="compilation"/> — global scope
+    /// plus every function/method body and top-level statement — and returns
+    /// its diagnostics in <c>Compilation.Evaluate</c>'s pre-execution shape
+    /// (parse, then global-scope, then body diagnostics; warnings before
+    /// errors), without ever executing. The binder-inspection companion for
+    /// Phase 3b.2 (issue #3176): tests that assert on the compilation's bound
+    /// state afterwards (<c>GlobalScope</c>, <c>BoundProgram</c>) keep their
+    /// own <c>Compilation</c> instance and stop running code they never
+    /// observe. The interpreter-only diagnostics <c>Compilation.Evaluate</c>
+    /// appended after this point (deinit GS0510, P/Invoke GS0514) never
+    /// appear — those constructs simply work under emitted execution
+    /// (ADR-0156); tests asserting them are evaluator-machinery pins.
+    /// </summary>
+    /// <param name="compilation">The compilation to bind.</param>
+    /// <returns>The full bind-time diagnostics, warnings first.</returns>
+    public static ImmutableArray<Diagnostic> CompileDiagnostics(Compilation compilation)
+    {
+        if (compilation is null)
+        {
+            throw new ArgumentNullException(nameof(compilation));
+        }
+
+        var all = compilation.SyntaxTrees.SelectMany(tree => tree.Diagnostics)
+            .Concat(compilation.GlobalScope.Diagnostics)
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .ToImmutableArray();
+        return all.Where(d => !d.IsError).Concat(all.Where(d => d.IsError)).ToImmutableArray();
     }
 
     private static EmittedOracleResult Execute(

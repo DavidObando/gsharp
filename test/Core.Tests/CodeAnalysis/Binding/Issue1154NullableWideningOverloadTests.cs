@@ -42,13 +42,13 @@ class C {
     func F(a []?uint8) { var n = 1 }
 }
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards (FindCall), which
-        // the EmittedOracle does not expose; disposition in 3b.2.
+        // Binder-inspection test (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state (FindCall); nothing needs to run.
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "F", "F");
         Assert.NotNull(selected);
@@ -68,13 +68,13 @@ class C {
     func F(a []uint8) { var n = 1 }
 }
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards (FindCall), which
-        // the EmittedOracle does not expose; disposition in 3b.2.
+        // Binder-inspection test (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state (FindCall); nothing needs to run.
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "F", "F");
         Assert.NotNull(selected);
@@ -93,13 +93,13 @@ class C {
     func F(a []?uint8) { F(C.Make()) }
 }
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards (FindCall), which
-        // the EmittedOracle does not expose; disposition in 3b.2.
+        // Binder-inspection test (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state (FindCall); nothing needs to run.
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "F", "F");
         Assert.NotNull(selected);
@@ -119,13 +119,13 @@ class C {
     func F(a []?uint8) { var n = 1 }
 }
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards (FindCall), which
-        // the EmittedOracle does not expose; disposition in 3b.2.
+        // Binder-inspection test (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state (FindCall); nothing needs to run.
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "F", "F");
         Assert.NotNull(selected);
@@ -171,14 +171,13 @@ class C {
     func F(a string) { F(C.Make()) }
 }
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — IsLibrary is a
-        // Compilation-level knob the EmittedOracle does not expose; disposition
-        // in 3b.2.
+        // Binder-diagnostics test over a library compilation (issue #3176
+        // Phase 3b.2): bind via EmittedOracle.CompileDiagnostics.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree) { IsLibrary = true };
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.NotEmpty(result.Diagnostics);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.NotEmpty(diagnostics);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
     }
 
     private static Compilation Compile(string source)

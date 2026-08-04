@@ -15,6 +15,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -267,12 +268,11 @@ let msg = InterpolationHarness.Gated(false, ""y=${InterpolationHarness.BumpAndRe
 
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, object? Value) EvaluateNamed(string source, string variableName)
     {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var vars = new Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(vars);
-        var match = vars.FirstOrDefault(kv => kv.Key.Name == variableName);
-        return (result.Diagnostics, match.Key is null ? null : match.Value);
+        // Post-run global read back through the oracle (issue #3176 Phase
+        // 3b.2): the emitted equivalent of the evaluator's variables
+        // dictionary.
+        var result = EmittedOracle.Evaluate(source);
+        return (result.Diagnostics, result.ReadGlobal(variableName));
     }
 
     private static string CompileAndRun(string source, string contextName)

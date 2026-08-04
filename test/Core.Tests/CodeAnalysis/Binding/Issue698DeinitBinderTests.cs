@@ -133,6 +133,10 @@ class CachedResource : Resource {
         Assert.NotSame(resource.Deinitializer, cached.Deinitializer);
     }
 
+    // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — several
+    // tests here assert the interpreter-boundary deinit diagnostic GS0510,
+    // which only Compilation.Evaluate synthesizes (deinit simply works under
+    // emitted execution). Retires with the evaluator in Phase 3c.
     private static (EvaluationResult Result, IEnumerable<StructSymbol> Structs) EvaluateAndGetStructs(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
