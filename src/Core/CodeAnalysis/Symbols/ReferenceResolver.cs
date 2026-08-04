@@ -374,6 +374,18 @@ public sealed class ReferenceResolver : IDisposable
     /// <returns>A default resolver.</returns>
     public static ReferenceResolver Default()
     {
+        foreach (var path in ResolveDriverReferencePaths(Array.Empty<string>()))
+        {
+            try
+            {
+                _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
+            }
+            catch (FileLoadException)
+            {
+                // Already loaded into the default context.
+            }
+        }
+
         return new ReferenceResolver(BuildHostAssemblies(), metadataContext: null);
     }
 
