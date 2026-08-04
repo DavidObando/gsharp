@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,30 +10,25 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
 using Xunit.Abstractions;
 
-// ADR-0156 spike parity harness comparing the evaluator and the emit path;
-// retires with the evaluator in Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
-
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// ADR-0156 feasibility spike: prove that the emit-to-memory execution model —
-/// compile with the real emitter into a <see cref="MemoryStream"/>, load the PE
-/// bytes into a collectible <see cref="AssemblyLoadContext"/>, invoke the entry
-/// point in-process, capture stdout and the exit code — produces the same
-/// observable result as the tree-walking evaluator and the sample's golden
-/// file, without touching the filesystem and without spawning a process.
+/// ADR-0156 feasibility spike, kept as a self-contained pin of the
+/// emit-to-memory execution mechanic: compile with the real emitter into a
+/// <see cref="MemoryStream"/>, load the PE bytes into a collectible
+/// <see cref="AssemblyLoadContext"/>, invoke the entry point in-process,
+/// capture stdout and the exit code, and prove the ALC is reclaimed after
+/// unload. The tree-walking-evaluator comparison arm retired with the
+/// evaluator in Phase 3c (#3176); the golden-file assertions remain.
 /// </summary>
 /// <remarks>
 /// This is spike evidence for docs/adr/0156-gsi-emit-to-memory-execution.md,
-/// not part of the conformance gate. It intentionally exercises only the
-/// Phase 1 mechanic (whole-program scripts); interactive submission chaining
-/// is Phase 2 design work. Keep it cheap: three representative samples.
+/// not part of the conformance gate. Keep it cheap: three representative
+/// samples.
 /// </remarks>
 [Trait("Category", "Adr0156Spike")]
 public sealed class Adr0156EmitToMemorySpikeTests
@@ -47,7 +41,7 @@ public sealed class Adr0156EmitToMemorySpikeTests
     [InlineData("Arithmetic.gs")]      // locals, functions, loops, top-level entry point
     [InlineData("ArrowLambda.gs")]     // closures / lambda emission
     [InlineData("AsyncTask.gs")]       // async state-machine lowering
-    public void EmitToMemory_RunInCollectibleAlc_MatchesEvaluatorAndGolden(string sampleName)
+    public void EmitToMemory_RunInCollectibleAlc_MatchesGolden(string sampleName)
     {
         var samplesDirectory = LocateSamplesDirectory();
         var sourcePath = Path.Combine(samplesDirectory, sampleName);
@@ -71,15 +65,8 @@ public sealed class Adr0156EmitToMemorySpikeTests
         var (emittedStdout, emittedExitCode, alcWeakRef) = LoadAndRun(peStream);
         runTimer.Stop();
 
-        // --- Tree-walking evaluator driver (current gsi engine) -------------
-        var evalTimer = Stopwatch.StartNew();
-        var (evalStdout, evalValue) = Evaluate(sourcePath);
-        evalTimer.Stop();
-
-        // --- Parity ----------------------------------------------------------
         Assert.Equal(golden, emittedStdout);
         Assert.Equal(0, emittedExitCode);
-        Assert.Equal(golden, evalStdout);
 
         // --- Collectibility: the ALC must be reclaimable after unload --------
         for (var i = 0; alcWeakRef.IsAlive && i < 10; i++)
@@ -93,15 +80,13 @@ public sealed class Adr0156EmitToMemorySpikeTests
         this.output.WriteLine(
             $"{sampleName}: parse+bind {parseAndBind.ElapsedMilliseconds} ms, " +
             $"emit-to-memory {emitTimer.ElapsedMilliseconds} ms ({peStream.Length} bytes), " +
-            $"ALC load+run {runTimer.ElapsedMilliseconds} ms, " +
-            $"evaluator run {evalTimer.ElapsedMilliseconds} ms, " +
-            $"eval value [{evalValue ?? "nil"}]");
+            $"ALC load+run {runTimer.ElapsedMilliseconds} ms");
     }
 
     /// <summary>
-    /// Measures the steady-state per-submission cost the interactive REPL would
-    /// pay under emit-to-memory: repeated emit+load+run of a small submission,
-    /// after warm-up, versus repeated evaluator runs of the same program.
+    /// Measures the steady-state per-submission cost the interactive REPL
+    /// pays under emit-to-memory: repeated emit+load+run of a small
+    /// submission, after warm-up.
     /// </summary>
     [Fact]
     public void EmitToMemory_SteadyStateSubmissionLatency()
@@ -109,9 +94,8 @@ public sealed class Adr0156EmitToMemorySpikeTests
         const string source = "package Spike.Latency\nimport System\nvar x = 21\nConsole.WriteLine(x * 2)\n";
         const int iterations = 5;
 
-        // Warm-up both paths once (JIT of the emitter/evaluator themselves).
+        // Warm-up once (JIT of the emitter itself).
         RunEmitOnce(source);
-        RunEvalOnce(source);
 
         var emitTimer = Stopwatch.StartNew();
         for (var i = 0; i < iterations; i++)
@@ -121,17 +105,8 @@ public sealed class Adr0156EmitToMemorySpikeTests
 
         emitTimer.Stop();
 
-        var evalTimer = Stopwatch.StartNew();
-        for (var i = 0; i < iterations; i++)
-        {
-            Assert.Equal("42\n", RunEvalOnce(source));
-        }
-
-        evalTimer.Stop();
-
         this.output.WriteLine(
-            $"steady-state per submission: emit+load+run {emitTimer.ElapsedMilliseconds / (double)iterations:F1} ms, " +
-            $"evaluator {evalTimer.ElapsedMilliseconds / (double)iterations:F1} ms ({iterations} iterations)");
+            $"steady-state per submission: emit+load+run {emitTimer.ElapsedMilliseconds / (double)iterations:F1} ms ({iterations} iterations)");
     }
 
     private static string RunEmitOnce(string source)
@@ -143,46 +118,6 @@ public sealed class Adr0156EmitToMemorySpikeTests
         var (stdout, exitCode, _) = LoadAndRun(peStream);
         Assert.Equal(0, exitCode);
         return stdout;
-    }
-
-    private static string RunEvalOnce(string source)
-    {
-        var compilation = new Compilation(SyntaxTree.Parse(source));
-        var previousOut = Console.Out;
-        using var writer = new StringWriter { NewLine = "\n" };
-        Console.SetOut(writer);
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
-
-        return Normalize(writer.ToString());
-    }
-
-    private static (string Stdout, string Value) Evaluate(string sourcePath)
-    {
-        var compilation = new Compilation(SyntaxTree.Load(sourcePath));
-        var previousOut = Console.Out;
-        using var writer = new StringWriter { NewLine = "\n" };
-        Console.SetOut(writer);
-        object value;
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-            value = result.Value;
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
-
-        return (Normalize(writer.ToString()), value?.ToString());
     }
 
     // Isolated in a non-inlinable method so no JIT-rooted locals keep the

@@ -3,26 +3,24 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
-
-// Interp-vs-emit parity harness; the evaluator side retires with the
-// evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issue #3140: evaluated user-method ref/out writes must match emitted execution.</summary>
+/// <summary>
+/// Issue #3140: user-method ref/out write-back across every receiver and
+/// operand shape, asserted against golden values on both emitted hosts —
+/// out-of-process (<c>gsc /out:</c> + <c>dotnet exec</c>) and the in-process
+/// submission-mode oracle. The tree-walking evaluator and evaluator
+/// SessionEngine columns retired in ADR-0156 Phase 3c (#3176).
+/// </summary>
 [Collection("ConsoleIo")]
 public class Issue3140OutParameterWriteBackParityTests
 {
@@ -41,7 +39,7 @@ public class Issue3140OutParameterWriteBackParityTests
 
     [Theory]
     [MemberData(nameof(ReceiverShapeMatrix))]
-    public async Task OutParameterWriteBack_EvaluatorAndSessionEngineMatchEmit(
+    public async Task OutParameterWriteBack_InProcessHostMatchesEmit(
         ReceiverKind receiver,
         ArgumentShape shape)
     {
@@ -346,13 +344,11 @@ public class Issue3140OutParameterWriteBackParityTests
         try
         {
             var emitted = await RunEmittedAsync(source, CreateEmptyDirectory(root, "emit"));
-            var evaluated = RunEvaluator(source);
-            var interpreted = RunSessionEngine(source);
+            var inProcess = RunEmittedOracle(source);
 
             Assert.Equal(expected, emitted);
             Assert.NotEmpty(emitted);
-            Assert.Equal(emitted, evaluated);
-            Assert.Equal(emitted, interpreted);
+            Assert.Equal(emitted, inProcess);
         }
         finally
         {
@@ -360,41 +356,14 @@ public class Issue3140OutParameterWriteBackParityTests
         }
     }
 
-    private static string RunEvaluator(string source)
+    private static string RunEmittedOracle(string source)
     {
-        using var stdout = new StringWriter();
-        using var stderr = new StringWriter();
-        var previousOut = Console.Out;
-        var previousError = Console.Error;
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
-        try
-        {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
-            var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
-            Assert.True(
-                errors.Length == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(error => error.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-            Console.SetError(previousError);
-        }
-
-        Assert.Equal(string.Empty, stderr.ToString());
-        return Normalize(stdout.ToString(), stripCompilerSuccess: false);
-    }
-
-    private static string RunSessionEngine(string source)
-    {
-        var engine = new SessionEngine { CaptureConsole = true };
-        var result = engine.Evaluate(source);
-
-        Assert.False(
-            result.HasError,
-            "session evaluation failed:\n" + string.Join("\n", result.Diagnostics));
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        Assert.True(
+            errors.Length == 0,
+            "oracle evaluation failed:\n" + string.Join("\n", errors.Select(error => error.ToString())));
+        Assert.Equal(string.Empty, result.ErrorOutput);
         return Normalize(result.Output, stripCompilerSuccess: false);
     }
 

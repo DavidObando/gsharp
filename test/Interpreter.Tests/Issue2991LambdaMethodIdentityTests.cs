@@ -3,28 +3,27 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Reflection;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
-
-// Evaluator-machinery pin: asserts the interpreter's lambda method-identity
-// semantics; retires with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2991: interpreter delegates preserve compiler lambda method identity.
+/// Issue #2991: delegates preserve lambda method identity — distinct lambda
+/// sites produce distinct <see cref="Delegate.Method"/> identities, the same
+/// site produces a stable one, and method groups keep the declared method's
+/// identity. Historically this pinned the tree-walking evaluator's synthesized
+/// delegate identities (fabricated <c>&lt;lambda1&gt;</c>/<c>Invoke</c>
+/// names); that machinery retired with the evaluator in ADR-0156 Phase 3c
+/// (#3176). Under emitted execution the identities are the compiler's real
+/// <see cref="System.Reflection.MethodInfo"/>s, so the identity relations
+/// (distinct/stable/declared-name) are asserted rather than the evaluator's
+/// fabricated name strings.
 /// </summary>
 public class Issue2991LambdaMethodIdentityTests
 {
     [Fact]
-    public void Lambda_DistinctSites_HaveDistinctCompilerNames()
+    public void Lambda_DistinctSites_HaveDistinctMethods()
     {
         const string Source = """
             let first () -> int32 = () -> 11
@@ -34,15 +33,13 @@ public class Issue2991LambdaMethodIdentityTests
 
         var pair = Assert.IsType<ValueTuple<Func<int>, Func<int>>>(Evaluate(Source));
 
-        Assert.Equal("<lambda1>", pair.Item1.Method.Name);
-        Assert.Equal("<lambda2>", pair.Item2.Method.Name);
         Assert.NotEqual(pair.Item1.Method, pair.Item2.Method);
         Assert.Equal(11, pair.Item1());
         Assert.Equal(22, pair.Item2());
     }
 
     [Fact]
-    public void Lambda_SameSite_HasStableCompilerNameAndMethod()
+    public void Lambda_SameSite_HasStableMethod()
     {
         const string Source = """
             func make(value int32) () -> int32 {
@@ -56,8 +53,6 @@ public class Issue2991LambdaMethodIdentityTests
 
         var pair = Assert.IsType<ValueTuple<Func<int>, Func<int>>>(Evaluate(Source));
 
-        Assert.Equal("Invoke", pair.Item1.Method.Name);
-        Assert.Equal(pair.Item1.Method.Name, pair.Item2.Method.Name);
         Assert.Equal(pair.Item1.Method, pair.Item2.Method);
         Assert.Equal(11, pair.Item1());
         Assert.Equal(33, pair.Item2());
@@ -82,15 +77,13 @@ public class Issue2991LambdaMethodIdentityTests
 
         var pair = Assert.IsType<ValueTuple<Func<int>, Func<int>>>(Evaluate(Source));
 
-        Assert.Equal("Invoke", pair.Item1.Method.Name);
-        Assert.Equal("Invoke", pair.Item2.Method.Name);
         Assert.NotEqual(pair.Item1.Method, pair.Item2.Method);
         Assert.Equal(11, pair.Item1());
         Assert.Equal(22, pair.Item2());
     }
 
     [Fact]
-    public void Lambda_ZeroCaptureHost_UsesCompilerName()
+    public void Lambda_ZeroCaptureHost_HasInvokableIdentity()
     {
         const string Source = """
             class Maker {
@@ -105,12 +98,12 @@ public class Issue2991LambdaMethodIdentityTests
 
         var result = Assert.IsType<ValueTuple<string, int>>(Evaluate(Source));
 
-        Assert.Equal("Invoke", result.Item1);
+        Assert.False(string.IsNullOrEmpty(result.Item1));
         Assert.Equal(33, result.Item2);
     }
 
     [Fact]
-    public void Lambda_GenericZeroCaptureHost_UsesCompilerName()
+    public void Lambda_GenericZeroCaptureHost_HasInvokableIdentity()
     {
         const string Source = """
             class Maker[T] {
@@ -125,7 +118,7 @@ public class Issue2991LambdaMethodIdentityTests
 
         var result = Assert.IsType<ValueTuple<string, int>>(Evaluate(Source));
 
-        Assert.Equal("<lambda1>", result.Item1);
+        Assert.False(string.IsNullOrEmpty(result.Item1));
         Assert.Equal(33, result.Item2);
     }
 
@@ -150,38 +143,9 @@ public class Issue2991LambdaMethodIdentityTests
         Assert.Equal(22, pair.Item2());
     }
 
-    [Fact]
-    public void DelegateFactory_SameSite_SupportsDistinctDelegateTypes()
-    {
-        var create = typeof(Evaluator).GetMethod(
-            "CreateInterpreterDelegate",
-            BindingFlags.NonPublic | BindingFlags.Static,
-            null,
-            new[] { typeof(Type), typeof(FunctionSymbol), typeof(string), typeof(Func<object[], object>) },
-            null);
-        Assert.NotNull(create);
-        var function = new FunctionSymbol(
-            "<lambda1>",
-            ImmutableArray.Create(new ParameterSymbol("value", TypeSymbol.Int32)),
-            TypeSymbol.Int32);
-
-        var first = Assert.IsType<Func<int, int>>(create.Invoke(
-            null,
-            new object[] { typeof(Func<int, int>), function, "<lambda1>", new Func<object[], object>(args => (int)args[0] + 11) }));
-        var second = Assert.IsType<Converter<int, int>>(create.Invoke(
-            null,
-            new object[] { typeof(Converter<int, int>), function, "<lambda1>", new Func<object[], object>(args => (int)args[0] + 11) }));
-
-        Assert.Equal("<lambda1>", first.Method.Name);
-        Assert.Equal("<lambda1>", second.Method.Name);
-        Assert.Equal(11, first(0));
-        Assert.Equal(22, second(11));
-    }
-
     private static object Evaluate(string source)
     {
-        var result = new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
 
         Assert.Empty(result.Diagnostics);
         return result.Value;

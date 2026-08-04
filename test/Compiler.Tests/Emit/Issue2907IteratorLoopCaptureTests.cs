@@ -10,20 +10,15 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using GSharp.Compiler;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2907: captures created inside iterator loops compile and match
-/// equivalent non-iterator capture semantics.
+/// equivalent non-iterator capture semantics. Asserts the emitted program
+/// only; the interpreter parity arm was retired with the evaluator in
+/// ADR-0156 Phase 3c (#3176).
 /// </summary>
 public class Issue2907IteratorLoopCaptureTests
 {
@@ -525,22 +520,11 @@ public class Issue2907IteratorLoopCaptureTests
 
     [Theory]
     [MemberData(nameof(CaptureCases))]
-    public async Task IteratorAndNonIteratorCaptureSemanticsAgree(
+    public void IteratorAndNonIteratorCaptureSemanticsAgree(
         string name,
         string source,
-        string expected,
-        bool evaluateWithInterpreter)
+        string expected)
     {
-        if (evaluateWithInterpreter)
-        {
-            var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>()));
-            Assert.Same(evaluationTask, await Task.WhenAny(evaluationTask, Task.Delay(TimeSpan.FromSeconds(30))));
-            var evaluation = await evaluationTask;
-            Assert.Empty(evaluation.Diagnostics);
-            Assert.Equal(true, evaluation.Value);
-        }
-
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
 
@@ -552,7 +536,7 @@ public class Issue2907IteratorLoopCaptureTests
     }
 
     [Fact]
-    public async Task AsyncIteratorLoopCaptureAgreesWithNonIterator()
+    public void AsyncIteratorLoopCaptureAgreesWithNonIterator()
     {
         const string Source = """
             package Issue2907Async
@@ -592,7 +576,7 @@ public class Issue2907IteratorLoopCaptureTests
             iteratorResult == directResult
             """;
 
-        await AssertParity(Source, "0,1,2,", nameof(AsyncIteratorLoopCaptureAgreesWithNonIterator), evaluateWithInterpreter: false);
+        AssertParity(Source, "0,1,2,", nameof(AsyncIteratorLoopCaptureAgreesWithNonIterator));
     }
 
     [Fact]
@@ -675,21 +659,11 @@ public class Issue2907IteratorLoopCaptureTests
             iteratorResult == directResult
             """;
 
-        return new object[] { name, source, expected, true };
+        return new object[] { name, source, expected };
     }
 
-    private static async Task AssertParity(string source, string expected, string name, bool evaluateWithInterpreter)
+    private static void AssertParity(string source, string expected, string name)
     {
-        if (evaluateWithInterpreter)
-        {
-            var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>()));
-            Assert.Same(evaluationTask, await Task.WhenAny(evaluationTask, Task.Delay(TimeSpan.FromSeconds(30))));
-            var evaluation = await evaluationTask;
-            Assert.Empty(evaluation.Diagnostics);
-            Assert.Equal(true, evaluation.Value);
-        }
-
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));

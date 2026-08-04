@@ -38,35 +38,11 @@ public class EvaluatorRetirementGateTests
         // obsolete OperandType.InlinePhi. The gate pins ALL CS0618
         // suppressions so no evaluator caller can hide behind a new one.
         "src/Core/CodeAnalysis/Emit/MaxStackTracker.cs",
+
+        // The evaluator's product host: deleted together with the evaluator
+        // in the Phase 3c deletion commit, at which point this gate has done
+        // its job and retires too.
         "src/Repl/Engine/SessionEngine.cs",
-        "test/Compiler.Tests/Emit/Issue1714StringZeroValueEmitTests.cs",
-        "test/Compiler.Tests/Emit/Issue2853EllipsisLoopCaptureTests.cs",
-        "test/Compiler.Tests/Emit/Issue2854TopLevelEllipsisLoopCaptureTests.cs",
-        "test/Compiler.Tests/Emit/Issue2906ExhaustiveSwitchReturnEmitTests.cs",
-        "test/Compiler.Tests/Emit/Issue2907IteratorLoopCaptureTests.cs",
-        "test/Compiler.Tests/Emit/Issue2914ConstantPatternSwitchLoweringTests.cs",
-        "test/Compiler.Tests/Emit/Issue2927NullableSequenceElementTypeTests.cs",
-        "test/Compiler.Tests/Emit/Issue2928TupleFunctionParityTests.cs",
-        "test/Core.Tests/CodeAnalysis/Binding/ByRefEvaluationTests.cs",
-        "test/Core.Tests/CodeAnalysis/Binding/Issue1654EvaluateNoCfgDumpTests.cs",
-        "test/Core.Tests/CodeAnalysis/Binding/Issue698DeinitBinderTests.cs",
-        "test/Core.Tests/CodeAnalysis/Emit/AsyncInterpVsEmitParityTests.cs",
-        "test/Core.Tests/CodeAnalysis/Emit/Issue2544LiftedUnaryOperatorTests.cs",
-        "test/Core.Tests/LanguageConformance/AddressBookSampleTests.cs",
-        "test/Core.Tests/LanguageConformance/AspirationalSamplesTests.cs",
-        "test/Core.Tests/LanguageConformance/CountWordsSampleTests.cs",
-        "test/Interpreter.Tests/Adr0156EmitToMemorySpikeTests.cs",
-        "test/Interpreter.Tests/Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests.cs",
-        "test/Interpreter.Tests/Issue2896StructObjectOverrideTests.cs",
-        "test/Interpreter.Tests/Issue2921LambdaBodyDefiniteReturnInterpreterTests.cs",
-        "test/Interpreter.Tests/Issue2938DelegateExceptionDiagnosticTests.cs",
-        "test/Interpreter.Tests/Issue2953ProtectedReturnFallthroughInterpreterTests.cs",
-        "test/Interpreter.Tests/Issue2984MainEntryPointInterpreterTests.cs",
-        "test/Interpreter.Tests/Issue2990ClrDelegateBoundaryTests.cs",
-        "test/Interpreter.Tests/Issue2991LambdaMethodIdentityTests.cs",
-        "test/Interpreter.Tests/Issue3058OutParameterMemberDefiniteAssignmentTests.cs",
-        "test/Interpreter.Tests/Issue3140OutParameterWriteBackParityTests.cs",
-        "tools/cs2gs/Cs2Gs.Tests/Issue1721PrinterPrecedenceTests.cs",
     };
 
     private static readonly Regex SuppressionLine = new(

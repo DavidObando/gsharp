@@ -3,24 +3,17 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Threading.Tasks;
 using GSharp.Compiler;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2853: numeric ellipsis loop captures use a fresh variable cell per iteration.
+/// Asserts the emitted program against pinned golden values; the interpreter
+/// parity arm was retired with the evaluator in ADR-0156 Phase 3c (#3176).
 /// </summary>
 public class Issue2853EllipsisLoopCaptureTests
 {
@@ -46,7 +39,7 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 0, nameof(ClosureCapturesValueFromCreatingIteration));
+        AssertEmittedResult(Source, expected: 0, nameof(ClosureCapturesValueFromCreatingIteration));
     }
 
     [Fact]
@@ -72,7 +65,7 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 3, nameof(CapturedWriteAdvancesLoopControlVariable));
+        AssertEmittedResult(Source, expected: 3, nameof(CapturedWriteAdvancesLoopControlVariable));
     }
 
     [Fact]
@@ -94,7 +87,7 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 21, nameof(CapturedFunctionLocalWritesSharedCell));
+        AssertEmittedResult(Source, expected: 21, nameof(CapturedFunctionLocalWritesSharedCell));
     }
 
     [Fact]
@@ -123,7 +116,7 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 300, nameof(CapturedIndexWritesUseExpressionTargets));
+        AssertEmittedResult(Source, expected: 300, nameof(CapturedIndexWritesUseExpressionTargets));
     }
 
     [Fact]
@@ -158,7 +151,7 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 22, nameof(CapturedInstanceFieldWritesUseExpressionReceivers));
+        AssertEmittedResult(Source, expected: 22, nameof(CapturedInstanceFieldWritesUseExpressionReceivers));
     }
 
     [Fact]
@@ -195,20 +188,11 @@ public class Issue2853EllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 3377, nameof(CapturedRefOutAndAliasWritesUseCallerCell));
+        AssertEmittedResult(Source, expected: 3377, nameof(CapturedRefOutAndAliasWritesUseCallerCell));
     }
 
-    private static void AssertEnginesAgree(string source, int expected, string testName)
-    {
-        var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>()));
-        Assert.True(evaluationTask.Wait(TimeSpan.FromSeconds(30)), "interpreter evaluation timed out");
-        var evaluation = evaluationTask.GetAwaiter().GetResult();
-
-        Assert.Empty(evaluation.Diagnostics);
-        Assert.Equal(expected, evaluation.Value);
-        Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
-    }
+    private static void AssertEmittedResult(string source, int expected, string testName)
+        => Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
 
     private static string CompileAndRun(string source, string testName)
     {

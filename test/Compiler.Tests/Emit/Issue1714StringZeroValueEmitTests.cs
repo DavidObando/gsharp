@@ -3,23 +3,17 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using GSharp.Compiler;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
@@ -27,6 +21,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// Issue #1714: language zero values and CLR storage defaults are distinct.
 /// Map misses retain the language's empty-string zero value, while fields and
 /// auto-property backing fields retain the CLR default for their storage type.
+/// Asserts against the emitted program only; the interpreter parity arm was
+/// retired with the evaluator in ADR-0156 Phase 3c (#3176).
 /// Each source uses unique package/type names because the in-process
 /// <c>FunctionTypeSymbol</c> cache is name-keyed.
 /// </summary>
@@ -49,9 +45,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n[]\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("True\nFalse\n[]\n", output);    }
 
     [Fact]
     public void EndToEnd_StructStringField_DefaultsToNull()
@@ -71,9 +65,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n5\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("False\nTrue\n5\n", output);    }
 
     [Fact]
     public void EndToEnd_ClassStringField_DefaultsToNull()
@@ -92,9 +84,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("False\nTrue\n", output);    }
 
     [Fact]
     public void EndToEnd_ClassStringAutoProperty_DefaultsToNull()
@@ -113,9 +103,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("False\nTrue\n", output);    }
 
     [Fact]
     public void EndToEnd_DefaultStringExpression_IsNull()
@@ -132,9 +120,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("False\nTrue\n", output);    }
 
     [Fact]
     public void EndToEnd_NestedStructStringFields_DefaultToNull()
@@ -158,9 +144,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\nFalse\nTrue\n[][]\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("False\nTrue\nFalse\nTrue\n[][]\n", output);    }
 
     [Fact]
     public void EndToEnd_InstanceAndStaticReferenceFields_MatchClrDefaults()
@@ -207,9 +191,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nTrue\n", output);
-        Assert.Equal(RunInterpreter(source), output);
-    }
+        Assert.Equal("True\nTrue\nTrue\n", output);    }
 
     [Fact]
     public void Reflection_ReferenceFields_UseClrNullAndPreserveAnnotationsAndInitializer()
@@ -286,8 +268,8 @@ public class Issue1714StringZeroValueEmitTests
                 var ChildValue Child
             }
             """;
-        var fieldsResult = Evaluate(fields);
-        Assert.Empty(fieldsResult.Diagnostics);
+        var fieldsDiagnostics = CollectCompileDiagnostics(fields);
+        Assert.Empty(fieldsDiagnostics);
 
         const string unassignedOut = """
             package i1714outdiagnostics
@@ -295,43 +277,22 @@ public class Issue1714StringZeroValueEmitTests
                 return
             }
             """;
-        var outResult = Evaluate(unassignedOut);
-        Assert.Contains(outResult.Diagnostics, d => d.Id == "GS0238");
+        var outDiagnostics = CollectCompileDiagnostics(unassignedOut);
+        Assert.Contains(outDiagnostics, d => d.Id == "GS0238");
     }
 
     /// <summary>
-    /// Runs <paramref name="source"/> through the interpreter (<see
-    /// cref="Compilation.Evaluate"/>) instead of the emitter, capturing
-    /// real <c>System.Console.WriteLine</c> output the same way the emitted
-    /// executable's stdout is captured in <see cref="CompileAndRun"/>. Used
-    /// to assert interpreter/emit parity so future interpreter changes to
-    /// <c>Evaluator.DefaultValue</c> can't silently re-diverge from emit.
+    /// Collects compile-time diagnostics (parse, global scope, and bound
+    /// program) for <paramref name="source"/> without executing it.
     /// </summary>
-    private static string RunInterpreter(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(ToScriptSource(source)));
-        var compilation = new Compilation(tree);
-
-        using var outWriter = new StringWriter();
-        var prevOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            Assert.Empty(result.Diagnostics);
-        }
-        finally
-        {
-            Console.SetOut(prevOut);
-        }
-
-        return outWriter.ToString().Replace("\r\n", "\n");
-    }
-
-    private static EvaluationResult Evaluate(string source)
+    private static ImmutableArray<Diagnostic> CollectCompileDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
-        return new Compilation(tree).Evaluate(new Dictionary<VariableSymbol, object>());
+        var compilation = new Compilation(tree);
+        return compilation.SyntaxTrees.SelectMany(t => t.Diagnostics)
+            .Concat(compilation.GlobalScope.Diagnostics)
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .ToImmutableArray();
     }
 
     private static Assembly CompileToAssembly(string source)
@@ -358,45 +319,6 @@ public class Issue1714StringZeroValueEmitTests
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
-    }
-
-    /// <summary>
-    /// Interpreter evaluation (<see cref="Compilation.Evaluate"/>) runs the
-    /// SCRIPT-mode top-level statement list, not a <c>package</c>/<c>func
-    /// Main()</c> entry point (that convention is compiler/emit-only). This
-    /// rewrites one of this file's `package`+`func Main()` sources into the
-    /// equivalent script — same struct/import declarations, `func Main`'s
-    /// body unwrapped to bare top-level statements — so <see
-    /// cref="RunInterpreter"/> can run the SAME source through both paths.
-    /// </summary>
-    private static string ToScriptSource(string source)
-    {
-        var withoutPackage = Regex.Replace(source, @"(?m)^\s*package\s+\S+\r?\n", string.Empty);
-        var mainIndex = withoutPackage.IndexOf("func Main() {", StringComparison.Ordinal);
-        Assert.True(mainIndex >= 0, "Expected a `func Main() { ... }` entry point in the test source.");
-
-        var braceStart = withoutPackage.IndexOf('{', mainIndex);
-        var depth = 0;
-        var i = braceStart;
-        for (; i < withoutPackage.Length; i++)
-        {
-            if (withoutPackage[i] == '{')
-            {
-                depth++;
-            }
-            else if (withoutPackage[i] == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    break;
-                }
-            }
-        }
-
-        var preamble = withoutPackage.Substring(0, mainIndex);
-        var body = withoutPackage.Substring(braceStart + 1, i - braceStart - 1);
-        return preamble + body;
     }
 
     private static string CompileAndRun(string source)

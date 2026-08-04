@@ -3,31 +3,24 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
 using GSharp.Repl.Engine;
 using Xunit;
 using CompilerProgram = GSharp.Compiler.Program;
 
-// Interp-vs-emit parity harness; the evaluator side retires with the
-// evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
-
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2896: plain structs may override Object virtual methods, including
-/// calls dispatched through an object-typed receiver. The evaluator's shared
-/// user-type dispatch path also preserves most-derived class overrides.
-/// Issue #3116 extends that dispatch to Object virtuals invoked by the BCL.
+/// calls dispatched through an object-typed receiver, with most-derived class
+/// overrides preserved. Issue #3116 extends that dispatch to Object virtuals
+/// invoked by the BCL. All drivers execute emitted code (the tree-walking
+/// evaluator retired in ADR-0156 Phase 3c, #3176).
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2896StructObjectOverrideTests
@@ -321,15 +314,16 @@ public class Issue2896StructObjectOverrideTests
             Console.WriteLine(boxedDefault.ToString())
             """;
 
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — issue
-        // #3204 pins the divergence this control exposed: the EVALUATOR gives
-        // a plain struct without a ToString override the record-style
-        // rendering, while emitted execution falls to ValueType.ToString (the
-        // CLR type name). Retires or realigns with #3204's resolution.
+        // Issue #3204 / ADR-0156 Phase 3c (#3176): with the tree-walking
+        // evaluator retired, emitted execution IS the semantics — a `data`
+        // struct keeps its synthesized record-style rendering, while a plain
+        // struct without a ToString override falls to ValueType.ToString
+        // (the CLR type name). The evaluator's record-style rendering for
+        // plain structs retired with it.
         Assert.Equal(
             "DataValue(Number=7)\nDataValue(Number=7)\n"
-                + "DefaultValue(Number=7)\nDefaultValue(Number=7)\n",
-            EvaluateWithEvaluator(Source));
+                + "Issue2896.Controls.DefaultValue\nIssue2896.Controls.DefaultValue\n",
+            Evaluate(Source));
     }
 
     private static string Evaluate(string source)
@@ -341,31 +335,6 @@ public class Issue2896StructObjectOverrideTests
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
 
         return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3204 control above; delete
-    // with the evaluator (Phase 3c) or when #3204 aligns the engines.
-    private static string EvaluateWithEvaluator(string source)
-    {
-        var compilation = new Compilation(SyntaxTree.Parse(source));
-
-        using var outWriter = new StringWriter();
-        var previousOut = Console.Out;
-        Console.SetOut(outWriter);
-        try
-        {
-            var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-            var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
-            Assert.True(
-                errors.Length == 0,
-                "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        }
-        finally
-        {
-            Console.SetOut(previousOut);
-        }
-
-        return outWriter.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     private static string BuildIssue3134Source(string surface, string suffix)

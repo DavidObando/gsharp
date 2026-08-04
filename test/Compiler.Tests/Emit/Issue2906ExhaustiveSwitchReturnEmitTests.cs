@@ -10,20 +10,17 @@ using System.Reflection;
 using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2906: exhaustive closed-type switches can satisfy definite return,
 /// while ordinary switch statements retain unmatched-value fallthrough.
+/// Asserts the emitted program only; the interpreter parity arm was retired
+/// with the evaluator in ADR-0156 Phase 3c (#3176).
 /// </summary>
 public class Issue2906ExhaustiveSwitchReturnEmitTests
 {
@@ -250,16 +247,11 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
 
     [Theory]
     [MemberData(nameof(FallthroughCases))]
-    public void ExhaustiveSwitchStatement_UnmatchedValueFallsThroughInBothEngines(
+    public void ExhaustiveSwitchStatement_UnmatchedValueFallsThrough(
         string name,
         int expected,
         string source)
     {
-        var evaluation = new Compilation(SyntaxTree.Parse(SourceText.From(source)))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(evaluation.Diagnostics);
-        Assert.Equal(expected, evaluation.Value);
-
         var assembly = CompileVerifyLoadAndRun(name, source);
         Assert.Equal(expected, GetField(assembly, "result"));
     }

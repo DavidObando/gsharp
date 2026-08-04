@@ -8,27 +8,21 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Threading.Tasks;
 using GSharp.Compiler;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2927: nullable value-type sequence elements retain their runtime
-/// element type across binding and iterator metadata emission.
+/// element type across binding and iterator metadata emission. Asserts the
+/// emitted program only; the interpreter parity arm was retired with the
+/// evaluator in ADR-0156 Phase 3c (#3176).
 /// </summary>
 public class Issue2927NullableSequenceElementTypeTests
 {
     [Fact]
-    public async Task SyncNullableIteratorElementCaptureLoadsVerifiesAndRuns()
+    public void SyncNullableIteratorElementCaptureLoadsVerifiesAndRuns()
     {
         const string Source = """
             package Issue2927Sync
@@ -70,11 +64,11 @@ public class Issue2927NullableSequenceElementTypeTests
             iteratorResult == directResult
             """;
 
-        await AssertParity(Source, "1,nil,3,", nameof(SyncNullableIteratorElementCaptureLoadsVerifiesAndRuns), evaluateWithInterpreter: true);
+        AssertParity(Source, "1,nil,3,", nameof(SyncNullableIteratorElementCaptureLoadsVerifiesAndRuns));
     }
 
     [Fact]
-    public async Task AsyncNullableIteratorElementCaptureLoadsVerifiesAndRuns()
+    public void AsyncNullableIteratorElementCaptureLoadsVerifiesAndRuns()
     {
         const string Source = """
             package Issue2927Async
@@ -122,7 +116,7 @@ public class Issue2927NullableSequenceElementTypeTests
             iteratorResult == directResult
             """;
 
-        await AssertParity(Source, "1,nil,3,", nameof(AsyncNullableIteratorElementCaptureLoadsVerifiesAndRuns), evaluateWithInterpreter: false);
+        AssertParity(Source, "1,nil,3,", nameof(AsyncNullableIteratorElementCaptureLoadsVerifiesAndRuns));
     }
 
     [Fact]
@@ -769,18 +763,8 @@ public class Issue2927NullableSequenceElementTypeTests
         && type.GetGenericTypeDefinition() == typeof(Nullable<>)
         && type.GetGenericArguments()[0].IsGenericParameter;
 
-    private static async Task AssertParity(string source, string expected, string name, bool evaluateWithInterpreter)
+    private static void AssertParity(string source, string expected, string name)
     {
-        if (evaluateWithInterpreter)
-        {
-            var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>()));
-            Assert.Same(evaluationTask, await Task.WhenAny(evaluationTask, Task.Delay(TimeSpan.FromSeconds(30))));
-            var evaluation = await evaluationTask;
-            Assert.Empty(evaluation.Diagnostics);
-            Assert.Equal(true, evaluation.Value);
-        }
-
         var assemblyPath = Compile(source, name);
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));

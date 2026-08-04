@@ -3,27 +3,19 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.IO;
-using System.Reflection;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Binding;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Tests;
 using Xunit;
-
-// Evaluator-machinery pin: drives the Evaluator's CLR-delegate boundary
-// directly; retires with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2990: closures whose signatures contain G# types must be coerced to
-/// the delegate type expected by each reflection-invoked CLR boundary.
+/// the delegate type expected by each CLR boundary. The tests that drove the
+/// tree-walking <c>Evaluator</c>'s private reflection-call machinery directly
+/// (<c>InvokeClrCtor</c>, <c>EvaluateClrStaticCallExpression</c>,
+/// <c>BuildRefSlots</c>) retired with the evaluator in ADR-0156 Phase 3c
+/// (#3176) — under emitted execution delegate conversion is real IL and is
+/// pinned here through the observable end-to-end shapes.
 /// </summary>
 public class Issue2990ClrDelegateBoundaryTests
 {
@@ -86,51 +78,6 @@ public class Issue2990ClrDelegateBoundaryTests
     }
 
     [Fact]
-    public void InvokeClrCtor_CoercesClosureWithUserTypeParameter()
-    {
-        var evaluator = new Evaluator(null, new Dictionary<VariableSymbol, object>());
-        var structType = new StructSymbol(
-            "ConstructorProbeDerived",
-            ImmutableArray<FieldSymbol>.Empty,
-            GSharp.Core.CodeAnalysis.Symbols.Accessibility.Private,
-            declaration: null,
-            packageName: "Issue2990");
-        var constructor = typeof(ConstructorProbe).GetConstructor([typeof(Func<object, int>)]);
-        var invoke = typeof(Evaluator).GetMethod("InvokeClrCtor", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(constructor);
-        Assert.NotNull(invoke);
-        var argument = CreateErasedClosure(77);
-        var result = Assert.IsAssignableFrom<ConstructorProbe>(invoke.Invoke(
-            evaluator,
-            [structType, constructor, ImmutableArray.Create<BoundExpression>(argument), ImmutableArray<RefKind>.Empty, argument]));
-
-        Assert.Equal(77, result.Value);
-    }
-
-    [Fact]
-    public void ClrStaticCall_CoercesClosureWithUserTypeParameter()
-    {
-        var evaluator = new Evaluator(null, new Dictionary<VariableSymbol, object>());
-        var method = typeof(Issue2990ClrDelegateBoundaryTests).GetMethod(
-            nameof(InvokeSelector),
-            BindingFlags.Static | BindingFlags.NonPublic);
-        var evaluate = typeof(Evaluator).GetMethod(
-            "EvaluateClrStaticCallExpression",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(method);
-        Assert.NotNull(evaluate);
-        var node = new BoundClrStaticCallExpression(
-            null,
-            method,
-            TypeSymbol.Int32,
-            ImmutableArray.Create<BoundExpression>(CreateErasedClosure(99)));
-
-        Assert.Equal(99, evaluate.Invoke(evaluator, [node]));
-    }
-
-    [Fact]
     public void UserFunctionCall_PreservesRawClosure()
     {
         const string Source = """
@@ -156,44 +103,6 @@ public class Issue2990ClrDelegateBoundaryTests
         Assert.Equal("88\n", Evaluate(Source));
     }
 
-    [Fact]
-    public void BuildRefSlots_RequiresMethodBaseArgument()
-    {
-        var method = typeof(Evaluator).GetMethod("BuildRefSlots", BindingFlags.Instance | BindingFlags.NonPublic);
-
-        Assert.NotNull(method);
-        var parameter = method.GetParameters()[3];
-        Assert.Equal(typeof(MethodBase), parameter.ParameterType);
-        Assert.False(parameter.IsOptional);
-    }
-
-    private static BoundFunctionLiteralExpression CreateErasedClosure(int value)
-    {
-        var erasedType = new StructSymbol(
-            "Issue2990Erased",
-            ImmutableArray<FieldSymbol>.Empty,
-            GSharp.Core.CodeAnalysis.Symbols.Accessibility.Private,
-            declaration: null,
-            packageName: "Issue2990");
-        var parameter = new ParameterSymbol("item", erasedType);
-        var function = new FunctionSymbol("<issue2990>", ImmutableArray.Create(parameter), TypeSymbol.Int32);
-        var functionType = FunctionTypeSymbol.Get(ImmutableArray.Create<TypeSymbol>(erasedType), TypeSymbol.Int32);
-        var body = new BoundBlockStatement(
-            null,
-            ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, new BoundLiteralExpression(null, value))));
-
-        Assert.Null(functionType.ClrType);
-        return new BoundFunctionLiteralExpression(
-            null,
-            function,
-            functionType,
-            body,
-            ImmutableArray<VariableSymbol>.Empty);
-    }
-
-    private static int InvokeSelector(Func<object, int> selector) => selector(new object());
-
     private static string Evaluate(string source)
     {
         var result = EmittedOracle.Evaluate(source);
@@ -201,15 +110,5 @@ public class Issue2990ClrDelegateBoundaryTests
         Assert.Empty(result.Diagnostics);
 
         return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
-    }
-
-    public class ConstructorProbe
-    {
-        public ConstructorProbe(Func<object, int> selector)
-        {
-            Value = selector(new object());
-        }
-
-        public int Value { get; }
     }
 }

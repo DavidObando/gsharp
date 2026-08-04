@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -11,15 +10,8 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
-
-// Semantic round-trip check runs translated G# on the evaluator (Cs2Gs.Tests
-// has no emitted-oracle reference); migrate or retire with the evaluator in
-// ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace Cs2Gs.Tests;
 
@@ -226,15 +218,15 @@ namespace N { public class C { public static int F(int x) => - -x; } }");
     }
 
     /// <summary>
-    /// Evaluates the printed arrow-body expression with the real G#
-    /// interpreter (no free variables) and asserts it equals
+    /// Evaluates the printed arrow-body expression through the emitted oracle
+    /// (ADR-0156 Phase 3c, #3176 — no free variables) and asserts it equals
     /// <paramref name="expected"/> — the same expression, evaluated directly
     /// by the C# compiler in the calling test — proving the printed G# text
     /// re-parses to a tree that preserves the original C# value.
     /// </summary>
     private static void AssertEvaluatesTo(int expected, string gsharpExpression)
     {
-        EvaluationResult result = Evaluate(gsharpExpression);
+        EmittedOracleResult result = EmittedOracle.Evaluate(gsharpExpression);
         AssertNoRealDiagnostics(result);
         Assert.Equal(expected, Convert.ToInt64(result.Value));
     }
@@ -249,19 +241,12 @@ namespace N { public class C { public static int F(int x) => - -x; } }");
     private static void AssertEvaluatesTo(int expected, string name1, int value1, string name2, int value2, string name3, int value3, string gsharpExpression)
     {
         string script = $"let {name1} = {value1}\nlet {name2} = {value2}\nlet {name3} = {value3}\n{gsharpExpression}";
-        EvaluationResult result = Evaluate(script);
+        EmittedOracleResult result = EmittedOracle.Evaluate(script);
         AssertNoRealDiagnostics(result);
         Assert.Equal(expected, Convert.ToInt64(result.Value));
     }
 
-    private static EvaluationResult Evaluate(string gsharpSource)
-    {
-        var tree = SyntaxTree.Parse(gsharpSource);
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-    }
-
-    private static void AssertNoRealDiagnostics(EvaluationResult result)
+    private static void AssertNoRealDiagnostics(EmittedOracleResult result)
     {
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
     }
