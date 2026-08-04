@@ -1582,10 +1582,7 @@ public sealed partial class Evaluator
                     WriteBackIndex(idx, value);
                     break;
                 case BoundDereferenceExpression deref:
-                    var target = deref.Operand is BoundAddressOfExpression addressOf
-                        ? addressOf.Operand
-                        : deref.Operand;
-                    WriteBackToOperand(target, value);
+                    WriteBackToOperand(deref, value);
                     break;
             }
         }
@@ -1702,7 +1699,7 @@ public sealed partial class Evaluator
 
     /// <summary>
     /// Issue #491 (ADR-0060 follow-up): writes <paramref name="value"/> through a
-    /// bound lvalue expression (variable, field, property, or indexer access).
+    /// bound lvalue expression (variable, field, property, indexer access, or dereference).
     /// Shared between ref-aliasing local writes and the existing ref/out parameter
     /// write-back path.
     /// </summary>
@@ -1724,7 +1721,10 @@ public sealed partial class Evaluator
                 break;
             case BoundDereferenceExpression deref:
                 // *p = v under interpreter: re-route through the inner operand.
-                WriteBackToOperand(deref.Operand, value);
+                var target = deref.Operand is BoundAddressOfExpression addressOf
+                    ? addressOf.Operand
+                    : deref.Operand;
+                WriteBackToOperand(target, value);
                 break;
         }
     }

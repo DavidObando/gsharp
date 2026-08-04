@@ -41,24 +41,35 @@ public class Issue3140OutParameterWriteBackParityTests
         ReceiverKind receiver,
         ArgumentShape shape)
     {
-        await AssertDriverParityAsync(BuildSource(receiver, shape), receiver + "-" + shape);
+        await AssertDriverParityAsync(
+            BuildSource(receiver, shape),
+            GetExpectedOutput(shape),
+            receiver + "-" + shape);
     }
 
-    /// <summary>Gets write-back operand-kind rows.</summary>
-    /// <returns>Operand-kind rows.</returns>
-    public static IEnumerable<object[]> WriteBackOperandKinds()
+    /// <summary>Gets receiver and write-back operand-kind rows.</summary>
+    /// <returns>Receiver and operand-kind rows.</returns>
+    public static IEnumerable<object[]> WriteBackOperandMatrix()
     {
-        foreach (var operand in Enum.GetValues<OperandKind>())
+        foreach (var receiver in Enum.GetValues<ReceiverKind>())
         {
-            yield return new object[] { operand };
+            foreach (var operand in Enum.GetValues<OperandKind>())
+            {
+                yield return new object[] { receiver, operand };
+            }
         }
     }
 
     [Theory]
-    [MemberData(nameof(WriteBackOperandKinds))]
-    public async Task OutParameterWriteBack_OperandKindsMatchEmit(OperandKind operand)
+    [MemberData(nameof(WriteBackOperandMatrix))]
+    public async Task OutParameterWriteBack_ReceiverAndOperandKindsMatchEmit(
+        ReceiverKind receiver,
+        OperandKind operand)
     {
-        await AssertDriverParityAsync(BuildOperandSource(operand), "Operand-" + operand);
+        await AssertDriverParityAsync(
+            BuildOperandSource(receiver, operand),
+            "91",
+            receiver + "-" + operand);
     }
 
     /// <summary>Call receiver shape.</summary>
@@ -130,10 +141,19 @@ public class Issue3140OutParameterWriteBackParityTests
         Dereference,
     }
 
-    private static string BuildSource(ReceiverKind receiver, ArgumentShape shape)
+    private static string BuildSource(ReceiverKind receiver, ArgumentShape shape) =>
+        BuildSource(
+            receiver,
+            GetShape(shape),
+            $"Issue3140{receiver}{shape}",
+            string.Empty);
+
+    private static string BuildSource(
+        ReceiverKind receiver,
+        ShapeSpec spec,
+        string package,
+        string extraDeclaration)
     {
-        var spec = GetShape(shape);
-        var package = $"Issue3140{receiver}{shape}";
         var method = $"func Fill({spec.Parameters}) {{\n{Indent(spec.Body, 4)}\n}}";
         string declarations;
         string target;
@@ -220,13 +240,15 @@ public class Issue3140OutParameterWriteBackParityTests
 
             {declarations}
 
+            {extraDeclaration}
+
             {receiverLocal}
             {spec.Locals}
             {calls}
             """;
     }
 
-    private static string BuildOperandSource(OperandKind operand)
+    private static string BuildOperandSource(ReceiverKind receiver, OperandKind operand)
     {
         var (declaration, locals, argument, output) = operand switch
         {
@@ -253,23 +275,17 @@ public class Issue3140OutParameterWriteBackParityTests
             _ => throw new ArgumentOutOfRangeException(nameof(operand), operand, null),
         };
 
-        return $$"""
-            package Issue3140Operand{{operand}}
-            import System
-
-            class Target {
-                func Fill(out value int32) {
-                    value = 91
-                }
-            }
-
-            {{declaration}}
-
-            let target = Target()
-            {{locals}}
-            target.Fill({{argument}})
-            Console.WriteLine({{output}})
-            """;
+        var spec = new ShapeSpec(
+            "out value int32",
+            "value = 91",
+            locals,
+            "&value",
+            [new(argument, $"Console.WriteLine({output})")]);
+        return BuildSource(
+            receiver,
+            spec,
+            $"Issue3140Operand{receiver}{operand}",
+            declaration);
     }
 
     private static ShapeSpec GetShape(ArgumentShape shape) => shape switch
@@ -310,7 +326,17 @@ public class Issue3140OutParameterWriteBackParityTests
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
     };
 
-    private static async Task AssertDriverParityAsync(string source, string name)
+    private static string GetExpectedOutput(ArgumentShape shape) => shape switch
+    {
+        ArgumentShape.SingleOut => "11",
+        ArgumentShape.MultipleOut => "21\n22",
+        ArgumentShape.OutAndRef => "31\n37",
+        ArgumentShape.OutAndNormal => "44",
+        ArgumentShape.ConditionalOut => "51\n52",
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+    };
+
+    private static async Task AssertDriverParityAsync(string source, string expected, string name)
     {
         var root = CreateEmptyDirectory(name);
         try
@@ -319,6 +345,7 @@ public class Issue3140OutParameterWriteBackParityTests
             var evaluated = RunEvaluator(source);
             var interpreted = RunSessionEngine(source);
 
+            Assert.Equal(expected, emitted);
             Assert.NotEmpty(emitted);
             Assert.Equal(emitted, evaluated);
             Assert.Equal(emitted, interpreted);
