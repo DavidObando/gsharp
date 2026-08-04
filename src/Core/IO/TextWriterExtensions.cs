@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
@@ -136,7 +138,7 @@ public static class TextWriterExtensions
             // diagnostic) has no file/position/snippet to render. Emit just
             // the severity/id/message so a single such diagnostic no longer
             // NREs and masks the whole batch.
-            if (diagnostic.Location.Text is null)
+            if (diagnostic.Location.Text is not SourceText sourceText)
             {
                 writer.SetForeground(severityColor);
                 writer.Write($"{severityLabel} {diagnostic.Id}: ");
@@ -155,7 +157,7 @@ public static class TextWriterExtensions
             // diagnostic span. When the span crosses line boundaries the span end can
             // be far past the end of the start line, so clamp every boundary to the
             // start line to keep all computed lengths non-negative.
-            var startLine = diagnostic.Location.Text.Lines[diagnostic.Location.StartLine];
+            var startLine = sourceText.Lines[diagnostic.Location.StartLine];
 
             var spanStart = Math.Clamp(diagnostic.Location.Span.Start, startLine.Start, startLine.End);
             var spanEnd = Math.Clamp(diagnostic.Location.Span.End, spanStart, startLine.End);
@@ -164,9 +166,9 @@ public static class TextWriterExtensions
             var errorSpan = TextSpan.FromBounds(spanStart, spanEnd);
             var suffixSpan = TextSpan.FromBounds(spanEnd, startLine.End);
 
-            var prefix = diagnostic.Location.Text.ToString(prefixSpan);
-            var error = diagnostic.Location.Text.ToString(errorSpan);
-            var suffix = diagnostic.Location.Text.ToString(suffixSpan);
+            var prefix = sourceText.ToString(prefixSpan);
+            var error = sourceText.ToString(errorSpan);
+            var suffix = sourceText.ToString(suffixSpan);
 
             writer.Write("    ");
             writer.Write(prefix);

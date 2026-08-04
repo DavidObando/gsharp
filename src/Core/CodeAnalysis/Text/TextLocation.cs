@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 
 namespace GSharp.Core.CodeAnalysis.Text;
@@ -23,39 +25,53 @@ public struct TextLocation : IComparable<TextLocation>
     }
 
     /// <summary>
-    /// Gets the source text.
+    /// Gets the source text. Null for a location-less entry
+    /// (<c>default(TextLocation)</c>, e.g. a synthesized or assembly-level
+    /// diagnostic with no source location).
     /// </summary>
-    public SourceText Text { get; }
+    public SourceText? Text { get; }
 
     /// <summary>
     /// Gets the text span within the source text.
     /// </summary>
     public TextSpan Span { get; }
 
+    // The four positional accessors below use `Text!`: line/character
+    // coordinates are only defined for located entries (constructed via the
+    // constructor, whose `text` parameter is non-nullable). On a
+    // location-less `default(TextLocation)` they throw, exactly as before
+    // nullable annotations; callers that may hold a location-less entry must
+    // check `Text` first (see TextWriterExtensions.WriteDiagnostics).
+
     /// <summary>
     /// Gets the zero-based start line in the source text as indicated by the text span.
+    /// Only defined for located entries (non-null <see cref="Text"/>).
     /// </summary>
-    public int StartLine => Text.GetLineIndex(Span.Start);
+    public int StartLine => Text!.GetLineIndex(Span.Start);
 
     /// <summary>
     /// Gets the zero-based start line character as indicated by the text span.
+    /// Only defined for located entries (non-null <see cref="Text"/>).
     /// </summary>
-    public int StartCharacter => Span.Start - Text.Lines[StartLine].Start;
+    public int StartCharacter => Span.Start - Text!.Lines[StartLine].Start;
 
     /// <summary>
     /// Gets the zero-based end line in the source text as indicated by the text span.
+    /// Only defined for located entries (non-null <see cref="Text"/>).
     /// </summary>
-    public int EndLine => Text.GetLineIndex(Span.End);
+    public int EndLine => Text!.GetLineIndex(Span.End);
 
     /// <summary>
     /// Gets the zero-based end line character as indicated by the text span.
+    /// Only defined for located entries (non-null <see cref="Text"/>).
     /// </summary>
-    public int EndCharacter => Span.End - Text.Lines[EndLine].Start;
+    public int EndCharacter => Span.End - Text!.Lines[EndLine].Start;
 
     /// <summary>
-    /// Gets the file name.
+    /// Gets the file name. Null for a location-less entry; empty for source
+    /// texts created without a file name.
     /// </summary>
-    public string FileName => Text?.FileName;
+    public string? FileName => Text?.FileName;
 
     /// <summary>
     /// Compares two text locations, useful for sorting sets of text locations.
@@ -72,8 +88,8 @@ public struct TextLocation : IComparable<TextLocation>
         // `OrderBy`/`Array.Sort` throw `InvalidOperationException: Failed to
         // compare two elements in the array`, which the compiler surfaces as
         // GS9998 and which masks every other diagnostic in the batch.
-        string thisFile = Text?.FileName;
-        string otherFile = other.Text?.FileName;
+        string? thisFile = Text?.FileName;
+        string? otherFile = other.Text?.FileName;
 
         int cmp = string.CompareOrdinal(thisFile, otherFile);
         if (cmp == 0)

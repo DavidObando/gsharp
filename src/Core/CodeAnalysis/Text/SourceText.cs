@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Text;
@@ -13,7 +15,7 @@ public sealed class SourceText
 {
     private readonly string text;
 
-    private SourceText(string text, string fileName, byte[] rawBytes)
+    private SourceText(string text, string fileName, byte[]? rawBytes)
     {
         this.text = text;
         FileName = fileName;
@@ -28,7 +30,7 @@ public sealed class SourceText
     /// document hash must be derived from them — not from a re-encoded copy of
     /// the decoded text — for on-disk source resolution to succeed.
     /// </summary>
-    public byte[] RawBytes { get; }
+    public byte[]? RawBytes { get; }
 
     /// <summary>
     /// Gets the set of lines contained by this document.
@@ -63,7 +65,7 @@ public sealed class SourceText
     /// bytes a debugger hashes.
     /// </param>
     /// <returns>A hydrated source text instance.</returns>
-    public static SourceText From(string text, string fileName = "", byte[] rawBytes = null)
+    public static SourceText From(string text, string fileName = "", byte[]? rawBytes = null)
     {
         return new SourceText(text, fileName, rawBytes);
     }
