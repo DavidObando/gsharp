@@ -371,13 +371,13 @@ public sealed partial class Evaluator
         // blocked thread's state intact whether the goroutine runs on a new
         // thread or inline on this one.
         var expression = node.Expression;
-        if (expression is BoundCallExpression call)
+        var enclosingScope = ScopeFrames.Count > 0 ? ScopeFrames.Peek() : null;
+        if (enclosingScope == null)
         {
-            RejectPInvoke(call.Function, call);
+            RejectPInvokeReachableFromGo(expression);
         }
 
         var goroutineState = CloneExecutionStateForGoroutine();
-        var enclosingScope = ScopeFrames.Count > 0 ? ScopeFrames.Peek() : null;
         if (enclosingScope != null)
         {
             var task = Task.Run(() =>
@@ -416,6 +416,16 @@ public sealed partial class Evaluator
                 executionState.Value = previousState;
             }
         });
+    }
+
+    private void RejectPInvokeReachableFromGo(BoundExpression expression)
+    {
+        var finder = new PInvokeReachabilityWalker(this);
+        finder.VisitExpression(expression);
+        if (finder.Function != null)
+        {
+            RejectPInvoke(finder.Function, finder.Node);
+        }
     }
 
     /// <summary>
@@ -844,5 +854,112 @@ public sealed partial class Evaluator
 
         matched = null;
         return false;
+    }
+
+    private sealed class PInvokeReachabilityWalker : BoundTreeWalker
+    {
+        private readonly Evaluator evaluator;
+        private readonly HashSet<FunctionSymbol> visitedFunctions = [];
+
+        public PInvokeReachabilityWalker(Evaluator evaluator)
+        {
+            this.evaluator = evaluator;
+        }
+
+        public FunctionSymbol Function { get; private set; }
+
+        public BoundNode Node { get; private set; }
+
+        public override void VisitStatement(BoundStatement node)
+        {
+            if (Node == null)
+            {
+                base.VisitStatement(node);
+            }
+        }
+
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (Node != null)
+            {
+                return;
+            }
+
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                VisitFunction(literal.Function, literal.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
+        }
+
+        protected override void VisitCallExpression(BoundCallExpression node)
+        {
+            if (Find(node.Function, node))
+            {
+                return;
+            }
+
+            base.VisitCallExpression(node);
+            VisitFunction(node.Function);
+        }
+
+        protected override void VisitMethodGroupExpression(BoundMethodGroupExpression node)
+        {
+            if (!Find(node.Function, node))
+            {
+                base.VisitMethodGroupExpression(node);
+            }
+        }
+
+        protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
+        {
+            base.VisitIndirectCallExpression(node);
+            if (Node != null || node.Target is not BoundVariableExpression variable)
+            {
+                return;
+            }
+
+            var target = evaluator.LookupVariable(variable.Variable);
+            if (target is Delegate materialized
+                && InterpreterClosures.TryGetValue(materialized, out var materializedClosure))
+            {
+                VisitFunction(materializedClosure.Function, materializedClosure.Body);
+            }
+            else if (target is ClosureValue closure)
+            {
+                VisitFunction(closure.Function, closure.Body);
+            }
+        }
+
+        private bool Find(FunctionSymbol function, BoundNode node)
+        {
+            if (function?.IsPInvoke != true)
+            {
+                return false;
+            }
+
+            Function = function;
+            Node = node;
+            return true;
+        }
+
+        private void VisitFunction(FunctionSymbol function)
+        {
+            if (evaluator.program.Functions.TryGetValue(function, out var body)
+                || evaluator.localFunctionBodies.TryGetValue(function, out body))
+            {
+                VisitFunction(function, body);
+            }
+        }
+
+        private void VisitFunction(FunctionSymbol function, BoundBlockStatement body)
+        {
+            if (visitedFunctions.Add(function))
+            {
+                VisitStatement(body);
+            }
+        }
     }
 }

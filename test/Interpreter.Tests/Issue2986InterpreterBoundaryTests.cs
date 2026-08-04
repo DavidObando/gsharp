@@ -260,6 +260,81 @@ public class Issue2986InterpreterBoundaryTests
             """);
     }
 
+    [Fact]
+    public void PInvokeGoThroughWrapper_ReportsGS0514()
+    {
+        AssertPInvokeUseRejected(
+            """
+            func CallNative() nint {
+                return NativeStrLen("Hello")
+            }
+
+            go CallNative()
+            Console.WriteLine("body-33")
+            """);
+    }
+
+    [Fact]
+    public void PInvokeGoThroughStoredClosure_ReportsGS0514()
+    {
+        AssertPInvokeUseRejected(
+            """
+            let invoke = func() nint { return NativeStrLen("Hello") }
+
+            go invoke()
+            Console.WriteLine("body-33")
+            """);
+    }
+
+    [Fact]
+    public void PInvokeGoThroughWrapperInsideScope_ReportsGS0514()
+    {
+        AssertPInvokeUseRejected(
+            """
+            func CallNative() nint {
+                return NativeStrLen("Hello")
+            }
+
+            scope {
+                go CallNative()
+            }
+            Console.WriteLine("body-33")
+            """);
+    }
+
+    [Fact]
+    public void PInvokeInsideStaticInitializer_ReportsLocatedGS0514()
+    {
+        var source = """
+            import System
+            import System.Runtime.InteropServices
+
+            @DllImport("libc", EntryPoint: "strlen", CharSet: CharSet.Ansi)
+            func NativeStrLen(text string) nint;
+
+            class Holder {
+                shared {
+                    public var Value int32 = 0
+                    init {
+                        Console.WriteLine(NativeStrLen("Hello"))
+                    }
+                }
+            }
+
+            Console.WriteLine(Holder.Value)
+            """;
+
+        var cell = new SessionEngine { CaptureConsole = true }.Evaluate(source, "static-init.gs");
+
+        var diagnostic = Assert.Single(cell.Diagnostics);
+        Assert.True(cell.HasError);
+        Assert.Equal("GS0514", diagnostic.Id);
+        Assert.Equal("static-init.gs", diagnostic.Location.FileName);
+        Assert.Equal(10, diagnostic.Location.StartLine);
+        Assert.Contains("NativeStrLen", diagnostic.Message);
+        Assert.Equal(string.Empty, cell.Output);
+    }
+
     /// <summary>
     /// ADR-0156 Phase 1: script-mode <c>gsi</c> executes emitted code, so the
     /// ADR-0152 native-call boundary (GS0514) no longer applies to file mode —

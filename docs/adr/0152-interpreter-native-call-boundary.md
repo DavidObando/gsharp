@@ -21,10 +21,11 @@ This ADR does not redefine that boundary.
 
 ## Decision
 
-Interpreted execution reports **GS0514 (Error)** when it reaches either a
-direct P/Invoke call or a first-class reference to a P/Invoke function. The
-diagnostic is located at the use expression, not the declaration, and directs
-the user to emit with `gsc /out:<path>` and run the emitted program.
+Interpreted execution maintains one invariant: every path that reaches a
+P/Invoke call or first-class reference reports **GS0514 (Error)** at that use
+before native dispatch. Runtime constructs may not catch, wrap into GS9999, or
+discard the compiler control signal. The diagnostic directs the user to emit
+with `gsc /out:<path>` and run the emitted program.
 
 An unused P/Invoke declaration remains valid. This preserves programs such as
 `samples/PInvokeFunctionPointer.gs`, which declare native signatures for the
@@ -42,8 +43,12 @@ wrappers that preserve a real runtime exception remain catchable by that
 exception's runtime type.
 
 ADR-0022 discards unhandled *runtime exceptions* from a free-standing `go`
-task. GS0514 is not a runtime exception, so a direct `go` P/Invoke call is
-rejected synchronously before the fire-and-forget task is scheduled.
+task. GS0514 is not a runtime exception. Before scheduling such a task, the
+evaluator follows its user-function and closure call graph and rejects any
+reachable P/Invoke use synchronously. Scoped goroutines propagate the same
+control signal through their awaited task. Static initialization likewise
+preserves the signal instead of replacing it with `TypeInitializationException`
+and GS9999.
 
 Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
 `Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
@@ -55,8 +60,8 @@ is deprecated and scheduled for removal in Phase 3c.
 
 - Interpreted execution never loads a native library for a P/Invoke use.
 - P/Invoke cannot silently return zero, `nil`, or another fabricated default.
-- User `catch` clauses cannot swallow GS0514, and a direct `go` P/Invoke call
-  is rejected before its fire-and-forget task is scheduled.
+- User `catch`, static initialization, free-standing `go`, and scoped `go`
+  cannot translate or swallow GS0514.
 - Programs may declare P/Invoke functions under interpretation when execution
   never calls or references them.
 - Default drivers run P/Invoke through emitted CLR execution; native calls are

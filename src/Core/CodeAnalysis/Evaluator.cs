@@ -367,6 +367,12 @@ public sealed partial class Evaluator
 
             succeeded = true;
         }
+        catch (Exception ex) when (
+            UnwrapDiagnosticException(ex) is EvaluatorException { IsDiagnosticControlSignal: true })
+        {
+            failure = ExceptionDispatchInfo.Capture(ex);
+            throw;
+        }
         catch (Exception ex)
         {
             var wrapped = new TypeInitializationException(

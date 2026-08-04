@@ -1777,9 +1777,9 @@ GS0264, even though iterator specialization synthesizes equivalent variants.
 | GS0514 | Error | Interpreted execution reached a P/Invoke call or function reference. Use `gsc /out:<path>` and run the emitted program to call native code; unused P/Invoke declarations remain valid. |
 
 This is an intentional interpreter capability boundary, not an internal
-compiler error. It applies even when the declaration is not called because
-the interpreter cannot create a valid callable value for direct or indirect
-use. Since [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+compiler error. It is reported only when interpreted execution reaches a call
+or function reference; declaration alone remains valid. Since
+[ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
 Phase 3a no driver interprets by default: `gsi <file>`, bare `gsc`, and the
 interactive REPL all execute emitted code, where P/Invoke runs natively. This
 diagnostic now fires only under gsi's deprecated `--engine evaluator` escape
