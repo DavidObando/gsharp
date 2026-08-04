@@ -767,4 +767,230 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(methodToken);
     }
+
+    /// <summary>
+    /// Issue #3226: the per-call plan for lifting an unconstrained generic
+    /// instantiation to <c>Nullable&lt;X&gt;</c>. A user generic function with
+    /// an UNCONSTRAINED type parameter <c>T</c> and a parameter declared
+    /// <c>T?</c> (e.g. the receiver of <c>func (self T?) MyOrElse[T](fb T) T</c>)
+    /// encodes every <c>T</c>/<c>T?</c> slot as the bare MVAR <c>!!T</c>
+    /// (<see cref="SignatureEncoder"/> models unconstrained <c>T?</c> as a
+    /// metadata-only reference annotation). That erasure is only sound for
+    /// reference instantiations: a value-type call site would push a live
+    /// <c>Nullable&lt;X&gt;</c> into an <c>X</c>-typed slot (invalid IL for
+    /// primitives, silent nil-loss for user structs). The lift instead
+    /// instantiates the MethodSpec at <c>Nullable&lt;X&gt;</c> — so the
+    /// <c>T?</c> slot really holds a nullable, and the body's box-probe
+    /// <c>nil</c> checks work because boxing a <c>Nullable&lt;X&gt;</c> yields
+    /// a null reference for the empty value — wrapping bare-<c>X</c> arguments
+    /// (<c>newobj Nullable&lt;X&gt;::.ctor</c>) and unwrapping a bare-<c>T</c>
+    /// return (<c>box</c> + <c>unbox.any</c>, loud on the impossible nil).
+    /// </summary>
+    private sealed class UnconstrainedNullableLiftPlan
+    {
+        /// <summary>Gets or sets the full (lifted) MethodSpec type-argument vector.</summary>
+        public TypeSymbol[] TypeArguments { get; set; }
+
+        /// <summary>Gets or sets, per argument index, the Nullable&lt;X&gt; to wrap the emitted argument into (null = pass through).</summary>
+        public NullableTypeSymbol[] ArgumentWraps { get; set; }
+
+        /// <summary>Gets or sets the Nullable&lt;X&gt; the call leaves on the stack when the declared return is the bare lifted T (null = no unwrap).</summary>
+        public NullableTypeSymbol ReturnUnwrap { get; set; }
+    }
+
+    // Issue #3226: decide whether (and how) the generic call must be
+    // instantiated at Nullable<X> instead of X. Returns null when the call
+    // needs no lift (no unconstrained T? slot, reference instantiation, or a
+    // shape the lift cannot represent — see the occurrence scan below).
+    private UnconstrainedNullableLiftPlan TryPlanUnconstrainedNullableLift(BoundCallExpression call)
+    {
+        var fn = call.Function;
+        var tps = fn.TypeParameters;
+        if (tps.IsDefaultOrEmpty
+            || call.MethodTypeArguments.IsDefaultOrEmpty
+            || call.MethodTypeArguments.Length != tps.Length
+            || fn.Parameters.Length != call.Arguments.Length
+            || fn.IsAsync
+            || call.StaticGenericOwnerType != null
+            || call.StaticGenericInterfaceOwnerType != null)
+        {
+            // Async bodies return through the Task<T> state-machine wrapper —
+            // a nested T occurrence the lift cannot represent — and statics on
+            // constructed generic owners resolve through TypeSpec-parented
+            // MemberRefs, not the MethodSpec path the lift rewrites.
+            return null;
+        }
+
+        TypeSymbol[] liftedArgs = null;
+        var liftedTps = new bool[tps.Length];
+        for (int k = 0; k < tps.Length; k++)
+        {
+            var tp = tps[k];
+            var x = call.MethodTypeArguments[k];
+
+            // A struct-constrained T? already emits as Nullable<!!T>
+            // (Issue #814); only the unconstrained erasure needs the lift.
+            // The instantiation must be a closed value type: an open X (the
+            // caller is itself generic) keeps the erased contract, and an
+            // already-nullable X has no valid Nullable<Nullable<..>> form.
+            if (tp.HasValueTypeConstraint
+                || x is NullableTypeSymbol
+                || x is TypeParameterSymbol
+                || !ReflectionMetadataEmitter.IsValueTypeSymbol(x))
+            {
+                continue;
+            }
+
+            bool hasNullableSlot = false;
+            bool representable = true;
+            for (int i = 0; i < fn.Parameters.Length && representable; i++)
+            {
+                var pt = fn.Parameters[i].Type;
+                if (pt is NullableTypeSymbol pn && ReferenceEquals(pn.UnderlyingType, tp))
+                {
+                    // A byref T?/T slot would need write-back through the
+                    // lifted representation; keep the status quo there.
+                    hasNullableSlot |= fn.Parameters[i].RefKind == RefKind.None;
+                    representable &= fn.Parameters[i].RefKind == RefKind.None;
+                }
+                else if (ReferenceEquals(pt, tp))
+                {
+                    representable &= fn.Parameters[i].RefKind == RefKind.None;
+                }
+                else if (TypeSymbol.AnyTypeParameter(pt, cand => ReferenceEquals(cand, tp)))
+                {
+                    // T occurs NESTED (e.g. []T, Box[T]): the instantiated
+                    // slot shape ([]X) diverges from the lifted vector
+                    // (Nullable<X>) — the lift cannot represent this call.
+                    representable = false;
+                }
+            }
+
+            if (!hasNullableSlot || !representable)
+            {
+                continue;
+            }
+
+            var rt = fn.Type;
+            if (ReferenceEquals(rt, tp)
+                || (rt is NullableTypeSymbol rn && ReferenceEquals(rn.UnderlyingType, tp)))
+            {
+                // Bare-T return unwraps after the call; T? return already
+                // matches the lifted Nullable<X>.
+            }
+            else if (TypeSymbol.AnyTypeParameter(rt, cand => ReferenceEquals(cand, tp)))
+            {
+                // Nested occurrence in the return (Task[T], []T, ...): not
+                // representable by the lift.
+                continue;
+            }
+
+            liftedArgs ??= call.MethodTypeArguments.ToArray();
+            liftedArgs[k] = NullableTypeSymbol.Get(x);
+            liftedTps[k] = true;
+        }
+
+        if (liftedArgs == null)
+        {
+            return null;
+        }
+
+        var plan = new UnconstrainedNullableLiftPlan { TypeArguments = liftedArgs };
+        var wraps = new NullableTypeSymbol[call.Arguments.Length];
+        for (int i = 0; i < fn.Parameters.Length; i++)
+        {
+            var pt = fn.Parameters[i].Type;
+            var tpIndex = IndexOfLiftedTypeParameter(tps, liftedTps, pt);
+            if (tpIndex < 0)
+            {
+                continue;
+            }
+
+            // The slot's instantiated shape is Nullable<X>. Wrap any argument
+            // the binder materialized as bare X (a `fb T` argument, or a
+            // receiver that bound without the X → X? lift); an argument
+            // already typed X? matches the slot as-is.
+            if (call.Arguments[i].Type is not NullableTypeSymbol)
+            {
+                wraps[i] = (NullableTypeSymbol)plan.TypeArguments[tpIndex];
+            }
+        }
+
+        plan.ArgumentWraps = wraps;
+        var retIndex = IndexOfLiftedTypeParameter(tps, liftedTps, fn.Type);
+        if (retIndex >= 0 && fn.Type is TypeParameterSymbol)
+        {
+            plan.ReturnUnwrap = (NullableTypeSymbol)plan.TypeArguments[retIndex];
+        }
+
+        return plan;
+    }
+
+    // Issue #3226: maps a declared T or T? slot type onto the index of the
+    // LIFTED type parameter it names; -1 for every other shape.
+    private static int IndexOfLiftedTypeParameter(
+        ImmutableArray<TypeParameterSymbol> tps,
+        bool[] liftedTps,
+        TypeSymbol declaredType)
+    {
+        var tp = declaredType as TypeParameterSymbol
+            ?? (declaredType is NullableTypeSymbol n ? n.UnderlyingType as TypeParameterSymbol : null);
+        if (tp == null)
+        {
+            return -1;
+        }
+
+        for (int k = 0; k < tps.Length; k++)
+        {
+            if (liftedTps[k] && ReferenceEquals(tps[k], tp))
+            {
+                return k;
+            }
+        }
+
+        return -1;
+    }
+
+    // Issue #3226: X → Nullable<X> wrap for a lifted argument slot. Mirrors
+    // the Issue #504/#1298 lifts in EmitConversion: a symbolic underlying
+    // (user struct/enum/tuple) routes through the TypeSpec-parented ctor
+    // MemberRef; a CLR-backed underlying closes System.Nullable`1 through the
+    // ReferenceResolver (Issue #571) and refs its single-arg ctor.
+    private void EmitUnconstrainedNullableLiftWrap(NullableTypeSymbol lifted)
+    {
+        this.il.OpCode(ILOpCode.Newobj);
+        if (NullableLifting.RequiresSymbolicNullableGetValue(lifted))
+        {
+            this.il.Token(this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(lifted));
+            return;
+        }
+
+        var innerClr = lifted.UnderlyingType.ClrType
+            ?? throw new InvalidOperationException(
+                $"Nullable<{lifted.UnderlyingType.Name}> lift has no CLR underlying type.");
+        if (!NullableLifting.TryConstructNullable(this.outer.emitCtx.References, innerClr, out var nullableClr))
+        {
+            throw new InvalidOperationException(
+                $"Cannot construct Nullable<{innerClr.FullName}>: System.Nullable`1 is not resolvable in the reference set.");
+        }
+
+        var nullableInnerArg = nullableClr.GetGenericArguments()[0];
+        var ctor = nullableClr.GetConstructor(new[] { nullableInnerArg })
+            ?? throw new InvalidOperationException(
+                $"Nullable<{nullableInnerArg.FullName}> has no single-arg constructor.");
+        this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
+    }
+
+    // Issue #3226: Nullable<X> → X unwrap for a lifted bare-T return.
+    // `box Nullable<X>` collapses to a boxed X (never null here — a T-typed
+    // value cannot be nil in the source type system), and `unbox.any X`
+    // reloads the value; an impossible nil would surface loudly as an NRE
+    // rather than a silent default(X).
+    private void EmitUnconstrainedNullableLiftUnwrap(NullableTypeSymbol lifted)
+    {
+        this.il.OpCode(ILOpCode.Box);
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(lifted));
+        this.il.OpCode(ILOpCode.Unbox_any);
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(lifted.UnderlyingType));
+    }
 }

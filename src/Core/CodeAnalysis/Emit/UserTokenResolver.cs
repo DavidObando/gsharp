@@ -244,6 +244,21 @@ internal sealed class UserTokenResolver
         => this.BuildMethodSpec(openMethod, methodGroup.MethodTypeArguments.ToArray());
 
     /// <summary>
+    /// Issue #3226: builds a MethodSpec for a generic G# user function call
+    /// whose instantiation was LIFTED at the call site — an unconstrained
+    /// <c>T?</c> parameter slot instantiated at a value type substitutes
+    /// <c>Nullable&lt;X&gt;</c> for the bind-time <c>X</c> so the erased
+    /// <c>!!T</c> slots carry the nullable representation. The caller
+    /// (<see cref="MethodBodyEmitter"/>'s lift planner) supplies the already
+    /// lifted type-argument vector.
+    /// </summary>
+    /// <param name="openMethod">The open generic MethodDef handle.</param>
+    /// <param name="liftedTypeArguments">The lifted instantiation vector.</param>
+    /// <returns>The MethodSpec handle.</returns>
+    internal EntityHandle BuildMethodSpecForLiftedGenericCall(EntityHandle openMethod, TypeSymbol[] liftedTypeArguments)
+        => this.BuildMethodSpec(openMethod, liftedTypeArguments);
+
+    /// <summary>
     /// ADR-0087 §3 R3+R4: builds a MethodSpec for a generic G# user
     /// instance method call (`h.Box[int32](42)`). Same inference rules
     /// as <see cref="BuildMethodSpecForGenericCall"/>.

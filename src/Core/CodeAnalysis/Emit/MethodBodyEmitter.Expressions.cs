@@ -127,10 +127,20 @@ internal sealed partial class MethodBodyEmitter
                     break;
                 }
 
+                // Issue #3226: an unconstrained `T?` slot (e.g. the receiver of
+                // `func (self T?) MyOrElse[T](fb T) T`) erases to the bare MVAR
+                // `!!T`, so a value-type instantiation must be lifted to
+                // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
+                var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
+
                 for (int i = 0; i < call.Arguments.Length; i++)
                 {
                     var arg = call.Arguments[i];
                     this.EmitExpression(arg);
+                    if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
+                    {
+                        this.EmitUnconstrainedNullableLiftWrap(liftWrap);
+                    }
                 }
 
                 // Issue #1433: a `shared` (static) method called on a
@@ -171,11 +181,24 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
                 {
-                    callTokenToEmit = this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
+                    // Issue #3226: a lifted call instantiates the MethodSpec at
+                    // Nullable<X> so the erased `!!T` slots really carry the
+                    // nullable representation the T? contract promises.
+                    callTokenToEmit = nullableLift != null
+                        ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(fnHandle, nullableLift.TypeArguments)
+                        : this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
                 }
 
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(callTokenToEmit);
+
+                // Issue #3226: a lifted call whose declared return is the bare
+                // lifted T leaves Nullable<X> on the stack; unwrap it back to
+                // the X the bound tree types the call as.
+                if (nullableLift?.ReturnUnwrap is { } liftUnwrap)
+                {
+                    this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap);
+                }
 
                 // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
                 // or plain MethodDef) returns the method's reified signature.

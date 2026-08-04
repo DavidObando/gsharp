@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -146,10 +140,10 @@ func (self T?) MyOrElse[T](fb T) T {
 var v int32? = nil
 v.MyOrElse(99)
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3226 tracks the invalid IL for the T? extension receiver on
-        // Nullable<int32>.
-        var result = EvaluateWithEvaluator(source);
+        // #3226: the T? extension receiver on Nullable<int32> emits via the
+        // unconstrained-nullable lift (MethodSpec at Nullable<int32>), so the
+        // emitted oracle now matches the evaluator.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(99, result.Value);
     }
@@ -176,11 +170,10 @@ var def = Point{X: 1, Y: 2}
 var r = pt.MyOrElse(def)
 r.X
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3226 tracks the wrong-value dispatch for the T? extension
-        // receiver on a nil user-struct Nullable (default(Point) instead of
-        // the fallback).
-        var result = EvaluateWithEvaluator(source);
+        // #3226: the nil user-struct Nullable receiver now dispatches to the
+        // fallback on the emitted path too (the lift boxes Nullable<Point> for
+        // the nil probe instead of reinterpreting it as a bare Point).
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
     }
@@ -352,15 +345,5 @@ a.FirstOr(99)
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3226 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3226 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
