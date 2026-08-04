@@ -1,9 +1,9 @@
 # ADR-0152: Interpreter native-call boundary
 
-- **Status**: Accepted
+- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 1; remains accepted for the default interactive evaluator
 - **Date**: 2026-07-31
 - **Phase**: Interpreter conformance
-- **Related**: ADR-0086 (P/Invoke), ADR-0153 (interpreter compiled-only storage boundary), issue [#2986](https://github.com/DavidObando/gsharp/issues/2986)
+- **Related**: ADR-0086 (P/Invoke), ADR-0153 (interpreter compiled-only storage boundary), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issue [#2986](https://github.com/DavidObando/gsharp/issues/2986)
 
 ## Context
 
@@ -21,27 +21,30 @@ This ADR does not redefine that boundary.
 
 ## Decision
 
-A bound P/Invoke declaration reports **GS0514 (Error)** before evaluation,
-located at the function identifier. The message names P/Invoke and directs the
-user to compile with `gsc`.
+A bound P/Invoke declaration presented to the tree evaluator reports **GS0514
+(Error)** before evaluation, located at the function identifier. The message
+names P/Invoke and directs the user to compile with `gsc`.
 
-The error applies even when the declaration is not called. `gsi` cannot create
-a valid callable value for the declaration, and function references can escape
-the declaring expression before a later indirect call. Refusing the declaration
-at the shared evaluation boundary is deterministic, prevents both fabricated
-results and delayed `GS9999` failures, and adds no native or reflection dispatch
-path.
+The error applies even when the declaration is not called. The evaluator cannot
+create a valid callable value for the declaration, and function references can
+escape the declaring expression before a later indirect call. Refusing the
+declaration at the shared evaluation boundary is deterministic, prevents both
+fabricated results and delayed `GS9999` failures, and adds no native or
+reflection dispatch path.
 
-Batch `gsi` renders the diagnostic through the shared renderer, including the
-filename, location, severity, and source excerpt. Rendering is presentation,
-not part of the boundary's semantic contract.
+Since ADR-0156 Phase 1, this boundary applies to `SessionEngine`,
+`Compilation.Evaluate`, and default interactive `gsi`, not to file drivers.
+Bare `gsc` and `gsi <file>` emit and run the native call; `gsc /out:` emits it
+to disk. Interactive `gsi --engine emit` also uses emitted execution.
 
 ## Consequences
 
-- `gsi` never loads a native library for a P/Invoke declaration.
+- The default interactive evaluator never loads a native library for a
+  P/Invoke declaration.
 - P/Invoke cannot silently return zero, `nil`, or another fabricated default.
-- Programs containing P/Invoke declarations must use `gsc`, even when a
-  particular interpreter execution would not call them.
+- File-mode programs and the opt-in emitted interactive engine run P/Invoke
+  through the CLR; evaluator submissions report GS0514 even when a particular
+  execution would not call the declaration.
 - `GS9999` remains an unexpected evaluator-exception diagnostic, not a
   deliberate capability boundary.
 

@@ -5,7 +5,8 @@
 - **Phase**: Interpreter conformance / execution architecture
 - **Related**: #3176 (tracking), #3163 (code-health P2 headline item), ADR-0152
   (interpreter native-call boundary), ADR-0153 (interpreter compiled-only
-  storage boundary), ADR-0154 (test oracle strength); divergence instances
+  storage boundary), ADR-0154 (test oracle strength), ADR-0068 (`deinit`
+  destructor support); divergence instances
   [#3140](https://github.com/DavidObando/gsharp/issues/3140),
   [#3134](https://github.com/DavidObando/gsharp/issues/3134),
   [#3116](https://github.com/DavidObando/gsharp/issues/3116),
@@ -24,9 +25,10 @@
 
 ## Context
 
-G# has three execution drivers and two execution engines. `gsc /out:` emits IL
+Before this decision, G# had three execution drivers and two execution engines.
+`gsc /out:` emitted IL
 through `ReflectionMetadataEmitter` and the program runs on the CLR. Bare `gsc`
-(no `/out:`) and `gsi` both call `Compilation.Evaluate`, which walks bound
+(no `/out:`) and `gsi` both called `Compilation.Evaluate`, which walks bound
 trees with the `Evaluator` — ~7,300 lines across seven partial files in
 `src/Core/CodeAnalysis/Evaluator*.cs`. The two engines do not even consume the
 same trees: the emit path runs `InterpolatedStringHandlerLowerer`,
@@ -78,10 +80,11 @@ applicable because the pieces already exist here:
 
 ## Decision
 
-**Bare `gsc` and `gsi` stop interpreting. They compile with the real emitter
-into memory, load the PE bytes into a collectible `AssemblyLoadContext` inside
-the driver process, invoke the entry point, and surface stdout/stderr and the
-exit code exactly as today.** The tree-walking evaluator is retired on a
+**Bare `gsc` and file-mode `gsi` stop interpreting. They compile with the real
+emitter into memory, load the PE bytes into a collectible
+`AssemblyLoadContext` inside the driver process, invoke the entry point, and
+surface stdout/stderr and the exit code exactly as today.** Interactive `gsi`
+follows the phased migration below. The tree-walking evaluator is retired on a
 phased schedule, ending with its deletion or a documented residue. One codegen
 pipeline executes everywhere; the divergence class dies by construction.
 
@@ -93,6 +96,27 @@ framework and `/r:` references from the default context / resolver paths,
 value to an exit code (`int`/`uint`/`void→0`, matching today's gsi protocol),
 and unwrap `TargetInvocationException` into the driver's unhandled-exception
 protocol.
+
+### Implementation status (2026-08-04)
+
+Phase 1 shipped in #3182. Phase 2's emitted submission engine shipped in #3186
+as an opt-in; the evaluator remains the interactive default. Phase 3 is not
+complete.
+
+| Invocation | Current execution path |
+|---|---|
+| bare `gsc file.gs` | `EmittedProgramHost.Run` |
+| `gsc /out:program.dll file.gs` | emit PE to disk; the CLR runs it separately |
+| `gsi file.gs` | `EmittedProgramHost.Run` |
+| interactive `gsi` | `SessionEngine` → `Compilation.Evaluate` (default) |
+| interactive `gsi --engine emit` | `EmittedSessionEngine` |
+
+Therefore the former "three-driver" model no longer identifies three
+execution semantics: all file-mode columns compile through the emitter. The
+default interactive REPL is the remaining shipped evaluator harness. This
+partially supersedes ADR-0068's original `deinit` interpreter boundary (and
+ADR-0152/ADR-0153) for migrated drivers, while leaving those boundaries in
+force for the evaluator residue.
 
 ### Phased migration plan
 
@@ -196,9 +220,9 @@ ALC lifetime). No changes to the language, the LSP, or `gsc /out:`.
   session that registers callbacks with default-ALC statics (timers, events)
   can pin the session ALC — accepted, same as any REPL.
 - **Deinit semantics**: emitted code runs real deinitializers, so the
-  GS0510 evaluator boundary disappears on migrated drivers and the recent
-  deinit driver-boundary observability work applies to all three drivers
-  uniformly.
+  GS0510 evaluator boundary in
+  [ADR-0068](0068-deinit-destructor-support.md) disappears on migrated drivers;
+  deinit behavior applies to all three file-mode columns uniformly.
 - **stdout / exit code**: the host process's `Console` is the program's
   `Console` (today's gsi behavior, spike-verified including async
   submissions); the TUI's `CaptureConsole` redirection keeps working because

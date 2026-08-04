@@ -23,7 +23,8 @@ and believes the property is covered.
 The concrete anti-patterns, each observed in this codebase:
 
 1. **Byte-identical fixture pair** (#3161). The positive and negative variants of the claimed
-   property produce identical output — escaping vs. non-escaping receivers under `gsi` were
+   property produce identical output — escaping vs. non-escaping receivers under the
+   then-evaluator-backed `gsi` were
    byte-identical in stdout and diagnostic count — so the assertion cannot distinguish them.
    The test name claimed reachability semantics; the only load-bearing assertion was a
    diagnostic count about something else.

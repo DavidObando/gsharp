@@ -16,9 +16,11 @@ Issue #727 (under parent #706) requires that G# emit real CLR P/Invoke metadata 
 
 ### Interpreter boundary
 
-This decision specifies emitted CLR behavior. Per ADR-0152, `gsi` reports
-GS0514 (Error) at a P/Invoke declaration and does not load a native library.
-Programs that require native calls must use `gsc`.
+This decision specifies emitted CLR behavior. Per ADR-0152, the default
+interactive evaluator reports GS0514 (Error) at a P/Invoke declaration and
+does not load a native library. Since ADR-0156 Phase 1, bare `gsc` and
+`gsi <file>` use emitted execution and run P/Invoke natively; `gsc /out:`
+emits the same CLR metadata to disk.
 
 ### 1. Syntax — `@DllImport("libname") func Name(...) ReturnType;`
 

@@ -386,7 +386,7 @@ of that migration, not left behind as dead code.
   / `IAsyncEnumerable[T]` / `async sequence[T]` — surfaced as
   `GS0136 Function 'yield' doesn't exist` (when reached through
   the compile path) or `GS9998 Unexpected statement: YieldStatement`
-  (when reached through the gsc no-output / interpreter path via
+  (when reached through the then-evaluator-backed bare-`gsc` path via
   `ControlFlowGraph.Create`). Root cause was two-fold and not
   actually shared-static-specific: (a) `StatementBinder.GetIteratorElementType`
   read only `function.Type.ClrType`, which is type-erased to

@@ -137,7 +137,12 @@ A "real" Roslyn-style source generator would model `@LibraryImport` (and future 
 
 We therefore generate the wrapper inline in the emitter and revisit the source-generator infrastructure if and when (a) at least one additional consumer is identified, **and** (b) the wrapper logic grows complex enough that bound-tree rewriting becomes the simpler implementation. Neither trigger is met today.
 
-For the interpreter (which has no IL emit), `@LibraryImport` functions are treated identically to `@DllImport`: the binder reserves an empty body and the evaluator returns the default value for the declared return type. The interpreter is not a runtime for native interop; programs that actually need to transition to unmanaged code must be compiled with `gsc`.
+ADR-0152 supersedes the original evaluator behavior described here. A valid
+`@LibraryImport` declaration now reports GS0514 before tree evaluation instead
+of returning a fabricated default value. ADR-0156 Phase 1 moved bare `gsc` and
+`gsi <file>` to emitted execution, where the generated wrapper performs the
+real native transition. The boundary remains on the default interactive
+evaluator.
 
 ### 5. Diagnostics (new)
 
@@ -167,7 +172,7 @@ The inner P/Invoke is emitted before the outer body to keep the row order in syn
   - Parser: `Issue758LibraryImportParserTests` covers `;`-bodied `@LibraryImport` declarations with each attribute knob.
   - Binder: `Issue758LibraryImportBinderTests` covers GS0342 – GS0344 plus successful acceptance, including a `string` return that binds with an explicit `StringMarshalling` and still reports GS0344 without one (issue #1504).
   - Emit (CompileAndRun + ilverify): `Issue758LibraryImportEmitTests` covers `strlen` (Utf8 round-trip), `getpid` (no string), empty-string null-safe behaviour, and metadata-shape verification of the outer + hidden inner pair. `Issue1504LibraryImportStringReturnEmitTests` covers `string` returns: a `setenv`+`getenv` Utf8 round-trip, the null-pointer→`nil` path, and metadata/IL-shape checks (outer returns `string`, inner returns `IntPtr`, the `PtrToString*` materialization is emitted, and the return pointer is never freed) for Utf8/Utf16 and return-only/return-plus-param shapes.
-  - Interpreter: `Issue758LibraryImportInterpreterTests` confirms the bound program does not crash under the interpreter and that GS0344 fires for an under-specified declaration before evaluation.
+  - Interpreter: `Issue758LibraryImportInterpreterTests` confirms valid declarations report GS0514 and that GS0344 fires for an under-specified declaration before evaluation.
 - **Follow-ups (filed under parent #706, peers of #758):**
   - `out` / `ref` primitive parameter marshalling for `@LibraryImport` (issue #759).
   - `Span<T>` and `ReadOnlySpan<T>` parameter marshalling (issue #760).
@@ -178,7 +183,9 @@ The inner P/Invoke is emitted before the outer body to keep the row order in syn
 
 - Programs that need AOT-friendly native interop no longer have to wrap the call in a hand-written C# `[LibraryImport]` partial method. The same surface is available directly in G# source.
 - The emitter delta is modest: one new bound-tree flag (`PInvokeMetadata.IsLibraryImport`), one new emit dispatch, and an explicit IL-stub generator. There is no new bound-node kind, so the BoundTree exhaustiveness allowlist is unaffected.
-- The interpreter inherits the existing P/Invoke "return default" behaviour. We document the limitation rather than masking it as a feature; it is consistent with how the interpreter treats `@DllImport` today.
+- The default interactive evaluator reports ADR-0152's GS0514 boundary for
+  valid declarations; it does not fabricate a return value. File-mode drivers
+  execute the emitted wrapper under ADR-0156.
 - ADR-0086 §4 is now superseded; cross-links from the v1 P/Invoke ADR point to ADR-0092 for the modern attribute. The historical rationale for deferring the work is preserved in ADR-0086 for context.
 - A full source-generator infrastructure is **not** added in this ADR. The trigger conditions for revisiting that decision are recorded in §4.
 
