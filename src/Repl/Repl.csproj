@@ -44,7 +44,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Interpreter.Tests" />
+    <!-- The test assembly is GSharp.Interpreter.Tests: gsharp.build.props
+         defaults AssemblyName to GSharp.$(MSBuildProjectName). -->
+    <InternalsVisibleTo Include="GSharp.Interpreter.Tests" />
   </ItemGroup>
 
 </Project>

@@ -35,8 +35,10 @@ public static class Program
                 Console.WriteLine("  file.gs                Run the given G# script and exit.");
                 Console.WriteLine("  /r:<file>              Reference an assembly (repeatable).");
                 Console.WriteLine("  /reference:<file>      Alias for /r: (also -r: and --reference:).");
-                Console.WriteLine("  --engine <name>        Interactive engine: 'evaluator' (default) or 'emit'");
-                Console.WriteLine("                         (ADR-0156 Phase 2 opt-in; also via GSI_ENGINE).");
+                Console.WriteLine("  --engine <name>        Interactive engine: 'emit' (default) or 'evaluator'");
+                Console.WriteLine("                         (also via GSI_ENGINE). 'evaluator' selects the legacy");
+                Console.WriteLine("                         tree-walking engine; it is deprecated and will be");
+                Console.WriteLine("                         removed in ADR-0156 Phase 3c.");
                 Console.WriteLine("  --help, -h             Show this help and exit.");
                 Console.WriteLine("  --version              Show the gsi version and exit.");
                 Console.WriteLine("  (no args)              Start the interactive REPL.");
@@ -83,7 +85,7 @@ public static class Program
         engineChoice ??= EngineChoiceFromEnvironment();
         if (engineChoice is not null and not "evaluator" and not "emit")
         {
-            Console.Error.WriteLine($"Unknown engine '{engineChoice}'. Expected 'evaluator' or 'emit'.");
+            Console.Error.WriteLine($"Unknown engine '{engineChoice}'. Expected 'emit' or 'evaluator'.");
             return 1;
         }
 
@@ -107,13 +109,29 @@ public static class Program
         return RunScript(scriptPath, references);
     }
 
-    private static string? EngineChoiceFromEnvironment()
+    /// <summary>
+    /// Decides whether an interactive engine choice selects the legacy
+    /// tree-walking evaluator. ADR-0156 Phase 3a: the emitted
+    /// submission-chaining engine is the interactive default, so only an
+    /// explicit <c>--engine evaluator</c> (or <c>GSI_ENGINE=evaluator</c>)
+    /// selects the evaluator — a deprecated escape hatch that retires with
+    /// the evaluator in Phase 3c.
+    /// </summary>
+    /// <param name="engineChoice">The normalized engine choice, or <see langword="null"/> for the default.</param>
+    /// <returns><see langword="true"/> when the evaluator engine was explicitly requested.</returns>
+    internal static bool UsesEvaluatorEngine(string? engineChoice) => engineChoice == "evaluator";
+
+    /// <summary>Reads the <c>GSI_ENGINE</c> environment variable as a normalized engine choice.</summary>
+    /// <returns>The lower-cased engine name, or <see langword="null"/> when unset or empty.</returns>
+    internal static string? EngineChoiceFromEnvironment()
         => Environment.GetEnvironmentVariable("GSI_ENGINE") is { Length: > 0 } env ? env.ToLowerInvariant() : null;
 
     /// <summary>
-    /// Starts the interactive TUI. ADR-0156 Phase 2: <c>--engine emit</c> (or
-    /// <c>GSI_ENGINE=emit</c>) selects the emitted submission-chaining engine;
-    /// the default remains the tree-walking evaluator until the flip lands.
+    /// Starts the interactive TUI. ADR-0156 Phase 3a: submissions execute
+    /// through the emitted <see cref="Engine.EmittedSessionEngine"/> by
+    /// default; <c>--engine evaluator</c> (or <c>GSI_ENGINE=evaluator</c>)
+    /// temporarily selects the legacy tree-walking engine until it is
+    /// removed in Phase 3c.
     /// </summary>
     private static int RunInteractive(string? engineChoice, List<string> references)
     {
@@ -124,13 +142,13 @@ public static class Program
         }
 
         var effectiveReferences = ReferenceResolver.ResolveDriverReferencePaths(references);
-        if (engineChoice == "emit")
+        if (UsesEvaluatorEngine(engineChoice))
         {
-            return ReplHost.Run(new Engine.EmittedSessionEngine(effectiveReferences));
+            using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
+            return ReplHost.Run(new Engine.SessionEngine(resolver));
         }
 
-        using var resolver = ReferenceResolver.WithRuntimeReferences(effectiveReferences);
-        return ReplHost.Run(new Engine.SessionEngine(resolver));
+        return ReplHost.Run(new Engine.EmittedSessionEngine(effectiveReferences));
     }
 
     /// <summary>
