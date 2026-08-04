@@ -325,6 +325,108 @@ internal sealed class ConstructorBodyEmitter
         => !classSym.InstanceFieldInitializers.IsEmpty;
 
     /// <summary>
+    /// Issue #3219: a value-kind struct whose declared field initializers
+    /// include a NON-public field cannot be materialized by the historical
+    /// call-site lowering (initobj + raw <c>stfld</c> per initializer) —
+    /// the private-field store executes outside the type and the runtime
+    /// rejects it with <see cref="FieldAccessException"/>. Such a struct
+    /// gets a synthesized public parameterless <c>.ctor</c> that runs ALL
+    /// declared instance field initializers in-type (mirroring the class
+    /// default-ctor path), and struct-literal sites construct through it.
+    /// Structs whose initializers are all public keep the historical inline
+    /// emission byte-for-byte. A user-declared parameterless ctor (which
+    /// would collide) and inline structs (fixed synthesized-member layout)
+    /// are excluded.
+    /// </summary>
+    /// <param name="structSym">The struct definition to probe.</param>
+    /// <returns><see langword="true"/> when the synthesized parameterless ctor is required.</returns>
+    internal static bool NeedsSynthesizedValueStructDefaultCtor(StructSymbol structSym)
+    {
+        if (structSym.IsClass || structSym.IsInline || structSym.InstanceFieldInitializers.IsEmpty)
+        {
+            return false;
+        }
+
+        if (!structSym.ExplicitConstructors.IsDefaultOrEmpty)
+        {
+            foreach (var ctor in structSym.ExplicitConstructors)
+            {
+                if (ctor.Parameters.Length == 0)
+                {
+                    return false;
+                }
+            }
+        }
+
+        foreach (var initializer in structSym.InstanceFieldInitializers)
+        {
+            if (initializer.Key.Accessibility != Accessibility.Public)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3219: builds the IL body for the synthesized parameterless
+    /// value-struct constructor — zero-initializes <c>this</c> (the caller's
+    /// storage may be a reused local) and then evaluates the declared
+    /// instance field initializers in declaration order, in-type, so
+    /// non-public initialized fields never need a call-site store.
+    /// Returns the resulting body offset.
+    /// </summary>
+    /// <param name="structSym">The struct whose ctor body is being emitted.</param>
+    /// <returns>The method-body stream offset.</returns>
+    internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
+    {
+        // Synthesize a `this` parameter for the field-initializer receiver.
+        var thisParam = new ParameterSymbol("this", structSym);
+
+        // Synthesize field-initializer assignment statements.
+        var statements = BuildInstanceFieldInitializerStatements(structSym, thisParam);
+        var body = new BoundBlockStatement(null, statements);
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);
+        session.Plan(body);
+
+        var parameters = new Dictionary<ParameterSymbol, int>
+        {
+            [thisParam] = 0,
+        };
+
+        var localsSignature = session.BuildLocalsSignature();
+
+        // arg0 of a value-type instance ctor is already a managed pointer;
+        // structThisParameter makes the receiver loads use ldarg.0 (the
+        // address) rather than ldarga (a pointer-to-pointer).
+        var emitter = session.CreateEmitter(parameters, structThisParameter: thisParam);
+
+        // `this` is a byref to caller storage (possibly a reused local):
+        // zero the whole value before the initializers store into it. For a
+        // generic struct the token is the self-instantiation TypeSpec
+        // (`Box`1<!0>`), the same in-type reference the field stores use.
+        il.LoadArgument(0);
+        il.OpCode(ILOpCode.Initobj);
+        il.Token(this.outer.userTokens.ResolveUserTypeToken(structSym));
+
+        // Instance field initializers
+        try
+        {
+            emitter.EmitBlock(body);
+        }
+        catch (Exception ex) when (ex is not EmitDiagnosticException and not OutOfMemoryException and not StackOverflowException)
+        {
+            var anchor = emitter.CurrentAnchor ?? structSym.Declaration;
+            EmitDiagnosticException.Wrap(anchor, ex);
+        }
+
+        return this.AddCompletedMethodBody(il, emitter, localsSignature);
+    }
+
+    /// <summary>
     /// Issue #640: builds the bound assignment statements for all instance
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.

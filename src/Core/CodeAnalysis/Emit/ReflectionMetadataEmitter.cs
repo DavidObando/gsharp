@@ -1132,6 +1132,7 @@ internal sealed class ReflectionMetadataEmitter
             (ctor, containingType) => this.memberRefs.GetCtorReference(ctor, containingType),
             this.ctorBodies.EmitStaticConstructorBodyBytes,
             this.ctorBodies.EmitClassDefaultConstructorBodyBytes,
+            this.ctorBodies.EmitValueStructDefaultConstructorBodyBytes,
             this.ctorBodies.EmitClassPrimaryConstructorBodyBytes,
             this.ctorBodies.EmitClassConstructorWithBaseInitializerBodyBytes,
             this.ctorBodies.EmitClassConstructorWithBodyBodyBytes,
@@ -2124,7 +2125,13 @@ internal sealed class ReflectionMetadataEmitter
         var structFirstMethodRows = new Dictionary<StructSymbol, int>();
         void PlanStructMethods(StructSymbol s)
         {
-            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
+            // Issue #3219: a value struct with a non-public declared field
+            // initializer gets a synthesized parameterless .ctor (planned as
+            // the struct's LAST row, below, so the explicit-ctor /
+            // inline-struct first-row offsets pre-registered later in this
+            // pass stay valid).
+            var needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s);
+            if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && !s.IsInline && !s.IsData && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock && !needsSynthesizedDefaultCtor)
             {
                 return;
             }
@@ -2251,6 +2258,16 @@ internal sealed class ReflectionMetadataEmitter
             if (!s.StaticFieldInitializers.IsEmpty || s.HasStaticInitializerBlock)
             {
                 this.cache.CctorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
+            }
+
+            // Issue #3219: plan (and pre-register, so bodies emitted before
+            // EmitStructMethodBodies can construct through it) the synthesized
+            // parameterless .ctor as the struct's last row. ClassCtorHandles
+            // doubles as the default-ctor registry ResolveUserCtorTokenForDefault
+            // consults for constructed-generic MemberRef parenting.
+            if (needsSynthesizedDefaultCtor)
+            {
+                this.cache.ClassCtorHandles[s] = MetadataTokens.MethodDefinitionHandle(methodRow++);
             }
         }
 
@@ -3578,8 +3595,18 @@ internal sealed class ReflectionMetadataEmitter
                 this.dataStructSynth.EmitDataStructSynthesizedMembers(s);
             }
 
+            // Issue #3219: the synthesized value-struct default ctor is the
+            // struct's LAST planned row — emitted at the tail of this method,
+            // so the early-out below must not skip a struct whose only row is
+            // that ctor.
+            var emitsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s);
             if (s.Methods.IsDefaultOrEmpty && s.ExplicitConstructors.IsDefaultOrEmpty && s.Properties.IsDefaultOrEmpty && s.Events.IsDefaultOrEmpty && s.StaticMethods.IsDefaultOrEmpty && s.StaticProperties.IsDefaultOrEmpty && s.StaticEvents.IsDefaultOrEmpty && s.StaticFieldInitializers.IsEmpty && !s.HasStaticInitializerBlock)
             {
+                if (emitsSynthesizedDefaultCtor)
+                {
+                    this.typeDefEmitter.EmitValueStructDefaultConstructor(s);
+                }
+
                 return;
             }
 
@@ -3653,6 +3680,13 @@ internal sealed class ReflectionMetadataEmitter
             // ADR-0149: emit MethodImpl rows for explicit-interface-clause
             // event implementations (add/remove/raise accessors).
             this.interfaceImpls.EmitExplicitInterfaceEventMethodImpls(s);
+
+            // Issue #3219: emit the synthesized value-struct default ctor at
+            // the tail so its MethodDef lands on the last planned row.
+            if (emitsSynthesizedDefaultCtor)
+            {
+                this.typeDefEmitter.EmitValueStructDefaultConstructor(s);
+            }
 
             // Issues #2718/#2742: see the class path above.
             this.interfaceImpls.EmitImplicitEventMethodImpls(s);

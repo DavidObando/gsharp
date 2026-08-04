@@ -127,10 +127,20 @@ internal sealed partial class MethodBodyEmitter
                     break;
                 }
 
+                // Issue #3226: an unconstrained `T?` slot (e.g. the receiver of
+                // `func (self T?) MyOrElse[T](fb T) T`) erases to the bare MVAR
+                // `!!T`, so a value-type instantiation must be lifted to
+                // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
+                var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
+
                 for (int i = 0; i < call.Arguments.Length; i++)
                 {
                     var arg = call.Arguments[i];
                     this.EmitExpression(arg);
+                    if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
+                    {
+                        this.EmitUnconstrainedNullableLiftWrap(liftWrap);
+                    }
                 }
 
                 // Issue #1433: a `shared` (static) method called on a
@@ -171,11 +181,24 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
                 {
-                    callTokenToEmit = this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
+                    // Issue #3226: a lifted call instantiates the MethodSpec at
+                    // Nullable<X> so the erased `!!T` slots really carry the
+                    // nullable representation the T? contract promises.
+                    callTokenToEmit = nullableLift != null
+                        ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(fnHandle, nullableLift.TypeArguments)
+                        : this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
                 }
 
                 this.il.OpCode(ILOpCode.Call);
                 this.il.Token(callTokenToEmit);
+
+                // Issue #3226: a lifted call whose declared return is the bare
+                // lifted T leaves Nullable<X> on the stack; unwrap it back to
+                // the X the bound tree types the call as.
+                if (nullableLift?.ReturnUnwrap is { } liftUnwrap)
+                {
+                    this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap);
+                }
 
                 // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
                 // or plain MethodDef) returns the method's reified signature.
@@ -1218,14 +1241,60 @@ internal sealed partial class MethodBodyEmitter
                 + "Check StructLiteralCollector and its ancestor walker.");
         }
 
-        // ldloca slot; initobj typedef — zero-initializes the value type.
+        // Issue #3219: a value struct with a NON-public declared field
+        // initializer cannot be materialized by initobj + raw stfld — the
+        // private-field store executes outside the type (FieldAccessException).
+        // Such a struct carries a synthesized parameterless .ctor (see
+        // ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor) that
+        // zero-initializes and runs ALL declared initializers in-type;
+        // construct through it and skip the literal's injected
+        // declared-initializer entries (identified below by reference to the
+        // symbol's InstanceFieldInitializers expressions — the binder injects
+        // exactly those instances), so initializer side effects run once.
+        var structDefinition = literal.StructType.Definition ?? literal.StructType;
+        HashSet<BoundExpression> declaredInitializerValues = null;
+        if (this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
+            && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition))
+        {
+            declaredInitializerValues = new HashSet<BoundExpression>(ReferenceEqualityComparer.Instance);
+            foreach (var declared in literal.StructType.InstanceFieldInitializers)
+            {
+                declaredInitializerValues.Add(declared.Value);
+            }
+
+            foreach (var declared in structDefinition.InstanceFieldInitializers)
+            {
+                declaredInitializerValues.Add(declared.Value);
+            }
+        }
+
+        // ldloca slot; initobj typedef — zero-initializes the value type —
+        // or, for a #3219 struct, ldloca slot; call .ctor() (which zeroes and
+        // runs the declared initializers in-type).
         this.il.LoadLocalAddress(slot);
-        this.il.OpCode(ILOpCode.Initobj);
-        this.il.Token(typeDef);
+        if (declaredInitializerValues != null)
+        {
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(this.outer.userTokens.ResolveUserCtorTokenForDefault(literal.StructType));
+        }
+        else
+        {
+            this.il.OpCode(ILOpCode.Initobj);
+            this.il.Token(typeDef);
+        }
 
         // For each initializer: ldloca slot; <emit value>; stfld fieldHandle.
         foreach (var init in literal.Initializers)
         {
+            // Issue #3219: the synthesized ctor already ran this declared
+            // initializer in-type.
+            if (declaredInitializerValues != null
+                && init.Field != null
+                && declaredInitializerValues.Contains(init.Value))
+            {
+                continue;
+            }
+
             // Issue #1211: a `prop` member on a value type is set through its
             // setter/init accessor (`ldloca slot; <value>; call set_X`). The
             // managed-pointer receiver means a non-virtual `call`.

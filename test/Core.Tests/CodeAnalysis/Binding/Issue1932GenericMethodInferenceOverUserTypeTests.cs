@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -90,10 +84,10 @@ func Describe[T](h IHolder[T]) T {
 
 Describe(StringBox{Value: ""hi""})
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3222 tracks the invalid IL for the implementing-struct call
-        // through the constructed generic interface parameter.
-        var result = EvaluateWithEvaluator(source);
+        // #3222: the implementing-struct argument now materializes its
+        // `box StringBox → IHolder<string>` conversion at the plain-call
+        // argument site, so the emitted oracle matches the evaluator.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("hi", result.Value);
     }
@@ -123,15 +117,5 @@ swapped.First
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3222 test above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3222 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }
