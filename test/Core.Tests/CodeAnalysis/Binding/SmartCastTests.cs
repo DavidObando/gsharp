@@ -2,12 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -64,9 +58,11 @@ if nil != x {
 }
 y
 ";
-        // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate —
-        // #3217 tracks the nil-on-left smart-cast invalid IL.
-        var result = EvaluateWithEvaluator(source);
+        // Issue #3217: the binder canonicalizes `nil != x` to `x != nil`, so
+        // the emitted nil-comparison machinery owns the node and the IL
+        // verifies; the nil-on-left form previously fell through to a raw
+        // `ceq` and threw InvalidProgramException at runtime.
+        var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(7, result.Value);
     }
@@ -125,15 +121,5 @@ y
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
-    }
-
-    // Evaluator-pinned twin of Evaluate for the #3217 tests above; delete
-    // with the evaluator (ADR-0156 Phase 3c) or when #3217 aligns the
-    // engines.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

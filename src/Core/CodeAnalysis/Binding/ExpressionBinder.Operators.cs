@@ -1579,6 +1579,29 @@ internal sealed partial class ExpressionBinder
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type);
         }
 
+        // Issue #3217: canonicalize a `nil` literal on the LEFT of `==` / `!=`
+        // (`nil != x`) to the nil-on-right form (`x != nil`). The operator
+        // table's null-compare arm binds both orders symmetrically, but the
+        // entire downstream nil-comparison machinery — the lifted-slot
+        // planner's Form 2 (`Nullable<T> op nil`), EmitLiftedNullableBinary,
+        // and the user-enum / type-parameter nil arms — matches only the
+        // nil-on-right shape, so a Null-typed LEFT operand fell through to
+        // the emitter's generic `ceq` tail and produced unverifiable IL
+        // (InvalidProgramException at runtime). Swapping is semantics-
+        // preserving: equality is symmetric and the `nil` literal is a pure
+        // constant, so the reordering of operand evaluation is unobservable.
+        if ((boundOperator.Kind == BoundBinaryOperatorKind.Equals || boundOperator.Kind == BoundBinaryOperatorKind.NotEquals)
+            && boundLeft.Type == TypeSymbol.Null
+            && boundRight.Type != TypeSymbol.Null)
+        {
+            var mirrored = BoundBinaryOperator.Bind(syntax.OperatorToken.Kind, boundRight.Type, boundLeft.Type);
+            if (mirrored != null)
+            {
+                (boundLeft, boundRight) = (boundRight, boundLeft);
+                boundOperator = mirrored;
+            }
+        }
+
         // Issue #1881: Sum/Difference/Product bound inside a `checked`
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
