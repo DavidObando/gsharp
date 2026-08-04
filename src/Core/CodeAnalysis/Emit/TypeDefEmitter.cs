@@ -569,6 +569,10 @@ internal sealed class TypeDefEmitter
         // when a static constructor is declared — it must NOT be
         // `beforefieldinit` (which would let the runtime run the type
         // initializer at an unspecified time before first field access).
+        // Issue #3203 confirmed this contract as the language semantics:
+        // explicit init blocks get C# static-constructor timing, while types
+        // with only shared FIELD initializers keep `beforefieldinit`, exactly
+        // like C# types with only static field initializers.
         if (structSym.HasStaticInitializerBlock)
         {
             typeAttrs &= ~TypeAttributes.BeforeFieldInit;
