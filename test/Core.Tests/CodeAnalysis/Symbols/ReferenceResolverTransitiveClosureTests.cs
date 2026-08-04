@@ -89,8 +89,8 @@ public class ReferenceResolverTransitiveClosureTests : IDisposable
         var candidate = widget.GetMethod("M", BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(candidate);
 
-        var result = OverloadResolution.Resolve(new[] { candidate }, Array.Empty<Type>());
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { candidate }, Array.Empty<Type>());
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     /// <summary>

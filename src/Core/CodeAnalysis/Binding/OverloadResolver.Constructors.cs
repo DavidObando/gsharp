@@ -1569,7 +1569,7 @@ internal sealed partial class OverloadResolver
         TextLocation location,
         out BoundExpression converted)
     {
-        if (OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+        if (ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
         {
             converted = conversions.BindConversion(location, argument, targetType);
             return true;

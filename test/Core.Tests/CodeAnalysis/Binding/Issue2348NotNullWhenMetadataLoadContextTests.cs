@@ -46,7 +46,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <para>
 /// The fix reuses the codebase's existing cross-<see cref="ReferenceResolver"/>
 /// type-identity helper (<c>ClrTypeUtilities.AreSame</c>/<c>IsSameAs</c>, already
-/// relied on by <c>OverloadResolution.ClassifyImplicit</c> for issue #835) instead
+/// relied on by <c>ClrOverloadResolution.ClassifyImplicit</c> for issue #835) instead
 /// of the raw <see cref="System.Type"/> reference comparison.
 /// </para>
 /// </summary>

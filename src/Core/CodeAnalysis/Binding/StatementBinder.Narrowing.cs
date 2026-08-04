@@ -1842,7 +1842,7 @@ internal sealed partial class StatementBinder
                         return method;
                     }
 
-                    if (!OverloadResolution.TryInferTypeArguments(method, inferenceTypes, out var typeArguments))
+                    if (!ClrOverloadResolution.TryInferTypeArguments(method, inferenceTypes, out var typeArguments))
                     {
                         return null;
                     }
@@ -1877,27 +1877,27 @@ internal sealed partial class StatementBinder
 
             Array.Fill(
                 argumentTypes,
-                OverloadResolution.InlineOutVarArgumentType,
+                ClrOverloadResolution.InlineOutVarArgumentType,
                 startIndex: receiverOffset,
                 count: identifiers.Count);
 
-            var resolution = OverloadResolution.Resolve(
+            var resolution = ClrOverloadResolution.Resolve(
                 candidates,
                 argumentTypes,
                 projectTypeArgument: scope.References.MapClrTypeToReferences);
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Ambiguous)
+            if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
             {
                 Diagnostics.ReportAmbiguousOverload(
                     location,
                     "Deconstruct",
                     resolution.Ambiguous.Length,
-                    resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+                    resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                 DeclareErrorTypedLocals(identifiers);
                 statements = ImmutableArray<BoundStatement>.Empty;
                 return true;
             }
 
-            if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+            if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
                 continue;
             }

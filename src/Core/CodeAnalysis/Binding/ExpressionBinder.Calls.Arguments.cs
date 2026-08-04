@@ -81,7 +81,7 @@ internal sealed partial class ExpressionBinder
     /// instance-method resolution: the extension is only preferred when (a) the
     /// resolved instance method's <em>worst</em> argument conversion is a
     /// delegate-reshaping conversion (rank ≥
-    /// <see cref="OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>),
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>),
     /// and (b) some applicable user extension matches the same arguments with a
     /// strictly better worst-case conversion. An instance method that matches by
     /// identity / standard implicit conversion always wins, so a genuine member
@@ -121,7 +121,7 @@ internal sealed partial class ExpressionBinder
 
         // The extension must be a strictly better match than the instance method.
         var extWorst = ComputeBestApplicableExtensionWorstConversionRank(extCandidates, argTypes);
-        if (extWorst == OverloadResolution.ImplicitConversionKind.None
+        if (extWorst == ClrOverloadResolution.ImplicitConversionKind.None
             || (int)extWorst >= (int)clrWorst)
         {
             return false;
@@ -139,47 +139,47 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Issue #2193: a delegate-reshaping implicit conversion (rank ≥
-    /// <see cref="OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate"/>
     /// and ≤
-    /// <see cref="OverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening"/>)
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening"/>)
     /// reshapes a G# function value to satisfy a differently-shaped or
     /// differently-named CLR delegate parameter (discarding a return value,
     /// widening/covarying a return type, or retargeting to a named delegate).
     /// These are the "worst"-ranked conversions and are the loose applicability
     /// that lets a same-named BCL instance method shadow an exact user extension.
     /// </summary>
-    private static bool IsDelegateReshapingConversion(OverloadResolution.ImplicitConversionKind kind)
+    private static bool IsDelegateReshapingConversion(ClrOverloadResolution.ImplicitConversionKind kind)
     {
-        return kind is OverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
-            or OverloadResolution.ImplicitConversionKind.DelegateReturnCovariance
-            or OverloadResolution.ImplicitConversionKind.DelegateStructuralMatch
-            or OverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening;
+        return kind is ClrOverloadResolution.ImplicitConversionKind.LambdaToVoidDelegate
+            or ClrOverloadResolution.ImplicitConversionKind.DelegateReturnCovariance
+            or ClrOverloadResolution.ImplicitConversionKind.DelegateStructuralMatch
+            or ClrOverloadResolution.ImplicitConversionKind.DelegateReturnNumericWidening;
     }
 
     /// <summary>
     /// Issue #2193: classifies each supplied argument against the corresponding
     /// parameter of a resolved CLR candidate and returns the <em>worst</em>
     /// (highest-ordinal) implicit-conversion rank across all arguments. Returns
-    /// <see cref="OverloadResolution.ImplicitConversionKind.None"/> when the
+    /// <see cref="ClrOverloadResolution.ImplicitConversionKind.None"/> when the
     /// arities do not line up positionally (the candidate matched in an expanded
     /// / named / defaulted form this cheap check cannot reason about, so the
     /// tie-break is skipped and the instance method keeps winning).
     /// </summary>
-    private static OverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type[] argTypes)
+    private static ClrOverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type[] argTypes)
     {
         var parameters = candidate.GetParameters();
         if (parameters.Length != argTypes.Length)
         {
-            return OverloadResolution.ImplicitConversionKind.None;
+            return ClrOverloadResolution.ImplicitConversionKind.None;
         }
 
-        var worst = OverloadResolution.ImplicitConversionKind.Identity;
+        var worst = ClrOverloadResolution.ImplicitConversionKind.Identity;
         for (var i = 0; i < argTypes.Length; i++)
         {
-            var kind = OverloadResolution.ClassifyImplicit(parameters[i].ParameterType, argTypes[i]);
-            if (kind == OverloadResolution.ImplicitConversionKind.None)
+            var kind = ClrOverloadResolution.ClassifyImplicit(parameters[i].ParameterType, argTypes[i]);
+            if (kind == ClrOverloadResolution.ImplicitConversionKind.None)
             {
-                return OverloadResolution.ImplicitConversionKind.None;
+                return ClrOverloadResolution.ImplicitConversionKind.None;
             }
 
             if ((int)kind > (int)worst)
@@ -198,14 +198,14 @@ internal sealed partial class ExpressionBinder
     /// <paramref name="argTypes"/>) and returns the <em>best</em> (lowest-ordinal)
     /// worst-rank. The extension's synthetic receiver slot lives in
     /// <c>Parameters[0]</c>, so user arguments align against <c>Parameters[1..]</c>.
-    /// Returns <see cref="OverloadResolution.ImplicitConversionKind.None"/> when
+    /// Returns <see cref="ClrOverloadResolution.ImplicitConversionKind.None"/> when
     /// no overload lines up positionally with the arguments.
     /// </summary>
-    private OverloadResolution.ImplicitConversionKind ComputeBestApplicableExtensionWorstConversionRank(
+    private ClrOverloadResolution.ImplicitConversionKind ComputeBestApplicableExtensionWorstConversionRank(
         ImmutableArray<FunctionSymbol> extCandidates,
         Type[] argTypes)
     {
-        var best = OverloadResolution.ImplicitConversionKind.None;
+        var best = ClrOverloadResolution.ImplicitConversionKind.None;
         foreach (var candidate in extCandidates)
         {
             if (candidate == null || candidate.Parameters.Length != argTypes.Length + 1)
@@ -213,13 +213,13 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var worst = OverloadResolution.ImplicitConversionKind.Identity;
+            var worst = ClrOverloadResolution.ImplicitConversionKind.Identity;
             var applicable = true;
             for (var i = 0; i < argTypes.Length; i++)
             {
                 var paramClr = GetEffectiveArgumentClrTypeForOverloadResolution(candidate.Parameters[i + 1].Type);
-                var kind = OverloadResolution.ClassifyImplicit(paramClr, argTypes[i]);
-                if (kind == OverloadResolution.ImplicitConversionKind.None)
+                var kind = ClrOverloadResolution.ClassifyImplicit(paramClr, argTypes[i]);
+                if (kind == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
                     applicable = false;
                     break;
@@ -236,7 +236,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            if (best == OverloadResolution.ImplicitConversionKind.None || (int)worst < (int)best)
+            if (best == ClrOverloadResolution.ImplicitConversionKind.None || (int)worst < (int)best)
             {
                 best = worst;
             }
@@ -997,7 +997,7 @@ internal sealed partial class ExpressionBinder
                 // TryBindImportedExtensionCall) instead of failing outright;
                 // BindClrParameterConversions resolves it once the candidate
                 // (and its parameter type) is known.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     return false;
                 }
@@ -1021,7 +1021,7 @@ internal sealed partial class ExpressionBinder
         var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
             null,
             ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
-        var resolution = OverloadResolution.Resolve(
+        var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             explicitTypeArgs,
@@ -1042,7 +1042,7 @@ internal sealed partial class ExpressionBinder
 
         switch (resolution.Outcome)
         {
-            case OverloadResolution.ResolutionOutcome.Resolved:
+            case ClrOverloadResolution.ResolutionOutcome.Resolved:
                 // Issue #1260: a `base.M(...)` into an abstract BCL member has no
                 // base implementation to delegate to (e.g. Stream.Read). Match C#
                 // (CS0205) with a clean diagnostic instead of emitting invalid IL.
@@ -1126,8 +1126,8 @@ internal sealed partial class ExpressionBinder
                 BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
-            case OverloadResolution.ResolutionOutcome.Ambiguous:
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+            case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                 result = new BoundErrorExpression(null);
                 return true;
             default:
@@ -1273,7 +1273,7 @@ internal sealed partial class ExpressionBinder
                 // extension-call candidate. It is resolved against the
                 // winning candidate's (possibly generic-inferred) parameter
                 // type afterwards by BindClrParameterConversions.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     // Issue #833: argument may carry an open TP (e.g. `T`,
                     // `[]T`). Project to an erased shape so resolution can run.
@@ -1389,7 +1389,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        // OverloadResolution.Resolve infers type arguments for open generic
+        // ClrOverloadResolution.Resolve infers type arguments for open generic
         // method definitions (e.g. Where<TSource>(IEnumerable<TSource>,
         // Func<TSource,bool>)) from the receiver and argument types. Issue #311:
         // when the call site supplied explicit type arguments (e.g.
@@ -1417,7 +1417,7 @@ internal sealed partial class ExpressionBinder
         // consistently with the instance/inherited/static/ctor paths. Offset by
         // 1 (receiverArgCount) since slot 0 here is the receiver, not a
         // user-supplied argument.
-        var resolution = OverloadResolution.Resolve(
+        var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             explicitTypeArgs,
@@ -1439,10 +1439,10 @@ internal sealed partial class ExpressionBinder
 
         switch (resolution.Outcome)
         {
-            case OverloadResolution.ResolutionOutcome.Resolved:
+            case ClrOverloadResolution.ResolutionOutcome.Resolved:
                 break;
-            case OverloadResolution.ResolutionOutcome.Ambiguous:
-                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(OverloadResolution.FormatMethodSignature));
+            case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
+                Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
                 result = new BoundErrorExpression(null);
                 return true;
             default:
@@ -1887,7 +1887,7 @@ internal sealed partial class ExpressionBinder
     /// by its surrogate CLR type in <paramref name="argTypes"/>) implements the
     /// specified CLR <paramref name="target"/> interface. Used as the
     /// <c>supplementaryInterfaceCheck</c> argument to
-    /// <see cref="OverloadResolution.Resolve{T}"/> during overload resolution for
+    /// <see cref="ClrOverloadResolution.Resolve{T}"/> during overload resolution for
     /// calls that include user-class arguments.
     /// </summary>
     private static bool IsUserClassAssignableToInterface(
@@ -2919,7 +2919,7 @@ internal sealed partial class ExpressionBinder
             {
                 // Issue #2347: defer an unresolved method-group argument (see
                 // TryBindImportedExtensionCall) instead of failing outright.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     return false;
                 }
@@ -2933,7 +2933,7 @@ internal sealed partial class ExpressionBinder
         // treats them as applicable to an IFormattable/FormattableString (or
         // handler) parameter, just like every other CLR-call Resolve site.
         var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length);
-        var resolution = OverloadResolution.Resolve(
+        var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             null,
@@ -2945,7 +2945,7 @@ internal sealed partial class ExpressionBinder
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
-        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
         }
@@ -3048,7 +3048,7 @@ internal sealed partial class ExpressionBinder
             {
                 // Issue #2347: defer an unresolved method-group argument (see
                 // TryBindImportedExtensionCall) instead of failing outright.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     return false;
                 }
@@ -3069,14 +3069,14 @@ internal sealed partial class ExpressionBinder
         // Constant-narrowing is intentionally omitted for the same reason:
         // object members expose only zero parameters or Equals(object), never a
         // narrower integer parameter.
-        var resolution = OverloadResolution.Resolve(
+        var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             null,
             scope.References.MapClrTypeToReferences,
             null,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
         }
@@ -3167,7 +3167,7 @@ internal sealed partial class ExpressionBinder
             {
                 // Issue #2347: defer an unresolved method-group argument (see
                 // TryBindImportedExtensionCall) instead of failing outright.
-                if (!OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (!ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     return false;
                 }
@@ -3179,14 +3179,14 @@ internal sealed partial class ExpressionBinder
         // Constant-narrowing is intentionally omitted: the only object member
         // with an argument is Equals(object), so there is no narrower integer
         // parameter for §10.2.11 to target.
-        var resolution = OverloadResolution.Resolve(
+        var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             null,
             scope.References.MapClrTypeToReferences,
             null,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
-        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
         }

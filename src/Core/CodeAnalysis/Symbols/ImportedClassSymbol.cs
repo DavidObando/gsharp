@@ -210,7 +210,7 @@ public sealed class ImportedClassSymbol : Symbol
             // BindClrParameterConversions against the resolved parameter type.
             if (arguments[i] is BoundDefaultExpression { Type: var defType } && defType == TypeSymbol.Error)
             {
-                argTypes[i] = OverloadResolution.DefaultLiteralArgumentType;
+                argTypes[i] = ClrOverloadResolution.DefaultLiteralArgumentType;
                 continue;
             }
 
@@ -226,7 +226,7 @@ public sealed class ImportedClassSymbol : Symbol
             // resolves instead of collapsing to GS0159 and poisoning the body.
             if (arguments[i] is BoundAddressOfExpression { Operand.Type: var outVarPointee } && outVarPointee == TypeSymbol.Error)
             {
-                argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                argTypes[i] = ClrOverloadResolution.InlineOutVarArgumentType;
                 continue;
             }
 
@@ -249,7 +249,7 @@ public sealed class ImportedClassSymbol : Symbol
                     || byRefPointee is TypeParameterSymbol { HasValueTypeConstraint: true })
                 && byRefPointee.ClrType == null)
             {
-                argTypes[i] = OverloadResolution.InlineOutVarArgumentType;
+                argTypes[i] = ClrOverloadResolution.InlineOutVarArgumentType;
                 continue;
             }
 
@@ -262,7 +262,7 @@ public sealed class ImportedClassSymbol : Symbol
             var t = NullableTypeSymbol.GetEffectiveClrType(arguments[i].Type);
             if (t == null && arguments[i].Type != TypeSymbol.Null)
             {
-                if (OverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
+                if (ClrOverloadResolution.IsUnresolvedMethodGroupArgument(arguments[i]))
                 {
                     argTypes[i] = null;
                     continue;
@@ -337,7 +337,7 @@ public sealed class ImportedClassSymbol : Symbol
             symbolicArgVector,
             argumentNames,
             SymbolicReceiver).ToList();
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             nameMatches,
             argTypes,
             explicitTypeArgs,
@@ -356,14 +356,14 @@ public sealed class ImportedClassSymbol : Symbol
 
         switch (result.Outcome)
         {
-            case OverloadResolution.ResolutionOutcome.Resolved:
+            case ClrOverloadResolution.ResolutionOutcome.Resolved:
                 // Issue #320: when an imported generic method returns exactly one
                 // of its method type parameters and was closed over a user-defined
                 // type argument (placeholder CLR type), recover the real return
                 // type from the explicit type-argument symbol.
                 TypeSymbol returnOverride = null;
                 if (!typeArgSymbols.IsDefaultOrEmpty
-                    && OverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
+                    && ClrOverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
                     && position >= 0
                     && position < typeArgSymbols.Length)
                 {
@@ -389,7 +389,7 @@ public sealed class ImportedClassSymbol : Symbol
                 parameterMapping = result.ParameterMapping;
                 isExpanded = result.IsExpanded;
                 return true;
-            case OverloadResolution.ResolutionOutcome.Ambiguous:
+            case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
                 isAmbiguous = true;
                 ambiguousMethods = result.Ambiguous;
                 return false;

@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// entry points, plus the supporting machinery — named-argument
 /// reordering, default-value fill, <c>params T[]</c> lowering, generic
 /// type-argument inference, candidate selection (delegating to the pure
-/// reflection-level resolver in <see cref="OverloadResolution"/>), and
+/// reflection-level resolver in <see cref="ClrOverloadResolution"/>), and
 /// the diagnostic emission used at all four call-site shapes.
 /// </summary>
 /// <remarks>
@@ -44,8 +44,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// established in PR-B-3.
 /// </para>
 /// <para>
-/// The pure value-shaped <see cref="OverloadResolution"/> static class
-/// in <c>OverloadResolution.cs</c> is unchanged and continues to expose
+/// The pure value-shaped <see cref="ClrOverloadResolution"/> static class
+/// in <c>ClrOverloadResolution.cs</c> is unchanged and continues to expose
 /// the reflection-level <c>Resolve&lt;T&gt;</c> /
 /// <c>TryInferTypeArguments</c> entry points. This class merely wraps
 /// that pure resolver with the diagnostic emission, syntax-aware

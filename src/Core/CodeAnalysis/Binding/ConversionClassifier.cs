@@ -795,7 +795,7 @@ internal sealed class ConversionClassifier
                     }
                 }
                 else if (!parameterType.IsByRef
-                    && (argument.Type != TypeSymbol.Error || OverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
+                    && (argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                 {
                     // ADR-0087 §3 R5 / issue #765: when the call dispatches
                     // through a constructed CLR generic whose type arguments
@@ -825,7 +825,7 @@ internal sealed class ConversionClassifier
                     // so non-lambda argument coercion is unaffected.
                     // Issue #2347: an unresolved method group (deferred through
                     // overload resolution the same way a lambda is deferred, see
-                    // OverloadResolution.IsUnresolvedMethodGroupArgument) needs
+                    // ClrOverloadResolution.IsUnresolvedMethodGroupArgument) needs
                     // the identical symbolic-target recovery — its resolved
                     // MethodInfo is picked below against whichever delegate
                     // target is recovered here, so a generic method whose
@@ -833,7 +833,7 @@ internal sealed class ConversionClassifier
                     // open) type argument must see the symbolic shape too.
                     if (substituted == null
                         && (argument.Type is FunctionTypeSymbol
-                            || OverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
+                            || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                     {
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
@@ -948,7 +948,7 @@ internal sealed class ConversionClassifier
 
                     // Issue #2347: an unresolved method group's natural type is
                     // the Error sentinel (see
-                    // OverloadResolution.IsUnresolvedMethodGroupArgument), so
+                    // ClrOverloadResolution.IsUnresolvedMethodGroupArgument), so
                     // Conversion.Classify below — which deliberately treats
                     // Error as convertible to nothing, to avoid cascading
                     // diagnostics — never reports it as convertible to the
@@ -959,7 +959,7 @@ internal sealed class ConversionClassifier
                     // MethodInfo/function overload matching targetType's
                     // Invoke signature, the same way it already does for a
                     // user-defined generic function's method-group argument.
-                    var isUnresolvedMethodGroupTarget = OverloadResolution.IsUnresolvedMethodGroupArgument(argument);
+                    var isUnresolvedMethodGroupTarget = ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument);
 
                     if (argument.Type != targetType
                         && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isUnresolvedMethodGroupTarget)
@@ -1005,7 +1005,7 @@ internal sealed class ConversionClassifier
                         && argument.Type != targetType
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && (!(argument is BoundFunctionLiteralExpression
-                                || OverloadResolution.IsUnresolvedMethodGroupArgument(argument))
+                                || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
                             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out _)))
                     {
                         // Issue #2391: overload resolution necessarily sees the
@@ -1458,8 +1458,8 @@ internal sealed class ConversionClassifier
             // interpolated-string literal in the first place.
             // The same applies to constant-narrowing: there are no bound call
             // arguments here, only the target delegate signature.
-            var resolution = OverloadResolution.Resolve(applicable, argTypes);
-            if (resolution.Outcome == OverloadResolution.ResolutionOutcome.Resolved)
+            var resolution = ClrOverloadResolution.Resolve(applicable, argTypes);
+            if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
                 var resolved = new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
                 return targetType is FunctionTypeSymbol functionTarget
@@ -2361,7 +2361,7 @@ internal sealed class ConversionClassifier
         // narrowing for every imported-CLR-method guard compiled outside a
         // real-reflection host (i.e. every real `gsc` build). Use the
         // existing cross-ReferenceResolver identity helper (already relied
-        // on by `OverloadResolution.ClassifyImplicit`) instead of a raw
+        // on by `ClrOverloadResolution.ClassifyImplicit`) instead of a raw
         // reference comparison.
         return !ClrTypeUtilities.AreSame(from.ClrType, targetParameterType);
     }

@@ -11,7 +11,7 @@ using GSharp.Core.CodeAnalysis.Binding;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Property-based tests for <see cref="OverloadResolution"/>.
+/// Property-based tests for <see cref="ClrOverloadResolution"/>.
 /// </summary>
 public class OverloadResolutionPropertyTests
 {
@@ -23,8 +23,8 @@ public class OverloadResolutionPropertyTests
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Resolution_is_deterministic(MethodInfo[] candidates, Type[] argTypes)
     {
-        var first = OverloadResolution.Resolve(candidates, argTypes);
-        var second = OverloadResolution.Resolve(candidates, argTypes);
+        var first = ClrOverloadResolution.Resolve(candidates, argTypes);
+        var second = ClrOverloadResolution.Resolve(candidates, argTypes);
 
         return first.Outcome == second.Outcome
             && MethodIdentityComparer.Instance.Equals(first.Best, second.Best)
@@ -39,15 +39,15 @@ public class OverloadResolutionPropertyTests
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Outcome_payloads_match_outcome(MethodInfo[] candidates, Type[] argTypes)
     {
-        var result = OverloadResolution.Resolve(candidates, argTypes);
+        var result = ClrOverloadResolution.Resolve(candidates, argTypes);
 
         return result.Outcome switch
         {
-            OverloadResolution.ResolutionOutcome.NoneApplicable =>
+            ClrOverloadResolution.ResolutionOutcome.NoneApplicable =>
                 result.Best is null && result.Ambiguous.IsEmpty,
-            OverloadResolution.ResolutionOutcome.Resolved =>
+            ClrOverloadResolution.ResolutionOutcome.Resolved =>
                 result.Best is not null && result.Ambiguous.IsEmpty,
-            OverloadResolution.ResolutionOutcome.Ambiguous =>
+            ClrOverloadResolution.ResolutionOutcome.Ambiguous =>
                 result.Best is null && result.Ambiguous.Length >= 2,
             _ => false,
         };
@@ -61,13 +61,13 @@ public class OverloadResolutionPropertyTests
     [Property(MaxTest = 300, Arbitrary = [typeof(OverloadResolutionGenerators)])]
     public bool Resolution_only_returns_input_candidates(MethodInfo[] candidates, Type[] argTypes)
     {
-        var result = OverloadResolution.Resolve(candidates, argTypes);
+        var result = ClrOverloadResolution.Resolve(candidates, argTypes);
 
         return result.Outcome switch
         {
-            OverloadResolution.ResolutionOutcome.Resolved =>
+            ClrOverloadResolution.ResolutionOutcome.Resolved =>
                 Contains(candidates, result.Best),
-            OverloadResolution.ResolutionOutcome.Ambiguous =>
+            ClrOverloadResolution.ResolutionOutcome.Ambiguous =>
                 result.Ambiguous.All(m => Contains(candidates, m)),
             _ => true,
         };
@@ -86,9 +86,9 @@ public class OverloadResolutionPropertyTests
             .Concat(distractors.Where(m => !MethodIdentityComparer.Instance.Equals(m, exact)))
             .Distinct(MethodIdentityComparer.Instance)
             .ToArray();
-        var result = OverloadResolution.Resolve(candidates, [argumentType]);
+        var result = ClrOverloadResolution.Resolve(candidates, [argumentType]);
 
-        return result.Outcome == OverloadResolution.ResolutionOutcome.Resolved
+        return result.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved
             && MethodIdentityComparer.Instance.Equals(exact, result.Best);
     }
 
@@ -118,10 +118,10 @@ public class OverloadResolutionPropertyTests
 
         var firstTarget = first.GetParameters()[0].ParameterType;
         var secondTarget = second.GetParameters()[0].ParameterType;
-        var firstClassification = OverloadResolution.ClassifyImplicit(firstTarget, source);
-        var secondClassification = OverloadResolution.ClassifyImplicit(secondTarget, source);
-        if (firstClassification == OverloadResolution.ImplicitConversionKind.None
-            || secondClassification == OverloadResolution.ImplicitConversionKind.None)
+        var firstClassification = ClrOverloadResolution.ClassifyImplicit(firstTarget, source);
+        var secondClassification = ClrOverloadResolution.ClassifyImplicit(secondTarget, source);
+        if (firstClassification == ClrOverloadResolution.ImplicitConversionKind.None
+            || secondClassification == ClrOverloadResolution.ImplicitConversionKind.None)
         {
             return true;
         }
@@ -138,15 +138,15 @@ public class OverloadResolutionPropertyTests
         }
 
         var expected = comparison < 0 ? first : second;
-        var forward = OverloadResolution.CompareNumericTargets(firstTarget, secondTarget, source);
-        var reverse = OverloadResolution.CompareNumericTargets(secondTarget, firstTarget, source);
+        var forward = ClrOverloadResolution.CompareNumericTargets(firstTarget, secondTarget, source);
+        var reverse = ClrOverloadResolution.CompareNumericTargets(secondTarget, firstTarget, source);
         if (forward != -reverse)
         {
             return false;
         }
 
-        var result = OverloadResolution.Resolve(new[] { first, second }, [source]);
-        return result.Outcome == OverloadResolution.ResolutionOutcome.Resolved
+        var result = ClrOverloadResolution.Resolve(new[] { first, second }, [source]);
+        return result.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved
             && MethodIdentityComparer.Instance.Equals(expected, result.Best);
     }
 

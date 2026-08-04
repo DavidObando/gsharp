@@ -26,7 +26,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// unset because the path skips the whole CLR parameter-conversion pipeline
 /// (the emitted MemberRef parameter is the interface type-variable
 /// <c>!0</c>, passed unconverted). This fix passes the flag to
-/// <c>OverloadResolution.Resolve</c> and, after the interface method is
+/// <c>ClrOverloadResolution.Resolve</c> and, after the interface method is
 /// selected, re-lowers any interpolated-string argument whose resolved
 /// parameter is IFormattable/FormattableString-shaped via
 /// <c>RebindFormattableInterpolationArguments</c> — mirroring the

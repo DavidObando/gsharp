@@ -12,7 +12,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Stream F: pure unit tests for <see cref="OverloadResolution"/> focused on
+/// Stream F: pure unit tests for <see cref="ClrOverloadResolution"/> focused on
 /// numeric "better conversion target" tie-breaking (C# §7.5.3.4). Builds tiny
 /// fixture method sets via reflection so we can drive the resolver directly
 /// without going through the binder.
@@ -61,8 +61,8 @@ public class OverloadResolutionTests
         // so the two widenings tie and the resolver reports ambiguity.
         var first = typeof(Fixture).GetMethod(nameof(Fixture.F_Float), BindingFlags.Public | BindingFlags.Static);
         var second = typeof(Fixture).GetMethod(nameof(Fixture.F_Decimal), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { first, second }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { first, second }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
     }
 
     [Fact]
@@ -76,8 +76,8 @@ public class OverloadResolutionTests
         // as a spurious ambiguity.
         var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(method);
-        var result = OverloadResolution.Resolve(new[] { method, method }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { method, method }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.F_Int), result.Best.Name);
     }
 
@@ -95,27 +95,27 @@ public class OverloadResolutionTests
     [Fact]
     public void CompareNumericTargets_LongBeatsFloatFromInt()
     {
-        Assert.True(OverloadResolution.CompareNumericTargets(typeof(long), typeof(float), typeof(int)) < 0);
-        Assert.True(OverloadResolution.CompareNumericTargets(typeof(float), typeof(long), typeof(int)) > 0);
+        Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(long), typeof(float), typeof(int)) < 0);
+        Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(float), typeof(long), typeof(int)) > 0);
     }
 
     [Fact]
     public void CompareNumericTargets_IntBeatsUIntFromShort()
     {
-        Assert.True(OverloadResolution.CompareNumericTargets(typeof(int), typeof(uint), typeof(short)) < 0);
+        Assert.True(ClrOverloadResolution.CompareNumericTargets(typeof(int), typeof(uint), typeof(short)) < 0);
     }
 
     [Fact]
     public void CompareNumericTargets_EqualTargetsCompareZero()
     {
-        Assert.Equal(0, OverloadResolution.CompareNumericTargets(typeof(int), typeof(int), typeof(short)));
+        Assert.Equal(0, ClrOverloadResolution.CompareNumericTargets(typeof(int), typeof(int), typeof(short)));
     }
 
     [Fact]
     public void InferTypeArguments_Identity_BindsTFromArgument()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(string) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(string) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(string) }, typeArgs);
     }
@@ -124,7 +124,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_PairWithConsistentBounds_Succeeds()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
     }
@@ -133,7 +133,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_PairWithConflictingBounds_Fails()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
         Assert.False(ok);
         Assert.Null(typeArgs);
     }
@@ -142,7 +142,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_TwoParam_BindsBothIndependently()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_TwoParam), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(string) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int), typeof(string) }, typeArgs);
     }
@@ -151,7 +151,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Array_UnwrapsElementType()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Array), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
     }
@@ -160,7 +160,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Enumerable_FromList_WalksInterface()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(System.Collections.Generic.List<int>) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(System.Collections.Generic.List<int>) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
     }
@@ -171,7 +171,7 @@ public class OverloadResolutionTests
         // #611: an array `int[]` implements IEnumerable<int>; the inference
         // should walk interfaces and find T = int.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int) }, typeArgs);
     }
@@ -181,7 +181,7 @@ public class OverloadResolutionTests
     {
         // #611: string[] → IEnumerable<string> inference.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(string[]) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(string[]) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(string) }, typeArgs);
     }
@@ -190,7 +190,7 @@ public class OverloadResolutionTests
     public void InferTypeArguments_Dictionary_BindsBothKeyAndValue()
     {
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_DictionaryFromValues), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(
+        var ok = ClrOverloadResolution.TryInferTypeArguments(
             open,
             new[] { typeof(System.Collections.Generic.Dictionary<string, int>) },
             out var typeArgs);
@@ -207,7 +207,7 @@ public class OverloadResolutionTests
     {
         // Issue #661: G_Pair<T>(T, T) with (Quality, Quality?) must infer T = Quality?
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality?) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
     }
@@ -217,7 +217,7 @@ public class OverloadResolutionTests
     {
         // Issue #661: symmetric — G_Pair<T>(T, T) with (Quality?, Quality) must infer T = Quality?
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
     }
@@ -227,7 +227,7 @@ public class OverloadResolutionTests
     {
         // Both operands nullable — should infer T = Quality? trivially.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality?) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality?), typeof(Quality?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality?) }, typeArgs);
     }
@@ -237,7 +237,7 @@ public class OverloadResolutionTests
     {
         // Both non-nullable — should infer T = Quality.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(Quality), typeof(Quality) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(Quality) }, typeArgs);
     }
@@ -247,7 +247,7 @@ public class OverloadResolutionTests
     {
         // Regression guard: the int case must still work.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var ok = OverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int?) }, out var typeArgs);
+        var ok = ClrOverloadResolution.TryInferTypeArguments(open, new[] { typeof(int), typeof(int?) }, out var typeArgs);
         Assert.True(ok);
         Assert.Equal(new[] { typeof(int?) }, typeArgs);
     }
@@ -259,8 +259,8 @@ public class OverloadResolutionTests
         var candidates = typeof(EqualLike)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal");
-        var result = OverloadResolution.Resolve(candidates, new[] { typeof(Quality), typeof(Quality?) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(Quality), typeof(Quality?) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(Quality?), result.Best.GetGenericArguments()[0]);
     }
 
@@ -271,8 +271,8 @@ public class OverloadResolutionTests
         var candidates = typeof(EqualLike)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal");
-        var result = OverloadResolution.Resolve(candidates, new[] { typeof(Quality?), typeof(Quality) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(Quality?), typeof(Quality) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(Quality?), result.Best.GetGenericArguments()[0]);
     }
 
@@ -285,8 +285,8 @@ public class OverloadResolutionTests
         var open = typeof(System.Linq.Enumerable)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Single(m => m.Name == nameof(System.Linq.Enumerable.Repeat) && m.IsGenericMethodDefinition);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethodDefinition);
         Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
         Assert.Equal(typeof(System.Collections.Generic.IEnumerable<int>), result.Best.ReturnType);
@@ -298,8 +298,8 @@ public class OverloadResolutionTests
         // G_Pair<T>(T, T) called with (int, string) cannot infer T — the
         // candidate must be dropped silently (NoneApplicable, not Ambiguous).
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Pair), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int), typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -310,8 +310,8 @@ public class OverloadResolutionTests
         // argument must infer TValue = string and close the method even though
         // the declared arity is 2 with a trailing optional parameter.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_SerializeLike), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethodDefinition);
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
     }
@@ -331,8 +331,8 @@ public class OverloadResolutionTests
             return t;
         }
 
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) }, explicitTypeArgs: null, projectTypeArgument: Project);
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) }, explicitTypeArgs: null, projectTypeArgument: Project);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
         Assert.Contains(typeof(string), seen);
     }
@@ -344,8 +344,8 @@ public class OverloadResolutionTests
         // applicable when called with a single int argument; the optional
         // trailing parameter is omitted. Mirrors HttpResponse.WriteAsync(text).
         var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
     }
 
@@ -355,8 +355,8 @@ public class OverloadResolutionTests
         // The same candidate is still applicable when the optional argument is
         // supplied explicitly.
         var method = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int), typeof(System.Threading.CancellationToken) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int), typeof(System.Threading.CancellationToken) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
     }
 
     [Fact]
@@ -365,8 +365,8 @@ public class OverloadResolutionTests
         // O_Required(int, int) has no optional parameters; calling with a single
         // argument leaves a non-optional parameter unfilled and is not applicable.
         var method = typeof(Fixture).GetMethod(nameof(Fixture.O_Required), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { method }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -378,8 +378,8 @@ public class OverloadResolutionTests
         // fewer omitted optionals wins (C# §7.5.3.2).
         var oneOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_OneOptional), BindingFlags.Public | BindingFlags.Static);
         var twoOpt = typeof(Fixture).GetMethod(nameof(Fixture.O_TwoOptional), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { oneOpt, twoOpt }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { oneOpt, twoOpt }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.O_OneOptional), result.Best.Name);
     }
 
@@ -393,10 +393,10 @@ public class OverloadResolutionTests
         var open = typeof(System.Linq.Enumerable)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Single(m => m.Name == nameof(System.Linq.Enumerable.CountBy) && m.IsGenericMethodDefinition);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { open },
             new[] { typeof(System.Collections.Generic.IEnumerable<int>), typeof(Func<int, int>) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethodDefinition);
     }
 
@@ -406,8 +406,8 @@ public class OverloadResolutionTests
         var second = typeof(Fixture).GetMethod(b, BindingFlags.Public | BindingFlags.Static);
         Assert.NotNull(first);
         Assert.NotNull(second);
-        var result = OverloadResolution.Resolve(new[] { first, second }, argTypes);
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { first, second }, argTypes);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         return result.Best;
     }
 
@@ -427,12 +427,12 @@ public class OverloadResolutionTests
 
         // Candidate order must not matter — both orderings resolve to the
         // Func<Task<TResult>> overload without ambiguity.
-        var forward = OverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, forward.Outcome);
+        var forward = ClrOverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, forward.Outcome);
         Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), forward.Best.Name);
 
-        var reverse = OverloadResolution.Resolve(new[] { funcTaskTResult, funcTResult }, new[] { argType });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, reverse.Outcome);
+        var reverse = ClrOverloadResolution.Resolve(new[] { funcTaskTResult, funcTResult }, new[] { argType });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, reverse.Outcome);
         Assert.Equal(nameof(Fixture.Run_FuncTaskTResult), reverse.Best.Name);
 
         // The winning overload closes over TResult = object, so its return type
@@ -454,8 +454,8 @@ public class OverloadResolutionTests
         var funcTaskTResult = typeof(Fixture).GetMethod(nameof(Fixture.Run_FuncTaskTResult), BindingFlags.Public | BindingFlags.Static);
         var argType = typeof(System.Func<object>);
 
-        var result = OverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { funcTResult, funcTaskTResult }, new[] { argType });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.Run_FuncTResult), result.Best.Name);
     }
 
@@ -467,11 +467,11 @@ public class OverloadResolutionTests
         // identity conversion) beats the `FormattableString` overload.
         var stringOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_String), BindingFlags.Public | BindingFlags.Static);
         var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { stringOverload, formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.F_String), result.Best.Name);
     }
 
@@ -481,11 +481,11 @@ public class OverloadResolutionTests
         // With only a FormattableString overload, the flagged interpolated-string
         // argument is applicable thanks to the Tier 4 relaxation.
         var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
     }
 
@@ -496,10 +496,10 @@ public class OverloadResolutionTests
         // argument must NOT convert to FormattableString, so the overload is not
         // applicable. This keeps ordinary string arguments unaffected.
         var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { formattableOverload },
             new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -509,22 +509,22 @@ public class OverloadResolutionTests
         // (better) target when both overloads apply to an interpolated string.
         var formattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_FormattableString), BindingFlags.Public | BindingFlags.Static);
         var iformattableOverload = typeof(Fixture).GetMethod(nameof(Fixture.F_IFormattable), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { iformattableOverload, formattableOverload },
             new[] { typeof(string) },
             interpolatedStringArgs: new[] { true });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(Fixture.F_FormattableString), result.Best.Name);
     }
 
     [Fact]
     public void IsFormattableStringTarget_RecognizesFormattableTargets()
     {
-        Assert.True(OverloadResolution.IsFormattableStringTarget(typeof(System.FormattableString)));
-        Assert.True(OverloadResolution.IsFormattableStringTarget(typeof(System.IFormattable)));
-        Assert.False(OverloadResolution.IsFormattableStringTarget(typeof(string)));
-        Assert.False(OverloadResolution.IsFormattableStringTarget(typeof(object)));
-        Assert.False(OverloadResolution.IsFormattableStringTarget(null));
+        Assert.True(ClrOverloadResolution.IsFormattableStringTarget(typeof(System.FormattableString)));
+        Assert.True(ClrOverloadResolution.IsFormattableStringTarget(typeof(System.IFormattable)));
+        Assert.False(ClrOverloadResolution.IsFormattableStringTarget(typeof(string)));
+        Assert.False(ClrOverloadResolution.IsFormattableStringTarget(typeof(object)));
+        Assert.False(ClrOverloadResolution.IsFormattableStringTarget(null));
     }
 
     [Fact]
@@ -536,10 +536,10 @@ public class OverloadResolutionTests
         // preferred. Without this tie-break, users had to write `Equal[string]`.
         var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
         var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { generic, nonGeneric },
             new[] { typeof(string), typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(nameof(EqualLike.Equal_StringString), result.Best.Name);
         Assert.False(result.Best.IsGenericMethod);
     }
@@ -564,8 +564,8 @@ public class OverloadResolutionTests
         // Pass them in via the synthesized `Equal` name on a real CLR Equal
         // probe class so this exercises the same EvaluateCandidate path.
         var nameMatches = candidates.Where(m => m.Name == "Equal").ToList();
-        var result = OverloadResolution.Resolve(nameMatches, new[] { typeof(string), typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(nameMatches, new[] { typeof(string), typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethod);
         var parameters = result.Best.GetParameters();
         Assert.Equal(2, parameters.Length);
@@ -582,11 +582,11 @@ public class OverloadResolutionTests
         // broken by the new non-generic-preference tie-breaker.
         var generic = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_TT), BindingFlags.Public | BindingFlags.Static);
         var nonGeneric = typeof(EqualLike).GetMethod(nameof(EqualLike.Equal_StringString), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(
+        var result = ClrOverloadResolution.Resolve(
             new[] { generic, nonGeneric },
             new[] { typeof(string), typeof(string) },
             explicitTypeArgs: new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.True(result.Best.IsGenericMethod);
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
     }
@@ -603,8 +603,8 @@ public class OverloadResolutionTests
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "Equal")
             .ToList();
-        var result = OverloadResolution.Resolve(candidates, new[] { typeof(int), typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(int), typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.True(result.Best.IsGenericMethod);
         Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
     }
@@ -618,8 +618,8 @@ public class OverloadResolutionTests
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == "NotEqual")
             .ToList();
-        var result = OverloadResolution.Resolve(candidates, new[] { typeof(string), typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(candidates, new[] { typeof(string), typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.False(result.Best.IsGenericMethod);
         var parameters = result.Best.GetParameters();
         Assert.Equal(typeof(string), parameters[0].ParameterType);
@@ -636,10 +636,10 @@ public class OverloadResolutionTests
         // caller can format them into the GS0160 diagnostic.
         var first = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IA), BindingFlags.Public | BindingFlags.Static);
         var second = typeof(EqualLike).GetMethod(nameof(EqualLike.Take_IB), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { first, second }, new[] { typeof(EqualLike.BothAB) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { first, second }, new[] { typeof(EqualLike.BothAB) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
         Assert.Equal(2, result.Ambiguous.Length);
-        var signatures = result.Ambiguous.Select(OverloadResolution.FormatMethodSignature).ToArray();
+        var signatures = result.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature).ToArray();
         Assert.Contains(signatures, s => s.Contains("IA"));
         Assert.Contains(signatures, s => s.Contains("IB"));
     }
@@ -651,7 +651,7 @@ public class OverloadResolutionTests
         // including the closed generic type arguments.
         var open = typeof(Fixture).GetMethod(nameof(Fixture.G_Identity), BindingFlags.Public | BindingFlags.Static);
         var closed = open.MakeGenericMethod(typeof(string));
-        var formatted = OverloadResolution.FormatMethodSignature(closed);
+        var formatted = ClrOverloadResolution.FormatMethodSignature(closed);
         Assert.Equal("G_Identity[String](String)", formatted);
     }
 
@@ -659,7 +659,7 @@ public class OverloadResolutionTests
     public void FormatMethodSignature_FormatsNonGenericMethod_PlainParens()
     {
         var method = typeof(Fixture).GetMethod(nameof(Fixture.F_Int), BindingFlags.Public | BindingFlags.Static);
-        var formatted = OverloadResolution.FormatMethodSignature(method);
+        var formatted = ClrOverloadResolution.FormatMethodSignature(method);
         Assert.Equal("F_Int(Int32)", formatted);
     }
 
@@ -670,7 +670,7 @@ public class OverloadResolutionTests
         // bracketed arguments rather than mangled (`IEnumerable`1`) names.
         var method = typeof(Fixture).GetMethod(nameof(Fixture.G_Enumerable), BindingFlags.Public | BindingFlags.Static);
         var closed = method.MakeGenericMethod(typeof(int));
-        var formatted = OverloadResolution.FormatMethodSignature(closed);
+        var formatted = ClrOverloadResolution.FormatMethodSignature(closed);
         Assert.Equal("G_Enumerable[Int32](IEnumerable[Int32])", formatted);
     }
 
@@ -684,16 +684,16 @@ public class OverloadResolutionTests
         // throw from MakeGenericMethod, so the explicit constraint check has
         // to drop the candidate.
         var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyClass), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
     public void Resolve_DropsCandidate_WhenStructConstraintViolatedByReferenceType()
     {
         var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -702,8 +702,8 @@ public class OverloadResolutionTests
         // `where T : struct` rejects Nullable<T> — int? is not a "non-nullable
         // value type" per ECMA-335.
         var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyStruct), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(int?) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(int?) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -712,8 +712,8 @@ public class OverloadResolutionTests
         // ConstraintFixture.OnlyNew<T>() where T : new() — string has no
         // public parameterless ctor.
         var open = typeof(ConstraintFixture).GetMethod(nameof(ConstraintFixture.OnlyNew), BindingFlags.Public | BindingFlags.Static);
-        var result = OverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(new[] { open }, new[] { typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
 
     [Fact]
@@ -725,8 +725,8 @@ public class OverloadResolutionTests
         var both = typeof(MapLike)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == nameof(MapLike.Map));
-        var result = OverloadResolution.Resolve(both, new[] { typeof(string), typeof(Func<string, string>) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(both, new[] { typeof(string), typeof(Func<string, string>) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         // Class overload's T resolves to string; struct overload couldn't infer
         // T at all from a string receiver.
         Assert.Equal(typeof(string), result.Best.GetGenericArguments()[0]);
@@ -739,8 +739,8 @@ public class OverloadResolutionTests
         var both = typeof(MapLike)
             .GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Where(m => m.Name == nameof(MapLike.Map));
-        var result = OverloadResolution.Resolve(both, new[] { typeof(int?), typeof(Func<int, int>) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(both, new[] { typeof(int?), typeof(Func<int, int>) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         // Struct overload binds T = int.
         Assert.Equal(typeof(int), result.Best.GetGenericArguments()[0]);
     }
@@ -752,8 +752,8 @@ public class OverloadResolutionTests
         // non-nullable value type the struct overload wins; the unconstrained
         // overload is dominated by constraint-specificity per ADR-0088.
         var all = ThreeWayCandidates();
-        var result = OverloadResolution.Resolve(all, new[] { typeof(int) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(all, new[] { typeof(int) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(ThreeWayStruct), result.Best.DeclaringType);
     }
 
@@ -761,8 +761,8 @@ public class OverloadResolutionTests
     public void Resolve_ThreeWayConstraints_PrefersClassOverNone_ForReferenceArgument()
     {
         var all = ThreeWayCandidates();
-        var result = OverloadResolution.Resolve(all, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(all, new[] { typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(ThreeWayClass), result.Best.DeclaringType);
     }
 
@@ -773,8 +773,8 @@ public class OverloadResolutionTests
         // value type) nor struct (because the struct constraint excludes
         // Nullable<T>) applies. The unconstrained overload survives and wins.
         var all = ThreeWayCandidates();
-        var result = OverloadResolution.Resolve(all, new[] { typeof(int?) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(all, new[] { typeof(int?) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, result.Outcome);
         Assert.Equal(typeof(ThreeWayNone), result.Best.DeclaringType);
     }
 
@@ -789,8 +789,8 @@ public class OverloadResolutionTests
             typeof(AmbiguousSameShapeA).GetMethod(nameof(AmbiguousSameShapeA.Take), BindingFlags.Public | BindingFlags.Static),
             typeof(AmbiguousSameShapeB).GetMethod(nameof(AmbiguousSameShapeB.Take), BindingFlags.Public | BindingFlags.Static),
         };
-        var result = OverloadResolution.Resolve(all, new[] { typeof(string) });
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
+        var result = ClrOverloadResolution.Resolve(all, new[] { typeof(string) });
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Ambiguous, result.Outcome);
     }
 
     // ----- Issue #1634: supplementaryInterfaceCheck / constantNarrowingArgumentCheck
@@ -818,11 +818,11 @@ public class OverloadResolutionTests
             {
                 try
                 {
-                    var result = OverloadResolution.Resolve(
+                    var result = ClrOverloadResolution.Resolve(
                         candidates,
                         new[] { typeof(object) },
                         supplementaryInterfaceCheck: (source, target) => target == wantInterface);
-                    if (result.Outcome != OverloadResolution.ResolutionOutcome.Resolved
+                    if (result.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
                         || result.Best.Name != expectedName)
                     {
                         lock (errors)
@@ -864,7 +864,7 @@ public class OverloadResolutionTests
         var candidates = new[] { takeIA, takeIB };
 
         var nestedCallCount = 0;
-        var outerResult = OverloadResolution.Resolve(
+        var outerResult = ClrOverloadResolution.Resolve(
             candidates,
             new[] { typeof(object) },
             supplementaryInterfaceCheck: (source, target) =>
@@ -879,11 +879,11 @@ public class OverloadResolutionTests
                     // ClassifyImplicit probe of the outer call would silently
                     // stop recognising IA.
                     nestedCallCount++;
-                    var nested = OverloadResolution.Resolve(
+                    var nested = ClrOverloadResolution.Resolve(
                         candidates,
                         new[] { typeof(object) },
                         supplementaryInterfaceCheck: (nestedSource, nestedTarget) => nestedTarget == typeof(EqualLike.IB));
-                    Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, nested.Outcome);
+                    Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, nested.Outcome);
                     Assert.Equal(nameof(EqualLike.Take_IB), nested.Best.Name);
                     return true;
                 }
@@ -892,7 +892,7 @@ public class OverloadResolutionTests
             });
 
         Assert.True(nestedCallCount > 0);
-        Assert.Equal(OverloadResolution.ResolutionOutcome.Resolved, outerResult.Outcome);
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.Resolved, outerResult.Outcome);
         Assert.Equal(nameof(EqualLike.Take_IA), outerResult.Best.Name);
     }
 

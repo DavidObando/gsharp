@@ -240,7 +240,7 @@ internal sealed class MemberLookup
     /// its base chain, and its transitive implemented interfaces with the given
     /// <paramref name="name"/>.
     /// The overload-resolution-facing variant, used by call sites that need to
-    /// pass a candidate set into <see cref="OverloadResolution.Resolve"/>.
+    /// pass a candidate set into <see cref="ClrOverloadResolution.Resolve"/>.
     /// Hides base-method-with-same-signature shadowing the same way C# does
     /// (via the existing <c>IsHiddenByExisting</c> helper in <see cref="ClrTypeUtilities"/>).
     /// </summary>
@@ -1254,7 +1254,7 @@ internal sealed class MemberLookup
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
         if (isExpanded
             && openParams.Length > 0
-            && OverloadResolution.IsParamsArrayParameter(openParams[^1])
+            && ClrOverloadResolution.IsParamsArrayParameter(openParams[^1])
             && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
         {
             var paramsIndex = openParams.Length - 1;
@@ -1599,7 +1599,7 @@ internal sealed class MemberLookup
             }
 
             var hasParams = parameters.Length > 0
-                && OverloadResolution.IsParamsArrayParameter(parameters[parameters.Length - 1]);
+                && ClrOverloadResolution.IsParamsArrayParameter(parameters[parameters.Length - 1]);
             var nextPositionalParameter = 0;
             for (var i = 0; i < symbolicArgTypes.Length; i++)
             {
@@ -3189,8 +3189,8 @@ internal sealed class MemberLookup
             }
         }
 
-        var resolution = OverloadResolution.Resolve(properties.Select(static property => property.GetMethod).ToArray(), argTypes);
-        if (resolution.Outcome != OverloadResolution.ResolutionOutcome.Resolved)
+        var resolution = ClrOverloadResolution.Resolve(properties.Select(static property => property.GetMethod).ToArray(), argTypes);
+        if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
         }

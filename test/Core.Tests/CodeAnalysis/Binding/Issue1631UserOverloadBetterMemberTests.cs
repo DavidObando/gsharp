@@ -18,7 +18,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// the C#-faithful "better function member" pairwise domination rules
 /// (§7.5.3.2), reusing the same <c>ImplicitConversionKind</c> ranking and
 /// numeric "better conversion target" tie-break the CLR-reflection resolver
-/// (<c>OverloadResolution</c>) applies to imported-method overloads — instead
+/// (<c>ClrOverloadResolution</c>) applies to imported-method overloads — instead
 /// of the previous ad-hoc linear score under which two candidates that both
 /// needed an implicit conversion tied at score 0 regardless of which
 /// conversion C# actually prefers.

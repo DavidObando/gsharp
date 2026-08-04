@@ -17,7 +17,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #1812 (follow-up to #1638 / PR #1811): the STATIC and EXTENSION
 /// CLR-call construction paths in <c>ExpressionBinder.Calls.cs</c> must pass
-/// <c>interpolatedStringArgs</c> to their <c>OverloadResolution.Resolve</c>
+/// <c>interpolatedStringArgs</c> to their <c>ClrOverloadResolution.Resolve</c>
 /// call — the same flag the ctor, instance, and inherited-instance paths
 /// already forward — so an interpolated-string argument bound to an
 /// <c>IFormattable</c>/<c>FormattableString</c> parameter resolves and

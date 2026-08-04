@@ -37,7 +37,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// <see cref="System.Reflection.Emit.TypeBuilderInstantiation"/> — an
 /// intentionally-tolerated, only-partially-real <see cref="Type"/> that this
 /// codebase already special-cases in several places (see
-/// <c>Binding/Conversion.cs</c>, <c>Binding/OverloadResolution.cs</c>).
+/// <c>Binding/Conversion.cs</c>, <c>Binding/ClrOverloadResolution.cs</c>).
 /// <see cref="Lowering.Async.AsyncCaptureWalker"/> (and the sibling
 /// <c>IteratorRewriter</c> / <c>AsyncIteratorRewriter</c> hoist walkers) read
 /// <c>local.Type.ClrType.IsByRefLike</c> directly to skip stack-only locals

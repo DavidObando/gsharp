@@ -89,9 +89,9 @@ public static class OverloadResolutionGenerators
             .ToImmutableArray();
 
     internal static int CompareExpected(
-        OverloadResolution.ImplicitConversionKind firstClassification,
+        ClrOverloadResolution.ImplicitConversionKind firstClassification,
         Type firstTarget,
-        OverloadResolution.ImplicitConversionKind secondClassification,
+        ClrOverloadResolution.ImplicitConversionKind secondClassification,
         Type secondTarget,
         Type source)
     {
@@ -100,9 +100,9 @@ public static class OverloadResolutionGenerators
             return ((int)firstClassification).CompareTo((int)secondClassification);
         }
 
-        if (firstClassification == OverloadResolution.ImplicitConversionKind.NumericWidening)
+        if (firstClassification == ClrOverloadResolution.ImplicitConversionKind.NumericWidening)
         {
-            return OverloadResolution.CompareNumericTargets(firstTarget, secondTarget, source);
+            return ClrOverloadResolution.CompareNumericTargets(firstTarget, secondTarget, source);
         }
 
         return 0;

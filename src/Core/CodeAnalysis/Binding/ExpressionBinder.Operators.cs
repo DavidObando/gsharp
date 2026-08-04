@@ -2570,7 +2570,7 @@ internal sealed partial class ExpressionBinder
     }
 
     // Issue #1311: builds the per-call constant-narrowing applicability hook for
-    // imported/BCL overload resolution (OverloadResolution.Resolve). The hook
+    // imported/BCL overload resolution (ClrOverloadResolution.Resolve). The hook
     // receives the source-argument index (into argTypes) and the candidate's CLR
     // parameter type; it returns true when the corresponding bound argument is a
     // constant integer expression whose value fits that (possibly narrower /

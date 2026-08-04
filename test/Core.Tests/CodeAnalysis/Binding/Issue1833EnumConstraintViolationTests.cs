@@ -23,7 +23,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// diagnostic instead of silently binding through overload resolution and
 /// only failing later at CLR verification.
 /// <para>
-/// Root cause: <c>OverloadResolution.SatisfiesGenericConstraints</c>'s
+/// Root cause: <c>ClrOverloadResolution.SatisfiesGenericConstraints</c>'s
 /// base-type-constraint loop treated <em>every</em> <c>System.ValueType</c>-
 /// or <c>System.Enum</c>-named constraint as satisfied once the argument was
 /// classified as a value-type-erased symbol (<c>IsValueTypeErasedSymbol</c>,
