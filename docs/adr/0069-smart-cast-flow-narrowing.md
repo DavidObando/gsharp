@@ -328,8 +328,9 @@ Narrowing proved anew for each iteration remains valid. In particular,
 their condition-derived narrowing, while a guard or proven-non-null assignment
 inside the body may re-establish narrowing after an inherited narrowing is
 removed. This applies equally to function locals and top-level globals. Since
-ADR-0156, all file-mode drivers use the compiled back-edge rules; the default
-interactive evaluator implements the same flow analysis.
+ADR-0156 Phase 3a, every default driver, including interactive `gsi`, uses the
+compiled back-edge rules. The `gsi --engine evaluator` escape hatch is
+deprecated and scheduled for removal in Phase 3c.
 
 Assignment precision is limited to plain storage whose identity the flow pass
 tracks directly: ordinary locals (including captured locals and `if let`

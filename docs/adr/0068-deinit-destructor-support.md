@@ -115,7 +115,7 @@ changed which invocations use that backend. Current routing is:
 | `gsc /out:program.dll file.gs`, then run the assembly | emit to file, then CLR host | real CLR finalizer; no GS0510 |
 | `gsi file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
 | interactive `gsi` (default) | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
-| interactive `gsi --engine evaluator` | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
+| interactive `gsi --engine evaluator` (deprecated; removed in Phase 3c) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
 
 The old two-column `gsc`/`gsi` table made object reachability appear to be the
 discriminating axis. It is not. Driving the legacy evaluator-backed
@@ -173,4 +173,5 @@ Two new diagnostics are allocated:
 
 The `deinit` language and emission design remain accepted. ADR-0156 partially
 supersedes only this ADR's original driver-boundary model: all default drivers
-now emit, while the evaluator compatibility path retains GS0510.
+now emit, while the deprecated evaluator compatibility path retains GS0510
+until its Phase 3c removal.

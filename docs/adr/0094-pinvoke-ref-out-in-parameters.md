@@ -138,7 +138,7 @@ ref-kind P/Invoke declarations bind without GS0326/GS0352, then the tree
 evaluator reports GS0514 before evaluation; no call-site write-back or native
 transition occurs. Binder errors such as GS0352 still take precedence.
 ADR-0156 default drivers emit the byref signature and execute the real native
-transition.
+transition. The evaluator is deprecated and scheduled for removal in Phase 3c.
 
 The interpreter test suite covers valid `ref`/`out`/`in` declarations reaching
 GS0514 and invalid pointees reaching GS0352 before that boundary.

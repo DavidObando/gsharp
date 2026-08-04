@@ -35,7 +35,8 @@ reflection dispatch path.
 Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
 `Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
 default drivers. Bare `gsc`, `gsi <file>`, and the default interactive REPL
-emit and run the native call; `gsc /out:` emits it to disk.
+emit and run the native call; `gsc /out:` emits it to disk. The evaluator path
+is deprecated and scheduled for removal in Phase 3c.
 
 ## Consequences
 

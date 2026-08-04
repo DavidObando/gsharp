@@ -198,7 +198,8 @@ ADR-0152 supersedes the original empty-body/default-value behavior. Valid
 Shape A and Shape B declarations bind, then the tree evaluator reports GS0514
 before evaluation; it neither invokes the delegate nor fabricates `default(R)`.
 Binder diagnostics GS0353–GS0356 still take precedence. ADR-0156 default
-drivers emit and run the native transition.
+drivers emit and run the native transition. The evaluator is deprecated and
+scheduled for removal in Phase 3c.
 
 The interpreter test suite covers valid Shape A/Shape B declarations reaching
 GS0514 and invalid shapes reaching their binder diagnostics first.

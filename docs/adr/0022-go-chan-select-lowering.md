@@ -11,7 +11,8 @@ Per ADR-0002 (D2) GSharp adopts a **synthesis** concurrency model: a Go-shaped s
 
 At the time of this decision, the interpreter was the project's semantic
 oracle. ADR-0156 later moved production file drivers and the conformance oracle
-to emitted execution. This ADR still documents both backends:
+to emitted execution. The evaluator backend is deprecated and scheduled for
+removal in ADR-0156 Phase 3c. This ADR still documents both backends:
 
 1. The Go-shaped surface the user sees.
 2. The .NET surface the interpreter (and, later, the emitter) lowers to.

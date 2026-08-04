@@ -142,7 +142,8 @@ ADR-0152 supersedes the original evaluator behavior described here. A valid
 of returning a fabricated default value. ADR-0156 Phase 1 moved bare `gsc` and
 `gsi <file>` to emitted execution, where the generated wrapper performs the
 real native transition. The boundary remains on direct tree evaluation and
-the deprecated `gsi --engine evaluator` compatibility path.
+the deprecated `gsi --engine evaluator` compatibility path until ADR-0156
+Phase 3c removes the evaluator.
 
 ### 5. Diagnostics (new)
 

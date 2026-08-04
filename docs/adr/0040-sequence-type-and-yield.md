@@ -112,7 +112,8 @@ This reuses architectural patterns from the async state-machine pipeline (`Synth
 3. **Interpreter parity**: the interpreter (`Evaluator.cs`) does not gain
    `yield` support in this slice. Iterator functions are emit-only. This is a
    known evaluator gap tracked as #138; ADR-0156 later made emitted execution
-   the production oracle and routed file-mode drivers through it.
+   the production oracle and routed every default driver through it. The
+   evaluator is deprecated and scheduled for removal in Phase 3c.
 
 ## Alternatives considered
 

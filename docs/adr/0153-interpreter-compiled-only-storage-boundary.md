@@ -41,7 +41,8 @@ and function-pointer execution — are **compiled-only in the tree evaluator**.
 Interactive `gsi --engine evaluator` must report a self-contained boundary
 diagnostic instead of attempting a value-only approximation. Since ADR-0156
 Phases 1–3a, all default drivers use emitted execution and run these constructs
-natively.
+natively. The evaluator path is deprecated and scheduled for removal in
+Phase 3c.
 
 This ADR governs only the evaluator's storage-model boundary. It does not
 redefine unsafe/native language validity or CIL emission.

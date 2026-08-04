@@ -27,7 +27,8 @@ The concrete anti-patterns, each observed in this codebase:
    then-evaluator-backed `gsi` were
    byte-identical in stdout and diagnostic count — so the assertion cannot distinguish them.
    The test name claimed reachability semantics; the only load-bearing assertion was a
-   diagnostic count about something else.
+   diagnostic count about something else. ADR-0156 now deprecates that evaluator and
+   schedules its removal for Phase 3c.
 2. **Degenerate parity oracle** (#3150). A driver-parity test computed its oracle from an emit
    run in which the discriminating code (deinit bodies) never executed, so the "computed"
    oracle equaled a constant; deleting the deinit bodies left the test green. One row compared

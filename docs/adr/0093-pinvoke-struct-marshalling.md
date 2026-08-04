@@ -155,7 +155,8 @@ valid P/Invoke declaration, ADR-0152 supersedes the original "return default"
 behavior: the tree evaluator reports GS0514 before evaluation. ADR-0156 default
 drivers emit and run the native transition. Interpreter tests cover managed
 layout behavior and confirm that diagnostics GS0346–GS0351 still fire before
-execution where applicable.
+execution where applicable. The evaluator is deprecated and scheduled for
+removal in ADR-0156 Phase 3c.
 
 ## Consequences
 
