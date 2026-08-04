@@ -2308,6 +2308,11 @@ public sealed partial class Evaluator
             return sv;
         }
 
+        if (type?.ClrType != null && IsSpanType(type.ClrType))
+        {
+            return InterpretedSpanValue.Empty(type.ClrType);
+        }
+
         // Issue #1652: every other value type (bool, all sized/unsigned ints,
         // float32/float64, decimal, char, nint/nuint, and user value structs
         // that slipped through as plain ClrType) gets its real CLR default via

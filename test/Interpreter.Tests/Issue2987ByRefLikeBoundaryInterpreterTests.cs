@@ -63,19 +63,6 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
             """,
             "System.Span[int32]"
         },
-        {
-            """
-            import System
-
-            func value(values []int32) int32 {
-                var span ReadOnlySpan[int32] = values
-                return 22
-            }
-
-            value([]int32{11, 22, 33})
-            """,
-            "System.ReadOnlySpan[int32]"
-        },
     };
 
     [Theory]

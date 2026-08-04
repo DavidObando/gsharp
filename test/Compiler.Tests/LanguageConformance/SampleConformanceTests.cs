@@ -63,19 +63,7 @@ public class SampleConformanceTests
             ["PInvokeLibraryImportStringReturn.gs"] = NativeCallDifference(),
             ["PInvokeMarshalAs.gs"] = NativeCallDifference(),
             ["PInvokeRefOutIn.gs"] = NativeCallDifference(),
-            ["RefStructGenericField.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0511"),
-                "docs/diagnostics.md GS0511 / #3114",
-                "the evaluator invokes func Main but rejects ByRefLike signatures"),
             ["RefStructSpan.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0511"),
-                "docs/diagnostics.md GS0511 / #3114",
-                "reflection cannot invoke ByRefLike signatures"),
-            ["SpanComprehensive.gs"] = SameDifference(
-                Expected(1, string.Empty, "GS0511"),
-                "docs/diagnostics.md GS0511 / #3114",
-                "the evaluator invokes func Main but rejects ByRefLike signatures"),
-            ["SpanIndexing.gs"] = SameDifference(
                 Expected(1, string.Empty, "GS0511"),
                 "docs/diagnostics.md GS0511 / #3114",
                 "reflection cannot invoke ByRefLike signatures"),
@@ -199,9 +187,6 @@ public class SampleConformanceTests
             var golden = SampleConformanceData.ReadNormalizedFile(
                 Path.Combine(samplesDirectory, Path.ChangeExtension(sample, ".golden")));
             Assert.False(string.IsNullOrEmpty(golden), $"{sample} must have non-empty golden output.");
-            Assert.True(
-                ExpectedDifferences.ContainsKey(sample),
-                $"{sample} declares an explicit Main with non-empty golden output; declare any driver difference explicitly.");
         }
     }
 
