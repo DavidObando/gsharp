@@ -51,6 +51,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     private static readonly MethodInfo AppendFormattedFormat = FindAppendFormatted(secondParam: typeof(string));
     private static readonly MethodInfo AppendFormattedAlignFormat = FindAppendFormatted(secondParam: typeof(int), thirdParam: typeof(string));
 
+    private readonly DiagnosticBag diagnostics = new();
     private int counter;
 
     /// <summary>
@@ -93,7 +94,8 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             changed |= lowerer.RewriteBaseInitializers(structSym);
         }
 
-        if (!changed)
+        var diagnostics = program.Diagnostics.AddRange(lowerer.diagnostics.ToImmutableArray());
+        if (!changed && diagnostics.Length == program.Diagnostics.Length)
         {
             return program;
         }
@@ -101,7 +103,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         var result = new BoundProgram(
             program.EntryPointPackage,
             program.Packages,
-            program.Diagnostics,
+            diagnostics,
             functions.ToImmutable(),
             program.EntryPoint,
             statement,
@@ -140,6 +142,17 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         if (node.Handler != null)
         {
             return this.RewriteUserHandler(node, literalLength, formattedCount);
+        }
+
+        foreach (var part in node.Parts)
+        {
+            if (part.IsHole &&
+                TypeSymbol.IsByRefLike(part.Value.Type) &&
+                FindByRefLikeToString(part.Value.Type) == null)
+            {
+                var location = part.Value.Syntax?.Location ?? node.Syntax.Location;
+                this.diagnostics.ReportByRefLikeInterpolationUnsupported(location, part.Value.Type);
+            }
         }
 
         var (parts, leading) = this.PrepareParts(node);
@@ -182,6 +195,17 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             }
 
             var value = part.Value;
+            var byRefLikeToString = TypeSymbol.IsByRefLike(value.Type) ? FindByRefLikeToString(value.Type) : null;
+            if (byRefLikeToString != null)
+            {
+                value = new BoundImportedInstanceCallExpression(
+                    node.Syntax,
+                    value,
+                    byRefLikeToString,
+                    TypeSymbol.String,
+                    ImmutableArray<BoundExpression>.Empty);
+            }
+
             var (method, typeArguments) = CloseAppendFormatted(part, value.Type);
 
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
@@ -669,6 +693,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         // encodes the user TypeDef into the MethodSpec (issue #320 path).
         return (open.MakeGenericMethod(typeof(object)), ImmutableArray.Create(holeType));
     }
+
+    private static MethodInfo FindByRefLikeToString(TypeSymbol type)
+        => type?.ClrType?.GetMethod("ToString", System.Type.EmptyTypes);
 
     private static MethodInfo FindAppendFormatted(
         System.Type secondParam = null, System.Type thirdParam = null, int genericArity = 1, bool valueOnly = false)

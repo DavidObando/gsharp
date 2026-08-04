@@ -760,7 +760,11 @@ public class Compilation
         // Gate: fail fast on unsupported async constructs after lowering.
         // This runs after the rewriters because it inspects StateMachineType
         // which is set during AsyncStateMachineRewriter.Rewrite.
-        var diagnostics = Lowering.Async.AsyncEmitPrecheck.Check(program);
+        // Binder errors return before lowering; only lowerer-added errors can reach this gate.
+        var diagnostics = program.Diagnostics
+            .Where(d => d.IsError)
+            .Concat(Lowering.Async.AsyncEmitPrecheck.Check(program))
+            .ToImmutableArray();
 
         var lowered = new LoweredProgram(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
         return (lowered, program, diagnostics);
