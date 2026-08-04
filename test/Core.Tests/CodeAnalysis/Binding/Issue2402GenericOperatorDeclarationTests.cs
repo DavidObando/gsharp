@@ -2,13 +2,13 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -31,12 +31,15 @@ public class Issue2402GenericOperatorDeclarationTests
 
             42
             """;
-        var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = Evaluate(source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(42, result.Value);
 
+        // Binder inspection (issue #3176 Phase 3b.2): the bound-shape asserts
+        // read a locally bound Compilation; the run above came from the
+        // emitted oracle.
+        var compilation = Compile(source);
         var box = (StructSymbol)compilation.GlobalScope.Structs.Single(t => t.Name == "Box");
         var add = box.StaticMethods.Single(m => m.Name == "op_Addition");
         Assert.Same(box, add.StaticOwnerType);
@@ -87,12 +90,15 @@ public class Issue2402GenericOperatorDeclarationTests
 
             42
             """;
-        var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = Evaluate(source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(42, result.Value);
 
+        // Binder inspection (issue #3176 Phase 3b.2): the bound-shape asserts
+        // read a locally bound Compilation; the run above came from the
+        // emitted oracle.
+        var compilation = Compile(source);
         var box = (StructSymbol)compilation.GlobalScope.Structs.Single(t => t.Name == "Box");
         var conversion = box.StaticMethods.Single(m => m.Name == "op_Implicit");
         Assert.Same(box, conversion.StaticOwnerType);
@@ -166,8 +172,8 @@ public class Issue2402GenericOperatorDeclarationTests
         return new Compilation(tree);
     }
 
-    private static EvaluationResult Evaluate(string source)
+    private static EmittedOracleResult Evaluate(string source)
     {
-        return Compile(source).Evaluate(new Dictionary<VariableSymbol, object>());
+        return EmittedOracle.Evaluate(source);
     }
 }

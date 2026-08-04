@@ -249,13 +249,12 @@ data struct Point {
 }
 0
 ";
-        // Phase 3b (issue #3176): stays on Compilation.Evaluate — the test
-        // inspects this Compilation's bound state afterwards, which the
-        // EmittedOracle does not expose; disposition in 3b.2.
+        // Binder-inspection helper (issue #3176 Phase 3b.2): bind via
+        // EmittedOracle.CompileDiagnostics and inspect this Compilation's
+        // bound state; nothing needs to run.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
         var sym = (StructSymbol)compilation.GlobalScope.Structs.Single(s => s.Name == "Point");
         Assert.NotNull(sym);
         Assert.True(sym.IsData);

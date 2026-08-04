@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -41,9 +42,9 @@ func Issue2146U(x Issue2146Animal) int32 -> 2
 func Issue2146Use(d Issue2146Dog) int32 -> Issue2146U(d)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue2146U");
         Assert.NotNull(selected);
@@ -65,9 +66,9 @@ func Issue2146UId(x Issue2146AnimalId) int32 -> 2
 func Issue2146UseId(a Issue2146AnimalId) int32 -> Issue2146UId(a)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue2146UId");
         Assert.NotNull(selected);
@@ -89,9 +90,9 @@ func Issue2146H(x Issue2146Mid) int32 -> 2
 func Issue2146HUse(leaf Issue2146Leaf) int32 -> Issue2146H(leaf)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue2146H");
         Assert.NotNull(selected);
@@ -114,9 +115,9 @@ func Issue2146L(caller Type?) int32 -> 2
 func Issue2146LUse() int32 -> Issue2146L(typeof(Issue2146LogC))
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue2146L");
         Assert.NotNull(selected);
@@ -139,8 +140,8 @@ func Issue2146A(x Issue2146IB) int32 -> 2
 func Issue2146AUse(b Issue2146Both) int32 -> Issue2146A(b)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0266");
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.Contains(diagnostics, d => d.Id == "GS0266");
     }
 
     [Fact]
@@ -159,9 +160,9 @@ func Issue2146S(x Issue2146IShape) int32 -> 2
 func Issue2146SUse(sq Issue2146Square) int32 -> Issue2146S(sq)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue2146S");
         Assert.NotNull(selected);

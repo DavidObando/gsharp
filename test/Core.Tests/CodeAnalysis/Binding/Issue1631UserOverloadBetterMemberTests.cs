@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -41,9 +42,9 @@ func Issue1631NwF(x float64) int32 -> 2
 func Issue1631NwUse() int32 -> Issue1631NwF(5)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631NwF");
         Assert.NotNull(selected);
@@ -63,9 +64,9 @@ func Issue1631ChF(x float64) int32 -> 2
 func Issue1631ChUse(n int16) int32 -> Issue1631ChF(n)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631ChF");
         Assert.NotNull(selected);
@@ -86,8 +87,8 @@ func Issue1631AmbF(x decimal) int32 -> 2
 func Issue1631AmbUse(n int32) int32 -> Issue1631AmbF(n)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0266");
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.Contains(diagnostics, d => d.Id == "GS0266");
     }
 
     [Fact]
@@ -103,9 +104,9 @@ func Issue1631GenF(x string) int32 -> 2
 func Issue1631GenUse(s string) int32 -> Issue1631GenF(s)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631GenF");
         Assert.NotNull(selected);
@@ -125,9 +126,9 @@ func Issue1631VarF(x int32, rest ...int32) int32 -> 2
 func Issue1631VarUse() int32 -> Issue1631VarF(1, 2)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631VarF");
         Assert.NotNull(selected);
@@ -153,9 +154,9 @@ func Issue1631VarWF(x int32, rest ...int32) int32 -> 2
 func Issue1631VarWUse() int32 -> Issue1631VarWF(1, 2)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631VarWF");
         Assert.NotNull(selected);
@@ -177,9 +178,9 @@ func Issue1631VarTieF(x int32, rest ...int32) int32 -> 2
 func Issue1631VarTieUse() int32 -> Issue1631VarTieF(1, 2)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631VarTieF");
         Assert.NotNull(selected);
@@ -200,9 +201,9 @@ func Issue1631VarSoleF(x int32, rest ...int32) int32 -> 2
 func Issue1631VarSoleUse() int32 -> Issue1631VarSoleF(1, 2, 3)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631VarSoleF");
         Assert.NotNull(selected);
@@ -221,9 +222,9 @@ func Issue1631VarVsVarF(x int32, rest ...int64) int32 -> 2
 func Issue1631VarVsVarUse() int32 -> Issue1631VarVsVarF(1, 2)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631VarVsVarF");
         Assert.NotNull(selected);
@@ -248,9 +249,9 @@ func Issue1631NamedF(a int32, b int64) int32 -> 2
 func Issue1631NamedUse() int32 -> Issue1631NamedF(b: 2, a: 1)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0266");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0266");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631NamedF");
         Assert.NotNull(selected);
@@ -270,8 +271,8 @@ func Issue1631PairF(a int64, b int32) int32 -> 2
 func Issue1631PairUse(x int32, y int32) int32 -> Issue1631PairF(x, y)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0266");
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.Contains(diagnostics, d => d.Id == "GS0266");
     }
 
     [Fact]
@@ -286,8 +287,8 @@ func Issue1631IdF(x int64) int32 -> 2
 func Issue1631IdUse(n int32) int32 -> Issue1631IdF(n)
 ";
         var compilation = Compile(source);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         var selected = FindCall(compilation, "Issue1631IdF");
         Assert.NotNull(selected);

@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -34,8 +35,8 @@ class Counter {
 
 var c = Counter()
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var counter = structs.Single(s => s.Name == "Counter");
         Assert.NotNull(counter.ExplicitConstructor);
@@ -56,8 +57,8 @@ class Counter {
 
 var c = Counter()
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var counter = structs.Single(s => s.Name == "Counter");
         Assert.NotNull(counter.ExplicitConstructor);
@@ -77,8 +78,8 @@ class Greeting {
 
 var g = Greeting(""hi"")
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var greeting = structs.Single(s => s.Name == "Greeting");
         Assert.NotNull(greeting.ExplicitConstructor);
@@ -108,8 +109,8 @@ class Color {
 
 var c = Color(1, 2, 3)
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var color = structs.Single(s => s.Name == "Color");
         Assert.NotNull(color.ExplicitConstructor);
@@ -132,8 +133,8 @@ class Config {
 
 var cfg = Config()
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var config = structs.Single(s => s.Name == "Config");
         Assert.NotNull(config.ExplicitConstructor);
@@ -155,8 +156,8 @@ class Dual(Name string) {
 
 var d = Dual(""x"")
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var dual = structs.Single(s => s.Name == "Dual");
         Assert.True(dual.HasPrimaryConstructor);
@@ -175,8 +176,8 @@ class Plain {
 
 var p = Plain()
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var plain = structs.Single(s => s.Name == "Plain");
         Assert.Null(plain.ExplicitConstructor);
@@ -191,20 +192,23 @@ class Box(Value int32) { }
 
 var b = Box(42)
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.Empty(result.Diagnostics);
+        var (diagnostics, structs) = EvaluateAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var box = structs.Single(s => s.Name == "Box");
         Assert.Null(box.ExplicitConstructor);
         Assert.True(box.HasPrimaryConstructor);
     }
 
-    private static (EvaluationResult Result, IEnumerable<StructSymbol> Structs) EvaluateAndGetStructs(string source)
+    // Binder-inspection helper (issue #3176 Phase 3b.2): bind via
+    // EmittedOracle.CompileDiagnostics and inspect this Compilation's bound
+    // state; nothing needs to run.
+    private static (System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics, IEnumerable<StructSymbol> Structs) EvaluateAndGetStructs(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
         var structs = compilation.GlobalScope.Structs;
-        return (result, structs);
+        return (diagnostics, structs);
     }
 }

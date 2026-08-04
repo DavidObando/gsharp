@@ -2,7 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -10,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -54,8 +54,7 @@ let w = Wide(22050, 32)
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var call = FindConstructorCall(compilation, "Wide");
         Assert.NotNull(call);
@@ -91,8 +90,7 @@ let p = Plain(a, b)
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var call = FindConstructorCall(compilation, "Plain");
         Assert.NotNull(call);
@@ -118,8 +116,7 @@ let h = Holder(5)
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var call = FindConstructorCall(compilation, "Holder");
         Assert.NotNull(call);
@@ -177,8 +174,7 @@ Foo(5)
 ";
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var call = compilation.GlobalScope.Statements
             .OfType<BoundExpressionStatement>()
@@ -194,8 +190,7 @@ Foo(5)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(EmittedOracle.CompileDiagnostics(compilation));
 
         var call = FindConstructorCall(compilation, typeName);
         Assert.NotNull(call);

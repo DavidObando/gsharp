@@ -9,6 +9,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -26,7 +27,7 @@ public class Issue836IteratorTryFinallyBinderTests
     [Fact]
     public void YieldInsideTryFinally_Accepted()
     {
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -39,13 +40,13 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]
     public void YieldInsideTryWithCatch_RejectedWithGS0367()
     {
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -57,13 +58,13 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0367");
+        Assert.Contains(diagnostics, d => d.Id == "GS0367");
     }
 
     [Fact]
     public void YieldInsideTryCatchFinally_RejectedWithGS0367()
     {
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -77,13 +78,13 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0367");
+        Assert.Contains(diagnostics, d => d.Id == "GS0367");
     }
 
     [Fact]
     public void NestedTryFinally_BothLevelsContainYields_Accepted()
     {
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -100,13 +101,13 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]
     public void NestedTryFinally_InnerHasCatchWithYield_InnerRejected()
     {
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -122,14 +123,14 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0367");
+        Assert.Contains(diagnostics, d => d.Id == "GS0367");
     }
 
     [Fact]
     public void TryWithCatch_NoYield_StillBinds()
     {
         // Non-iterator try/catch is unaffected.
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             func gen() int32 {
                 try {
@@ -140,7 +141,7 @@ public class Issue836IteratorTryFinallyBinderTests
             }
             """);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]
@@ -150,7 +151,7 @@ public class Issue836IteratorTryFinallyBinderTests
         // count as belonging to the outer try/catch (different lexical
         // scope; the inner lambda would have its own iterator semantics
         // if it returned a sequence).
-        var (result, _) = Compile("""
+        var (diagnostics, _) = Compile("""
             import System
             import System.Collections.Generic
             func gen() IEnumerable[int32] {
@@ -170,14 +171,17 @@ public class Issue836IteratorTryFinallyBinderTests
 
         // The outer try has only a finally, not a catch — should be
         // accepted regardless of where the inner lambda's yield lives.
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
     }
 
-    private static (EvaluationResult Result, Compilation Compilation) Compile(string source)
+    // Binder-inspection helper (issue #3176 Phase 3b.2): bind via
+    // EmittedOracle.CompileDiagnostics and inspect this Compilation's bound
+    // state; nothing needs to run.
+    private static (System.Collections.Immutable.ImmutableArray<Diagnostic> Diagnostics, Compilation Compilation) Compile(string source)
     {
         var syntaxTree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(syntaxTree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        return (result, compilation);
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
+        return (diagnostics, compilation);
     }
 }
