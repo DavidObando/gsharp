@@ -24,9 +24,8 @@ operations with `GS0513` and exit code 1.
 `fixed` is the cleanest existing boundary message: the evaluator explains that
 pinning requires the CIL pinned-local emit path. `stackalloc`, `sizeof` over
 unmanaged storage, method function pointers, and function-pointer invocation
-use the same pattern. These older guards are still wrapped as legacy GS9999
-diagnostics; #3199 tracks moving deliberate boundary failures out of the
-internal-error category.
+use the same pattern. Their deliberate boundary exceptions are classified as
+`GS0513` rather than the `GS9999` internal-error category.
 
 Diagnostic presentation is not part of this boundary contract. Boundary
 messages must still name the construct, state that the evaluator does not
@@ -56,21 +55,20 @@ The current implementation status is:
 | Construct | Current tree-evaluator behavior | Contract status |
 |---|---|---|
 | `unsafe { ... }` without a storage-only construct | Evaluates normally | Supported |
-| `fixed` over array/slice, string, or a pinnable-reference source | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
-| `stackalloc` | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
-| `sizeof` requiring the CIL unmanaged-storage path | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
-| `&Method` function pointer | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
-| Function-pointer invocation | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
+| `fixed` over array/slice, string, or a pinnable-reference source | Self-contained `GS0513` boundary | Meets contract after #3199 |
+| `stackalloc` | Self-contained `GS0513` boundary | Meets contract after #3199 |
+| `sizeof` requiring the CIL unmanaged-storage path | Self-contained `GS0513` boundary | Meets contract after #3199 |
+| `&Method` function pointer | Self-contained `GS0513` boundary | Meets contract after #3199 |
+| Function-pointer invocation | Self-contained `GS0513` boundary | Meets contract after #3199 |
 | Ref local alias (`let ref r = arr[i]`) | Aliases the captured storage location | Meets contract after #3032 |
 | `*p = value` | `GS0513` compiled-only boundary | Meets contract |
 | `*(p + 1)` | `GS0513` fires before pointer arithmetic is evaluated | Meets contract |
 | Free-standing `&x` followed by `*p` | `GS0513` compiled-only boundary | Meets contract |
 | Pointer arithmetic or comparison over copied values | May return coincidentally plausible results | Must become a boundary |
 
-The evaluator reports unmanaged `&`/`*` storage boundaries through `GS0513`.
-The older construct-specific guards listed above still use self-contained
-messages carried by GS9999; #3199 tracks that diagnostic-classification gap.
-Outside those named legacy guards, `GS9999` remains a failure.
+The evaluator reports these compiled-only storage boundaries through `GS0513`
+with self-contained, construct-specific messages. `GS9999` remains reserved
+for unexpected evaluator failures.
 
 ## Consequences
 
