@@ -103,6 +103,13 @@ public class Issue3267ExplicitGenericArgumentValidationTests
         {
             """
             func Id[T](value T) T -> value
+            Id[object](41)
+            """,
+            41
+        },
+        {
+            """
+            func Id[T](value T) T -> value
             Id[int64](42)
             """,
             42L
@@ -166,6 +173,23 @@ public class Issue3267ExplicitGenericArgumentValidationTests
         Assert.Equal(expectedStart, diagnostic.Location.Span.Start);
         Assert.Equal(expectedSpan.Length, diagnostic.Location.Span.Length);
         Assert.Equal(expectedSpan, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void ExplicitGenericArgumentMismatch_RecommendsCompatibleValue()
+    {
+        const string source = """
+            class Box {
+                func Id[T](value T) T -> value
+            }
+            Box().Id[int32]("wrong")
+            """;
+
+        var diagnostic = Assert.Single(GetErrors(source));
+
+        Assert.Equal(
+            "Cannot convert type 'string' to 'int32'. Provide a value of type 'int32' instead.",
+            diagnostic.Message);
     }
 
     [Theory]
