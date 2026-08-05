@@ -1,29 +1,21 @@
-// <copyright file="Issue1881CheckedUncheckedInterpreterTests.cs" company="GSharp">
+// <copyright file="Issue1881CheckedUncheckedEmittedOracleTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1881: interpreter counterpart of
-/// <see cref="GSharp.Core.Tests.CodeAnalysis.Emit.Issue1881CheckedUncheckedEmitTests"/>.
-/// Asserts the tree-walking evaluator agrees with the compiled/emitted IL for
-/// <c>checked</c>/<c>unchecked</c> expressions and blocks: overflow throws
+/// Issue #1881: emitted-oracle coverage for <c>checked</c>/<c>unchecked</c>
+/// expressions and blocks. Pins that overflow throws
 /// <see cref="System.OverflowException"/> (caught here via a G#-level
 /// try/catch, mirroring real usage) in a checked context, and wraps silently
 /// in an unchecked context (the C# project default), across signed/unsigned
 /// integer widths and narrowing conversions.
 /// </summary>
-public class Issue1881CheckedUncheckedInterpreterTests
+public class Issue1881CheckedUncheckedEmittedOracleTests
 {
     [Fact]
     public void CheckedAddition_Int32_Overflow_ThrowsOverflowException()

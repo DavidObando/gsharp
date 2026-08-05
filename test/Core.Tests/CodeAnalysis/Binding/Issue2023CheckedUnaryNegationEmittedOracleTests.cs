@@ -1,29 +1,21 @@
-// <copyright file="Issue2023CheckedUnaryNegationInterpreterTests.cs" company="GSharp">
+// <copyright file="Issue2023CheckedUnaryNegationEmittedOracleTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #2023: interpreter counterpart of
-/// <see cref="GSharp.Core.Tests.CodeAnalysis.Emit.Issue2023CheckedUnaryNegationEmitTests"/>.
-/// Asserts the tree-walking evaluator agrees with the compiled/emitted IL for
-/// unary negation of the each width's <c>MinValue</c> inside a
+/// Issue #2023: emitted-oracle coverage for unary negation of each width's
+/// <c>MinValue</c> inside a
 /// <c>checked</c>/<c>unchecked</c> context: overflow throws
 /// <see cref="System.OverflowException"/> in a checked context and wraps
 /// silently in an unchecked context (the project default per #1881), while
 /// floating-point negation never traps regardless of context.
 /// </summary>
-public class Issue2023CheckedUnaryNegationInterpreterTests
+public class Issue2023CheckedUnaryNegationEmittedOracleTests
 {
     [Fact]
     public void CheckedNegation_Int32MinValue_ThrowsOverflowException()

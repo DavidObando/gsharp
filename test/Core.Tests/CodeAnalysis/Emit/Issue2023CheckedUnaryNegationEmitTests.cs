@@ -20,8 +20,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// <c>neg</c> opcode (2's-complement negation, which silently wraps
 /// <c>MinValue</c> back to itself) regardless of context. These tests
 /// exercise the compiled (emit) backend; <see
-/// cref="GSharp.Core.Tests.CodeAnalysis.Binding.Issue2023CheckedUnaryNegationInterpreterTests"/>
-/// exercises the interpreter and asserts the two backends agree.
+/// cref="GSharp.Core.Tests.CodeAnalysis.Binding.Issue2023CheckedUnaryNegationEmittedOracleTests"/>
+/// pins additional forms through the emitted submission oracle.
 /// </summary>
 public class Issue2023CheckedUnaryNegationEmitTests
 {

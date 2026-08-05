@@ -1,4 +1,4 @@
-// <copyright file="ParenthesizedReceiverInterpreterTests.cs" company="GSharp">
+// <copyright file="ParenthesizedReceiverEmittedSessionTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -10,21 +10,20 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// ADR-0054: postfix member/index access on primary expressions. Verifies that
-/// the interpreter (a separate execution path from the emitter) evaluates
-/// member access, method calls, and indexing through a parenthesized receiver
-/// with the same results the compiled program produces.
+/// the emitted REPL session evaluates member access, method calls, and indexing
+/// through a parenthesized receiver to the exact expected value.
 /// </summary>
-public class ParenthesizedReceiverInterpreterTests
+public class ParenthesizedReceiverEmittedSessionTests
 {
     [Theory]
     [InlineData("(10 + 32).GetType()", "System.Int32")]
     [InlineData("(10 + 32).ToString()", "42")]
     [InlineData("(\"hello\").Length", "5")]
     [InlineData("([3]int32{10, 20, 30})[1]", "20")]
-    public void Interpreter_ParenthesizedReceiver_MatchesEmitter(string expr, string expectedContains)
+    public void EmittedSession_ParenthesizedReceiver_PrintsExpectedValue(string expr, string expected)
     {
         var output = RunSubmission(expr);
-        Assert.Contains(expectedContains, output);
+        Assert.Equal(expected + Environment.NewLine, output);
     }
 
     private static string RunSubmission(string text)

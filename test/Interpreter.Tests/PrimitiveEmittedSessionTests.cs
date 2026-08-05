@@ -1,4 +1,4 @@
-// <copyright file="PrimitiveInterpreterTests.cs" company="GSharp">
+// <copyright file="PrimitiveEmittedSessionTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -9,12 +9,11 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Phase 5 of #142: interpreter parity for the expanded numeric
-/// primitive set. Each test feeds a snippet through the REPL and
-/// asserts that the printed value matches what the emitter produces
-/// in the equivalent compiled program.
+/// Phase 5 of #142: emitted-session coverage for the expanded numeric
+/// primitive set. Each test feeds a snippet through the REPL and pins
+/// its exact printed value.
 /// </summary>
-public class PrimitiveInterpreterTests
+public class PrimitiveEmittedSessionTests
 {
     [Theory]
     [InlineData("100L + 50L", "150")]
@@ -52,14 +51,14 @@ public class PrimitiveInterpreterTests
     [InlineData("int32(9999999999L)", "1410065407")]
 
     // Issue #1183 (C# §6.4.5.3): un-suffixed literals that exceed int32 infer
-    // a wider type and evaluate to the correct value in the tree interpreter.
+    // a wider type and evaluate to the correct value in the emitted session.
     [InlineData("4294967295", "4294967295")]
     [InlineData("5000000000", "5000000000")]
     [InlineData("18446744073709551615", "18446744073709551615")]
-    public void Interpreter_PrimitiveArithmetic_MatchesEmitter(string expr, string expectedContains)
+    public void EmittedSession_PrimitiveExpression_PrintsExpectedValue(string expr, string expected)
     {
         var output = RunSubmission(expr);
-        Assert.Contains(expectedContains, output);
+        Assert.Equal(expected + Environment.NewLine, output);
     }
 
     private static string RunSubmission(string text)
