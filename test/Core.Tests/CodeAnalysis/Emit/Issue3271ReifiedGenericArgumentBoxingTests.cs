@@ -76,17 +76,21 @@ public class Issue3271ReifiedGenericArgumentBoxingTests
             "Issue3271TopReferences.IMark[]",
             "Issue3271TopReferences.Mark");
 
-        // Issue #3280: value-type → System.ValueType is not classified yet.
-        AssertValueTypeTargetDiagnostic(
+        AssertRuns(
             """
             package Issue3271TopValueType
             import System
 
-            func Show[T](value T) { }
+            func Show[T](value T) {
+                Console.WriteLine([]T{value}.GetType())
+                Console.WriteLine(value.GetType())
+                Console.WriteLine(value)
+            }
 
             Show[ValueType](23)
             """,
-            "GS0154",
+            "System.ValueType[]",
+            "System.Int32",
             "23");
     }
 
@@ -119,20 +123,24 @@ public class Issue3271ReifiedGenericArgumentBoxingTests
             "System.IComparable[]",
             "System.Int32");
 
-        // Issue #3280: value-type → System.ValueType is not classified yet.
-        AssertValueTypeTargetDiagnostic(
+        AssertRuns(
             """
             package Issue3271InstanceValueType
             import System
 
             class Runner {
                 init() {}
-                func Show[T](value T) { }
+                func Show[T](value T) {
+                    Console.WriteLine([]T{value}.GetType())
+                    Console.WriteLine(value.GetType())
+                    Console.WriteLine(value)
+                }
             }
 
             Runner().Show[ValueType](33)
             """,
-            "GS0155",
+            "System.ValueType[]",
+            "System.Int32",
             "33");
     }
 
@@ -160,17 +168,21 @@ public class Issue3271ReifiedGenericArgumentBoxingTests
             "System.IComparable[]",
             "System.Int32");
 
-        // Issue #3280: value-type → System.ValueType is not classified yet.
-        AssertValueTypeTargetDiagnostic(
+        AssertRuns(
             """
             package Issue3271ExtensionValueType
             import System
 
-            func (self string) Show[T](value T) { }
+            func (self string) Show[T](value T) {
+                Console.WriteLine([]T{value}.GetType())
+                Console.WriteLine(value.GetType())
+                Console.WriteLine(value)
+            }
 
             "extension".Show[ValueType](43)
             """,
-            "GS0155",
+            "System.ValueType[]",
+            "System.Int32",
             "43");
     }
 
@@ -370,14 +382,4 @@ public class Issue3271ReifiedGenericArgumentBoxingTests
             result.Output);
     }
 
-    private static void AssertValueTypeTargetDiagnostic(string source, string expectedId, string expectedText)
-    {
-        var result = EmittedOracle.Evaluate(source);
-        var diagnostic = Assert.Single(result.Diagnostics);
-
-        Assert.Equal(expectedId, diagnostic.Id);
-        Assert.Equal(expectedText, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
-        Assert.Equal(1, result.ExitCode);
-        Assert.Equal(string.Empty, result.Output);
-    }
 }
