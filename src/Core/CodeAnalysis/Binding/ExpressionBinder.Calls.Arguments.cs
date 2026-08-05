@@ -1124,7 +1124,14 @@ internal sealed partial class ExpressionBinder
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
-                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedUpdatedReceiver ?? receiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
+                var inheritedCallReceiver = inheritedUpdatedReceiver ?? receiver;
+                if (TryReportByRefLikeInheritedCall(inheritedCallReceiver, resolution.Best, ce.Location))
+                {
+                    result = new BoundErrorExpression(null);
+                    return true;
+                }
+
+                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case ClrOverloadResolution.ResolutionOutcome.Ambiguous:

@@ -288,10 +288,9 @@ internal sealed partial class MethodBodyEmitter
                     // pointer to the value; without the box the raw value bits
                     // are reinterpreted as a reference, producing an
                     // AccessViolationException (or silent corruption) at runtime.
-                    var declaringType = instCall.Method.DeclaringType;
-                    var receiverNeedsBox = receiverIsValueType
-                        && declaringType != null
-                        && !declaringType.IsValueType;
+                    var receiverNeedsBox = ReflectionMetadataEmitter.ImportedInstanceReceiverRequiresBoxing(
+                        receiverType,
+                        instCall.Method);
 
                     // A value type calling a method it declares itself receives a
                     // managed pointer (`this` is `ref TStruct`) and uses `call`;

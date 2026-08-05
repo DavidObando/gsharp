@@ -1353,6 +1353,11 @@ internal sealed partial class OverloadResolver
             var constraintLocation = syntax.TypeArgumentList != null
                 ? syntax.TypeArgumentList.Location
                 : syntax.Identifier.Location;
+            if (TryReportByRefLikeTypeArgument(function.TypeParameters, substitution, constraintLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+
             foreach (var tp in function.TypeParameters)
             {
                 var typeArg = substitution[tp];

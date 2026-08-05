@@ -1129,6 +1129,11 @@ internal sealed partial class OverloadResolver
             var constraintLocation = ce.TypeArgumentList != null
                 ? ce.TypeArgumentList.Location
                 : ce.Identifier.Location;
+            if (TryReportByRefLikeTypeArgument(extension.TypeParameters, substitution, constraintLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+
             foreach (var tp in extension.TypeParameters)
             {
                 var typeArg = substitution[tp];
@@ -1439,6 +1444,11 @@ internal sealed partial class OverloadResolver
             var constraintLocation = ce.TypeArgumentList != null
                 ? ce.TypeArgumentList.Location
                 : ce.Identifier.Location;
+            if (TryReportByRefLikeTypeArgument(method.TypeParameters, substitution, constraintLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+
             foreach (var tp in method.TypeParameters)
             {
                 var typeArg = substitution[tp];

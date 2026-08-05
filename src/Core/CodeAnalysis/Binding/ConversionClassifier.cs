@@ -660,8 +660,7 @@ internal sealed class ConversionClassifier
         // the same ref struct) already returned above.
         if (TypeSymbol.IsByRefLike(expression.Type)
             && type != TypeSymbol.String
-            && type?.ClrType != null
-            && !type.ClrType.IsValueType
+            && Conversion.IsReferenceLikeTarget(type)
             && expression.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
