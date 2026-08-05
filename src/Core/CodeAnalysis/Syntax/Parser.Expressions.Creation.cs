@@ -855,6 +855,13 @@ public partial class Parser
             pos++;
         }
 
+        if (Peek(pos).Kind == SyntaxKind.ChanKeyword)
+        {
+            isComplex = true;
+            pos++;
+            return TryScanTypeClause(ref pos);
+        }
+
         // ADR-0075: `(T1, T2, ...) -> R` arrow function-type clause, or a
         // tuple-type clause `(T1, T2, ...)`. Both start with '('.
         if (Peek(pos).Kind == SyntaxKind.OpenParenthesisToken)

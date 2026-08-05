@@ -66,6 +66,52 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
     }
 
     [Fact]
+    public void ChannelEnclosingTypeArg_GenericConstruction_ParsesAtSourceSpan()
+    {
+        const string source = """
+            package p
+            class Box[T] {}
+            class Owner[T] { class Payload[U] {} }
+            func Reify[T]() {
+                var value = Box[Owner[chan T].Payload[string]]()
+            }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var channel = Descendants(tree.Root)
+            .OfType<TypeClauseSyntax>()
+            .Single(type => type.IsChannel);
+        Assert.Equal(4, channel.Location.StartLine);
+        Assert.Equal(26, channel.Location.StartCharacter);
+        Assert.Equal(4, channel.Location.EndLine);
+        Assert.Equal(32, channel.Location.EndCharacter);
+    }
+
+    [Fact]
+    public void ChannelTypeArg_StaticCall_ParsesAsGenericName()
+    {
+        const string source = """
+            package p
+            struct Box[T] { shared { func Make(x int32) int32 { return x } } }
+            class C { func F() int32 { return Box[chan int32].Make(5) } }
+            """;
+
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        Assert.IsType<GenericNameExpressionSyntax>(GetReturnedAccessorReceiver(tree));
+
+        var channel = Descendants(tree.Root)
+            .OfType<TypeClauseSyntax>()
+            .Single(type => type.IsChannel);
+        Assert.Equal(2, channel.Location.StartLine);
+        Assert.Equal(38, channel.Location.StartCharacter);
+        Assert.Equal(2, channel.Location.EndLine);
+        Assert.Equal(48, channel.Location.EndCharacter);
+    }
+
+    [Fact]
     public void MultiTypeArg_StaticCall_ParsesAsGenericName()
     {
         // A multi-type-argument list followed by `.` commits to a generic call

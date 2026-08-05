@@ -25,6 +25,65 @@ namespace GSharp.Interpreter.Tests;
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
 {
+    [Fact]
+    public void ChannelEnclosingTypeArgument_ReifiesAcrossEmittedHosts()
+    {
+        const string Source = """
+            package Issue3255
+            import System
+            import Gsharp.Extensions.Go
+
+            class Box[T] {
+            }
+
+            class Owner[T] {
+                class Payload[U] {
+                }
+            }
+
+            func Reify[T]() {
+                let value = Box[Owner[chan T].Payload[string]]()
+                let payloadType = value.GetType().GenericTypeArguments[0]
+                let channelType = payloadType.GenericTypeArguments[0]
+                Console.WriteLine(channelType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine(channelType.GenericTypeArguments[0].FullName)
+            }
+
+            Reify[int32]()
+            """;
+        const string Expected =
+            "System.Threading.Channels.Channel`1\nSystem.Int32\n";
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3255-{Guid.NewGuid():N}");
+
+        try
+        {
+            var compiler = RunSourceDriver(
+                Path.Combine(root, "gsc"),
+                Source,
+                Program.Main);
+            var gsi = RunSourceDriver(
+                Path.Combine(root, "gsi"),
+                Source,
+                GSharp.Repl.Program.Main);
+            var interactive = RunInteractive(Source);
+
+            Assert.Equal(Expected + "Success.\n", compiler);
+            Assert.Equal(Expected, gsi);
+            Assert.Equal(Expected, interactive);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     public static IEnumerable<object[]> TypeArgumentCases()
     {
         yield return ["class", "class Payload {\n    let Eleven int32\n    var TwentyTwo string\n}", "Payload"];
