@@ -1,4 +1,4 @@
-// <copyright file="Issue3140OutParameterWriteBackParityTests.cs" company="GSharp">
+// <copyright file="Issue3140OutParameterWriteBackDriverTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -22,7 +22,7 @@ namespace GSharp.Interpreter.Tests;
 /// SessionEngine columns retired in ADR-0156 Phase 3c (#3176).
 /// </summary>
 [Collection("ConsoleIo")]
-public class Issue3140OutParameterWriteBackParityTests
+public class Issue3140OutParameterWriteBackDriverTests
 {
     /// <summary>Gets receiver and argument-shape matrix rows.</summary>
     /// <returns>Matrix rows.</returns>
@@ -39,11 +39,11 @@ public class Issue3140OutParameterWriteBackParityTests
 
     [Theory]
     [MemberData(nameof(ReceiverShapeMatrix))]
-    public async Task OutParameterWriteBack_InProcessHostMatchesEmit(
+    public async Task OutParameterWriteBack_AgreesAcrossEmittedDrivers(
         ReceiverKind receiver,
         ArgumentShape shape)
     {
-        await AssertDriverParityAsync(
+        await AssertEmittedDriverAgreementAsync(
             BuildSource(receiver, shape),
             GetExpectedOutput(shape),
             receiver + "-" + shape);
@@ -64,11 +64,11 @@ public class Issue3140OutParameterWriteBackParityTests
 
     [Theory]
     [MemberData(nameof(WriteBackOperandMatrix))]
-    public async Task OutParameterWriteBack_ReceiverAndOperandKindsMatchEmit(
+    public async Task OutParameterWriteBack_ReceiverAndOperandKindsAgreeAcrossEmittedDrivers(
         ReceiverKind receiver,
         OperandKind operand)
     {
-        await AssertDriverParityAsync(
+        await AssertEmittedDriverAgreementAsync(
             BuildOperandSource(receiver, operand),
             "91",
             receiver + "-" + operand);
@@ -338,7 +338,7 @@ public class Issue3140OutParameterWriteBackParityTests
         _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
     };
 
-    private static async Task AssertDriverParityAsync(string source, string expected, string name)
+    private static async Task AssertEmittedDriverAgreementAsync(string source, string expected, string name)
     {
         var root = CreateEmptyDirectory(name);
         try
@@ -446,7 +446,7 @@ public class Issue3140OutParameterWriteBackParityTests
 
     private static string CreateEmptyDirectory(string name)
     {
-        var parent = Path.Combine(AppContext.BaseDirectory, nameof(Issue3140OutParameterWriteBackParityTests));
+        var parent = Path.Combine(AppContext.BaseDirectory, nameof(Issue3140OutParameterWriteBackDriverTests));
         return CreateEmptyDirectory(parent, name + "-" + Guid.NewGuid().ToString("N"));
     }
 
