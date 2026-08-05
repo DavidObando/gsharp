@@ -1897,6 +1897,8 @@ internal sealed partial class ExpressionBinder
                 }
                 else if (!SameDelegateIdentity(nominalTarget, nominalCandidate))
                 {
+                    // Issue #3149: reached but not mutation-pinned. TryBindClrConstructorCall
+                    // is the sole constructor caller; BindAccessorCall also consumes this output.
                     nominalTarget = null;
                     nominalTargetsAgree = false;
                 }
@@ -1907,6 +1909,9 @@ internal sealed partial class ExpressionBinder
         // if some candidate produced a usable closed target, that target wins
         // and there is nothing left to defer.
         blockedByOpenGenericParameter = blockedByOpenGenericParameter && target == null && sawAnyMatchingSlot;
+
+        // Issue #3149: reached but not mutation-pinned. BindAccessorCall consumes
+        // sawOpen to defer mixed open/closed candidates, so this reset must remain.
         if (sawOpenGenericParameter)
         {
             nominalTarget = null;

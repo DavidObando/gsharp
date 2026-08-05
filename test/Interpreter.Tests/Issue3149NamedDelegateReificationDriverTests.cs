@@ -136,10 +136,12 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
             var referencePath = typeof(Issue3149Greeter).Assembly.Location;
             var copiedReferencePath = Path.Combine(directory, Path.GetFileName(referencePath));
             File.Copy(referencePath, copiedReferencePath);
+            var consumerSource = CreateConsumerSource(consumerPackage, generic);
+            Assert.DoesNotContain("import GSharp.Interpreter.Tests.Issue3149Mixed", consumerSource, StringComparison.Ordinal);
             var sourcePath = WriteSource(
                 directory,
                 "consumer.gs",
-                CreateConsumerSource(consumerPackage, generic));
+                consumerSource);
             var expectedOutput = generic
                 ? $"{typeof(Issue3149Mapper<>).FullName}\n{typeof(Issue3149Item).FullName}\n24\n"
                 : $"{typeof(Issue3149Greeter).FullName}\n13\n";
