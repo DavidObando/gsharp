@@ -20,13 +20,13 @@ namespace GSharp.Interpreter.Tests;
 /// Issue #3137 extends the same emit-oracle matrix to reflected field shape.
 /// Issue #3180 covers enclosing generic parameters in the interactive emitted
 /// engine; ADR-0156 file drivers remain compared against explicit and interactive
-/// emitted hosts.
+/// emitted hosts. Issue #3255 covers composite types in enclosing generic arguments.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
 {
     [Fact]
-    public void ChannelEnclosingTypeArgument_ReifiesAcrossEmittedHosts()
+    public void CompositeEnclosingTypeArguments_ReifyAcrossEmittedHosts()
     {
         const string Source = """
             package Issue3255
@@ -42,17 +42,53 @@ public class Issue3099TypeArgumentReificationTests
             }
 
             func Reify[T]() {
-                let value = Box[Owner[chan T].Payload[string]]()
-                let payloadType = value.GetType().GenericTypeArguments[0]
-                let channelType = payloadType.GenericTypeArguments[0]
-                Console.WriteLine(channelType.GetGenericTypeDefinition().FullName)
-                Console.WriteLine(channelType.GenericTypeArguments[0].FullName)
+                let channelValue = Box[Owner[chan T].Payload[string]]()
+                let channelType = channelValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine("chan:" + channelType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("chan-arg:" + channelType.GenericTypeArguments[0].FullName)
+
+                let sequenceValue = Box[Owner[sequence[T]].Payload[string]]()
+                let sequenceType = sequenceValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine("sequence:" + sequenceType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("sequence-arg:" + sequenceType.GenericTypeArguments[0].FullName)
+
+                let mapValue = Box[Owner[map[string,T]].Payload[string]]()
+                let mapType = mapValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine("map:" + mapType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("map-key:" + mapType.GenericTypeArguments[0].FullName)
+                Console.WriteLine("map-value:" + mapType.GenericTypeArguments[1].FullName)
+
+                let asyncSequenceValue = Box[Owner[async sequence[T]].Payload[string]]()
+                let asyncSequenceType = asyncSequenceValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine("async-sequence:" + asyncSequenceType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("async-sequence-arg:" + asyncSequenceType.GenericTypeArguments[0].FullName)
+
+                let deepValue = Box[Owner[map[string,sequence[chan T]]].Payload[string]]()
+                let deepMap = deepValue.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                let deepSequence = deepMap.GenericTypeArguments[1]
+                let deepChannel = deepSequence.GenericTypeArguments[0]
+                Console.WriteLine("deep-map:" + deepMap.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("deep-sequence:" + deepSequence.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("deep-channel:" + deepChannel.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("deep-arg:" + deepChannel.GenericTypeArguments[0].FullName)
             }
 
             Reify[int32]()
             """;
         const string Expected =
-            "System.Threading.Channels.Channel`1\nSystem.Int32\n";
+            "chan:System.Threading.Channels.Channel`1\n"
+            + "chan-arg:System.Int32\n"
+            + "sequence:System.Collections.Generic.IEnumerable`1\n"
+            + "sequence-arg:System.Int32\n"
+            + "map:System.Collections.Generic.Dictionary`2\n"
+            + "map-key:System.String\n"
+            + "map-value:System.Int32\n"
+            + "async-sequence:System.Collections.Generic.IAsyncEnumerable`1\n"
+            + "async-sequence-arg:System.Int32\n"
+            + "deep-map:System.Collections.Generic.Dictionary`2\n"
+            + "deep-sequence:System.Collections.Generic.IEnumerable`1\n"
+            + "deep-channel:System.Threading.Channels.Channel`1\n"
+            + "deep-arg:System.Int32\n";
         var root = Path.Combine(
             GetRepositoryRoot(),
             "out",
@@ -69,11 +105,53 @@ public class Issue3099TypeArgumentReificationTests
                 Path.Combine(root, "gsi"),
                 Source,
                 GSharp.Repl.Program.Main);
-            var interactive = RunInteractive(Source);
+            var interactive = RunInteractiveEmit(Source);
 
             Assert.Equal(Expected + "Success.\n", compiler);
             Assert.Equal(Expected, gsi);
             Assert.Equal(Expected, interactive);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void PointerEnclosingTypeArgument_RemainsRejectedBeforeEmit()
+    {
+        const string Source = """
+            package Issue3255Pointer
+            class Box[T] {}
+            class Owner[T] { class Payload[U] {} }
+            func Reify[T]() {
+                let value = Box[Owner[*int32].Payload[string]]()
+            }
+            """;
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3255-pointer-{Guid.NewGuid():N}");
+
+        try
+        {
+            var probeDirectory = PrepareEmptyDirectory(root);
+            var sourcePath = Path.Combine(probeDirectory, "Probe.gs");
+            File.WriteAllText(sourcePath, Source);
+            var result = CaptureDriverResult(() => Program.Main([sourcePath]));
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains(
+                "(5,28,5,33): error GS0125: Variable 'int32' doesn't exist.",
+                result.Stdout,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("Cannot encode", result.Stdout, StringComparison.Ordinal);
+            Assert.Equal("Failed.\n", result.Stderr);
         }
         finally
         {
@@ -272,6 +350,15 @@ public class Issue3099TypeArgumentReificationTests
 
     private static string CaptureDriver(Func<int> driver)
     {
+        var result = CaptureDriverResult(driver);
+        Assert.True(
+            result.ExitCode == 0,
+            $"driver failed with exit {result.ExitCode}\nstdout:\n{result.Stdout}\nstderr:\n{result.Stderr}");
+        return result.Stdout;
+    }
+
+    private static DriverResult CaptureDriverResult(Func<int> driver)
+    {
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
         var previousOut = Console.Out;
@@ -289,11 +376,13 @@ public class Issue3099TypeArgumentReificationTests
             Console.SetError(previousError);
         }
 
-        Assert.True(
-            exit == 0,
-            $"driver failed with exit {exit}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return new DriverResult(
+            exit,
+            stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
+            stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
     }
+
+    private readonly record struct DriverResult(int ExitCode, string Stdout, string Stderr);
 
     private static string NormalizeGenericTypeNames(string output)
     {
