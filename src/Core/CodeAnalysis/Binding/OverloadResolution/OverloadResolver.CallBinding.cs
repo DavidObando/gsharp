@@ -1643,7 +1643,7 @@ internal sealed partial class OverloadResolver
             }
 
             if (argument.Type != expectedType
-                && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
+                && !TypeSymbol.ContainsTypeParameter(expectedType)
                 && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
             {
                 // Issue #889: arrow/func literal → void-returning delegate.
