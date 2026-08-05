@@ -329,8 +329,8 @@ public sealed class EmittedSessionEngineTests : IDisposable
     /// <summary>
     /// ADR-0156 Phase 2 deliberate semantic change: interactive submissions
     /// run real emitted code, so a class deinitializer executes as a genuine
-    /// CLR finalizer when a collection is forced — and the GS0510 interpreter
-    /// boundary warning (pinned for the evaluator engine by
+    /// CLR finalizer when a collection is forced — and the historical GS0510
+    /// boundary warning (pinned before evaluator retirement by
     /// <c>Issue2988DeinitInterpreterTests.ReachableInstanceReportsGS0510WithoutRunningDeinitializer</c>)
     /// no longer fires, matching Phase 1's script-mode behavior.
     /// </summary>
@@ -526,8 +526,8 @@ public sealed class EmittedSessionEngineTests : IDisposable
     /// <summary>
     /// Issue #3185 (part 1, negative): a struct with NO base clause does not
     /// satisfy an interface across cells — G# interface conformance is
-    /// nominal, and the emitted engine reports the same GS0155 the evaluator
-    /// engine (and a same-cell conversion) reports.
+    /// nominal, and the emitted engine reports the same GS0155 that the retired
+    /// evaluator engine and a same-cell conversion reported.
     /// </summary>
     [Fact]
     public void CrossCellInterfaceConversionWithoutBaseClauseStillErrors()

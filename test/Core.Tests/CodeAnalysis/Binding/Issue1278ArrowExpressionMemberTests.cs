@@ -15,10 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1278 / ADR-0131: binder/interpreter coverage for expression-bodied
-/// members using the G# arrow <c>-&gt;</c>. The arrow forms desugar to the same
-/// block bodies they would otherwise spell, so they bind, type-check, and
-/// evaluate identically to their block-bodied equivalents.
+/// Issue #1278: Emitted-oracle coverage for arrow expression member.
 /// </summary>
 public class Issue1278ArrowExpressionMemberTests
 {

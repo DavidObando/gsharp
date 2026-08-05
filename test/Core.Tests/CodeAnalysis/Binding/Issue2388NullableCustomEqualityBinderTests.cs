@@ -15,24 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #2388: <c>Nullable&lt;T&gt;</c> comparisons where <c>T</c> is an
-/// imported CLR value type with custom equality (<c>DateTime</c>,
-/// <c>Guid</c>) previously bound "successfully" against
-/// <c>ClrOperatorResolution</c>'s CLR-type match (Stream C) even though the
-/// bound operands stayed <c>Nullable&lt;T&gt;</c>-typed — the CLR type match
-/// only inspects <see cref="TypeSymbol.ClrType"/>, which for
-/// <see cref="NullableTypeSymbol"/> is already the UNDERLYING type. The
-/// resulting <c>BoundClrBinaryOperatorExpression</c> then emitted invalid IL
-/// (ilverify <c>StackUnexpected</c>) at the CALL site, not the BIND site — so
-/// these tests assert the binder produces clean diagnostics for the
-/// nullable-lifted shapes (proving the binder itself now recognizes and
-/// lifts them) while a same-compilation struct WITHOUT a user operator still
-/// correctly reports GS0129 (proving the fix does not make every value type
-/// universally nullable-comparable). Method bodies are bound but never
-/// invoked — this is pure binder coverage. Issue #2400 adds tree-walking
-/// Evaluator coverage for the same-compilation Function-carrying shape, while
-/// Issue2388NullableCustomEqualityEmitTests covers compiled/run/ILVerify
-/// behavior.
+/// Issue #2388: Emitted-oracle coverage for nullable custom equality.
 /// </summary>
 public class Issue2388NullableCustomEqualityBinderTests
 {

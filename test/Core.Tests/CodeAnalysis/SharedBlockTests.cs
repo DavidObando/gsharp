@@ -22,8 +22,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis;
 
 /// <summary>
-/// ADR-0053 Phase E — comprehensive tests for the <c>shared { … }</c> block feature
-/// covering parser, binder, evaluator, and emit round-trip scenarios.
+/// Emitted-oracle coverage for shared block.
 /// </summary>
 public class SharedBlockTests
 {

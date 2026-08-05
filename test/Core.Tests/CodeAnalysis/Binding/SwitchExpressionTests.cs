@@ -16,7 +16,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 6.1: <c>switch</c> expression binding and interpretation.
+/// Emitted-oracle coverage for switch expression.
 /// </summary>
 public class SwitchExpressionTests
 {

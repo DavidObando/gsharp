@@ -14,11 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1038: binder/interpreter coverage for the standalone range value
-/// (<c>let r = 1..3</c>) and its use as an index argument (<c>a[r]</c>). The
-/// four open forms bind to a constructed <c>System.Range</c>; indexing an array
-/// or string by a range value slices it. A leading <c>^</c> at the start of a
-/// standalone range reports GS0410.
+/// Issue #1038: Emitted-oracle coverage for standalone range binding.
 /// </summary>
 public class Issue1038StandaloneRangeBindingTests
 {

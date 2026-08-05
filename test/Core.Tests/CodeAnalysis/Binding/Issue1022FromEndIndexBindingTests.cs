@@ -15,10 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1022: binder/interpreter coverage for the from-end index marker
-/// <c>^n</c>. A bare <c>a[^n]</c> reads <c>length - n</c>; from-end bounds in a
-/// range compute the concrete offset at lowering time. Regression checks keep
-/// the one's-complement / XOR meanings of <c>^</c> intact.
+/// Issue #1022: Emitted-oracle coverage for from end index binding.
 /// </summary>
 public class Issue1022FromEndIndexBindingTests
 {

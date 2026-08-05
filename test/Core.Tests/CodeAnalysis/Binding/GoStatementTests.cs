@@ -14,7 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 5.3 — <c>go f(args)</c> statement (interpreter).
+/// Emitted-oracle coverage for go statement.
 /// </summary>
 public class GoStatementTests
 {

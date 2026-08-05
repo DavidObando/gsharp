@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2931 interpreter parity for struct receiver iterators.
+/// Emitted-session coverage for issue #2931 struct receiver iterators.
 /// </summary>
 public class Issue2931StructReceiverIteratorTests
 {

@@ -15,8 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #143: binder and evaluator coverage for the <c>typeof(T)</c> and
-/// <c>nameof(expr)</c> contextual operators.
+/// Emitted-oracle coverage for type of name of.
 /// </summary>
 public class TypeOfNameOfTests
 {

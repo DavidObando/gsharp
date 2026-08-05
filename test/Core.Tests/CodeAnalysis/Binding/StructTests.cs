@@ -15,8 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.B.1 — struct declarations, composite literals, field access.
-/// Interpreter-only for now; emit support lands in a follow-up commit.
+/// Emitted-oracle coverage for struct.
 /// </summary>
 public class StructTests
 {

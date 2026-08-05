@@ -15,19 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1136: inherited <see cref="object"/> instance members
-/// (<c>GetType()</c>, <c>ToString()</c>, <c>GetHashCode()</c>,
-/// <c>Equals(object)</c>) must be callable on user <c>class</c>/<c>struct</c>
-/// instances even when the user type declares no explicit imported base. The
-/// binder's inherited-CLR fallback previously only fired when
-/// <c>StructSymbol.ImportedBaseType</c> was set; it now falls back to
-/// <c>typeof(object)</c> so the universally-inherited members resolve in
-/// <c>this.M()</c>, <c>receiver.M()</c>, and bare implicit-<c>this</c> (<c>M()</c>)
-/// positions. The return types are validated through explicit type annotations
-/// (<c>System.Type</c>/<c>string</c>/<c>int32</c>/<c>bool</c>): a mismatch would
-/// surface a conversion diagnostic. Method bodies are bound (and their
-/// diagnostics captured) without being executed, so these tests are pure binder
-/// coverage independent of the tree interpreter.
+/// Issue #1136: Emitted-oracle coverage for object member.
 /// </summary>
 public class Issue1136ObjectMemberBinderTests
 {

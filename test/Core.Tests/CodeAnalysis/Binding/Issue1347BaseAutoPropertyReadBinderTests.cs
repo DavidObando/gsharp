@@ -14,15 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1347: binder/interpreter tests for reading and writing a base-class
-/// <em>auto-property</em> through <c>base.Prop</c>. Auto-properties have no
-/// accessor <see cref="FunctionSymbol"/> (their getter/setter are
-/// compiler-synthesized over a backing field), and the original #1104 support
-/// mis-bound such a read as a write — emitting GS0127. These tests verify the
-/// read binds as a value (no GS0127), the write binds as an assignment, and
-/// both run with the expected backing-field semantics, including for
-/// getter-only (<c>{ get; }</c>), expression-bodied re-exposure, and
-/// grandparent auto-properties.
+/// Issue #1347: Emitted-oracle coverage for base auto property read.
 /// </summary>
 public class Issue1347BaseAutoPropertyReadBinderTests
 {

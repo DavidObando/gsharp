@@ -17,7 +17,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 6.8 binder and evaluator coverage for enum declarations.
+/// Emitted-oracle coverage for enum declaration.
 /// </summary>
 public class EnumDeclarationTests
 {

@@ -14,8 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 5.6 / ADR-0022 — <c>select</c> statement with receive (discard +
-/// bind), send, and <c>default</c> arms. Interpreter only.
+/// Emitted-oracle coverage for select.
 /// </summary>
 public class SelectTests
 {

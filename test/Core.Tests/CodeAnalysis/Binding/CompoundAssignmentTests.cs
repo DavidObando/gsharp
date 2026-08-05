@@ -12,10 +12,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 2.1: compound assignment operators (<c>+=</c>, <c>-=</c>, <c>*=</c>,
-/// <c>/=</c>, <c>%=</c>, <c>^=</c>, <c>&amp;=</c>, <c>|=</c>, <c>&amp;^=</c>,
-/// <c>&lt;&lt;=</c>, <c>&gt;&gt;=</c>) desugar in the parser to <c>x = x op rhs</c>,
-/// so the binder, lowerer, interpreter, and emitter need no per-operator changes.
+/// Binder and emitted-oracle coverage for compound assignment.
 /// </summary>
 public class CompoundAssignmentTests
 {

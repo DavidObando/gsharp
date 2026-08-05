@@ -13,7 +13,9 @@ using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issue #2947 cross-assembly compiler/interpreter regression coverage.</summary>
+/// <summary>
+/// Issue #2947: Emitted-execution coverage for imported nested generic.
+/// </summary>
 [Collection("ConsoleIo")]
 public class Issue2947ImportedNestedGenericDriverTests
 {

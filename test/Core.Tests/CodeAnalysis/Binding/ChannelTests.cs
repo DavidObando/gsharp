@@ -14,9 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 5.4 / 5.5 — <c>chan T</c> type, <c>make(chan T[, cap])</c>,
-/// send <c>ch &lt;- v</c>, receive <c>&lt;-ch</c>, and <c>close(ch)</c>
-/// in the interpreter.
+/// Emitted-oracle coverage for channel.
 /// </summary>
 public class ChannelTests
 {

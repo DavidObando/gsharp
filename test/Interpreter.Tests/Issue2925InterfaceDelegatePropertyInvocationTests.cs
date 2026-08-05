@@ -9,8 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter parity for issue #2925's source-interface delegate property
-/// invocation.
+/// Emitted-session coverage for issue #2925 source-interface delegate property invocation.
 /// </summary>
 public class Issue2925InterfaceDelegatePropertyInvocationTests
 {

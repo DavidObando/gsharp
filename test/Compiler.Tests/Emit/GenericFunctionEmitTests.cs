@@ -10,18 +10,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Phase 4 emit-parity tests for generic function declarations (Phase 4.1) —
-/// emit commit F1: type-erased generic emit.
-/// <para>
-/// Each open type parameter <c>T</c> is encoded as <c>System.Object</c> in
-/// the method's signature. Call sites box value-type arguments crossing
-/// into <c>T</c>-typed parameters, and <c>unbox.any</c> the return when
-/// the substituted return type is a value type. This matches the
-/// interpreter's type-erased model. ADR-0004 still calls for CLR reified
-/// generics as the long-term goal; F2 (follow-up) will widen to
-/// <c>GenericParam</c> rows with MVAR / VAR encoding and MethodSpec tokens
-/// at call sites.
-/// </para>
+/// Emit coverage for generic function.
 /// </summary>
 public class GenericFunctionEmitTests
 {

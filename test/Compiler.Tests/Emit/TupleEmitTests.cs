@@ -10,12 +10,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Phase 4.5 emit-parity tests for tuple literals and element access. Tuple
-/// literals lower to <c>System.ValueTuple{...}</c> constructor calls (struct
-/// newobj); element access (<c>t.ItemN</c>) lowers to <c>ldfld</c> on the
-/// public ItemN field of the ValueTuple shape. Tuple arities 2–7 are covered;
-/// higher arities have a null ClrType per TupleTypeSymbol.BuildClrType and
-/// remain interpreter-only.
+/// Emit coverage for tuple.
 /// </summary>
 public class TupleEmitTests
 {

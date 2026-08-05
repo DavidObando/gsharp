@@ -16,7 +16,9 @@ using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
-/// <summary>Binder and interpreter coverage for issue #3091.</summary>
+/// <summary>
+/// Issue #3091: Emitted-oracle coverage for property pattern property.
+/// </summary>
 public sealed class Issue3091PropertyPatternPropertyTests
 {
     [Fact]

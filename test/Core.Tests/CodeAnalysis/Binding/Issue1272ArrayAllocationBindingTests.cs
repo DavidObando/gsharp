@@ -15,10 +15,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1272: binder/interpreter coverage for the native runtime/zero-init
-/// allocation form <c>[n]T</c>. Both a constant and a runtime length yield a
-/// zero-initialised <c>[]T</c> of length <c>n</c>; the existing literal and
-/// slice forms keep their behaviour.
+/// Issue #1272: Emitted-oracle coverage for array allocation binding.
 /// </summary>
 public class Issue1272ArrayAllocationBindingTests
 {
