@@ -8,20 +8,18 @@ using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
-
-// Interp-vs-emit parity harness; the evaluator side retires with the
-// evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #3058: out-parameter definite assignment must run for every function
-/// body without rejecting calls that definitely assign the parameter.
+/// body without rejecting calls that definitely assign the parameter. The
+/// diagnostics are compile-time binder analysis; the matrix crosses each case
+/// with the whole-program emit path and the REPL submission path (the
+/// tree-walking evaluator driver retired in ADR-0156 Phase 3c, #3176).
 /// </summary>
 public class Issue3058OutParameterMemberDefiniteAssignmentTests
 {
@@ -124,17 +122,14 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
         InFunction,
     }
 
-    /// <summary>Compiler/interpreter driver path.</summary>
+    /// <summary>Compiler driver path.</summary>
     public enum Driver
     {
-        /// <summary>Bare <c>gsc</c>: evaluate.</summary>
-        Evaluate,
-
-        /// <summary><c>gsc /out:</c>: emit.</summary>
+        /// <summary><c>gsc /out:</c>: whole-program emit.</summary>
         Emit,
 
-        /// <summary><c>gsi</c>: interpret.</summary>
-        Interpreter,
+        /// <summary>REPL submission binding via the emitted oracle.</summary>
+        Submission,
     }
 
     private static IEnumerable<SourceCase> DeclarationCases()
@@ -1104,25 +1099,15 @@ public class Issue3058OutParameterMemberDefiniteAssignmentTests
 
     private static Diagnostic[] Compile(string source, Driver driver)
     {
-        if (driver == Driver.Interpreter)
+        if (driver == Driver.Submission)
         {
-            return new SessionEngine()
-                .Evaluate(source)
+            return EmittedOracle.Evaluate(source)
                 .Diagnostics
                 .Where(diagnostic => diagnostic.IsError)
                 .ToArray();
         }
 
         var compilation = new Compilation(SyntaxTree.Parse(source));
-        if (driver == Driver.Evaluate)
-        {
-            return compilation
-                .Evaluate(new Dictionary<VariableSymbol, object>())
-                .Diagnostics
-                .Where(diagnostic => diagnostic.IsError)
-                .ToArray();
-        }
-
         using var peStream = new MemoryStream();
         return compilation
             .Emit(peStream)

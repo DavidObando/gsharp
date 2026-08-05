@@ -22,7 +22,7 @@ public sealed class AppShell : IAppShellNavigator
     private readonly IReadOnlyList<ITabScreen> tabs;
 
     // Captured once, up front: a cell evaluation can run on a background thread while the
-    // busy spinner keeps this render loop going on the main thread, and SessionEngine
+    // busy spinner keeps this render loop going on the main thread, and the session engine
     // temporarily swaps the *global* Console.Out/Error to capture that cell's stdout. Writing
     // frames through the live Console.Out property would race with that swap and corrupt the
     // screen; writing through this captured reference to the real terminal writer never does.

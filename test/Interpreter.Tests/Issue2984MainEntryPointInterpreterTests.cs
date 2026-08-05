@@ -3,23 +3,24 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Execution;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
-
-// Evaluator-machinery pin: exercises the evaluateEntryPoint overload surface
-// and Evaluator entry-point selection; retires with the evaluator in
-// ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2984: the interpreter invokes the entry point selected by the binder.
+/// Issue #2984: script-mode execution invokes the entry point selected by the
+/// binder. Historically pinned on the tree-walking evaluator (including the
+/// direct <c>Evaluator</c>-constructor overload surface); since the evaluator
+/// retired in ADR-0156 Phase 3c (#3176) the same observable entry-point
+/// selection runs through <see cref="EmittedProgramHost"/> — the gsi script
+/// driver — with the assertions preserved.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2984MainEntryPointInterpreterTests
@@ -35,62 +36,21 @@ public class Issue2984MainEntryPointInterpreterTests
             }
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
         Assert.Equal("package-main\n", output);
     }
 
     [Fact]
-    public void EvaluatorDefaultRunsEntryPoint()
+    public void ValueEchoPreservesTopLevelExpressionValue()
     {
-        const string Source = """
-            import System
-
-            func Main() {
-                Console.WriteLine("evaluator-main")
-            }
-            """;
-
-        using var output = new StringWriter();
-        var previousOutput = Console.Out;
-        Console.SetOut(output);
-        try
-        {
-            var compilation = new Compilation(SyntaxTree.Parse(Source));
-            var evaluator = new Evaluator(
-                compilation.BoundProgram,
-                new Dictionary<VariableSymbol, object>());
-
-            evaluator.Evaluate();
-
-            Assert.Equal("evaluator-main\n", output.ToString().Replace("\r\n", "\n"));
-        }
-        finally
-        {
-            Console.SetOut(previousOutput);
-        }
-    }
-
-    [Fact]
-    public void CompilationEvaluationPreservesTopLevelExpressionValue()
-    {
-        var result = new Compilation(SyntaxTree.Parse("40 + 2"))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
+        // The evaluator's `Evaluate` value-echo contract, preserved through
+        // the emitted oracle's synthesized trailing-expression capture.
+        var result = EmittedOracle.Evaluate("40 + 2");
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(42, result.Value);
-    }
-
-    [Fact]
-    public void EvaluatorDefaultPreservesTopLevelExpressionValue()
-    {
-        var compilation = new Compilation(SyntaxTree.Parse("40 + 2"));
-        var evaluator = new Evaluator(
-            compilation.BoundProgram,
-            new Dictionary<VariableSymbol, object>());
-
-        Assert.Equal(42, evaluator.Evaluate());
     }
 
     [Fact]
@@ -108,9 +68,9 @@ public class Issue2984MainEntryPointInterpreterTests
             }
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
         Assert.Equal("class-main\n", output);
     }
 
@@ -123,9 +83,9 @@ public class Issue2984MainEntryPointInterpreterTests
             Console.WriteLine("top-level")
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.Empty(result.Diagnostics);
+        Assert.Empty(diagnostics);
         Assert.Equal("top-level\n", output);
     }
 
@@ -142,10 +102,10 @@ public class Issue2984MainEntryPointInterpreterTests
             }
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0166");
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0166");
         Assert.Equal("top-level\n", output);
     }
 
@@ -160,9 +120,9 @@ public class Issue2984MainEntryPointInterpreterTests
             }
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
         Assert.Equal("0\n", output);
     }
 
@@ -177,27 +137,29 @@ public class Issue2984MainEntryPointInterpreterTests
             }
             """;
 
-        var (result, output) = Evaluate(Source);
+        var (diagnostics, output) = Run(Source);
 
-        Assert.Contains(
-            result.Diagnostics,
-            diagnostic => diagnostic.IsError && diagnostic.Message.Contains("x int32"));
+        // A `Main` whose parameter is not `args []string` is not an entry
+        // point: nothing is seeded (no System.String[] coercion — the
+        // original #2984 bug) and nothing runs. The evaluator additionally
+        // reported an invocation error naming the parameter; the emitted
+        // driver simply produces a program without an entry point.
         Assert.DoesNotContain(
-            result.Diagnostics,
+            diagnostics,
             diagnostic => diagnostic.Message.Contains("System.String[]"));
         Assert.Equal(string.Empty, output);
     }
 
-    private static (EvaluationResult Result, string Output) Evaluate(string source)
+    private static (ImmutableArray<Diagnostic> Diagnostics, string Output) Run(string source)
     {
         using var output = new StringWriter();
         var previousOutput = Console.Out;
         Console.SetOut(output);
         try
         {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
-            return (result, output.ToString().Replace("\r\n", "\n"));
+            var compilation = new Compilation(SyntaxTree.Parse(source));
+            var result = EmittedProgramHost.Run(compilation);
+            return (result.Diagnostics, output.ToString().Replace("\r\n", "\n"));
         }
         finally
         {

@@ -3,24 +3,20 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2928: tuple-contained function values execute identically through
-/// interpreter and compiled backends.
+/// Issue #2928: tuple-contained function values execute correctly through the
+/// compiled backend. The interpreter parity arm was retired with the
+/// evaluator in ADR-0156 Phase 3c (#3176); its cross-checked output is pinned
+/// as the golden value.
 /// </summary>
 public class Issue2928TupleFunctionParityTests
 {
@@ -34,9 +30,12 @@ public class Issue2928TupleFunctionParityTests
         """;
 
     [Fact]
-    public void TupleFunction_InterpreterAndCompiledOutputsMatch()
+    public void TupleFunction_EmittedOutputMatchesPinnedParityValue()
     {
-        Assert.Equal(CompileAndRun(Source), Interpret(Source));
+        // "42\n" is the cross-checked interpreter/emit parity value, pinned
+        // as a literal golden when the evaluator retired in ADR-0156
+        // Phase 3c (#3176): t.Item1 invokes handler, which returns 41 + 1.
+        Assert.Equal("42\n", CompileAndRun(Source));
     }
 
     [Fact]
@@ -57,25 +56,6 @@ public class Issue2928TupleFunctionParityTests
 
         var exception = Assert.Throws<TargetInvocationException>(() => CompileAndRun(KnownBadSource));
         Assert.IsType<InvalidOperationException>(exception.InnerException);
-    }
-
-    private static string Interpret(string source)
-    {
-        using var writer = new StringWriter();
-        var previous = Console.Out;
-        Console.SetOut(writer);
-        try
-        {
-            var result = new Compilation(SyntaxTree.Parse(source))
-                .Evaluate(new Dictionary<VariableSymbol, object>());
-            Assert.Empty(result.Diagnostics);
-        }
-        finally
-        {
-            Console.SetOut(previous);
-        }
-
-        return writer.ToString().Replace("\r\n", "\n");
     }
 
     private static string CompileAndRun(string source)

@@ -3,24 +3,17 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Threading.Tasks;
 using GSharp.Compiler;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
 using Xunit;
-
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2854: top-level numeric ellipsis loop captures compile and run.
+/// Asserts the emitted program against pinned golden values; the interpreter
+/// parity arm was retired with the evaluator in ADR-0156 Phase 3c (#3176).
 /// </summary>
 public class Issue2854TopLevelEllipsisLoopCaptureTests
 {
@@ -42,7 +35,7 @@ public class Issue2854TopLevelEllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 0, nameof(TopLevelClosureCapturesIterationVariable));
+        AssertEmittedResult(Source, expected: 0, nameof(TopLevelClosureCapturesIterationVariable));
     }
 
     [Fact]
@@ -65,20 +58,11 @@ public class Issue2854TopLevelEllipsisLoopCaptureTests
             result
             """;
 
-        AssertEnginesAgree(Source, expected: 215, nameof(TopLevelForInCapturedWriteUsesSharedCell));
+        AssertEmittedResult(Source, expected: 215, nameof(TopLevelForInCapturedWriteUsesSharedCell));
     }
 
-    private static void AssertEnginesAgree(string source, int expected, string testName)
-    {
-        var evaluationTask = Task.Run(() => new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>()));
-        Assert.True(evaluationTask.Wait(TimeSpan.FromSeconds(30)), "interpreter evaluation timed out");
-        var evaluation = evaluationTask.GetAwaiter().GetResult();
-
-        Assert.Empty(evaluation.Diagnostics);
-        Assert.Equal(expected, evaluation.Value);
-        Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
-    }
+    private static void AssertEmittedResult(string source, int expected, string testName)
+        => Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
 
     private static string CompileAndRun(string source, string testName)
     {

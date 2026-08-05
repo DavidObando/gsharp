@@ -11,10 +11,9 @@ namespace GSharp.Repl.Engine;
 
 /// <summary>
 /// The evaluation engine surface the interactive TUI drives (ADR-0156): the
-/// emitted submission-chaining <see cref="EmittedSessionEngine"/> (the
-/// interactive default since Phase 3a) and the legacy tree-walking
-/// <see cref="SessionEngine"/> (deprecated escape hatch until Phase 3c) both
-/// implement it, so the REPL screen is engine-agnostic.
+/// emitted submission-chaining <see cref="EmittedSessionEngine"/> implements
+/// it (the only engine since Phase 3c deleted the tree-walking evaluator),
+/// and the interface keeps the REPL screen engine-agnostic for tests.
 /// </summary>
 public interface ISessionEngine
 {

@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using GSharp.Repl.Engine;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -142,10 +143,14 @@ public class Issue2941FlagsEnumExhaustivenessTests
     [Fact]
     public void UnmatchedFlagsValue_ReportsRuntimeError()
     {
-        var result = new SessionEngine().Evaluate(UnmatchedSource);
+        // EmittedOracle preserves the historical uncaught-exception protocol
+        // (a GS9999 error diagnostic carrying the exception message), so the
+        // assertions survive the evaluator retirement verbatim
+        // (ADR-0156 Phase 3c, #3176).
+        var result = EmittedOracle.Evaluate(UnmatchedSource);
         var diagnostic = Assert.Single(result.Diagnostics);
 
-        Assert.True(result.HasError);
+        Assert.True(diagnostic.IsError);
         Assert.Equal("GS9999", diagnostic.Id);
         Assert.Equal("Unmatched switch expression value.", diagnostic.Message);
     }
@@ -153,7 +158,8 @@ public class Issue2941FlagsEnumExhaustivenessTests
     [Fact]
     public void UnmatchedFlagsValue_PreservesInvalidOperationExceptionType()
     {
-        var result = new SessionEngine { CaptureConsole = true }.Evaluate(CatchingUnmatchedSource);
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
+        var result = engine.Evaluate(CatchingUnmatchedSource);
 
         Assert.False(result.HasError);
         Assert.Empty(result.Diagnostics);

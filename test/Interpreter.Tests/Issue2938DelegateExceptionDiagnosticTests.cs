@@ -3,34 +3,31 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Tests;
 using Xunit;
-
-// Evaluator-machinery pin: asserts the interpreter's delegate-exception
-// diagnostic surface; retires with the evaluator in ADR-0156 Phase 3c
-// (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2938: uncaught exceptions from delegates reached through CLR members
-/// retain their real message and source node.
+/// retain their real message, and typed catch clauses receive the real
+/// exception. Historically these tests also pinned the tree-walking
+/// evaluator's runtime-diagnostic protocol — the source-node location
+/// anchoring and the recursive unwrapping of the evaluator's own
+/// reflection-call wrappers (<c>TargetInvocationException</c>,
+/// aggregate-await shapes). That machinery retired with the evaluator in
+/// ADR-0156 Phase 3c (#3176): emitted code performs direct IL calls, so no
+/// interpreter-synthesized wrappers exist to unwrap, and the emitted oracle
+/// surfaces an uncaught exception as a GS9999 diagnostic carrying the real
+/// <see cref="Exception.Message"/> with no source-node location.
 /// </summary>
 public class Issue2938DelegateExceptionDiagnosticTests
 {
     /// <summary>
-    /// Gets delegate-storage cases that cover CLR and interpreter containers.
+    /// Gets delegate-storage cases covering CLR and language containers.
     /// </summary>
-    // Reflection-routed storage reports the call site, while closure-routed
-    // storage reports the lambda body. This is a known inconsistency, not a contract.
-    public static TheoryData<string, string, string> StorageCases => new()
+    public static TheoryData<string, string> StorageCases => new()
     {
         {
             "tuple",
@@ -38,8 +35,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             let handler (int32) -> int32 = (value int32) -> 1 / value
             let pair = (handler, 0)
             pair.Item1(0)
-            """,
-            "pair.Item1.Invoke(0)"
+            """
         },
         {
             "list",
@@ -49,8 +45,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             let handler (int32) -> int32 = (value int32) -> 1 / value
             let handlers = List[(int32) -> int32]{ handler }
             handlers[0](0)
-            """,
-            "handlers[0].Invoke(0)"
+            """
         },
         {
             "array",
@@ -58,8 +53,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             let handler (int32) -> int32 = (value int32) -> 1 / value
             let handlers = []((int32) -> int32){ handler }
             handlers[0](0)
-            """,
-            "1 / value"
+            """
         },
         {
             "struct-field",
@@ -70,8 +64,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
 
             let holder = Holder{Handler: (value int32) -> 1 / value}
             holder.Handler(0)
-            """,
-            "1 / value"
+            """
         },
         {
             "class-field",
@@ -83,8 +76,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             let holder = Holder{}
             holder.Handler = (value int32) -> 1 / value
             holder.Handler(0)
-            """,
-            "1 / value"
+            """
         },
         {
             "returned",
@@ -94,22 +86,15 @@ public class Issue2938DelegateExceptionDiagnosticTests
             }
 
             Handler()(0)
-            """,
-            "1 / value"
+            """
         },
     };
 
     [Theory]
     [MemberData(nameof(StorageCases))]
-    public void StoredDelegate_UncaughtExceptionKeepsMessageAndSourceNode(
-        string _,
-        string source,
-        string expectedLocation)
+    public void StoredDelegate_UncaughtExceptionKeepsMessage(string _, string source)
     {
-        AssertDiagnostic(
-            source,
-            "Attempted to divide by zero.",
-            expectedLocation);
+        AssertDiagnostic(source, "Attempted to divide by zero.");
     }
 
     [Fact]
@@ -122,10 +107,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             pair.Item1(0)
             """;
 
-        AssertDiagnostic(
-            Source,
-            "Attempted to divide by zero.",
-            "pair.Item1.Invoke(0)");
+        AssertDiagnostic(Source, "Attempted to divide by zero.");
     }
 
     [Fact]
@@ -140,7 +122,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             handlers[0]()
             """;
 
-        AssertDiagnostic(Source, "user boom", "handlers[0].Invoke()");
+        AssertDiagnostic(Source, "user boom");
     }
 
     [Fact]
@@ -154,21 +136,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             pair.Item1()
             """;
 
-        AssertDiagnostic(Source, "null boom", "pair.Item1.Invoke()");
-    }
-
-    [Fact]
-    public void NestedReflectionTargetInvocationExceptions_UnwrapRecursively()
-    {
-        const string Source = """
-            import GSharp.Interpreter.Tests
-
-            let handler () -> int32 = () -> Issue2938ExceptionProbe.InvokeNullReferenceReflectively()
-            let pair = (handler, 0)
-            pair.Item1()
-            """;
-
-        AssertDiagnostic(Source, "null boom", "pair.Item1.Invoke()");
+        AssertDiagnostic(Source, "null boom");
     }
 
     [Fact]
@@ -181,10 +149,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             handler()
             """;
 
-        AssertDiagnostic(
-            Source,
-            "outer boom",
-            "throw GSharp.Interpreter.Tests.Issue2938ExceptionProbe.CreateWithOrdinaryInner()");
+        AssertDiagnostic(Source, "outer boom");
     }
 
     [Fact]
@@ -200,41 +165,7 @@ public class Issue2938DelegateExceptionDiagnosticTests
             handler()
             """;
 
-        var diagnostic = Assert.Single(Evaluate(Source).Diagnostics);
-
-        Assert.Equal("GS9999", diagnostic.Id);
-        Assert.Equal("author outer", diagnostic.Message);
-    }
-
-    [Fact]
-    public void AwaitedChannelValue_SingleAggregateTargetInvocation_UnwrapsInnerMessage()
-    {
-        const string Source = """
-            import GSharp.Interpreter.Tests
-            import Gsharp.Extensions.Go
-            import System.Threading.Tasks
-
-            let ch = make(chan ValueTask[int32], 1)
-            ch <- Issue2938ExceptionProbe.CreateSingleAggregateValueTaskAsync()
-            await <-ch
-            """;
-
-        AssertDiagnostic(Source, "aggregate await boom", "await <-ch");
-    }
-
-    [Fact]
-    public void MultipleAggregateExceptions_RemainAggregate()
-    {
-        const string Source = """
-            import GSharp.Interpreter.Tests
-
-            await Issue2938ExceptionProbe.CreateMultipleAggregateValueTaskAsync()
-            """;
-
-        AssertDiagnostic(
-            Source,
-            "One or more errors occurred. (Exception has been thrown by the target of an invocation.) (second aggregate boom)",
-            "await GSharp.Interpreter.Tests.Issue2938ExceptionProbe.CreateMultipleAggregateValueTaskAsync()");
+        AssertDiagnostic(Source, "author outer");
     }
 
     [Fact]
@@ -255,26 +186,10 @@ public class Issue2938DelegateExceptionDiagnosticTests
             message
             """;
 
-        var result = Evaluate(Source);
+        var result = EmittedOracle.Evaluate(Source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal("caught-aggregate", result.Value);
-    }
-
-    [Fact]
-    public void ClrMemberDelegateDiagnostic_RemainsAnchoredAtCallSite()
-    {
-        const string Source = """
-            let handler (int32) -> int32 = (value int32) -> 1 / value
-            let pair = (handler, 0)
-            pair.Item1(0)
-            """;
-
-        var diagnostic = Assert.Single(Evaluate(Source).Diagnostics);
-
-        Assert.Equal(
-            "pair.Item1.Invoke(0)",
-            diagnostic.Location.Text.ToString(diagnostic.Location.Span));
     }
 
     [Fact]
@@ -295,29 +210,26 @@ public class Issue2938DelegateExceptionDiagnosticTests
             message
             """;
 
-        var result = Evaluate(Source);
+        var result = EmittedOracle.Evaluate(Source);
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal("outer boom", result.Value);
     }
 
-    private static void AssertDiagnostic(string source, string message, string sourceNode)
+    private static void AssertDiagnostic(string source, string message)
     {
-        var diagnostic = Assert.Single(Evaluate(source).Diagnostics);
+        var result = EmittedOracle.Evaluate(source);
+        var diagnostic = Assert.Single(result.Diagnostics);
 
         Assert.Equal("GS9999", diagnostic.Id);
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Equal(message, diagnostic.Message);
-        Assert.Equal(sourceNode, diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.NotNull(result.UnhandledException);
     }
-
-    private static EvaluationResult Evaluate(string source)
-        => new Compilation(SyntaxTree.Parse(source))
-            .Evaluate(new Dictionary<VariableSymbol, object>());
 }
 
 /// <summary>
-/// CLR exception shapes used by issue #2938 interpreter tests.
+/// CLR exception shapes used by issue #2938 tests.
 /// </summary>
 public static class Issue2938ExceptionProbe
 {
@@ -329,15 +241,6 @@ public static class Issue2938ExceptionProbe
         => throw new NullReferenceException("null boom");
 
     /// <summary>
-    /// Invokes a throwing method through reflection to create nested runtime wrappers.
-    /// </summary>
-    /// <returns>This method never returns.</returns>
-    public static int InvokeNullReferenceReflectively()
-        => (int)typeof(Issue2938ExceptionProbe)
-            .GetMethod(nameof(ThrowNullReference))
-            .Invoke(null, null);
-
-    /// <summary>
     /// Creates an ordinary exception that itself has an inner exception.
     /// </summary>
     /// <returns>Exception with a non-target-invocation inner exception.</returns>
@@ -345,44 +248,4 @@ public static class Issue2938ExceptionProbe
         => new InvalidOperationException(
             "outer boom",
             new DivideByZeroException("inner boom"));
-
-    /// <summary>
-    /// Creates an awaitable whose result throws a single-inner aggregate wrapper.
-    /// </summary>
-    /// <returns>Awaitable exception probe.</returns>
-    public static ValueTask<int> CreateSingleAggregateValueTaskAsync()
-        => new(Task.FromException<int>(
-            new AggregateException(
-                CreateReflectionTargetInvocationException())));
-
-    /// <summary>
-    /// Creates an awaitable whose result throws a multi-inner aggregate wrapper.
-    /// </summary>
-    /// <returns>Awaitable exception probe.</returns>
-    public static ValueTask<int> CreateMultipleAggregateValueTaskAsync()
-        => new(Task.FromException<int>(
-            new AggregateException(
-                CreateReflectionTargetInvocationException(),
-                new InvalidOperationException("second aggregate boom"))));
-
-    private static TargetInvocationException CreateReflectionTargetInvocationException()
-    {
-        try
-        {
-            typeof(Issue2938ExceptionProbe)
-                .GetMethod(
-                    nameof(ThrowAggregateAwaitBoom),
-                    BindingFlags.NonPublic | BindingFlags.Static)
-                .Invoke(null, null);
-        }
-        catch (TargetInvocationException ex)
-        {
-            return ex;
-        }
-
-        throw new InvalidOperationException("Reflection probe did not throw.");
-    }
-
-    private static int ThrowAggregateAwaitBoom()
-        => throw new DivideByZeroException("aggregate await boom");
 }

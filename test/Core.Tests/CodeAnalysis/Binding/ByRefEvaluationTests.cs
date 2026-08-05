@@ -3,22 +3,19 @@
 // </copyright>
 
 using System.Collections.Generic;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
-
-// Pinned: the AddressOf test asserts the interpreter's by-design ADR-0039
-// pointer model; retires with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0039: Evaluator (interpreter) tests for by-ref/out write-back semantics.
+/// ADR-0039: by-ref/out write-back semantics, asserted through the emitted
+/// oracle. The interpreter pointer-model pin
+/// (<c>AddressOf_Evaluates_To_Value_In_Interpreter</c>, "&amp;x evaluates to
+/// the value") retired with the tree-walking evaluator in ADR-0156 Phase 3c
+/// (#3176) — it asserted ADR-0039's interpreter-only by-design behavior,
+/// which has no emitted equivalent (under emit the byref-typed local never
+/// surfaces as a readable global, see #3215).
 /// </summary>
 public class ByRefEvaluationTests
 {
@@ -66,24 +63,6 @@ var y = *p
         Assert.Equal(100, vars["y"]);
     }
 
-    [Fact]
-    public void AddressOf_Evaluates_To_Value_In_Interpreter()
-    {
-        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
-        // asserted semantics ("&x evaluates to the value") are the
-        // interpreter's pointer model by design (ADR-0039), and under the
-        // #3215 fix the byref-typed `p` is an entry-point local, not a
-        // readable global; retires with the evaluator (Phase 3c).
-        var source = @"
-var x = 55
-var p = &x
-";
-        var (eval, vars) = EvaluateWithEvaluatorVariables(source);
-        Assert.Empty(eval.Diagnostics);
-        // In the interpreter, &x just evaluates to the value of x.
-        Assert.Equal(55, vars["p"]);
-    }
-
     private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object> Variables) EvaluateWithVariables(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
@@ -91,23 +70,5 @@ var p = &x
         // dictionary.
         var result = EmittedOracle.Evaluate(source);
         return (result, result.ReadGlobals());
-    }
-
-    // ADR-0156 Phase 3b (#3176): evaluator twin for the ADR-0039-pinned
-    // pointer-model test above; delete with the evaluator (Phase 3c).
-    private static (EvaluationResult Result, Dictionary<string, object> Variables) EvaluateWithEvaluatorVariables(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-        var variables = new Dictionary<VariableSymbol, object>();
-        var result = compilation.Evaluate(variables);
-
-        var namedVars = new Dictionary<string, object>();
-        foreach (var kvp in variables)
-        {
-            namedVars[kvp.Key.Name] = kvp.Value;
-        }
-
-        return (result, namedVars);
     }
 }

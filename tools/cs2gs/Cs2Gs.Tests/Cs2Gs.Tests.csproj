@@ -33,6 +33,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ADR-0156 Phase 3c (#3176): the shared emitted oracle replaces the
+         retired Compilation.Evaluate for semantic round-trip checks. -->
+    <Compile Include="..\..\..\test\Shared\EmittedOracle.cs" Link="EmittedOracle.cs" />
+    <Compile Include="..\..\..\test\Shared\EmittedOracleOptions.cs" Link="EmittedOracleOptions.cs" />
+    <Compile Include="..\..\..\test\Shared\EmittedOracleResult.cs" Link="EmittedOracleResult.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Fixture .cs files are translation-test DATA, not test code. -->
     <Compile Remove="Fixtures\**\*.cs" />
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />

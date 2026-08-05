@@ -19,8 +19,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// The node's static type is always <see cref="TypeSymbol.String"/>. Lowering
 /// happens late, not in the binder:
 /// <list type="bullet">
-/// <item>the interpreter (<see cref="Evaluator"/>) renders the node directly via
-/// composite formatting (alignment + format, current culture), and</item>
+/// <item>the historical tree-walking evaluator (deleted in ADR-0156 Phase 3c)
+/// rendered the node directly via composite formatting (alignment + format,
+/// current culture), and</item>
 /// <item>the IL emitter lowers it (issue #368) to the C# 10
 /// <c>System.Runtime.CompilerServices.DefaultInterpolatedStringHandler</c>
 /// pattern: construct the handler, call <c>AppendLiteral</c>/

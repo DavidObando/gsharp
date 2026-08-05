@@ -1,6 +1,6 @@
 # ADR-0153: Interpreter compiled-only storage boundary
 
-- **Status**: Partially superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phases 1–3a; remains accepted for direct tree evaluation and the deprecated evaluator compatibility path
+- **Status**: Superseded by [ADR-0156](0156-gsi-emit-to-memory-execution.md) — the tree-walking evaluator (and with it this boundary and GS0511/GS0513) was deleted in Phase 3c ([#3176](https://github.com/DavidObando/gsharp/issues/3176)); every driver executes emitted code with the real CLR storage model
 - **Date**: 2026-08-01
 - **Phase**: Phase 9 — low-level / interop depth
 - **Related**: ADR-0039 (managed by-ref pointers), ADR-0122 (unsafe context and unmanaged pointers), ADR-0124 (`stackalloc`), ADR-0125 (`fixed`), [ADR-0156](0156-gsi-emit-to-memory-execution.md) (execution-engine migration), issues [#2956](https://github.com/DavidObando/gsharp/issues/2956), [#3004](https://github.com/DavidObando/gsharp/issues/3004), [#3022](https://github.com/DavidObando/gsharp/issues/3022), [#3028](https://github.com/DavidObando/gsharp/pull/3028), [#3032](https://github.com/DavidObando/gsharp/pull/3032), [#2939](https://github.com/DavidObando/gsharp/issues/2939), and [#3199](https://github.com/DavidObando/gsharp/issues/3199)

@@ -3,29 +3,24 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Threading.Tasks;
-using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
-// Interp-vs-emit parity harness: the evaluator side retires with the
-// evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
-
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
-/// Interp↔emit parity tests: each case runs the same GSharp source through
-/// both the interpreter and the emitter, then asserts that both produce
-/// identical stdout matching the expected golden string.
+/// Async/iterator emit golden tests: each case runs GSharp source through the
+/// emitter and asserts stdout against the expected golden string. Historically
+/// a dual-engine interp↔emit parity harness; the interpreter arm retired with
+/// the tree-walking evaluator in ADR-0156 Phase 3c (#3176) — the goldens were
+/// the cross-checked parity values and are preserved verbatim.
 /// </summary>
 public class AsyncInterpVsEmitParityTests
 {
@@ -291,13 +286,13 @@ consume().Wait()
     }
 
     [Fact]
-    public void AsyncIterator_InterpOnly_ProducesValues()
+    public void AsyncIterator_TopLevelAwaitFor_ProducesValues()
     {
-        // Interpreter-side coverage for #138: yield + await inside an async
-        // iterator function (`IAsyncEnumerable[int]`). The matching parity
-        // test is skipped because the emitter does not yet implement the
-        // `await for` consumer side; this test exercises the interpreter
-        // alone so the producer side does not regress.
+        // Coverage for #138: yield + await inside an async iterator function
+        // (`IAsyncEnumerable[int]`) consumed by a TOP-LEVEL `await for`.
+        // Historically interpreter-only (the emitter lacked the top-level
+        // `await for` consumer); runs emitted since the evaluator retired in
+        // ADR-0156 Phase 3c (#3176).
         const string Source = @"package AsyncIterInterp
 import System
 import System.Collections.Generic
@@ -316,7 +311,7 @@ await for x in gen() {
 }
 ";
         const string Expected = "10\n20\n30\n";
-        Assert.Equal(Expected, RunInterpreter(Source));
+        Assert.Equal(Expected, RunEmitter(Source, nameof(AsyncIterator_TopLevelAwaitFor_ProducesValues)));
     }
 
     [Fact]
@@ -344,37 +339,9 @@ Console.WriteLine(""end"")
 
     private static void AssertParity(string source, string expected, string contextName)
     {
-        var interpOutput = RunInterpreter(source);
         var emitOutput = RunEmitter(source, contextName);
 
-        Assert.Equal(expected, interpOutput);
         Assert.Equal(expected, emitOutput);
-    }
-
-    private static string RunInterpreter(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
-
-        var prevOut = Console.Out;
-        var captured = new StringWriter();
-        Console.SetOut(captured);
-        EvaluationResult result;
-        try
-        {
-            result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
-        }
-        finally
-        {
-            Console.SetOut(prevOut);
-        }
-
-        Assert.True(
-            result.Diagnostics.IsEmpty,
-            "interpreter diagnostics:\n  " +
-            string.Join("\n  ", result.Diagnostics.Select(d => d.ToString())));
-
-        return captured.ToString().Replace("\r\n", "\n");
     }
 
     private static string RunEmitter(string source, string contextName)

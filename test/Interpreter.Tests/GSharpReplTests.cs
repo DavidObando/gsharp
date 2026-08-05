@@ -12,7 +12,7 @@ public class GSharpReplTests
     [Fact]
     public void Snapshot_DisplaysConstructedSourceGenericType()
     {
-        var engine = new SessionEngine();
+        using var engine = new EmittedSessionEngine();
 
         Assert.False(engine.Evaluate("class Box[T] {}").HasError);
         Assert.False(engine.Evaluate("let box = Box[int32]()").HasError);
@@ -24,7 +24,8 @@ public class GSharpReplTests
     [Fact]
     public void Evaluate_SimpleExpression_ReturnsValue()
     {
-        var cell = new SessionEngine().Evaluate("1 + 2");
+        using var engine = new EmittedSessionEngine();
+        var cell = engine.Evaluate("1 + 2");
         Assert.False(cell.HasError);
         Assert.Equal("3", cell.Value?.ToString());
     }
@@ -32,18 +33,20 @@ public class GSharpReplTests
     [Fact]
     public void Evaluate_StringLiteral_ReturnsValue()
     {
-        var cell = new SessionEngine().Evaluate("\"hello\"");
+        using var engine = new EmittedSessionEngine();
+        var cell = engine.Evaluate("\"hello\"");
         Assert.Contains("hello", cell.Value?.ToString());
     }
 
     [Fact]
     public void Evaluate_InvalidInput_ProducesDiagnostics()
     {
-        var cell = new SessionEngine().Evaluate("1 +");
+        using var engine = new EmittedSessionEngine();
+        var cell = engine.Evaluate("1 +");
         Assert.True(cell.HasError);
         Assert.NotEmpty(cell.Diagnostics);
     }
 
     [Fact]
-    public void IsComplete_OpenExpression_False() => Assert.False(SessionEngine.IsComplete("func f() {"));
+    public void IsComplete_OpenExpression_False() => Assert.False(EmittedSessionEngine.IsComplete("func f() {"));
 }

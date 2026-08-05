@@ -3,28 +3,26 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
-
-// Interpreter twin of this file's emit tests; retires with the evaluator in
-// ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public class Issue2544LiftedUnaryOperatorTests
 {
     [Fact]
-    public void Interpreter_LiftedUnaryOperatorsMatchNullableSemantics()
+    public void LiftedUnaryOperators_ValueEchoMatchesNullableSemantics()
     {
+        // Historically the interpreter twin of this file's emit tests; runs
+        // through the emitted oracle since the tree-walking evaluator retired
+        // (ADR-0156 Phase 3c, #3176). Same sources, same expected values.
         Assert.Equal(true, Evaluate("var value bool? = nil\n(!value) ?? true"));
         Assert.Equal(false, Evaluate("var value bool? = true\n(!value) ?? true"));
         Assert.Equal(-5, Evaluate("var value int32? = 5\n(-value) ?? 0"));
@@ -111,8 +109,7 @@ public class Issue2544LiftedUnaryOperatorTests
 
     private static object Evaluate(string source)
     {
-        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var result = EmittedOracle.Evaluate(source);
         Assert.Empty(result.Diagnostics);
         return result.Value;
     }

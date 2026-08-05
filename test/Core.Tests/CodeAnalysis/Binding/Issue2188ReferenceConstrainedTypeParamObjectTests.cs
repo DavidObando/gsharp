@@ -2,20 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
-using System.Linq;
-using GSharp.Core.CodeAnalysis;
-using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
-using GSharp.Core.CodeAnalysis.Syntax;
-using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
-
-// Pinned on the evaluator pending the #3236 emitter fix (nullable-lifted
-// reference conversions); unpins onto the emitted oracle when #3236 lands
-// (ADR-0156, #3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
@@ -124,17 +112,15 @@ func Sink[T Animal](x T?) object? -> x
     {
         // Not special-cased to `object`: the reference conversion also reaches
         // the base-class constraint target.
-        // ADR-0156 Phase 3b (#3176): pinned on Compilation.Evaluate — the
-        // emitter cannot lower the constrained nullable type parameter to
-        // its nullable base yet (issue #3236: NotSupportedException
-        // "Conversion from 'T?' to 'Animal?'"); realigns with that issue's
-        // resolution.
+        // ADR-0156 Phase 3c (#3176): unpinned onto the emitted oracle — the
+        // #3241 emitter fix lowers the constrained nullable type parameter
+        // to its nullable base (issue #3236).
         var source = @"
 package p
 class Animal { init() {} }
 func Sink[T Animal](x T?) Animal? -> x
 ";
-        Assert.Empty(EvaluateWithEvaluator(source).Diagnostics);
+        Assert.Empty(Evaluate(source).Diagnostics);
     }
 
     [Fact]
@@ -211,13 +197,5 @@ class C {
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(new[] { source }, new EmittedOracleOptions { IsLibrary = true });
-    }
-
-    // ADR-0156 Phase 3b (#3176): evaluator twin for the #3236-pinned test.
-    private static EvaluationResult EvaluateWithEvaluator(string source)
-    {
-        var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree) { IsLibrary = true };
-        return compilation.Evaluate(new Dictionary<VariableSymbol, object>());
     }
 }

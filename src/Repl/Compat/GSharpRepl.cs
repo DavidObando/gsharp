@@ -10,11 +10,13 @@ namespace GSharp.Interpreter;
 
 /// <summary>
 /// Compatibility shim preserving the legacy <c>GSharp.Interpreter.GSharpRepl</c> API used by
-/// existing tests. Wraps the new <see cref="SessionEngine"/> and writes results to the console.
+/// existing tests. Wraps the emitted submission-chaining <see cref="EmittedSessionEngine"/>
+/// (ADR-0156 Phase 3c, #3176 — previously the tree-walking <c>SessionEngine</c>) and writes
+/// results to the console.
 /// </summary>
-public sealed class GSharpRepl
+public sealed class GSharpRepl : IDisposable
 {
-    private readonly SessionEngine engine = new();
+    private readonly EmittedSessionEngine engine = new();
 
     /// <summary>Evaluate one submission, printing diagnostics then the value to the console.</summary>
     public void EvaluateSubmission(string text)
@@ -30,4 +32,7 @@ public sealed class GSharpRepl
             Console.WriteLine(cell.Value);
         }
     }
+
+    /// <inheritdoc/>
+    public void Dispose() => engine.Dispose();
 }

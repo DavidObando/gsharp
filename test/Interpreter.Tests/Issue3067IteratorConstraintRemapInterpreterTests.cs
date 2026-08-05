@@ -3,8 +3,8 @@
 // </copyright>
 
 using System;
-using System.IO;
-using GSharp.Repl.Engine;
+using System.Linq;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -18,20 +18,12 @@ public class Issue3067IteratorConstraintRemapInterpreterTests
     public void ConstraintRepro_TopLevelAndInFunction_Runs(bool inFunction, string expected)
     {
         var source = inFunction ? InFunctionSource : TopLevelSource;
-        using var output = new StringWriter();
-        var previous = Console.Out;
-        Console.SetOut(output);
-        try
-        {
-            var result = new SessionEngine().Evaluate(source);
-            Assert.False(result.HasError, string.Join(Environment.NewLine, result.Diagnostics));
-        }
-        finally
-        {
-            Console.SetOut(previous);
-        }
+        var result = EmittedOracle.Evaluate(source);
 
-        Assert.Equal(expected + "\n", output.ToString().Replace("\r\n", "\n"));
+        Assert.False(
+            result.Diagnostics.Any(d => d.IsError),
+            string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.Equal(expected + "\n", result.Output.Replace("\r\n", "\n"));
     }
 
     private const string TopLevelSource = """

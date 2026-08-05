@@ -304,22 +304,18 @@ These diagnostics indicate a fatal compiler or evaluator failure. If you encount
 | GS9996 | Error | Source generator execution failure. `gsc` could not locate or launch `gsgen`, `gsgen` timed out, or it exited nonzero without producing its own diagnostics. |
 | GS9997 | Error | Fatal compiler I/O error. An unrecoverable file-system error occurred (permission denied, disk full, etc.) before or during assembly writing. |
 | GS9998 | Error | Internal compiler error (emit-time failure). The emit pipeline encountered an unexpected state and could not produce valid IL. The diagnostic message includes the exception type and a brief description of the failure. |
-| GS9999 | Error | An unexpected exception was caught by the evaluator. The message text contains the original exception message. |
+| GS9999 | Error | Historical: an unexpected exception caught by the tree-walking evaluator. Since ADR-0156 Phase 3c no product driver produces it; the emitted test oracle synthesizes it as the assertion surface for uncaught runtime exceptions. |
 
-#### Interpreter compiled-only boundaries
+#### Interpreter compiled-only boundaries (retired)
 
 [ADR-0153](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0153-interpreter-compiled-only-storage-boundary.md)
-defines storage-dependent unsafe constructs as compiled-only in the tree
-evaluator. Unmanaged `&`/`*` operations surface through `GS0513`. Older guards
-for `fixed`, `stackalloc`, unmanaged `sizeof`, and function pointers still
-carry self-contained boundary messages through legacy `GS9999`; issue
-[#3199](https://github.com/DavidObando/gsharp/issues/3199) tracks moving those
-deliberate failures out of the internal-error category. Since
+defined storage-dependent unsafe constructs as compiled-only in the tree
+evaluator (`GS0513` for unmanaged `&`/`*`, plus legacy `GS9999` guards tracked
+by [#3199](https://github.com/DavidObando/gsharp/issues/3199)). The evaluator —
+and with it the boundary and its diagnostics — was deleted in
 [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
-Phase 3a the boundary applies only to direct tree evaluation and
-`gsi --engine evaluator`; all default drivers execute emitted code, where
-these constructs run natively. The evaluator path is deprecated and scheduled
-for removal in Phase 3c.
+Phase 3c: every driver executes emitted code, where these constructs run
+natively.
 
 ## Documentation diagnostics (GS0227–GS0231)
 
@@ -1755,7 +1751,6 @@ different method.
 | ID | Severity | Description |
 |----|----------|-------------|
 | GS0508 | Error | A nullable sequence element uses a type parameter that is not constrained to `struct` or a reference type. |
-| GS0513 | Error | Unmanaged pointer operations require compiled execution because the interpreter has no storage-location model. |
 
 `sequence[T?]` needs one stable CLR element representation. Iterator return
 types are specialized into `class` and `struct` variants automatically.
@@ -1770,35 +1765,20 @@ it reports GS0266, and a nullable value-type argument may instead report
 GS0152. G# rejects source overloads differentiated only by constraints with
 GS0264, even though iterator specialization synthesizes equivalent variants.
 
-## P/Invoke interpreter boundary (GS0514)
+## P/Invoke interpreter boundary (GS0514, retired)
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0514 | Error | A P/Invoke declaration cannot run under the interpreter. Evaluation stops before the native function can return a fabricated default value; compile with `gsc` to call native code. |
-
-This is an intentional interpreter capability boundary, not an internal
-compiler error. It applies even when the declaration is not called because
-the interpreter cannot create a valid callable value for direct or indirect
-use. Since [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
-Phase 3a no driver interprets by default: `gsi <file>`, bare `gsc`, and the
-interactive REPL all execute emitted code, where P/Invoke runs natively. This
-diagnostic now fires only under gsi's deprecated `--engine evaluator` escape
-hatch and retires with the evaluator in Phase 3c.
-
-## Interpreter deinitializer boundary (GS0510)
-
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0510 | Warning | A class declares a CLR GC finalizer with `deinit`, which does not run under interpreted execution. |
-
-The interpreter has no emitted class with a CLR `Finalize` override and does
-not invent deterministic scope-exit cleanup. Since
+GS0514 marked P/Invoke declarations as unrunnable under the tree-walking
+interpreter ([ADR-0152](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0152-interpreter-native-call-boundary.md)).
+The evaluator — and with it this diagnostic — was deleted in
 [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
-Phase 3a no driver interprets by default: `gsi <file>`, bare `gsc`, and the
-interactive REPL all execute emitted code, whose deinitializers run as real CLR
-finalizers, so this warning no longer appears in a default `gsi` session. It
-now fires only under gsi's deprecated `--engine evaluator` escape hatch and
-retires with the evaluator in Phase 3c.
+Phase 3c; every driver executes emitted code, where P/Invoke runs natively.
+
+## Interpreter deinitializer boundary (GS0510, retired)
+
+GS0510 warned that a `deinit` finalizer would not run under interpreted
+execution. The evaluator — and with it this warning — was deleted in
+[ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+Phase 3c; deinitializers run as real CLR finalizers on every driver.
 
 ## Explicit-layout reference storage (GS0518)
 
@@ -1902,13 +1882,12 @@ above retain their longer explanations and examples.
 | GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained.  | |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
-## Stack-only CLR values in the interpreter (GS0511)
+## Stack-only CLR values in the interpreter (GS0511, retired)
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0511 | Error | The interpreter cannot represent this stack-only (`ByRefLike`) CLR value. Array-backed `Span[T]` and `ReadOnlySpan[T]` values are supported. |
+GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage
+interpreter could not represent. The evaluator — and with it this diagnostic —
+was deleted in
+[ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
+Phase 3c; every driver executes emitted code, where ByRefLike values work
+natively.
 
-Interpreter values use boxed storage, which cannot hold stack-only CLR values
-or preserve their interior references. The interpreter emulates spans created
-from arrays; CLR methods and properties returning stack-only values remain
-unsupported. Compile the program with `gsc /out:<file>` to use those values.

@@ -8,8 +8,10 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Verifies that the REPL session engine captures interpreted standard output/error and can
-/// source standard input, so the interactive gsi shell can surface them in the transcript.
+/// Verifies that the REPL session engine (the emitted submission-chaining
+/// engine since ADR-0156 Phase 3c, #3176) captures standard output/error and
+/// can source standard input, so the interactive gsi shell can surface them in
+/// the transcript.
 /// </summary>
 [Collection("ConsoleIo")]
 public class SessionEngineConsoleIoTests
@@ -17,7 +19,7 @@ public class SessionEngineConsoleIoTests
     [Fact]
     public void CaptureConsole_WriteLine_IsCapturedInCell()
     {
-        var engine = new SessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
         var cell = engine.Evaluate("Console.WriteLine(\"hello\")");
 
         Assert.False(cell.HasError);
@@ -28,7 +30,7 @@ public class SessionEngineConsoleIoTests
     [Fact]
     public void CaptureConsole_Disabled_LeavesOutputEmpty()
     {
-        var engine = new SessionEngine { CaptureConsole = false };
+        using var engine = new EmittedSessionEngine { CaptureConsole = false };
         var cell = engine.Evaluate("1 + 1");
 
         Assert.False(cell.HasError);
@@ -38,7 +40,7 @@ public class SessionEngineConsoleIoTests
     [Fact]
     public void CaptureConsole_Error_IsCapturedSeparately()
     {
-        var engine = new SessionEngine { CaptureConsole = true };
+        using var engine = new EmittedSessionEngine { CaptureConsole = true };
         var cell = engine.Evaluate("Console.Error.WriteLine(\"oops\")");
 
         Assert.False(cell.HasError);
@@ -48,7 +50,7 @@ public class SessionEngineConsoleIoTests
     [Fact]
     public void InputProvider_ReadLine_FeedsStandardInput()
     {
-        var engine = new SessionEngine
+        using var engine = new EmittedSessionEngine
         {
             CaptureConsole = true,
             InputProvider = () => "world",

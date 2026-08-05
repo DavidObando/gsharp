@@ -84,7 +84,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
             var glyphs = spinner.RenderMarkup(evalFrame, Tokens.Tokens.Canvas);
 
             // Cancellation can't interrupt a running evaluation (no cooperative cancellation in
-            // the interpreter, see SessionEngine.EvaluateAsync), so give immediate feedback that
+            // the engine, see ISessionEngine.EvaluateAsync), so give immediate feedback that
             // Esc registered instead of leaving the hint unchanged until the eval happens to finish.
             var hint = cancelRequested
                 ? $"[{tertiary}]cancelling…[/]"
@@ -195,7 +195,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
                     return true;
                 }
 
-                if (SessionEngine.IsComplete(editor.Text) && !editor.IsEmpty)
+                if (EmittedSessionEngine.IsComplete(editor.Text) && !editor.IsEmpty)
                 {
                     evalCts = new CancellationTokenSource();
                     pendingEval = engine.EvaluateAsync(editor.Text, evalCts.Token);
@@ -251,7 +251,7 @@ public sealed class ReplScreen : ITabScreen, IDisposable
             _ = pendingEval.Exception;
         }
 
-        // The interpreter can't be interrupted mid-run (see SessionEngine.EvaluateAsync), so a
+        // A running submission can't be interrupted mid-run (see ISessionEngine.EvaluateAsync), so a
         // cancelled submission finishes normally and is just discarded with no result cell. Tell
         // the user it actually happened instead of leaving them wondering why nothing appeared.
         // (If Esc lost the race and the eval committed anyway, IsCompletedSuccessfully is true

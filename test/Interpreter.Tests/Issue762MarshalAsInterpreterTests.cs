@@ -9,71 +9,15 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter coverage for ADR-0096 / issue #762 — per-parameter
-/// <c>@MarshalAs(UnmanagedType.…)</c> overrides on P/Invoke
-/// declarations. Valid declarations report the intentional GS0514
-/// interpreter boundary. Binder diagnostics (GS0357–GS0360) still surface
-/// first for invalid declarations.
+/// Coverage for ADR-0096 / issue #762 — per-parameter
+/// <c>@MarshalAs(UnmanagedType.…)</c> overrides on P/Invoke declarations in
+/// the REPL. The GS0514 interpreter boundary pins retired with the
+/// tree-walking evaluator (ADR-0156 Phase 3c, #3176; positive native-call
+/// coverage lives in the PInvokeMarshalAs conformance sample); binder
+/// diagnostics (GS0357–GS0360) for invalid declarations remain.
 /// </summary>
 public class Issue762MarshalAsInterpreterTests
 {
-    [Fact]
-    public void MarshalAs_LPWStr_OnString_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("user32", EntryPoint: "MessageBoxW")
-            func MessageBoxW(
-                hWnd nint,
-                @MarshalAs(UnmanagedType.LPWStr) lpText string,
-                @MarshalAs(UnmanagedType.LPWStr) lpCaption string,
-                uType uint32) int32;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void MarshalAs_I4_OnBool_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libfoo", EntryPoint: "set_flag")
-            func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void MarshalAs_LPArray_WithSizeParamIndex_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libfoo", EntryPoint: "sum_buf")
-            func native_sum_buf(
-                @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 1) buf []int32,
-                count int32) int64;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
     [Fact]
     public void MarshalAs_UnsupportedUnmanagedType_ReportsGS0357InRepl()
     {

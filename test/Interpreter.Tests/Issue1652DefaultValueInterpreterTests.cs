@@ -164,12 +164,12 @@ public class Issue1652DefaultValueInterpreterTests
     [Fact]
     public void UserEnum_DefaultValue_EqualsZeroMember()
     {
-        // User-defined enums have no ClrType at interpret time (their
-        // members are raw int literals — see EnumMemberSymbol.Value), so
-        // default(Color) must equal the boxed int backing Color.Red (the
-        // first, auto-numbered-0 member), not `nil`.
+        // default(Color) must equal Color.Red (the first, auto-numbered-0
+        // member), not `nil`. (No explicit `package` declaration: the value
+        // echo rides the submission's synthesized <Result>$ capture, which
+        // lives in the submission's default package — ADR-0156 Phase 3c,
+        // #3176.)
         var source = """
-            package p
             enum Color { Red, Green, Blue }
             class Box {
                 var C Color

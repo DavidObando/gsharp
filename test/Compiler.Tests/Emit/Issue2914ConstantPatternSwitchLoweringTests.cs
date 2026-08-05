@@ -3,25 +3,22 @@
 // </copyright>
 
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
-using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
-// Dual-oracle emit-vs-interp parity harness; the evaluator oracle retires
-// with the evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
-
 namespace GSharp.Compiler.Tests.Emit;
 
-/// <summary>Issue #2914: constant pattern switches fold during lowering.</summary>
+/// <summary>
+/// Issue #2914: constant pattern switches fold during lowering. Asserts the
+/// emitted program only; the interpreter parity arm was retired with the
+/// evaluator in ADR-0156 Phase 3c (#3176).
+/// </summary>
 public class Issue2914ConstantPatternSwitchLoweringTests
 {
     private const string ArtifactSource = """
@@ -223,7 +220,7 @@ public class Issue2914ConstantPatternSwitchLoweringTests
     }
 
     [Fact]
-    public void TopLevelAndFunctionSwitches_AgreeAcrossEmitAndInterpreter()
+    public void TopLevelAndFunctionSwitches_FoldAcrossDriverPositions()
     {
         const string Source = """
             package Issue2914.DriverPositions
@@ -252,10 +249,6 @@ public class Issue2914ConstantPatternSwitchLoweringTests
         Assert.Equal(22, GetField(program, "functionResult"));
         Assert.Equal(0, GetMethodBranches(program, "<Main>$"));
         Assert.Equal(0, GetMethodBranches(program, "F"));
-
-        var evaluation = Evaluate(Source);
-        Assert.Empty(evaluation.Diagnostics.Where(diagnostic => diagnostic.IsError));
-        Assert.Equal(33, evaluation.Value);
     }
 
     [Fact]
@@ -286,10 +279,6 @@ public class Issue2914ConstantPatternSwitchLoweringTests
 
         var assembly = CompileAndRun(Source);
         Assert.Equal(33, GetField(GetProgram(assembly), "result"));
-
-        var evaluation = Evaluate(Source);
-        Assert.Empty(evaluation.Diagnostics.Where(diagnostic => diagnostic.IsError));
-        Assert.Equal(33, evaluation.Value);
     }
 
     [Fact]
@@ -410,9 +399,6 @@ public class Issue2914ConstantPatternSwitchLoweringTests
         var result = CreateCompilation(source).Emit(peStream);
         return (result, peStream.Length);
     }
-
-    private static EvaluationResult Evaluate(string source)
-        => CreateCompilation(source).Evaluate(new Dictionary<VariableSymbol, object>());
 
     private static Compilation CreateCompilation(string source)
         => new(SyntaxTree.Parse(SourceText.From(source)));

@@ -9,50 +9,13 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter coverage for ADR-0095 / issue #761 — P/Invoke
-/// function-pointer marshalling. Valid P/Invoke declarations report the
-/// intentional GS0514 interpreter boundary. Binder diagnostics
-/// (GS0353–GS0356) still surface first for invalid declarations.
+/// Coverage for ADR-0095 / issue #761 — P/Invoke function-pointer
+/// marshalling in the REPL. The GS0514 interpreter boundary pins retired
+/// with the tree-walking evaluator (ADR-0156 Phase 3c, #3176); binder
+/// diagnostics (GS0353–GS0356) for invalid declarations remain.
 /// </summary>
 public class Issue761PInvokeFunctionPointerInterpreterTests
 {
-    [Fact]
-    public void DllImport_RawFunctionPointer_Parameter_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libc", EntryPoint: "qsort")
-            func native_qsort(base nint, nmemb nint, size nint, cmp unmanaged[Cdecl] (nint, nint) -> int32) void;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void DllImport_DelegateWithUnmanagedFunctionPointer_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-            type Comparer = delegate func(a nint, b nint) int32
-
-            @DllImport("libc", EntryPoint: "qsort")
-            func native_qsort(base nint, nmemb nint, size nint, cmp Comparer) void;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
     [Fact]
     public void DllImport_DelegateWithoutUnmanagedFunctionPointer_ReportsGS0353InRepl()
     {
@@ -88,23 +51,6 @@ public class Issue761PInvokeFunctionPointerInterpreterTests
 
         var output = RunSubmission(source);
         Assert.Contains("GS0355", output);
-    }
-
-    [Fact]
-    public void DllImport_FunctionPointer_ReturnType_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libc", EntryPoint: "dlsym")
-            func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
-
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
     }
 
     [Fact]

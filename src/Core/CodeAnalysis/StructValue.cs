@@ -17,10 +17,12 @@ using GSharp.Core.CodeAnalysis.Symbols;
 namespace GSharp.Core.CodeAnalysis;
 
 /// <summary>
-/// Interpreter-side representation of a user-defined struct value (Phase 3.B.1).
-/// The emit backend uses native CLR value types; this class only exists so the
-/// tree-walking <see cref="Evaluator"/> can carry struct values around with
-/// Go-style value semantics (assignment and field writes go through copies).
+/// Boxed representation of a user-defined struct value (Phase 3.B.1),
+/// historically the tree-walking evaluator's carrier for Go-style value
+/// semantics (assignment and field writes went through copies). The
+/// evaluator retired in ADR-0156 Phase 3c; the class survives because the
+/// binder's explicit-layout analysis reuses its storage-size computation
+/// (<see cref="TryGetStorageSize"/>, see <c>StructLayoutBinder</c>).
 /// </summary>
 public sealed class StructValue
 {

@@ -3,24 +3,25 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
-
-// Evaluator-machinery pin: asserts the interpreter-boundary GS0510 deinit
-// diagnostic only Compilation.Evaluate synthesizes; retires with the
-// evaluator in ADR-0156 Phase 3c (#3176).
-#pragma warning disable CS0618 // Compilation.Evaluate / Evaluator are retiring (ADR-0156 Phase 3c, #3176)
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #698 / ADR-0068: binder-level tests for the Swift-style
-/// <c>deinit { … }</c> destructor on classes.
+/// <c>deinit { … }</c> destructor on classes. The interpreter-boundary
+/// GS0510 warning ("deinitializer will not run under the interpreter")
+/// retired with the tree-walking evaluator in ADR-0156 Phase 3c (#3176) —
+/// deinit simply works under emitted execution, so valid deinit sources now
+/// bind clean.
 /// </summary>
 public class Issue698DeinitBinderTests
 {
@@ -34,8 +35,8 @@ class Resource {
     }
 }
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.All(result.Diagnostics, diagnostic => Assert.Equal("GS0510", diagnostic.Id));
+        var (diagnostics, structs) = BindAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var resource = structs.Single(s => s.Name == "Resource");
         Assert.NotNull(resource.Deinitializer);
@@ -56,9 +57,8 @@ class Resource {
     }
 }
 ";
-        var (result, _) = EvaluateAndGetStructs(source);
-        Assert.Single(result.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
-        Assert.All(result.Diagnostics, diagnostic => Assert.Equal("GS0510", diagnostic.Id));
+        var (diagnostics, _) = BindAndGetStructs(source);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]
@@ -71,8 +71,8 @@ struct Point {
     }
 }
 ";
-        var (result, _) = EvaluateAndGetStructs(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0289");
+        var (diagnostics, _) = BindAndGetStructs(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0289");
     }
 
     [Fact]
@@ -87,8 +87,8 @@ class Resource {
     }
 }
 ";
-        var (result, _) = EvaluateAndGetStructs(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0290");
+        var (diagnostics, _) = BindAndGetStructs(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0290");
     }
 
     [Fact]
@@ -107,8 +107,8 @@ class Resource {
 var r = Resource()
 r.deinit()
 ";
-        var (result, _) = EvaluateAndGetStructs(source);
-        Assert.NotEmpty(result.Diagnostics);
+        var (diagnostics, _) = BindAndGetStructs(source);
+        Assert.NotEmpty(diagnostics);
     }
 
     [Fact]
@@ -127,8 +127,8 @@ class CachedResource : Resource {
     }
 }
 ";
-        var (result, structs) = EvaluateAndGetStructs(source);
-        Assert.All(result.Diagnostics, diagnostic => Assert.Equal("GS0510", diagnostic.Id));
+        var (diagnostics, structs) = BindAndGetStructs(source);
+        Assert.Empty(diagnostics);
 
         var resource = structs.Single(s => s.Name == "Resource");
         var cached = structs.Single(s => s.Name == "CachedResource");
@@ -138,16 +138,15 @@ class CachedResource : Resource {
         Assert.NotSame(resource.Deinitializer, cached.Deinitializer);
     }
 
-    // ADR-0156 Phase 3b (#3176): stays on Compilation.Evaluate — several
-    // tests here assert the interpreter-boundary deinit diagnostic GS0510,
-    // which only Compilation.Evaluate synthesizes (deinit simply works under
-    // emitted execution). Retires with the evaluator in Phase 3c.
-    private static (EvaluationResult Result, IEnumerable<StructSymbol> Structs) EvaluateAndGetStructs(string source)
+    // Binder-inspection shape (ADR-0156 Phase 3c, #3176): fully bind and
+    // collect diagnostics without executing — these tests assert bound
+    // symbols and binder diagnostics, never runtime behavior.
+    private static (ImmutableArray<Diagnostic> Diagnostics, IEnumerable<StructSymbol> Structs) BindAndGetStructs(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var compilation = new Compilation(tree);
-        var result = compilation.Evaluate(new Dictionary<VariableSymbol, object>());
+        var diagnostics = EmittedOracle.CompileDiagnostics(compilation);
         var structs = compilation.GlobalScope.Structs;
-        return (result, structs);
+        return (diagnostics, structs);
     }
 }

@@ -9,98 +9,16 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter coverage for ADR-0094 / issue #760 — P/Invoke
-/// <c>ref</c>/<c>out</c>/<c>in</c> parameter marshalling. The interpreter
-/// accepts valid ref/out/in declarations, then reports the intentional
-/// GS0514 interpreter boundary before any native call can fabricate a result.
-/// Binder diagnostics for invalid declarations still take precedence.
+/// Coverage for ADR-0094 / issue #760 — P/Invoke
+/// <c>ref</c>/<c>out</c>/<c>in</c> parameter marshalling in the REPL. The
+/// GS0514 interpreter boundary pins retired with the tree-walking evaluator
+/// (ADR-0156 Phase 3c, #3176) — ref/out/in P/Invoke runs natively on the
+/// emitted engine, with positive native-call coverage in the
+/// PInvokeRefOutIn conformance sample. Binder diagnostics for invalid
+/// declarations remain.
 /// </summary>
 public class Issue760PInvokeRefOutInInterpreterTests
 {
-    [Fact]
-    public void DllImport_RefInt64_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libc", EntryPoint: "time")
-            func native_time(ref t int64) int64;
-
-            var t = 0L
-            var rc = native_time(ref t)
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-        Assert.DoesNotContain("GS0326", output);
-        Assert.DoesNotContain("GS0352", output);
-    }
-
-    [Fact]
-    public void DllImport_OutInt32_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @DllImport("libc", EntryPoint: "native_out")
-            func native_out(out p int32) int32;
-
-            var p = 0
-            var rc = native_out(out p)
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void LibraryImport_RefInt64_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @LibraryImport("libc", EntryPoint: "time")
-            func native_time(ref t int64) int64;
-
-            var t = 0L
-            var rc = native_time(ref t)
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
-    [Fact]
-    public void DllImport_RefBlittableStruct_ReportsGS0514()
-    {
-        var source = """
-            import System.Runtime.InteropServices
-
-            @StructLayout(LayoutKind.Sequential)
-            struct TimeSpec {
-                var tv_sec int64
-                var tv_nsec int64
-            }
-
-            @DllImport("libc", EntryPoint: "clock_gettime")
-            func clock_gettime_native(clk_id int32, ref tp TimeSpec) int32;
-
-            var ts = TimeSpec{tv_sec: 0L, tv_nsec: 0L}
-            var rc = clock_gettime_native(1, ref ts)
-            Console.WriteLine("ran")
-            """;
-
-        var output = RunSubmission(source);
-        Assert.Contains("GS0514", output);
-        Assert.DoesNotContain("ran", output);
-    }
-
     [Fact]
     public void DllImport_RefString_StillProducesBinderDiagnostic()
     {

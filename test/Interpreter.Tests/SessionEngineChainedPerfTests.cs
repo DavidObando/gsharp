@@ -9,60 +9,27 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2101: chained REPL evaluation via
-/// <c>Compilation.ContinueWith(tree).Evaluate(variables)</c> got dramatically
-/// slower as the number of prior submissions grew — the per-submission cost
-/// doubled roughly every additional cell (~O(2^n)), turning a 30-cell session
-/// into a multi-minute CI hang. These are functional regression guards with
-/// generous timeouts, not tight perf assertions (those are flaky in CI): each
-/// only asserts that 50 trivial submissions complete well within a budget
-/// that exponential per-cell behavior could never hit (it took ~80s for a
-/// single submission around N=31 before the #2101 fix).
+/// Issue #2101: chained REPL evaluation got dramatically slower as the number
+/// of prior submissions grew — the evaluator engine's
+/// <c>Compilation.ContinueWith(tree).Evaluate(variables)</c> per-submission
+/// cost doubled roughly every additional cell (~O(2^n)), turning a 30-cell
+/// session into a multi-minute CI hang. The evaluator-side chain guard
+/// retired together with that engine (ADR-0156 Phase 3c, #3176); what remains
+/// is the emitted engine's chain-scaling canary — a functional regression
+/// guard with a generous timeout, not a tight perf assertion (those are flaky
+/// in CI): it only asserts that 50 trivial submissions complete well within a
+/// budget that super-linear per-cell behavior could never hit.
 /// </summary>
 public class SessionEngineChainedPerfTests
 {
-    /// <summary>
-    /// EVALUATOR-MACHINERY PIN (ADR-0156 Phase 3b.3; retire with the
-    /// evaluator engine in Phase 3c, #3176): only the tree-walking
-    /// <see cref="SessionEngine"/> drives the
-    /// <c>ContinueWith</c> → <c>Previous</c> bound-scope chain whose binding
-    /// cost #2101 fixed — the emitted engine builds an independent
-    /// compilation per submission via <c>SubmissionImports</c> and never
-    /// touches that path. This guard pins the deprecated
-    /// <c>--engine evaluator</c> escape hatch's chain scaling until 3c
-    /// deletes the engine (and this test with it).
-    /// </summary>
-    [Fact]
-    public void Evaluate_FiftyChainedSubmissions_CompletesQuickly()
-    {
-        var engine = new SessionEngine();
-        var sw = Stopwatch.StartNew();
-
-        for (var i = 0; i < 50; i++)
-        {
-            var cell = engine.Evaluate($"var x{i} = {i}");
-            Assert.False(cell.HasError, $"submission {i} unexpectedly failed: {string.Join(", ", cell.Diagnostics)}");
-        }
-
-        sw.Stop();
-
-        // Generous sanity ceiling: linear-ish binding of 50 trivial
-        // submissions should take well under a second on any CI runner.
-        // Before the fix, this loop took tens of seconds by submission ~30
-        // and would not have finished within any reasonable multiple of this
-        // budget by submission 50.
-        Assert.True(
-            sw.Elapsed.TotalSeconds < 10,
-            $"50 chained submissions took {sw.Elapsed.TotalSeconds:F1}s — expected linear-ish scaling, not the pre-fix O(2^n) blowup.");
-    }
-
     /// <summary>
     /// The emitted counterpart (ADR-0156 Phase 3b.3): the interactive-default
     /// <see cref="EmittedSessionEngine"/> has a different per-submission cost
     /// channel — a full in-memory emit, an ALC assembly load, and an import
     /// surface that grows with every prior submission — so it needs its own
-    /// chain-scaling canary; the evaluator guard above cannot cover it (the
-    /// engines share no chain machinery). Survives Phase 3c. Also asserts the
+    /// chain-scaling canary; the retired evaluator chain guard could not
+    /// cover it (the engines shared no chain machinery). Survived Phase 3c
+    /// as planned. Also asserts the
     /// chain actually carries state end to end (first and last variables
     /// readable from cell 51 — the REPL model the chain exists for).
     /// </summary>
