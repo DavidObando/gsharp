@@ -555,6 +555,26 @@ public class TypeSymbol : Symbol
                 }
 
                 return;
+            case StructSymbol ssNested when !ssNested.EnclosingTypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in ssNested.EnclosingTypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                foreach (var arg in ssNested.TypeArguments)
+                {
+                    CollectReferencedTypeParameters(arg, sink);
+                }
+
+                if (ssNested.TypeArguments.IsDefaultOrEmpty)
+                {
+                    foreach (var tp in ssNested.TypeParameters)
+                    {
+                        CollectReferencedTypeParameters(tp, sink);
+                    }
+                }
+
+                return;
             case StructSymbol ss when !ss.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in ss.TypeArguments)
                 {

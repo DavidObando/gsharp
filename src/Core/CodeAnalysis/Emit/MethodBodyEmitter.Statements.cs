@@ -410,13 +410,27 @@ internal sealed partial class MethodBodyEmitter
                 $"Go display invoke method '{closure.InvokeMethod.Name}' has no emitted MethodDef.");
         }
 
+        var constructedClosure = closure.ConstructedClassSym;
+        var closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure);
+
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(ctorHandle);
+        this.il.Token(closureIsGeneric
+            ? this.outer.userTokens.ResolveUserCtorTokenForDefault(constructedClosure)
+            : ctorHandle);
 
         foreach (var captured in closure.CaptureFields.Keys)
         {
             var field = closure.CaptureFields[captured];
-            if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            EntityHandle fieldToken;
+            if (closureIsGeneric)
+            {
+                fieldToken = this.outer.userTokens.ResolveFieldToken(constructedClosure, field);
+            }
+            else if (this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            {
+                fieldToken = fieldHandle;
+            }
+            else
             {
                 throw new InvalidOperationException(
                     $"Go display field '{field.Name}' has no emitted FieldDef.");
@@ -425,16 +439,19 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Dup);
             this.EmitExpression(new BoundVariableExpression(null, captured));
             this.il.OpCode(ILOpCode.Stfld);
-            this.il.Token(fieldHandle);
+            this.il.Token(fieldToken);
         }
 
         var isAsync = ClosureEmitter.IsTaskClrType(closure.InvokeMethod.Type?.ClrType);
+        var invokeToken = closureIsGeneric
+            ? this.outer.userTokens.ResolveClosureInvokeFtnToken(constructedClosure, closure.ClassSym, closure.InvokeMethod)
+            : invokeHandle;
 
         if (isAsync)
         {
             var funcTaskCtor = typeof(Func<System.Threading.Tasks.Task>).GetConstructor(new[] { typeof(object), typeof(nint) });
             this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(invokeHandle);
+            this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(funcTaskCtor));
         }
@@ -442,7 +459,7 @@ internal sealed partial class MethodBodyEmitter
         {
             var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(nint) });
             this.il.OpCode(ILOpCode.Ldftn);
-            this.il.Token(invokeHandle);
+            this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(actionCtor));
         }
