@@ -1207,7 +1207,7 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameters = resolution.Best.GetParameters();
-            var targets = new Dictionary<int, FunctionTypeSymbol>();
+            var targets = new Dictionary<int, (FunctionTypeSymbol FunctionType, TypeSymbol DelegateType)>();
             var allMapped = true;
             foreach (var idx in deferredIndices)
             {
@@ -1232,7 +1232,7 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
-                targets[idx] = fn;
+                targets[idx] = (fn, TypeSymbol.FromClrType(parameterType));
             }
 
             if (!allMapped)
@@ -1245,7 +1245,12 @@ internal sealed partial class ExpressionBinder
                 var inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx]);
                 if (inner is LambdaExpressionSyntax lambdaSyntax)
                 {
-                    boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, targets[idx]);
+                    var target = targets[idx];
+                    boundArgs[idx] = BindLambdaWithDelegateTarget(
+                        ce.Arguments[idx],
+                        lambdaSyntax,
+                        target.FunctionType,
+                        target.DelegateType);
                 }
             }
 
@@ -2244,8 +2249,21 @@ internal sealed partial class ExpressionBinder
                     if (!delegateTargetCandidatesComputed)
                     {
                         delegateTargetCandidatesComputed = true;
-                        delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(receiver, classSymbol, methodName);
+                        delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(
+                            receiver,
+                            classSymbol,
+                            methodName);
                     }
+
+                    var hasClosedTarget = TryResolveDelegateTargetFromCandidates(
+                        delegateTargetCandidateParams,
+                        paramOffset: 0,
+                        sourceArgIndex: argSlot,
+                        argName: argName,
+                        target: out var target,
+                        nominalTarget: out var nominalTarget,
+                        blockedByOpenGenericParameter: out var blocked,
+                        sawOpenGenericParameter: out var sawOpen);
 
                     // Issue #2345: an explicitly-typed lambda whose matching
                     // delegate parameter is an *open* generic (e.g. an imported
@@ -2270,17 +2288,28 @@ internal sealed partial class ExpressionBinder
                     // delegate target (its own explicit parameter types are
                     // unaffected — only return-type inference depends on the
                     // target).
-                    if (inner is LambdaExpressionSyntax { Body: BlockExpressionSyntax } blockLambda
-                        && !TryResolveDelegateTargetFromCandidates(delegateTargetCandidateParams, paramOffset: 0, sourceArgIndex: argSlot, argName: argName, target: out _, blockedByOpenGenericParameter: out var blocked)
-                        && blocked)
+                    //
+                    // Issue #3149: a mixed open/closed set must also wait for
+                    // overload resolution. The closed candidate supplies the
+                    // shared function shape, but only the selected method can
+                    // determine whether the lambda needs a named delegate.
+                    if ((inner is LambdaExpressionSyntax { Body: BlockExpressionSyntax } && !hasClosedTarget && blocked)
+                        || (hasClosedTarget && sawOpen))
                     {
                         deferredArrowLambdaIndices.Add(argSlot);
-                        boundArguments.Add(new BoundErrorExpression(blockLambda));
+                        boundArguments.Add(new BoundErrorExpression(inner));
+                    }
+                    else if (inner is LambdaExpressionSyntax lambdaSyntax && hasClosedTarget)
+                    {
+                        boundArguments.Add(BindLambdaWithDelegateTarget(
+                            argument,
+                            lambdaSyntax,
+                            target,
+                            nominalTarget));
                     }
                     else
                     {
-                        boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
-                            argument, delegateTargetCandidateParams, sourceArgIndex: argSlot, argName: argName, paramOffset: 0));
+                        boundArguments.Add(BindExpression(inner));
                     }
                 }
             }
