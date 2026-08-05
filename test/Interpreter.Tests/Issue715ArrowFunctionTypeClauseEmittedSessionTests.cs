@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #715: Emitted-session coverage for arrow function type clause.
+/// Traceability: ADR-0075.
 /// </summary>
 public class Issue715ArrowFunctionTypeClauseEmittedSessionTests
 {

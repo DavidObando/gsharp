@@ -23,6 +23,7 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 
 /// <summary>
 /// Emitted-oracle coverage for shared block.
+/// Traceability: ADR-0053.
 /// </summary>
 public class SharedBlockTests
 {

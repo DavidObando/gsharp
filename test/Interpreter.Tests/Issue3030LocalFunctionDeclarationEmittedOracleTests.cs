@@ -15,6 +15,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #3030: Emitted-oracle coverage for local function declaration.
+/// Traceability: issue #3050.
 /// </summary>
 public class Issue3030LocalFunctionDeclarationEmittedOracleTests
 {

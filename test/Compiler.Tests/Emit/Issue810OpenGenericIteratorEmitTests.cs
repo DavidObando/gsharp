@@ -14,6 +14,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #810: Emit coverage for open generic iterator.
+/// Traceability: issue #798.
 /// </summary>
 public class Issue810OpenGenericIteratorEmitTests
 {

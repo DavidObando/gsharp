@@ -15,6 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1347: Emitted-oracle coverage for base auto property read.
+/// Traceability: issue #1104; diagnostic GS0127.
 /// </summary>
 public class Issue1347BaseAutoPropertyReadBinderTests
 {

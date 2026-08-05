@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #712: Emitted-session coverage for flow narrowing extensions.
+/// Traceability: ADR-0069.
 /// </summary>
 public class Issue712FlowNarrowingExtensionsEmittedSessionTests
 {

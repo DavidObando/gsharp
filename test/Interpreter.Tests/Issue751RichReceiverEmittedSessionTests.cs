@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #751: Emitted-session coverage for rich receiver.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue751RichReceiverEmittedSessionTests
 {

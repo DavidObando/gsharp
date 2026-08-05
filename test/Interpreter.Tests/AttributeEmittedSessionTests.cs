@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Emitted-session coverage for attribute.
+/// Traceability: ADR-0047; issue #141; diagnostic GS0204.
 /// </summary>
 public class AttributeEmittedSessionTests
 {

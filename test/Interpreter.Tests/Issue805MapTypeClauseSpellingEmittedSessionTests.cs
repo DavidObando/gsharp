@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #805: Emitted-session coverage for map type clause spelling.
+/// Traceability: ADR-0104.
 /// </summary>
 public class Issue805MapTypeClauseSpellingEmittedSessionTests
 {

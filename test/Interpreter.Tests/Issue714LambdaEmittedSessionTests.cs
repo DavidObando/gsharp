@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #714: Emitted-session coverage for lambda.
+/// Traceability: ADR-0074; diagnostic GS0302.
 /// </summary>
 public class Issue714LambdaEmittedSessionTests
 {

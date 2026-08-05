@@ -11,6 +11,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Emit coverage for clr interop.
+/// Traceability: issues #63 and #64.
 /// </summary>
 public class ClrInteropEmitTests
 {

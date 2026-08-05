@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle coverage for type of name of.
+/// Traceability: issue #143.
 /// </summary>
 public class TypeOfNameOfTests
 {

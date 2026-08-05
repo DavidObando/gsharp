@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #832: Emitted-session coverage for discarded open t return.
+/// Traceability: issues #798 and #813.
 /// </summary>
 public class Issue832DiscardedOpenTReturnEmittedSessionTests
 {

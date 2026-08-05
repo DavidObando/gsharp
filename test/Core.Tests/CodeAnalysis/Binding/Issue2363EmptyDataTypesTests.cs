@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2363: Emitted-oracle coverage for empty data types.
+/// Traceability: ADR-0029; diagnostic GS0104.
 /// </summary>
 public class Issue2363EmptyDataTypesTests
 {

@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #707: Emitted-session coverage for while do labeled.
+/// Traceability: ADR-0070.
 /// </summary>
 public class Issue707WhileDoLabeledEmittedSessionTests
 {

@@ -16,6 +16,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #1019: Emitted-oracle coverage for static interface property.
+/// Traceability: ADR-0089.
 /// </summary>
 public class Issue1019StaticInterfacePropertyEmittedOracleTests
 {

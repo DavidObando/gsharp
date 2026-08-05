@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #2915: Emitted-session coverage for implicit interface indexer.
+/// Traceability: issues #2954 and #2960.
 /// </summary>
 public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
 {

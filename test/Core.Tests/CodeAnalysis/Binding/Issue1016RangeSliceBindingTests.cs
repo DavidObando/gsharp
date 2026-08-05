@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1016: Emitted-oracle coverage for range slice binding.
+/// Traceability: diagnostic GS0392.
 /// </summary>
 public class Issue1016RangeSliceBindingTests
 {

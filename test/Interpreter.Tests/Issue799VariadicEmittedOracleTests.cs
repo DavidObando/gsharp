@@ -16,6 +16,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #799: Emitted-oracle coverage for variadic.
+/// Traceability: ADR-0101.
 /// </summary>
 public class Issue799VariadicEmittedOracleTests
 {

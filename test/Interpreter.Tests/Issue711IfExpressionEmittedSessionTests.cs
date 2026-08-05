@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #711: Emitted-session coverage for if expression.
+/// Traceability: ADR-0064.
 /// </summary>
 public class Issue711IfExpressionEmittedSessionTests
 {

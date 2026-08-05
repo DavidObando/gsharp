@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Emitted-session coverage for property.
+/// Traceability: ADR-0051.
 /// </summary>
 public class PropertyEmittedSessionTests
 {

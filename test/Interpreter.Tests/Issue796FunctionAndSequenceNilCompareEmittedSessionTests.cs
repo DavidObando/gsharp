@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #796: Emitted-session coverage for function and sequence nil compare.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
 {

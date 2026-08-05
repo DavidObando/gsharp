@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #710: Emitted-session coverage for null conditional indexing.
+/// Traceability: ADR-0073.
 /// </summary>
 public class Issue710NullConditionalIndexingEmittedSessionTests
 {

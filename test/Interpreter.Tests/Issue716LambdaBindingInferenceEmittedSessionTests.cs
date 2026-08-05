@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #716: Emitted-session coverage for lambda binding inference.
+/// Traceability: ADR-0076.
 /// </summary>
 public class Issue716LambdaBindingInferenceEmittedSessionTests
 {

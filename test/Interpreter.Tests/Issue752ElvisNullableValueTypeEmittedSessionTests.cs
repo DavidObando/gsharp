@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #752: Emitted-session coverage for elvis nullable value type.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue752ElvisNullableValueTypeEmittedSessionTests
 {

@@ -16,6 +16,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #1030: Emitted-oracle coverage for interface static members.
+/// Traceability: ADR-0089; issue #1019.
 /// </summary>
 public class Issue1030InterfaceStaticMembersEmittedOracleTests
 {

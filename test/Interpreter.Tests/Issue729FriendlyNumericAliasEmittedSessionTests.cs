@@ -11,6 +11,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #729: Emitted-session coverage for friendly numeric alias.
+/// Traceability: ADR-0098.
 /// </summary>
 public class Issue729FriendlyNumericAliasEmittedSessionTests
 {

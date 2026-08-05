@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #708: Emitted-session coverage for if let guard let.
+/// Traceability: ADR-0071.
 /// </summary>
 public class Issue708IfLetGuardLetEmittedSessionTests
 {

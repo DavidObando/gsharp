@@ -15,6 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #986: Emitted-oracle coverage for base class call.
+/// Traceability: diagnostics GS0383, GS0384 and GS0385.
 /// </summary>
 public class Issue986BaseClassCallBinderTests
 {

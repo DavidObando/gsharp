@@ -9,6 +9,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1104: Emitted-oracle coverage for base property access.
+/// Traceability: diagnostics GS0157, GS0383, GS0384 and GS0385.
 /// </summary>
 public class Issue1104BasePropertyAccessBinderTests
 {

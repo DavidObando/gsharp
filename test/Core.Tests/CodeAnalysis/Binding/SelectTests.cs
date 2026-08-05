@@ -15,6 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle coverage for select.
+/// Traceability: ADR-0022.
 /// </summary>
 public class SelectTests
 {

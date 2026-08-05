@@ -17,6 +17,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle coverage for data struct.
+/// Traceability: ADR-0029.
 /// </summary>
 public class DataStructTests
 {

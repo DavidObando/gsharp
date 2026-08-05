@@ -16,6 +16,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #750: Emitted-oracle coverage for constraint overload.
+/// Traceability: ADR-0088.
 /// </summary>
 public class Issue750ConstraintOverloadEmittedOracleTests
 {

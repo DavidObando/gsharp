@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle coverage for interpolated string.
+/// Traceability: ADR-0055.
 /// </summary>
 public class InterpolatedStringTests
 {

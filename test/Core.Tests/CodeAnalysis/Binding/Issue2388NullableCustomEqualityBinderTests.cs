@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #2388: Emitted-oracle coverage for nullable custom equality.
+/// Traceability: issue #2400; diagnostic GS0129.
 /// </summary>
 public class Issue2388NullableCustomEqualityBinderTests
 {

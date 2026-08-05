@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Binder and emitted-oracle coverage for rich extension receiver shapes from issue #751.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue751RichReceiverBinderTests
 {

@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #1712: Emitted-session coverage for na n binary operator.
+/// Traceability: issues #1653 and #421.
 /// </summary>
 public class Issue1712NaNBinaryOperatorEmittedSessionTests
 {

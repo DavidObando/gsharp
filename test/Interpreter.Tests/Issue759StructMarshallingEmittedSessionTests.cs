@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #759: Emitted-session coverage for struct marshalling.
+/// Traceability: ADR-0093; diagnostics GS0346 and GS0351.
 /// </summary>
 public class Issue759StructMarshallingEmittedSessionTests
 {

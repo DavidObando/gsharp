@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #795: Emitted-oracle coverage for default expression.
+/// Traceability: ADR-0100.
 /// </summary>
 public class Issue795DefaultExpressionBinderTests
 {

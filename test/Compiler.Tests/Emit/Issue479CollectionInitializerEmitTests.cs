@@ -11,6 +11,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #479: Emit coverage for collection initializer.
+/// Traceability: ADR-0117.
 /// </summary>
 public class Issue479CollectionInitializerEmitTests
 {

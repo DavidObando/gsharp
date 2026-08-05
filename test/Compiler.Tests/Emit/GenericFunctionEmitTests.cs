@@ -11,6 +11,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Emit coverage for generic function.
+/// Traceability: ADR-0004.
 /// </summary>
 public class GenericFunctionEmitTests
 {

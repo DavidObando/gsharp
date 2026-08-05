@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Emitted-session coverage for event.
+/// Traceability: ADR-0052.
 /// </summary>
 public class EventEmittedSessionTests
 {

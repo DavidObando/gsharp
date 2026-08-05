@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #757: Emitted-session coverage for base interface call.
+/// Traceability: ADR-0091.
 /// </summary>
 public class Issue757BaseInterfaceCallEmittedSessionTests
 {

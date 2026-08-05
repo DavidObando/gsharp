@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #813: Emitted-session coverage for tuple sequence return.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue813TupleSequenceReturnEmittedSessionTests
 {

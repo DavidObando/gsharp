@@ -15,6 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1038: Emitted-oracle coverage for standalone range binding.
+/// Traceability: diagnostic GS0410.
 /// </summary>
 public class Issue1038StandaloneRangeBindingTests
 {

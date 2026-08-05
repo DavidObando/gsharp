@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #709: Emitted-session coverage for null coalescing assignment.
+/// Traceability: ADR-0072.
 /// </summary>
 public class Issue709NullCoalescingAssignmentEmittedSessionTests
 {

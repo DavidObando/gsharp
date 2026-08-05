@@ -14,6 +14,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Witness coverage for emitted-oracle value capture, diagnostics, console output, exceptions, and lifetime handling.
+/// Traceability: ADR-0156; issue #3116; diagnostics GS0510 and GS9999.
 /// </summary>
 [Collection("ConsoleIo")]
 public class EmittedOracleTests

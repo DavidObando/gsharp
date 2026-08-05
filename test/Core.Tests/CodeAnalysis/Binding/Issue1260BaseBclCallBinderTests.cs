@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1260: Emitted-oracle coverage for base bcl call.
+/// Traceability: diagnostic GS0413.
 /// </summary>
 public class Issue1260BaseBclCallBinderTests
 {

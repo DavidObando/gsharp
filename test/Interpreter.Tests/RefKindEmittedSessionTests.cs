@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Emitted-session coverage for ref kind.
+/// Traceability: ADR-0060; issue #7.
 /// </summary>
 public class RefKindEmittedSessionTests
 {

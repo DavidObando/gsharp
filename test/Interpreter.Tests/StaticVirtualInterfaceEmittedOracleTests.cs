@@ -16,6 +16,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Emitted-oracle coverage for static virtual interface.
+/// Traceability: ADR-0087 and ADR-0089; issue #755.
 /// </summary>
 public class StaticVirtualInterfaceEmittedOracleTests
 {

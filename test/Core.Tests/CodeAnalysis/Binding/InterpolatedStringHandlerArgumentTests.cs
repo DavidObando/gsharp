@@ -22,6 +22,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle and end-to-end emit/run coverage for interpolated-string-handler argument forwarding.
+/// Traceability: issue #368.
 /// </summary>
 public class InterpolatedStringHandlerArgumentTests
 {

@@ -16,6 +16,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1278: Emitted-oracle coverage for arrow expression member.
+/// Traceability: ADR-0131.
 /// </summary>
 public class Issue1278ArrowExpressionMemberTests
 {

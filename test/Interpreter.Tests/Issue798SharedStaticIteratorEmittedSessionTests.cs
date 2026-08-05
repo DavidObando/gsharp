@@ -10,6 +10,7 @@ namespace GSharp.Interpreter.Tests;
 
 /// <summary>
 /// Issue #798: Emitted-session coverage for shared static iterator.
+/// Traceability: ADR-0084; diagnostic GS9998.
 /// </summary>
 /// <remarks>
 /// Coverage here uses concretely-instantiated iterator return

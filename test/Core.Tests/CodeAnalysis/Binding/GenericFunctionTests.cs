@@ -15,6 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Emitted-oracle coverage for generic function.
+/// Traceability: ADR-0020.
 /// </summary>
 public class GenericFunctionTests
 {
