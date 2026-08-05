@@ -150,7 +150,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 TypeSymbol.IsByRefLike(part.Value.Type) &&
                 FindByRefLikeToString(part.Value.Type) == null)
             {
-                var location = part.Value.Syntax?.Location ?? node.Syntax.Location;
+                var location = part.HoleSyntax?.Location ?? part.Value.Syntax?.Location ?? node.Syntax.Location;
                 this.diagnostics.ReportByRefLikeInterpolationUnsupported(location, part.Value.Type);
             }
         }

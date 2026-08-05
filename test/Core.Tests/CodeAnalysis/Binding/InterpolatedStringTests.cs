@@ -439,6 +439,296 @@ public class InterpolatedStringTests
     }
 
     [Fact]
+    public void CallValuedByRefLikeHole_ReportsCallSpan()
+    {
+        var source = """
+            ref struct Token {
+                var value int32
+            }
+
+            func MakeToken() Token {
+                return Token{value: 42}
+            }
+
+            func Main() {
+                Console.WriteLine("token=${MakeToken()}")
+            }
+            """;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, "(10,32,10,43)", "MakeToken()");
+    }
+
+    [Fact]
+    public void ExtensionValuedByRefLikeHole_ReportsCallSpan()
+    {
+        var source = """
+            ref struct Token {
+                var value int32
+            }
+
+            func (n int32) Wrap() Token {
+                return Token{value: n}
+            }
+
+            func Main() {
+                let n = 42
+                Console.WriteLine("token=${n.Wrap()}")
+            }
+            """;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, "(11,32,11,40)", "n.Wrap()");
+    }
+
+    [Fact]
+    public void InstanceCallValuedByRefLikeHole_ReportsCallSpan()
+    {
+        var source = """
+            ref struct Token {
+                var value int32
+            }
+
+            class Box {
+                func Make() Token {
+                    return Token{value: 42}
+                }
+            }
+
+            func Main() {
+                let b = Box()
+                Console.WriteLine("token=${b.Make()}")
+            }
+            """;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, "(13,32,13,40)", "b.Make()");
+    }
+
+    [Fact]
+    public void FieldValuedByRefLikeHole_ReportsFieldSpan()
+    {
+        var source = """
+            ref struct Token {
+                var value int32
+            }
+
+            ref struct Outer {
+                var inner Token
+            }
+
+            func Main() {
+                let o = Outer{inner: Token{value: 42}}
+                Console.WriteLine("token=${o.inner}")
+            }
+            """;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, "(11,32,11,39)", "o.inner");
+    }
+
+    [Fact]
+    public void StructLiteralValuedByRefLikeHole_ReportsLiteralSpan()
+    {
+        var source = """
+            ref struct Token {
+                var value int32
+            }
+
+            func Main() {
+                Console.WriteLine("token=${Token{value: 42}}")
+            }
+            """;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, "(6,32,6,48)", "Token{value: 42}");
+    }
+
+    [Theory]
+    [MemberData(nameof(AdditionalByRefLikeHoleSpanCases))]
+    public void AdditionalByRefLikeHoles_ReportHoleSpan(
+        string shape,
+        string source,
+        string expectedSpan,
+        string expectedText)
+    {
+        _ = shape;
+        var result = EmittedOracle.Evaluate(source);
+
+        AssertByRefLikeInterpolationSpan(result.Diagnostics, expectedSpan, expectedText);
+    }
+
+    public static TheoryData<string, string, string, string> AdditionalByRefLikeHoleSpanCases =>
+        new()
+        {
+            {
+                "generic call",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func MakeToken[T]() Token {
+                    return Token{value: 42}
+                }
+
+                func Main() {
+                    Console.WriteLine("token=${MakeToken[int32]()}")
+                }
+                """,
+                "(10,32,10,50)",
+                "MakeToken[int32]()"
+            },
+            {
+                "argumented call",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func MakeToken(value int32) Token {
+                    return Token{value: value}
+                }
+
+                func Main() {
+                    Console.WriteLine("token=${MakeToken(1 + 2)}")
+                }
+                """,
+                "(10,32,10,48)",
+                "MakeToken(1 + 2)"
+            },
+            {
+                "nested interpolation argument",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func MakeToken(value string) Token {
+                    return Token{value: value.Length}
+                }
+
+                func Main() {
+                    let n = 42
+                    Console.WriteLine("token=${MakeToken("n=${n}")}")
+                }
+                """,
+                "(11,32,11,51)",
+                "MakeToken(\"n=${n}\")"
+            },
+            {
+                "awaited argument",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                async func Seed() int32 {
+                    return 42
+                }
+
+                func MakeToken(value int32) Token {
+                    return Token{value: value}
+                }
+
+                async func Main() {
+                    Console.WriteLine("token=${MakeToken(await Seed())}")
+                }
+                """,
+                "(14,32,14,55)",
+                "MakeToken(await Seed())"
+            },
+            {
+                "lambda body",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func MakeToken() Token {
+                    return Token{value: 42}
+                }
+
+                func Main() {
+                    let f = func() {
+                        Console.WriteLine("token=${MakeToken()}")
+                    }
+                    f()
+                }
+                """,
+                "(11,36,11,47)",
+                "MakeToken()"
+            },
+            {
+                "lambda-valued local invocation",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func Main() {
+                    let f = func() Token { return Token{value: 42} }
+                    Console.WriteLine("token=${f()}")
+                }
+                """,
+                "(7,32,7,35)",
+                "f()"
+            },
+            {
+                "function parameter invocation",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func Use(f func() Token) {
+                    Console.WriteLine("token=${f()}")
+                }
+
+                func Main() {
+                    Use(func() Token { return Token{value: 42} })
+                }
+                """,
+                "(6,32,6,35)",
+                "f()"
+            },
+            {
+                "method-value local invocation",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func MakeToken() Token {
+                    return Token{value: 42}
+                }
+
+                func Main() {
+                    let g = MakeToken
+                    Console.WriteLine("token=${g()}")
+                }
+                """,
+                "(11,32,11,35)",
+                "g()"
+            },
+            {
+                "local value",
+                """
+                ref struct Token {
+                    var value int32
+                }
+
+                func Main() {
+                    let token = Token{value: 42}
+                    Console.WriteLine("token=${token}")
+                }
+                """,
+                "(7,32,7,37)",
+                "token"
+            },
+        };
+
+    [Fact]
     public void Many_Interpolation_Holes_Parse_Near_Linear_Time()
     {
         // Issue #1605: each hole used to re-lex/re-parse a padded copy of the
@@ -494,6 +784,24 @@ public class InterpolatedStringTests
         // wall-clock noise on oversubscribed CI runners while still catching a
         // regression back to O(n^2).
         Assert.True(large < small * 50, $"expected near-linear scaling, got small={small} large={large} ratio={(double)large / small}");
+    }
+
+    private static void AssertByRefLikeInterpolationSpan(
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics,
+        string expectedSpan,
+        string expectedText)
+    {
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal("GS0519", diagnostic.Id);
+        var location = diagnostic.Location;
+
+        // Start is one-based inclusive; end remains exclusive.
+        var actualSpan =
+            $"({location.StartLine + 1},{location.StartCharacter + 1},{location.EndLine + 1},{location.EndCharacter + 1})";
+        var actualText = location.Text.ToString(location.Span);
+        Assert.Equal(
+            (Span: expectedSpan, Text: expectedText),
+            (Span: actualSpan, Text: actualText));
     }
 
     private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
