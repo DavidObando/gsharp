@@ -2,63 +2,144 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.IO;
-using System.Text.RegularExpressions;
+using System.Collections.Generic;
+using Gsharp.NET.Sdk.Tools;
+using Microsoft.Build.Framework;
 using Xunit;
 
 namespace GSharp.Sdk.Tests;
 
 /// <summary>
-/// 6.2 SilentEmitFailure invariant (boundary ring): verifies that the BuildTask
-/// safety-net logic anchors at the first Compile item rather than <c>gsc.dll</c>
-/// when gsc exits non-zero without logging a structured diagnostic.
+/// 6.2 SilentEmitFailure invariant (boundary ring): verifies that the real
+/// BuildTask parser logs both source-anchored and location-less GS9998 output
+/// as structured MSBuild errors.
 ///
 /// <para>
-/// The BuildTask cannot be instantiated in isolation without MSBuild's
-/// <c>IBuildEngine</c>. These tests exercise the observable behavior by invoking
-/// <c>Program.Main</c> directly (which is what gsc.dll does) and verifying that
-/// the diagnostic line on stdout carries the source file name. The full
-/// end-to-end BuildTask path is covered by the existing acceptance tests that
-/// drive <c>dotnet build</c> on sample projects.
+/// Located output carries the source file and span. Location-less output keeps
+/// the compiler's error code and root-cause message without inventing a file or
+/// coordinates, and still sets <see cref="Microsoft.Build.Utilities.TaskLoggingHelper.HasLoggedErrors"/>.
 /// </para>
 /// </summary>
 public class BuildTaskSilentFailureTests
 {
-    /// <summary>
-    /// The SDK BuildTask regex for diagnostic lines.
-    /// </summary>
-    private static readonly Regex DiagnosticLine = new(
-        @"^(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*(?<sev>error|warning|info)\s+(?<code>[^:]+):\s*(?<msg>.*)$",
-        RegexOptions.Compiled);
-
     [Fact]
-    public void DiagnosticLine_Regex_MatchesGS9998_WithSourceFile()
+    public void LogCompilerLine_LocatedGS9998_LogsStructuredErrorWithSourceSpan()
     {
-        // Verify that the canonical GS9998 format emitted by Program.Main's
-        // outer-ring catch matches the BuildTask's DiagnosticLine regex and
-        // carries a source-file path (not "gsc.dll").
+        var (task, engine) = CreateTask();
         var line = "/path/to/test.gs(9,5,11,1): error GS9998: InvalidOperationException: test message";
-        var match = DiagnosticLine.Match(line);
 
-        Assert.True(match.Success, "Diagnostic line should match the regex");
-        Assert.Equal("/path/to/test.gs", match.Groups["file"].Value);
-        Assert.Equal("error", match.Groups["sev"].Value);
-        Assert.Equal("GS9998", match.Groups["code"].Value.Trim());
-        Assert.Contains("InvalidOperationException", match.Groups["msg"].Value);
+        task.LogCompilerLine(line);
+
+        var error = Assert.Single(engine.Errors);
+        Assert.True(task.Log.HasLoggedErrors);
+        Assert.Equal("GS9998", error.Code);
+        Assert.Equal("/path/to/test.gs", error.File);
+        Assert.Equal(9, error.LineNumber);
+        Assert.Equal(5, error.ColumnNumber);
+        Assert.Equal(11, error.EndLineNumber);
+        Assert.Equal(1, error.EndColumnNumber);
+        Assert.Equal("InvalidOperationException: test message", error.Message);
     }
 
     [Fact]
-    public void DiagnosticLine_Regex_MatchesOldFormat_ButNewCodeNeverEmitsGscDll()
+    public void LogCompilerLine_LocationlessGS9998_LogsStructuredErrorWithoutInventedSpan()
     {
-        // The old pattern "gsc.dll(0,0,0,0): error GS9998: ..." used to surface
-        // as MSB4181. The regex would match it, but production code (Program.Main)
-        // now uses the first source file instead. This test documents the regex
-        // capability and serves as a guard that the new invariant format is
-        // distinguishable from the old one.
-        var goodLine = "/path/to/test.gs(9,5,11,1): error GS9998: something";
-        var goodMatch = DiagnosticLine.Match(goodLine);
-        Assert.True(goodMatch.Success);
-        Assert.DoesNotContain("gsc.dll", goodMatch.Groups["file"].Value);
-        Assert.Contains(".gs", goodMatch.Groups["file"].Value);
+        var (task, engine) = CreateTask();
+        var line = "error GS9998: InvalidOperationException: no source location";
+
+        task.LogCompilerLine(line);
+
+        var error = Assert.Single(engine.Errors);
+        Assert.True(task.Log.HasLoggedErrors);
+        Assert.Equal("GS9998", error.Code);
+        Assert.True(string.IsNullOrEmpty(error.File));
+        Assert.Equal(0, error.LineNumber);
+        Assert.Equal(0, error.ColumnNumber);
+        Assert.Equal("InvalidOperationException: no source location", error.Message);
+        Assert.DoesNotContain("(1,1,1,1)", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("error handling failed: retrying")]
+    [InlineData("warning signs detected: check config")]
+    [InlineData("info about the build: nothing to do")]
+    public void LogCompilerLine_ProseIsNotClassifiedAsDiagnostic(string line)
+    {
+        var (task, engine) = CreateTask();
+
+        task.LogCompilerLine(line);
+
+        Assert.Empty(engine.Errors);
+        Assert.Empty(engine.Warnings);
+        var message = Assert.Single(engine.Messages);
+        Assert.Equal(line, message.Message);
+        Assert.Equal(MessageImportance.Low, message.Importance);
+    }
+
+    [Fact]
+    public void LogCompilerLine_WarningIsNotPromotedToError()
+    {
+        var (task, engine) = CreateTask();
+
+        task.LogCompilerLine("warning GS0001: test warning");
+
+        Assert.Empty(engine.Errors);
+        var warning = Assert.Single(engine.Warnings);
+        Assert.Equal("GS0001", warning.Code);
+        Assert.Equal("test warning", warning.Message);
+    }
+
+    [Fact]
+    public void LogCompilerLine_GS9100RemainsLowImportanceMessage()
+    {
+        var (task, engine) = CreateTask();
+        var line = "warning GS9100: advisory warning";
+
+        task.LogCompilerLine(line);
+
+        Assert.Empty(engine.Errors);
+        Assert.Empty(engine.Warnings);
+        var message = Assert.Single(engine.Messages);
+        Assert.Equal(line, message.Message);
+        Assert.Equal(MessageImportance.Low, message.Importance);
+    }
+
+    private static (BuildTask Task, RecordingBuildEngine Engine) CreateTask()
+    {
+        var engine = new RecordingBuildEngine();
+        return (new BuildTask { BuildEngine = engine }, engine);
+    }
+
+    private sealed class RecordingBuildEngine : IBuildEngine
+    {
+        public List<BuildErrorEventArgs> Errors { get; } = new();
+
+        public List<BuildWarningEventArgs> Warnings { get; } = new();
+
+        public List<BuildMessageEventArgs> Messages { get; } = new();
+
+        public bool ContinueOnError => false;
+
+        public int LineNumberOfTaskNode => 0;
+
+        public int ColumnNumberOfTaskNode => 0;
+
+        public string ProjectFileOfTaskNode => string.Empty;
+
+        public bool BuildProjectFile(
+            string projectFileName,
+            string[] targetNames,
+            System.Collections.IDictionary globalProperties,
+            System.Collections.IDictionary targetOutputs) => true;
+
+        public void LogCustomEvent(CustomBuildEventArgs e)
+        {
+        }
+
+        public void LogErrorEvent(BuildErrorEventArgs e) => Errors.Add(e);
+
+        public void LogMessageEvent(BuildMessageEventArgs e) => Messages.Add(e);
+
+        public void LogWarningEvent(BuildWarningEventArgs e) => Warnings.Add(e);
     }
 }

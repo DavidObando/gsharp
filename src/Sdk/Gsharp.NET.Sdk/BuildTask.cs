@@ -23,14 +23,13 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     private readonly CancellationTokenSource cts = new();
 
     /// <summary>
-    /// Matches gsc's canonical diagnostic header line
-    /// <c>file(startLine,startCol,endLine,endCol): error|warning|info CODE: message</c>
-    /// so it can be re-emitted through the MSBuild logger with structured
-    /// location, code, and severity. End line/column are optional.
+    /// Matches gsc's canonical diagnostic header line, with or without source
+    /// coordinates, so every diagnostic can be re-emitted through the MSBuild
+    /// logger with structured code and severity. End line/column are optional.
     /// </summary>
     private static readonly System.Text.RegularExpressions.Regex DiagnosticLine =
         new(
-            @"^(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*(?<sev>error|warning|info)\s+(?<code>[^:]+):\s*(?<msg>.*)$",
+            @"^(?:(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*)?(?<sev>error|warning|info)\s+(?<code>[^:\s]+):\s*(?<msg>.*)$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>Gets or sets the full path to gsc.dll.</summary>
@@ -419,7 +418,7 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// importance to keep default-verbosity output clean.
     /// </summary>
     /// <param name="line">A line written by gsc to standard output.</param>
-    private void LogCompilerLine(string line)
+    internal void LogCompilerLine(string line)
     {
         var match = DiagnosticLine.Match(line);
         if (!match.Success)
@@ -428,11 +427,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             return;
         }
 
-        var file = match.Groups["file"].Value.Trim();
+        var file = match.Groups["file"].Success ? match.Groups["file"].Value.Trim() : null;
         var code = match.Groups["code"].Value.Trim();
         var message = match.Groups["msg"].Value;
-        var startLine = int.Parse(match.Groups["l1"].Value);
-        var startColumn = int.Parse(match.Groups["c1"].Value);
+        var startLine = match.Groups["l1"].Success ? int.Parse(match.Groups["l1"].Value) : 0;
+        var startColumn = match.Groups["c1"].Success ? int.Parse(match.Groups["c1"].Value) : 0;
         var endLine = match.Groups["l2"].Success ? int.Parse(match.Groups["l2"].Value) : 0;
         var endColumn = match.Groups["c2"].Success ? int.Parse(match.Groups["c2"].Value) : 0;
 

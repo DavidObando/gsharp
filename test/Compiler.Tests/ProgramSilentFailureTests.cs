@@ -49,19 +49,17 @@ public class ProgramSilentFailureTests
     }
 
     [Fact]
-    public void DiagnosticLineRegex_MatchesExpectedGS9998Format()
+    public void DiagnosticLineRegex_MatchesLocatedGS9998Format()
     {
-        // Verify the format that ReportUnhandledException produces
-        // matches the SDK BuildTask diagnostic regex.
-        var sampleLine = "/path/to/test.gs(1,1,1,1): error GS9998: InvalidOperationException: something broke";
+        var sampleLine = "/path/to/test.gs(9,5,9,16): error GS9998: InvalidOperationException: something broke";
         var match = DiagnosticLine.Match(sampleLine);
 
         Assert.True(match.Success, $"Regex should match: {sampleLine}");
         Assert.Equal("/path/to/test.gs", match.Groups["file"].Value);
-        Assert.Equal("1", match.Groups["l1"].Value);
-        Assert.Equal("1", match.Groups["c1"].Value);
-        Assert.Equal("1", match.Groups["l2"].Value);
-        Assert.Equal("1", match.Groups["c2"].Value);
+        Assert.Equal("9", match.Groups["l1"].Value);
+        Assert.Equal("5", match.Groups["c1"].Value);
+        Assert.Equal("9", match.Groups["l2"].Value);
+        Assert.Equal("16", match.Groups["c2"].Value);
         Assert.Equal("error", match.Groups["sev"].Value);
         Assert.Equal("GS9998", match.Groups["code"].Value.Trim());
         Assert.Contains("InvalidOperationException", match.Groups["msg"].Value);
@@ -135,4 +133,3 @@ public class ProgramSilentFailureTests
         }
     }
 }
-

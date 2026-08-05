@@ -173,13 +173,7 @@ public static class Program
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            // 6.2 SilentEmitFailure invariant, gsi edition: a compiler
-            // exception that escapes the emit pipeline (e.g. #3183) must
-            // surface as gsc's canonical GS9998 line rather than a raw
-            // driver crash. User-code exceptions never reach here — the
-            // host reports those via UnhandledException below.
-            Console.Error.WriteLine($"{scriptPath}(1,1,1,1): error GS9998: {ex.GetType().Name}: {ex.Message}");
-            return 1;
+            return ReportUnhandledException(ex);
         }
         if (result.Diagnostics.Any())
         {
@@ -200,6 +194,12 @@ public static class Program
         }
 
         return result.ExitCode;
+    }
+
+    internal static int ReportUnhandledException(Exception ex)
+    {
+        Console.Error.WriteDiagnostics(new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
+        return 1;
     }
 
     /// <summary>

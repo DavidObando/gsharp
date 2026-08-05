@@ -192,11 +192,9 @@ public class Program
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             // 6.2 SilentEmitFailure invariant (outer ring): any exception
-            // that escapes Compilation.Emit or the compilation setup is
-            // formatted as a canonical GS9998 diagnostic line on stdout so
-            // the SDK BuildTask regex matches it and the IDE error pane
-            // navigates to the source file.
-            return ReportUnhandledException(ex, parsed);
+            // that escapes Compilation.Emit or compilation setup becomes a
+            // GS9998 on stdout, using a carried source anchor when available.
+            return ReportUnhandledException(ex);
         }
     }
 
@@ -261,6 +259,17 @@ public class Program
         return tokens;
     }
 
+    internal static int ReportUnhandledException(Exception ex)
+    {
+        Console.Out.WriteDiagnostics(new[] { Compilation.CreateInternalErrorDiagnostic(ex) });
+        if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
+        {
+            Console.Out.WriteLine(ex.ToString());
+        }
+
+        return Error;
+    }
+
     private static int ReportFatalIOError(Exception ex)
     {
         // Emit in the csc-compatible "gsc: error GS9997: <message>" form so
@@ -268,27 +277,6 @@ public class Program
         // MSBuild error rather than an opaque process crash.
         var descriptor = DiagnosticDescriptors.FatalCompilerIOError;
         Console.Error.WriteLine($"gsc: error {descriptor.Id}: {string.Format(descriptor.MessageFormat, ex.Message)}");
-        return Error;
-    }
-
-    private static int ReportUnhandledException(Exception ex, CommandLineArgs parsed)
-    {
-        // 6.2 SilentEmitFailure invariant (outer ring): format the exception
-        // as a canonical diagnostic line so the SDK BuildTask regex matches.
-        // Anchor at the first source file when available.
-        var file = parsed?.SourceFiles?.Count > 0
-            ? Path.GetFullPath(parsed.SourceFiles[0])
-            : "gsc";
-
-        var typeName = ex.GetType().Name;
-        var message = $"{typeName}: {ex.Message}";
-
-        Console.Out.WriteLine($"{file}(1,1,1,1): error GS9998: {message}");
-        if (System.Environment.GetEnvironmentVariable("GS_DEBUG_STACK") != null)
-        {
-            Console.Out.WriteLine(ex.ToString());
-        }
-
         return Error;
     }
 
