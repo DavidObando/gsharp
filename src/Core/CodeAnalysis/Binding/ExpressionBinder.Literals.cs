@@ -465,6 +465,7 @@ internal sealed partial class ExpressionBinder
                 if (bound.Type is StructSymbol { IsRefStruct: true } structType
                     && structType.TryGetMethod("ToString", out _))
                 {
+                    var diagMark = Diagnostics.Count;
                     var toString = BindAccessorCall(
                         bound,
                         classSymbol: null,
@@ -473,6 +474,10 @@ internal sealed partial class ExpressionBinder
                         && returnType == TypeSymbol.String)
                     {
                         bound = toString;
+                    }
+                    else
+                    {
+                        Diagnostics.TruncateTo(diagMark);
                     }
                 }
 

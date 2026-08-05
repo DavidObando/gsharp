@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Reflection.Emit;
 using Xunit;
 
 namespace GSharp.Interpreter.Tests;
@@ -326,9 +327,43 @@ public class Issue3114ReadOnlySpanInterpreterTests
         }
     }
 
+    [Fact]
+    public void ImportedRefStructInterpolation_WithOverloadedToString_CompilesAndRuns()
+    {
+        const string Source = """
+            import System
+            import Issue3220External
+
+            func Main() {
+                let token ExtTok = ExtTok()
+                Console.WriteLine("interp=${token}")
+            }
+            """;
+
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var referencePath = Path.Combine(root, "Issue3220.External.dll");
+        var sourcePath = Path.Combine(root, "imported-overloaded-tostring.gs");
+        EmitOverloadedToStringRefStructAssembly(referencePath);
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = CompileAndRun(root, "imported-overloaded-tostring.gs", sourcePath, referencePath);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("interp=ExtTok!\n", result.StandardOutput);
+            Assert.Equal(string.Empty, result.StandardError);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(Drivers))]
-    public void UserRefStructInterpolation_ReportsFallbackDiagnosticAcrossFileDrivers(Driver driver)
+    public void UserRefStructInterpolation_WithoutDeclaredToStringReportsGS0519AcrossFileDrivers(Driver driver)
     {
         const string Source = """
             ref struct Token {
@@ -378,6 +413,61 @@ public class Issue3114ReadOnlySpanInterpreterTests
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Drivers))]
+    public void UserRefStructInterpolation_WithoutParameterlessToStringReportsGS0519AcrossFileDrivers(Driver driver)
+    {
+        const string Source = """
+            import System
+
+            ref struct Token {
+                func ToString(value int32) string -> String.Format("Token#{0}", value)
+            }
+
+            func Main() {
+                let token Token = Token{}
+                Console.WriteLine("interp=${token}")
+            }
+            """;
+
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        var sourcePath = Path.Combine(root, "user-ref-struct-arity-interpolation.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = driver switch
+            {
+                Driver.CompilerEmitToMemory => CaptureConsole(
+                    () => GSharp.Compiler.Program.Main([sourcePath])),
+                Driver.CompilerEmitToFile => CompileOnly(root, "user-ref-struct-arity-interpolation.gs", sourcePath),
+                Driver.ReplEmitToMemory => CaptureConsole(
+                    () => GSharp.Repl.Program.Main([sourcePath])),
+                _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
+            };
+
+            Assert.Equal(1, result.ExitCode);
+            var diagnosticStream = driver == Driver.ReplEmitToMemory
+                ? result.StandardError
+                : result.StandardOutput;
+            Assert.Equal(
+                driver == Driver.ReplEmitToMemory ? string.Empty : "Failed.\n",
+                driver == Driver.ReplEmitToMemory ? result.StandardOutput : result.StandardError);
+
+            var diagnostic = Assert.Single(
+                diagnosticStream.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                line => line.Contains("error GS0519:", StringComparison.Ordinal));
+            Assert.StartsWith($"{sourcePath}(9,23,9,40): error GS0519:", diagnostic, StringComparison.Ordinal);
+            AssertByRefLikeInterpolationDiagnostic(diagnostic, sourcePath, 9, "Token");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static void AssertByRefLikeInterpolationDiagnostic(
         string line,
         string sourcePath,
@@ -407,19 +497,35 @@ public class Issue3114ReadOnlySpanInterpreterTests
     private static (int ExitCode, string StandardOutput, string StandardError) CompileAndRun(
         string root,
         string sample,
-        string sourcePath)
+        string sourcePath,
+        string referencePath = null)
     {
         var outputDirectory = Path.Combine(root, "emit");
         Directory.CreateDirectory(outputDirectory);
         Assert.Empty(Directory.EnumerateFileSystemEntries(outputDirectory));
         var assemblyPath = Path.Combine(outputDirectory, Path.GetFileNameWithoutExtension(sample) + ".dll");
+        var arguments = new List<string>
+        {
+            "/out:" + assemblyPath,
+            "/target:exe",
+            "/targetframework:net10.0",
+        };
+        if (referencePath != null)
+        {
+            arguments.Add("/r:" + referencePath);
+        }
+
+        arguments.Add(sourcePath);
         var compile = CaptureConsole(
-            () => GSharp.Compiler.Program.Main(
-                ["/out:" + assemblyPath, "/target:exe", "/targetframework:net10.0", sourcePath]));
+            () => GSharp.Compiler.Program.Main(arguments.ToArray()));
 
         Assert.Equal(0, compile.ExitCode);
         Assert.True(File.Exists(assemblyPath), compile.StandardOutput + compile.StandardError);
         Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        if (referencePath != null)
+        {
+            File.Copy(referencePath, Path.Combine(outputDirectory, Path.GetFileName(referencePath)));
+        }
 
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -432,14 +538,54 @@ public class Issue3114ReadOnlySpanInterpreterTests
 
         using var process = Process.Start(startInfo);
         Assert.NotNull(process);
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Emitted program timed out.");
+        }
 
         return (
             process.ExitCode,
-            standardOutput.Replace("\r\n", "\n"),
-            standardError.Replace("\r\n", "\n"));
+            standardOutput.GetAwaiter().GetResult().Replace("\r\n", "\n"),
+            standardError.GetAwaiter().GetResult().Replace("\r\n", "\n"));
+    }
+
+    private static void EmitOverloadedToStringRefStructAssembly(string outputPath)
+    {
+        var builder = new PersistedAssemblyBuilder(new AssemblyName("Issue3220.External"), typeof(object).Assembly);
+        var module = builder.DefineDynamicModule("Issue3220.External");
+        var type = module.DefineType(
+            "Issue3220External.ExtTok",
+            TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.SequentialLayout,
+            typeof(ValueType));
+        type.SetCustomAttribute(
+            new CustomAttributeBuilder(
+                typeof(System.Runtime.CompilerServices.IsByRefLikeAttribute).GetConstructor(Type.EmptyTypes)!,
+                []));
+
+        var parameterless = type.DefineMethod(
+            nameof(ToString),
+            MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.HideBySig,
+            typeof(string),
+            Type.EmptyTypes);
+        var il = parameterless.GetILGenerator();
+        il.Emit(OpCodes.Ldstr, "ExtTok!");
+        il.Emit(OpCodes.Ret);
+        type.DefineMethodOverride(parameterless, typeof(object).GetMethod(nameof(ToString), Type.EmptyTypes)!);
+
+        var overload = type.DefineMethod(
+            nameof(ToString),
+            MethodAttributes.Public | MethodAttributes.HideBySig,
+            typeof(string),
+            [typeof(string)]);
+        il = overload.GetILGenerator();
+        il.Emit(OpCodes.Ldstr, "unused");
+        il.Emit(OpCodes.Ret);
+
+        type.CreateType();
+        builder.Save(outputPath);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(

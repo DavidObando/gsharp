@@ -66,6 +66,38 @@ public static class ClrTypeUtilities
     }
 
     /// <summary>
+    /// Resolves a named method with the specified parameter types without
+    /// asking a constructed <see cref="TypeBuilder"/> generic instantiation to
+    /// resolve members directly.
+    /// </summary>
+    /// <param name="type">The type that declares or inherits the method.</param>
+    /// <param name="name">The method name to resolve.</param>
+    /// <param name="types">The method's parameter types.</param>
+    /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    public static MethodInfo GetMethodSafe(this Type type, string name, Type[] types)
+    {
+        if (type is null || name is null || types is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return type.GetMethod(name, types);
+        }
+        catch (NotSupportedException)
+        {
+            if (!IsConstructedGenericWithTypeBuilderArgument(type))
+            {
+                return null;
+            }
+
+            var openMethod = type.GetGenericTypeDefinition().GetMethod(name, types);
+            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+        }
+    }
+
+    /// <summary>
     /// Issue #2327: single shared guard for every enum-reflection predicate
     /// in the binder/emitter (generalizes the #1100 / #2135 pattern already
     /// established for <c>IsAssignableFrom</c>/<c>IsInterface</c> probes).

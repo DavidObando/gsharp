@@ -695,7 +695,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     }
 
     private static MethodInfo FindByRefLikeToString(TypeSymbol type)
-        => type?.ClrType?.GetMethodSafe("ToString");
+        => type?.ClrType?.GetMethodSafe("ToString", System.Type.EmptyTypes);
 
     private static MethodInfo FindAppendFormatted(
         System.Type secondParam = null, System.Type thirdParam = null, int genericArity = 1, bool valueOnly = false)
