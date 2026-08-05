@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -174,6 +175,97 @@ public class ClrTypeUtilitiesTests
         Assert.Equal(nameof(TypeBuilderMethodFixture<object>.Accept), method.Name);
     }
 
+    [Fact]
+    public void GetMethodSafe_TypeBuilderConstructedGeneric_ResolvesNestedParameterTypes()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("GetMethodSafeNestedTypeBuilder"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("GetMethodSafeNestedTypeBuilder");
+        var argument = module.DefineType("Argument", TypeAttributes.Public);
+        var constructed = typeof(TypeBuilderMethodFixture<>).MakeGenericType(argument);
+        var cases = new[]
+        {
+            (nameof(TypeBuilderMethodFixture<object>.AcceptList), typeof(List<>).MakeGenericType(argument)),
+            (nameof(TypeBuilderMethodFixture<object>.AcceptArray), argument.MakeArrayType()),
+            (nameof(TypeBuilderMethodFixture<object>.AcceptFunc), typeof(Func<>).MakeGenericType(argument)),
+            (nameof(TypeBuilderMethodFixture<object>.AcceptByRef), argument.MakeByRefType()),
+        };
+
+        foreach (var (name, parameterType) in cases)
+        {
+            Assert.Throws<NotSupportedException>(() => constructed.GetMethod(name, [parameterType]));
+            Assert.NotNull(constructed.GetMethodSafe(name, [parameterType]));
+        }
+    }
+
+    [Fact]
+    public void GetMethodSafe_TypeBuilderConstructedGeneric_ResolvesPointerParameterType()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("GetMethodSafePointerTypeBuilder"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("GetMethodSafePointerTypeBuilder");
+        var argument = module.DefineType(
+            "Argument",
+            TypeAttributes.Public | TypeAttributes.Sealed,
+            typeof(ValueType));
+        var constructed = typeof(TypeBuilderPointerMethodFixture<>).MakeGenericType(argument);
+        var parameterType = argument.MakePointerType();
+
+        Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
+            nameof(TypeBuilderPointerMethodFixture<int>.AcceptPointer),
+            [parameterType]));
+        Assert.NotNull(constructed.GetMethodSafe(
+            nameof(TypeBuilderPointerMethodFixture<int>.AcceptPointer),
+            [parameterType]));
+    }
+
+    [Fact]
+    public void GetMethodSafe_TypeBuilderConstructedGeneric_MapsDuplicateArgumentsByPosition()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("GetMethodSafeDuplicateTypeBuilder"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("GetMethodSafeDuplicateTypeBuilder");
+        var argument = module.DefineType("Argument", TypeAttributes.Public);
+        var constructed = typeof(TypeBuilderPairMethodFixture<,>).MakeGenericType(argument, argument);
+
+        Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
+            nameof(TypeBuilderPairMethodFixture<object, object>.Second),
+            [argument]));
+        Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
+            nameof(TypeBuilderPairMethodFixture<object, object>.Both),
+            [argument, argument]));
+
+        var first = constructed.GetMethodSafe(
+            nameof(TypeBuilderPairMethodFixture<object, object>.First),
+            [argument]);
+        var second = constructed.GetMethodSafe(
+            nameof(TypeBuilderPairMethodFixture<object, object>.Second),
+            [argument]);
+        var both = constructed.GetMethodSafe(
+            nameof(TypeBuilderPairMethodFixture<object, object>.Both),
+            [argument, argument]);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.NotNull(both);
+        Assert.Equal(0, first.GetParameters()[0].ParameterType.GenericParameterPosition);
+        Assert.Equal(1, second.GetParameters()[0].ParameterType.GenericParameterPosition);
+        Assert.Equal(
+            [0, 1],
+            both.GetParameters()
+                .Select(parameter => parameter.ParameterType.GenericParameterPosition)
+                .ToArray());
+
+        var ambiguous = typeof(TypeBuilderAmbiguousMethodFixture<,>)
+            .MakeGenericType(argument, argument);
+        Assert.Throws<AmbiguousMatchException>(() => ambiguous.GetMethodSafe(
+            nameof(TypeBuilderAmbiguousMethodFixture<object, string>.Accept),
+            [argument]));
+    }
+
     /// <summary>
     /// Loads <see cref="Fixture338"/> through a MetadataLoadContext whose
     /// reference set intentionally omits <c>System.Text.RegularExpressions</c>,
@@ -256,4 +348,38 @@ file sealed class TypeBuilderMethodFixture<T>
     public void Accept(T value) => _ = value;
 
     public void Accept(int value) => _ = value;
+
+    public void AcceptList(List<T> value) => _ = value;
+
+    public void AcceptArray(T[] value) => _ = value;
+
+    public void AcceptFunc(Func<T> value) => _ = value;
+
+    public void AcceptByRef(ref T value) => _ = value;
+}
+
+file sealed class TypeBuilderPairMethodFixture<TFirst, TSecond>
+{
+    public void First(TFirst value) => _ = value;
+
+    public void Second(TSecond value) => _ = value;
+
+    public void Both(TFirst first, TSecond second)
+    {
+        _ = first;
+        _ = second;
+    }
+}
+
+file unsafe sealed class TypeBuilderPointerMethodFixture<T>
+    where T : unmanaged
+{
+    public void AcceptPointer(T* value) => _ = value;
+}
+
+file sealed class TypeBuilderAmbiguousMethodFixture<TFirst, TSecond>
+{
+    public void Accept(TFirst value) => _ = value;
+
+    public void Accept(TSecond value) => _ = value;
 }

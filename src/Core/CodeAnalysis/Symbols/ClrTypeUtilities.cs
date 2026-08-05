@@ -76,6 +76,8 @@ public static class ClrTypeUtilities
     /// <param name="name">The method name to resolve.</param>
     /// <param name="types">The method's parameter types.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    /// <exception cref="AmbiguousMatchException">More than one method matches the supplied signature.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="types"/> contains a <see langword="null"/> element.</exception>
     public static MethodInfo GetMethodSafe(this Type type, string name, Type[] types)
     {
         if (type is null || name is null || types is null)
@@ -97,12 +99,12 @@ public static class ClrTypeUtilities
             var openType = type.GetGenericTypeDefinition();
             var typeArguments = type.GetGenericArguments();
             var openTypeArguments = openType.GetGenericArguments();
-            var openParameterTypes = types.Select(parameterType =>
-            {
-                var index = Array.IndexOf(typeArguments, parameterType);
-                return index >= 0 ? openTypeArguments[index] : parameterType;
-            }).ToArray();
-            var openMethod = openType.GetMethod(name, openParameterTypes);
+            var openMethod = FindOpenGenericMethod(
+                openType,
+                name,
+                types,
+                openTypeArguments,
+                typeArguments);
             return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
         }
     }
@@ -1133,6 +1135,109 @@ public static class ClrTypeUtilities
         return type != null
             && type.IsConstructedGenericType
             && ContainsTypeBuilderGenericArgument(type);
+    }
+
+    private static MethodInfo FindOpenGenericMethod(
+        Type openType,
+        string name,
+        Type[] parameterTypes,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        var matches = openType.GetMethods()
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+            .Where(method =>
+            {
+                var parameters = method.GetParameters();
+                return parameters.Length == parameterTypes.Length
+                    && parameters.Select(parameter => parameter.ParameterType)
+                    .Zip(parameterTypes, (open, constructed) =>
+                        MatchesConstructedParameterType(
+                            open,
+                            constructed,
+                            openTypeArguments,
+                            typeArguments))
+                    .All(matches => matches);
+            })
+            .Take(2)
+            .ToArray();
+
+        return matches.Length switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new AmbiguousMatchException(),
+        };
+    }
+
+    private static bool MatchesConstructedParameterType(
+        Type open,
+        Type constructed,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        if (open.IsGenericParameter)
+        {
+            var position = Array.IndexOf(openTypeArguments, open);
+            if (position >= 0)
+            {
+                return constructed == typeArguments[position];
+            }
+        }
+
+        if (open.IsByRef || constructed.IsByRef)
+        {
+            return open.IsByRef
+                && constructed.IsByRef
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsPointer || constructed.IsPointer)
+        {
+            return open.IsPointer
+                && constructed.IsPointer
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsArray || constructed.IsArray)
+        {
+            return open.IsArray
+                && constructed.IsArray
+                && open.IsSZArray == constructed.IsSZArray
+                && open.GetArrayRank() == constructed.GetArrayRank()
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsConstructedGenericType || constructed.IsConstructedGenericType)
+        {
+            return open.IsConstructedGenericType
+                && constructed.IsConstructedGenericType
+                && open.GetGenericTypeDefinition() == constructed.GetGenericTypeDefinition()
+                && open.GetGenericArguments()
+                    .Zip(
+                        constructed.GetGenericArguments(),
+                        (openArgument, constructedArgument) =>
+                            MatchesConstructedParameterType(
+                                openArgument,
+                                constructedArgument,
+                                openTypeArguments,
+                                typeArguments))
+                    .All(matches => matches);
+        }
+
+        return open == constructed;
     }
 
     private static bool ContainsTypeBuilderGenericArgument(Type type)
