@@ -109,11 +109,11 @@ This reuses architectural patterns from the async state-machine pipeline (`Synth
 
 1. **Async iterator alias**: `IAsyncEnumerable[T]` support shipped in #128 but no `asyncSequence[T]` alias exists yet. ADR-0041 proposes overloading `sequence[T]` in `async` return-type position to mean `IAsyncEnumerable[T]`, in lieu of a separate keyword.
 2. **Try/finally in iterators**: this slice does not support `try`/`finally` within iterator bodies (would require `Dispose()` to resume into finally blocks). A diagnostic is emitted if detected.
-3. **Interpreter parity**: the interpreter (`Evaluator.cs`) does not gain
-   `yield` support in this slice. Iterator functions are emit-only. This is a
+3. **Interpreter parity**: the interpreter (`Evaluator.cs`) did not gain
+   `yield` support in this slice. Iterator functions were emit-only. This was a
    known evaluator gap tracked as #138; ADR-0156 later made emitted execution
-   the production oracle and routed every default driver through it. The
-   evaluator is deprecated and scheduled for removal in Phase 3c.
+   the production oracle, routed every driver through it, and deleted the
+   evaluator in Phase 3c.
 
 ## Alternatives considered
 

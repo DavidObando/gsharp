@@ -6,7 +6,7 @@ draft: false
 
 # Standard library and built-ins
 
-G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, function values, and a few legacy built-in functions are provided by the compiler and evaluator. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
+G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, function values, and a few legacy built-in functions are provided by the compiler. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
 
 ## Primitive types
 
@@ -186,4 +186,4 @@ import System
 Console.WriteLine("hello")
 ```
 
-The compiler also contains legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32`. They are implemented by the evaluator as console/random helpers and are not the shape used by current reference samples.
+The compiler also contains legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32`. They are not the shape used by current reference samples.

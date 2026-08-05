@@ -114,13 +114,12 @@ changed which invocations use that backend. Current routing is:
 | bare `gsc file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
 | `gsc /out:program.dll file.gs`, then run the assembly | emit to file, then CLR host | real CLR finalizer; no GS0510 |
 | `gsi file.gs` | emit to memory, then `EmittedProgramHost.Run` | real CLR finalizer; no GS0510 |
-| interactive `gsi` (default) | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
-| interactive `gsi --engine evaluator` (deprecated; removed in Phase 3c) | `SessionEngine` → `Compilation.Evaluate` | skips the body; GS0510 once per declaring class |
+| interactive `gsi` | `EmittedSessionEngine` | real CLR finalizer; no GS0510 |
 
 The old two-column `gsc`/`gsi` table made object reachability appear to be the
-discriminating axis. It is not. Driving the legacy evaluator-backed
-`SessionEngine` across the old rows produces the same boundary regardless of
-liveness:
+discriminating axis. It was not. Before ADR-0156 Phase 3c deleted the legacy
+evaluator-backed `SessionEngine`, driving it across the old rows produced the
+same boundary regardless of liveness:
 
 | Evaluator probe | Output | GS0510 |
 |---|---|---:|
@@ -128,10 +127,10 @@ liveness:
 | object dies in a function; no forced collection | `made-22` / `body-33` | 1 |
 | object remains reachable; collection forced | `made-22` / `body-33` / `kept` | 1 |
 
-The discriminating axis is the execution engine. Emitted execution delegates
-lifetime to the CLR; the tree evaluator has no emitted `Finalize` override and
-does not invent scope-exit cleanup. GS0510 remains a warning on that evaluator
-surface because the program can complete while omitting a nondeterministic
+The discriminating axis was the execution engine. Emitted execution delegated
+lifetime to the CLR; the tree evaluator had no emitted `Finalize` override and
+did not invent scope-exit cleanup. GS0510 remained a warning on that evaluator
+surface because the program could complete while omitting a nondeterministic
 GC-scheduled side effect.
 
 Matching CLR behavior requires tying finalization to `StructValue` lifetime
@@ -173,5 +172,5 @@ Two new diagnostics are allocated:
 
 The `deinit` language and emission design remain accepted. ADR-0156 partially
 supersedes only this ADR's original driver-boundary model: all default drivers
-now emit, while the deprecated evaluator compatibility path retains GS0510
-until its Phase 3c removal.
+now emit. The deprecated evaluator compatibility path retained GS0510 until
+ADR-0156 Phase 3c removed both.

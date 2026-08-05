@@ -388,7 +388,7 @@ of that migration, not left behind as dead code.
   the compile path) or `GS9998 Unexpected statement: YieldStatement`
   (when reached through the then-evaluator-backed bare-`gsc` path via
   `ControlFlowGraph.Create`). ADR-0156 now routes every default driver through
-  emit and schedules the deprecated evaluator's removal for Phase 3c. Root
+  emit, and Phase 3c deleted the deprecated evaluator. Root
   cause was two-fold and not
   actually shared-static-specific: (a) `StatementBinder.GetIteratorElementType`
   read only `function.Type.ClrType`, which is type-erased to

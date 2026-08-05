@@ -330,7 +330,7 @@ inside the body may re-establish narrowing after an inherited narrowing is
 removed. This applies equally to function locals and top-level globals. Since
 ADR-0156 Phase 3a, every default driver, including interactive `gsi`, uses the
 compiled back-edge rules. The `gsi --engine evaluator` escape hatch is
-deprecated and scheduled for removal in Phase 3c.
+recorded here historically; ADR-0156 Phase 3c removed it with the evaluator.
 
 Assignment precision is limited to plain storage whose identity the flow pass
 tracks directly: ordinary locals (including captured locals and `if let`

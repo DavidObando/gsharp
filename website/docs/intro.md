@@ -20,19 +20,16 @@ or TypeScript, much of the syntax will already feel familiar.
 
 ## How G# runs
 
-G# currently has two execution engines:
+Every driver parses, binds, lowers, and emits CIL. SDK projects use
+the emitter through MSBuild. Direct `gsc` uses it both with and
+without `/out`; without `/out`, `gsc` runs the emitted program
+immediately. File-mode `gsi` and the interactive REPL also use the
+emitter. G# function literals can be passed to CLR delegate parameters
+on these file paths, including bare `gsc`.
 
-- Every driver parses, binds, lowers, and emits CIL. SDK projects use
-  the emitter through MSBuild. Direct `gsc` uses it both with and
-  without `/out`; without `/out`, `gsc` runs the emitted program
-  immediately. File-mode `gsi` and the interactive REPL also use the
-  emitter. G# function literals can be passed to CLR
-  delegate parameters on these file paths, including bare `gsc`.
-- The deprecated evaluator runs interactive submissions in-process
-  when `gsi --engine evaluator` or `GSI_ENGINE=evaluator` is selected.
-  It is scheduled for removal. The two engines can differ at runtime
-  boundaries: the evaluator reports `GS0510` and skips class
-  deinitializers, while the emitted engine runs them.
+The legacy tree-walking evaluator and its `--engine evaluator` /
+`GSI_ENGINE=evaluator` forms were removed in ADR-0156 Phase 3c.
+`gsi` now accepts only the `emit` engine choice.
 
 The default emitted target framework is `net10.0`; the compiler also
 recognizes `net8.0` and `net9.0` target framework mappings.
@@ -46,8 +43,8 @@ modern, Kotlin-/Swift-shaped syntax but still need CLR interop,
 MSBuild projects, Portable PDBs, and the broader .NET ecosystem.
 
 The language is still growing. The documentation highlights what
-works today and calls out differences between the emitter and
-interactive evaluator where they matter.
+works today and calls out known implementation limits where they
+matter.
 
 The 0.3 line fills in more of the CLR-facing surface: collection
 initializers, index/range ergonomics, expression-bodied members,

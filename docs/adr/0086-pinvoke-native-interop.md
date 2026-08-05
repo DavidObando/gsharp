@@ -16,10 +16,10 @@ Issue #727 (under parent #706) requires that G# emit real CLR P/Invoke metadata 
 
 ### Interpreter boundary
 
-This decision specifies emitted CLR behavior. Per ADR-0152, the deprecated
-`gsi --engine evaluator` path reports GS0514 (Error) at a P/Invoke declaration
-and does not load a native library; ADR-0156 Phase 3c removes that evaluator.
-Every default driver now uses emitted execution and runs P/Invoke natively;
+This decision specifies emitted CLR behavior. Before ADR-0156 Phase 3c, the
+deprecated `gsi --engine evaluator` path reported GS0514 (Error) at a P/Invoke
+declaration and did not load a native library. Phase 3c deleted that evaluator.
+Every driver now uses emitted execution and runs P/Invoke natively;
 `gsc /out:` emits the same CLR metadata to disk.
 
 ### 1. Syntax — `@DllImport("libname") func Name(...) ReturnType;`

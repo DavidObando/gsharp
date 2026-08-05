@@ -83,10 +83,10 @@ fallthrough around fixed and protected-region return epilogues to the
 compiler-generated non-void guard. Only an actual rewritten return reaches
 the epilogue's value slot. Protected-region lowering is also consumed by the
 tree evaluator. In `SessionEngine`, the deprecated evaluator compatibility
-path, reaching this guard reports GS0100 instead of the GS9999 internal-error
-fallback. This evaluator behavior rejects the fallthrough instead of returning
-a default value. Default `gsi` execution uses the emitted engine under ADR-0156;
-Phase 3c removes the evaluator.
+path reported GS0100 at this guard instead of the GS9999 internal-error
+fallback. This evaluator behavior rejected the fallthrough instead of returning
+a default value. Default `gsi` execution used the emitted engine under ADR-0156;
+Phase 3c removed the evaluator.
 GS0506 (`FixedStatementCannotSuspend`, issue
 [#2917](https://github.com/DavidObando/gsharp/issues/2917)) is existing
 precedent that a deliberate `fixed`-boundary rejection uses a semantic
