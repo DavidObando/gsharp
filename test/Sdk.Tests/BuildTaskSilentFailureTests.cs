@@ -59,6 +59,51 @@ public class BuildTaskSilentFailureTests
         Assert.DoesNotContain("(1,1,1,1)", error.ToString());
     }
 
+    [Theory]
+    [InlineData("error handling failed: retrying")]
+    [InlineData("warning signs detected: check config")]
+    [InlineData("info about the build: nothing to do")]
+    public void LogCompilerLine_ProseIsNotClassifiedAsDiagnostic(string line)
+    {
+        var (task, engine) = CreateTask();
+
+        task.LogCompilerLine(line);
+
+        Assert.Empty(engine.Errors);
+        Assert.Empty(engine.Warnings);
+        var message = Assert.Single(engine.Messages);
+        Assert.Equal(line, message.Message);
+        Assert.Equal(MessageImportance.Low, message.Importance);
+    }
+
+    [Fact]
+    public void LogCompilerLine_WarningIsNotPromotedToError()
+    {
+        var (task, engine) = CreateTask();
+
+        task.LogCompilerLine("warning GS0001: test warning");
+
+        Assert.Empty(engine.Errors);
+        var warning = Assert.Single(engine.Warnings);
+        Assert.Equal("GS0001", warning.Code);
+        Assert.Equal("test warning", warning.Message);
+    }
+
+    [Fact]
+    public void LogCompilerLine_GS9100RemainsLowImportanceMessage()
+    {
+        var (task, engine) = CreateTask();
+        var line = "warning GS9100: advisory warning";
+
+        task.LogCompilerLine(line);
+
+        Assert.Empty(engine.Errors);
+        Assert.Empty(engine.Warnings);
+        var message = Assert.Single(engine.Messages);
+        Assert.Equal(line, message.Message);
+        Assert.Equal(MessageImportance.Low, message.Importance);
+    }
+
     private static (BuildTask Task, RecordingBuildEngine Engine) CreateTask()
     {
         var engine = new RecordingBuildEngine();
@@ -68,6 +113,10 @@ public class BuildTaskSilentFailureTests
     private sealed class RecordingBuildEngine : IBuildEngine
     {
         public List<BuildErrorEventArgs> Errors { get; } = new();
+
+        public List<BuildWarningEventArgs> Warnings { get; } = new();
+
+        public List<BuildMessageEventArgs> Messages { get; } = new();
 
         public bool ContinueOnError => false;
 
@@ -89,12 +138,8 @@ public class BuildTaskSilentFailureTests
 
         public void LogErrorEvent(BuildErrorEventArgs e) => Errors.Add(e);
 
-        public void LogMessageEvent(BuildMessageEventArgs e)
-        {
-        }
+        public void LogMessageEvent(BuildMessageEventArgs e) => Messages.Add(e);
 
-        public void LogWarningEvent(BuildWarningEventArgs e)
-        {
-        }
+        public void LogWarningEvent(BuildWarningEventArgs e) => Warnings.Add(e);
     }
 }

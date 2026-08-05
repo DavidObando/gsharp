@@ -29,7 +29,7 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// </summary>
     private static readonly System.Text.RegularExpressions.Regex DiagnosticLine =
         new(
-            @"^(?:(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*)?(?<sev>error|warning|info)\s+(?<code>[^:]+):\s*(?<msg>.*)$",
+            @"^(?:(?<file>[^(]+)\((?<l1>\d+),(?<c1>\d+)(?:,(?<l2>\d+),(?<c2>\d+))?\):\s*)?(?<sev>error|warning|info)\s+(?<code>[^:\s]+):\s*(?<msg>.*)$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>Gets or sets the full path to gsc.dll.</summary>
