@@ -97,6 +97,25 @@ public class SilentEmitFailureInvariantTests
     }
 
     [Fact]
+    public void CreateInternalErrorDiagnostic_FindsAnchorAndRootCauseThroughMultipleWrappers()
+    {
+        var sourceText = SourceText.From("var x = 1\n", "wrapped.gs");
+        var tree = SyntaxTree.Parse(sourceText);
+        var anchor = tree.Root.Members[0];
+        var rootCause = new InvalidOperationException("deep failure");
+        var emitEx = new EmitDiagnosticException("emit failure", anchor, rootCause);
+        var exception = new Exception("outer one", new Exception("outer two", emitEx));
+
+        var diagnostic = Compilation.CreateInternalErrorDiagnostic(exception);
+
+        Assert.Equal("GS9998", diagnostic.Id);
+        Assert.Equal("wrapped.gs", diagnostic.Location.FileName);
+        Assert.Equal(anchor.Span, diagnostic.Location.Span);
+        Assert.Equal("var x = 1", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.Equal("InvalidOperationException: deep failure", diagnostic.Message);
+    }
+
+    [Fact]
     public void CreateInternalErrorDiagnostic_WithoutAnchor_HasNoLocation()
     {
         var plainEx = new InvalidOperationException("unexpected failure");

@@ -579,13 +579,21 @@ public class Compilation
     {
         ArgumentNullException.ThrowIfNull(ex);
 
-        var emitException = ex as Emit.EmitDiagnosticException
-            ?? ex.InnerException as Emit.EmitDiagnosticException;
-        var anchor = emitException?.Anchor;
+        Emit.EmitDiagnosticException anchoredException = null;
+        var rootEx = ex;
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            rootEx = current;
+            if (current is Emit.EmitDiagnosticException { Anchor: not null } emitException)
+            {
+                anchoredException = emitException;
+            }
+        }
+
+        var anchor = anchoredException?.Anchor;
         var location = anchor is null
             ? default
             : new TextLocation(anchor.SyntaxTree.Text, anchor.Span);
-        var rootEx = emitException?.InnerException ?? ex;
         var typeName = rootEx.GetType().Name;
         var message = $"{typeName}: {rootEx.Message}";
 
