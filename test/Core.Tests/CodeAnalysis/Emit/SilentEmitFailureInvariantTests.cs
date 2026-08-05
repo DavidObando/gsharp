@@ -6,7 +6,6 @@ using System;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Emit;
@@ -67,12 +66,11 @@ public class SilentEmitFailureInvariantTests
     }
 
     [Fact]
-    public void BuildEmitFailureDiagnostic_WithAnchor_ProducesGS9998AtAnchorLocation()
+    public void CreateInternalErrorDiagnostic_WithAnchor_ProducesGS9998AtAnchorLocation()
     {
         var source = "package Test\n\nvar x = 1\n";
         var sourceText = SourceText.From(source, "anchor_test.gs");
         var tree = SyntaxTree.Parse(sourceText);
-        var compilation = new Compilation(tree);
 
         // The "var x = 1" statement is on line 2 (0-based).
         // Use the first statement's syntax node as anchor.
@@ -83,48 +81,31 @@ public class SilentEmitFailureInvariantTests
             anchor,
             new InvalidOperationException("unsupported node"));
 
-        // Call the private BuildEmitFailureDiagnostic via reflection
-        var method = typeof(Compilation).GetMethod(
-            "BuildEmitFailureDiagnostic",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-
-        var diagnostic = (Diagnostic)method.Invoke(compilation, new object[] { emitEx });
+        var diagnostic = Compilation.CreateInternalErrorDiagnostic(
+            new Exception("outer wrapper", emitEx));
 
         Assert.Equal("GS9998", diagnostic.Id);
         Assert.True(diagnostic.IsError);
         Assert.Equal("anchor_test.gs", diagnostic.Location.FileName);
+        Assert.Equal(2, diagnostic.Location.StartLine);
+        Assert.Equal(0, diagnostic.Location.StartCharacter);
+        Assert.Equal(2, diagnostic.Location.EndLine);
+        Assert.Equal(9, diagnostic.Location.EndCharacter);
+        Assert.Equal("var x = 1", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.Contains("InvalidOperationException", diagnostic.Message);
         Assert.Contains("unsupported node", diagnostic.Message);
-
-        // The anchor is on line 2 (0-based), not at origin (0,0)
-        Assert.True(
-            diagnostic.Location.StartLine >= 2,
-            $"Expected line >= 2, got {diagnostic.Location.StartLine}");
     }
 
     [Fact]
-    public void BuildEmitFailureDiagnostic_WithoutAnchor_FallsBackToFirstTree()
+    public void CreateInternalErrorDiagnostic_WithoutAnchor_HasNoLocation()
     {
-        var source = "package Test\nvar x = 1\n";
-        var sourceText = SourceText.From(source, "fallback_test.gs");
-        var tree = SyntaxTree.Parse(sourceText);
-        var compilation = new Compilation(tree);
-
-        // A plain exception (not EmitDiagnosticException) should still produce GS9998
         var plainEx = new InvalidOperationException("unexpected failure");
-
-        var method = typeof(Compilation).GetMethod(
-            "BuildEmitFailureDiagnostic",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(method);
-
-        var diagnostic = (Diagnostic)method.Invoke(compilation, new object[] { plainEx });
+        var diagnostic = Compilation.CreateInternalErrorDiagnostic(plainEx);
 
         Assert.Equal("GS9998", diagnostic.Id);
         Assert.True(diagnostic.IsError);
-        // Falls back to first tree's file name
-        Assert.Equal("fallback_test.gs", diagnostic.Location.FileName);
+        Assert.Null(diagnostic.Location.Text);
+        Assert.Null(diagnostic.Location.FileName);
         Assert.Contains("InvalidOperationException", diagnostic.Message);
     }
 
@@ -152,4 +133,3 @@ public class SilentEmitFailureInvariantTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
     }
 }
-

@@ -10,16 +10,11 @@ namespace GSharp.Sdk.Tests;
 
 /// <summary>
 /// 6.2 SilentEmitFailure invariant (boundary ring): verifies that the BuildTask
-/// safety-net logic anchors at the first Compile item rather than <c>gsc.dll</c>
-/// when gsc exits non-zero without logging a structured diagnostic.
+/// diagnostic parser accepts source-anchored GS9998 headers.
 ///
 /// <para>
-/// The BuildTask cannot be instantiated in isolation without MSBuild's
-/// <c>IBuildEngine</c>. These tests exercise the observable behavior by invoking
-/// <c>Program.Main</c> directly (which is what gsc.dll does) and verifying that
-/// the diagnostic line on stdout carries the source file name. The full
-/// end-to-end BuildTask path is covered by the existing acceptance tests that
-/// drive <c>dotnet build</c> on sample projects.
+/// Location recovery and the honest location-less fallback are covered by the
+/// driver tests; this class pins the SDK-facing located header format.
 /// </para>
 /// </summary>
 public class BuildTaskSilentFailureTests
@@ -51,10 +46,7 @@ public class BuildTaskSilentFailureTests
     public void DiagnosticLine_Regex_MatchesOldFormat_ButNewCodeNeverEmitsGscDll()
     {
         // The old pattern "gsc.dll(0,0,0,0): error GS9998: ..." used to surface
-        // as MSB4181. The regex would match it, but production code (Program.Main)
-        // now uses the first source file instead. This test documents the regex
-        // capability and serves as a guard that the new invariant format is
-        // distinguishable from the old one.
+        // as MSB4181. Located diagnostics now carry the source anchor instead.
         var goodLine = "/path/to/test.gs(9,5,11,1): error GS9998: something";
         var goodMatch = DiagnosticLine.Match(goodLine);
         Assert.True(goodMatch.Success);
