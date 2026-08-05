@@ -37,11 +37,13 @@ public static class ClrTypeUtilities
     /// <summary>
     /// Resolves a named method without asking a constructed
     /// <see cref="TypeBuilder"/> generic instantiation to resolve members
-    /// directly.
+    /// directly. The name must be unambiguous; use the parameter-type overload
+    /// for overloaded methods.
     /// </summary>
     /// <param name="type">The type that declares or inherits the method.</param>
     /// <param name="name">The method name to resolve.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    /// <exception cref="AmbiguousMatchException"><paramref name="name"/> identifies multiple methods.</exception>
     public static MethodInfo GetMethodSafe(this Type type, string name)
     {
         if (type is null || name is null)
@@ -92,7 +94,15 @@ public static class ClrTypeUtilities
                 return null;
             }
 
-            var openMethod = type.GetGenericTypeDefinition().GetMethod(name, types);
+            var openType = type.GetGenericTypeDefinition();
+            var typeArguments = type.GetGenericArguments();
+            var openTypeArguments = openType.GetGenericArguments();
+            var openParameterTypes = types.Select(parameterType =>
+            {
+                var index = Array.IndexOf(typeArguments, parameterType);
+                return index >= 0 ? openTypeArguments[index] : parameterType;
+            }).ToArray();
+            var openMethod = openType.GetMethod(name, openParameterTypes);
             return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
         }
     }

@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Text.RegularExpressions;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
@@ -150,6 +151,29 @@ public class ClrTypeUtilitiesTests
         Assert.Null(ClrTypeUtilities.SafeGetEvent(fixture, nameof(Fixture338.BadEvent), InstanceFlags));
     }
 
+    [Fact]
+    public void GetMethodSafe_TypeBuilderConstructedGeneric_ResolvesParameterType()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("GetMethodSafeTypeBuilder"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("GetMethodSafeTypeBuilder");
+        var argument = module.DefineType("Argument", TypeAttributes.Public);
+        var constructed = typeof(TypeBuilderMethodFixture<>).MakeGenericType(argument);
+
+        Assert.Equal("TypeBuilderInstantiation", constructed.GetType().Name);
+        Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
+            nameof(TypeBuilderMethodFixture<object>.Accept),
+            [argument]));
+
+        var method = constructed.GetMethodSafe(
+            nameof(TypeBuilderMethodFixture<object>.Accept),
+            [argument]);
+
+        Assert.NotNull(method);
+        Assert.Equal(nameof(TypeBuilderMethodFixture<object>.Accept), method.Name);
+    }
+
     /// <summary>
     /// Loads <see cref="Fixture338"/> through a MetadataLoadContext whose
     /// reference set intentionally omits <c>System.Text.RegularExpressions</c>,
@@ -226,3 +250,10 @@ file sealed class Fixture338
 }
 #pragma warning restore CS0067
 #pragma warning restore CS0649
+
+file sealed class TypeBuilderMethodFixture<T>
+{
+    public void Accept(T value) => _ = value;
+
+    public void Accept(int value) => _ = value;
+}
