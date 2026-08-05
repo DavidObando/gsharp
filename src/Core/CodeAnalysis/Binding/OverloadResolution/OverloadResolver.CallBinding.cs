@@ -1704,7 +1704,9 @@ internal sealed partial class OverloadResolver
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
             }
             else if (argument.Type != expectedType
-                && !(substitution != null && parameter.Type is TypeParameterSymbol)
+                && !(substitution != null
+                    && parameter.Type is TypeParameterSymbol
+                    && TypeSymbol.ContainsTypeParameter(expectedType))
                 && (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
                     || (Conversion.Classify(argument.Type, expectedType).IsImplicit
                         && structuralArgumentType is not FunctionTypeSymbol)))
@@ -1731,9 +1733,10 @@ internal sealed partial class OverloadResolver
                 // (`int32 → int64`) and other representation-changing
                 // implicit conversions.
                 //
-                // Issue #3222: only a BARE erased slot (`parameter.Type is
-                // TypeParameterSymbol`, the `!!T` MVAR the emitter erases at
-                // the call boundary) is skipped.
+                // Issue #3222: only a BARE erased slot whose substituted target
+                // remains open is skipped. Once explicit substitution closes
+                // the slot, this branch must materialize conversions such as
+                // value-type boxing, matching the instance and extension paths.
                 // A parameter that merely CONTAINS a type parameter (e.g. a
                 // constructed generic interface `IHolder[T]`) emits as a real
                 // constructed slot (`IHolder<!!T>`), so a value-type argument
