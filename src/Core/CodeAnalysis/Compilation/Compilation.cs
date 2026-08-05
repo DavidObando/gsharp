@@ -398,7 +398,7 @@ public class Compilation
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
-            var diagnostic = BuildEmitFailureDiagnostic(ex);
+            var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
             return new EmitResult(success: false, combined);
         }
@@ -547,7 +547,7 @@ public class Compilation
             // type) produces a structured GS9998 diagnostic anchored at the
             // offending source construct. Previously this only caught
             // NotSupportedException and InvalidOperationException (#519).
-            var diagnostic = BuildEmitFailureDiagnostic(ex);
+            var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
             return new EmitResult(success: false, combined);
         }
@@ -567,37 +567,33 @@ public class Compilation
     public EmitResult Emit(Stream peStream, Stream refStream) =>
         Emit(peStream, pdbStream: null, refStream, docStream: null, assemblyName: null);
 
-    // Issue #519 + 6.2 SilentEmitFailure invariant: anchor the synthetic
-    // GS9998 at the best available source location. Preference order:
-    // 1. EmitDiagnosticException.Anchor (precise node that triggered the failure)
-    // 2. First syntax tree root (file-level fallback)
-    // 3. File-named empty SourceText (guarantees the SDK regex matches)
-    // The message includes the exception type name so the user can distinguish
-    // different ICE flavors without needing a stack trace.
-    private Diagnostic BuildEmitFailureDiagnostic(Exception ex)
+    /// <summary>
+    /// Creates a GS9998 diagnostic for an unexpected compiler exception.
+    /// </summary>
+    /// <param name="ex">The exception that escaped the compiler pipeline.</param>
+    /// <returns>
+    /// A diagnostic anchored at an <see cref="EmitDiagnosticException"/> source
+    /// node when available; otherwise a location-less diagnostic.
+    /// </returns>
+    internal static Diagnostic CreateInternalErrorDiagnostic(Exception ex)
     {
-        // Unwrap EmitDiagnosticException to get the original exception type
-        // name in the message and the precise anchor.
-        var anchor = (ex as Emit.EmitDiagnosticException)?.Anchor
-            ?? (ex.InnerException as Emit.EmitDiagnosticException)?.Anchor;
+        ArgumentNullException.ThrowIfNull(ex);
 
-        TextLocation location;
-        if (anchor != null)
+        Emit.EmitDiagnosticException anchoredException = null;
+        var rootEx = ex;
+        for (var current = ex; current is not null; current = current.InnerException)
         {
-            location = new TextLocation(anchor.SyntaxTree.Text, anchor.Span);
-        }
-        else
-        {
-            var firstTree = SyntaxTrees.FirstOrDefault();
-            var sourceText = firstTree?.Text
-                ?? SourceText.From(string.Empty, fileName: "gsc");
-            location = new TextLocation(sourceText, new TextSpan(0, 0));
+            rootEx = current;
+            if (current is Emit.EmitDiagnosticException { Anchor: not null } emitException)
+            {
+                anchoredException = emitException;
+            }
         }
 
-        // Build the message: include the root-cause exception type and message.
-        var rootEx = ex is Emit.EmitDiagnosticException ede && ede.InnerException != null
-            ? ede.InnerException
-            : ex;
+        var anchor = anchoredException?.Anchor;
+        var location = anchor is null
+            ? default
+            : new TextLocation(anchor.SyntaxTree.Text, anchor.Span);
         var typeName = rootEx.GetType().Name;
         var message = $"{typeName}: {rootEx.Message}";
 

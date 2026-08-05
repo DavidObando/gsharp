@@ -46,7 +46,7 @@ natively. Phase 3c deleted the evaluator path and its boundary diagnostics.
 This ADR governed only the evaluator's storage-model boundary. It did not
 redefine unsafe/native language validity or CIL emission.
 
-The `unsafe` context itself remained supported. It was a permission boundary, not
+The `unsafe` context itself remained supported. It is a permission boundary, not
 a storage operation; an `unsafe` block containing only otherwise-supported
 value operations continued to evaluate normally.
 

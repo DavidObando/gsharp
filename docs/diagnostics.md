@@ -1175,12 +1175,13 @@ executes emitted code, where P/Invoke runs natively.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0519 | Error | A ByRefLike value without an available CLR `ToString()` method cannot be used as an interpolation hole on emitted execution paths. |
+| GS0519 | Error | A ByRefLike value without a usable parameterless `ToString()` method cannot be used as an interpolation hole on emitted execution paths. |
 
-Emitted interpolation routes ByRefLike holes through their CLR `ToString()`
-method because `DefaultInterpolatedStringHandler.AppendFormatted<T>` rejects
-ByRefLike generic arguments. GS0519 is the source-anchored fallback when no
-such method is available, preventing a GS9998 reflection exception.
+Emitted interpolation routes ByRefLike holes through their user-declared or
+CLR `ToString()` method because
+`DefaultInterpolatedStringHandler.AppendFormatted<T>` rejects ByRefLike
+generic arguments. GS0519 is the source-anchored fallback when no usable
+parameterless method is available, preventing a GS9998 reflection exception.
 
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
@@ -1199,7 +1200,11 @@ run as real CLR finalizers on every driver.
 
 ## Internal compiler error details (GS9998)
 
-`GS9998` is the *silent emit failure* diagnostic. It is always anchored at the user's source file at the location of the expression or statement that triggered the failure. If you ever see `GS9998` anchored at `(1,1,1,1)` against `gsc.dll` instead of your source file, that itself is a bug — please file an issue.
+`GS9998` is the *silent emit failure* diagnostic. When the compiler can recover
+the responsible expression or statement, it reports that source file and span.
+When no trustworthy source anchor exists, it reports `error GS9998: ...`
+without a file or coordinates. A `GS9998` anchored at `(1,1,1,1)` against
+`gsc.dll` or an arbitrary source file is itself a bug — please file an issue.
 
 The message format is `<ExceptionType>: <description>`, for example `InvalidOperationException: Variable 'x' has no local slot`. This tells you what the compiler was trying to do when it failed, even though the underlying bug may not be your fault.
 
