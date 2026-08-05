@@ -1970,6 +1970,17 @@ internal sealed partial class ExpressionBinder
         var name = syntax.TargetIdentifier.Text;
         if (scope.TryLookupSymbol(name) is not VariableSymbol variable)
         {
+            // ADR-0156 Phase 2 (issue #3251): a bare indexed write
+            // (`name[i] = v`) whose target is a top-level global declared by
+            // a prior interactive submission. Every sibling lvalue shape
+            // (read, whole-variable write, compound `name[i] op= v` via the
+            // chain path) already consults the submission fallback; without
+            // this the shape reports a spurious GS0125.
+            if (TryBindSubmissionGlobalIndexAssignment(syntax, out var submissionIndexWrite))
+            {
+                return submissionIndexWrite;
+            }
+
             Diagnostics.ReportUndefinedVariable(syntax.TargetIdentifier.Location, name);
             return new BoundErrorExpression(null);
         }
@@ -2563,6 +2574,66 @@ internal sealed partial class ExpressionBinder
 
         var converted = conversions.BindConversion(syntax.Value.Location, binaryResult, targetSymbol);
         result = new BoundClrPropertyAssignmentExpression(null, receiver: null, member, converted, targetSymbol, staticContainerType: null);
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0156 Phase 2 (issue #3251): binds a bare indexed write
+    /// (<c>name[i] = v</c>) whose target is a top-level global declared by a
+    /// prior interactive submission. The receiver is bound through the shared
+    /// bare-identifier read fallback (<see cref="TryBindSubmissionStaticMember"/>,
+    /// which applies the issue #3185 addressable-static-field marking) into a
+    /// synthesized temp local, then the ordinary indexed write targets the
+    /// temp — for a map / array / slice global the temp holds the reference,
+    /// so the store mutates the stored global. This is the same
+    /// temp-receiver shape the compound chain path
+    /// (<c>BindIndexedWriteThroughChain</c>) and the same-cell static-field
+    /// path (<see cref="ImplicitStaticFieldVariableSymbol"/>) already use, so
+    /// simple and compound indexed writes stay in lockstep.
+    /// </summary>
+    /// <param name="syntax">The <c>name[index] = value</c> assignment syntax.</param>
+    /// <param name="result">The bound assignment when the target named a prior submission's global.</param>
+    /// <returns><c>true</c> when a prior submission declared the global (and the current cell does not shadow it).</returns>
+    private bool TryBindSubmissionGlobalIndexAssignment(IndexAssignmentExpressionSyntax syntax, out BoundExpression result)
+    {
+        result = null;
+        var submissionImports = scope.SubmissionImports;
+        var name = syntax.TargetIdentifier.Text;
+        if (submissionImports is null
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out _, out _))
+        {
+            return false;
+        }
+
+        // The current cell's own declarations shadow prior cells (newest
+        // declaration wins regardless of kind): when the name resolves to any
+        // same-cell symbol, keep the regular path's diagnostics.
+        if (scope.TryLookupSymbol(name) is not null)
+        {
+            return false;
+        }
+
+        var nameSyntax = new NameExpressionSyntax(syntax.SyntaxTree, syntax.TargetIdentifier);
+        if (!TryBindSubmissionStaticMember(nameSyntax, out var receiver)
+            || receiver is BoundErrorExpression
+            || receiver.Type == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, receiver.Type);
+        scope.TryDeclareVariable(tempVar);
+        var declaration = new BoundVariableDeclaration(syntax, tempVar, receiver);
+
+        var assignment = BindIndexedAssignmentToVariable(tempVar, syntax.Index, syntax.Value, syntax.TargetIdentifier.Location);
+        if (assignment is BoundErrorExpression)
+        {
+            result = assignment;
+            return true;
+        }
+
+        result = new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
         return true;
     }
 
