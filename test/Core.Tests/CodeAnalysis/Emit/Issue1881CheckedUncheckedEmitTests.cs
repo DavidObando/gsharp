@@ -19,10 +19,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// <c>checked { }</c> statement translated (by cs2gs) to a plain block,
 /// silently erasing overflow-trap semantics, and <c>checked(...)</c>/
 /// <c>unchecked(...)</c> expressions had no G# equivalent whatsoever. This
-/// adds the language feature to gsc itself (syntax, binding, emission,
-/// interpreter) so cs2gs can translate faithfully. These tests exercise the
-/// compiled (emit) backend; <see cref="GSharp.Core.Tests.CodeAnalysis.Binding.Issue1881CheckedUncheckedInterpreterTests"/>
-/// exercises the interpreter and asserts the two backends agree.
+/// adds the language feature to gsc itself (syntax, binding, and emission) so
+/// cs2gs can translate faithfully. These tests execute compiled programs;
+/// <see cref="GSharp.Core.Tests.CodeAnalysis.Binding.Issue1881CheckedUncheckedEmittedOracleTests"/>
+/// pins expression and block forms through the emitted submission oracle.
 /// </summary>
 public class Issue1881CheckedUncheckedEmitTests
 {
