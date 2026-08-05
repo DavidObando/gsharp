@@ -8,43 +8,43 @@
 ## Context
 
 The compiler turns a P/Invoke declaration into a native ABI transition and
-marshalling stub. The interpreter has no equivalent callable value.
+marshalling stub. The deleted interpreter had no equivalent callable value.
 
 Without an explicit boundary, direct calls can return a plausible fabricated
 default value, while first-class references can fail later with unrelated
 conversion errors. Silently producing a defined but incorrect value is never
 acceptable.
 
-ADR-0153 separately governs the interpreter's compiled-only storage boundary,
+ADR-0153 separately governed the interpreter's compiled-only storage boundary,
 including `fixed`, unmanaged `&`/`*`, stack allocation, and function pointers.
-This ADR does not redefine that boundary.
+This ADR did not redefine that boundary.
 
 ## Decision
 
-A bound P/Invoke declaration presented to the tree evaluator reports **GS0514
+A bound P/Invoke declaration presented to the tree evaluator reported **GS0514
 (Error)** before evaluation, located at the function identifier. The message
-names P/Invoke and directs the user to compile with `gsc`.
+named P/Invoke and directed the user to compile with `gsc`.
 
-The error applies even when the declaration is not called. The evaluator cannot
-create a valid callable value for the declaration, and function references can
-escape the declaring expression before a later indirect call. Refusing the
-declaration at the shared evaluation boundary is deterministic, prevents both
-fabricated results and delayed `GS9999` failures, and adds no native or
+The error applied even when the declaration was not called. The evaluator could
+not create a valid callable value for the declaration, and function references
+could escape the declaring expression before a later indirect call. Refusing the
+declaration at the shared evaluation boundary was deterministic, prevented both
+fabricated results and delayed `GS9999` failures, and added no native or
 reflection dispatch path.
 
-Since ADR-0156 Phases 1–3a, this boundary applies to `SessionEngine`,
+During ADR-0156 Phases 1–3b, this boundary applied to `SessionEngine`,
 `Compilation.Evaluate`, and interactive `gsi --engine evaluator`, not to
 default drivers. Bare `gsc`, `gsi <file>`, and the default interactive REPL
-emit and run the native call; `gsc /out:` emits it to disk. The evaluator path
-is deprecated and scheduled for removal in Phase 3c.
+emitted and ran the native call; `gsc /out:` emitted it to disk. Phase 3c
+deleted the evaluator path and GS0514.
 
 ## Consequences
 
-- The tree evaluator never loads a native library for a P/Invoke declaration.
-- P/Invoke cannot silently return zero, `nil`, or another fabricated default.
-- Default drivers run P/Invoke through the CLR; evaluator submissions report
+- The tree evaluator never loaded a native library for a P/Invoke declaration.
+- P/Invoke could not silently return zero, `nil`, or another fabricated default.
+- Default drivers ran P/Invoke through the CLR; evaluator submissions reported
   GS0514 even when a particular execution would not call the declaration.
-- `GS9999` remains an unexpected evaluator-exception diagnostic, not a
+- `GS9999` remained an unexpected evaluator-exception diagnostic, not a
   deliberate capability boundary.
 
 ## Alternatives considered

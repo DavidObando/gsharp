@@ -1,6 +1,6 @@
 # Emit pipeline
 
-GSharp has two execution backends. The emit pipeline produces managed PEs — written to disk by `dotnet build`/`gsc /out:`, or loaded straight from memory by the in-process drivers ([ADR-0156](adr/0156-gsi-emit-to-memory-execution.md)) — and since ADR-0156 Phase 3a it is the execution path for every driver by default, including the interactive REPL. The interpreter (`Evaluator`) walks the bound tree in-process; it survives only behind gsi's deprecated `--engine evaluator` escape hatch and as the `Compilation.Evaluate` oracle in many language tests, and it retires in ADR-0156 Phase 3c. This document describes the emit pipeline only.
+GSharp has one execution backend. The emit pipeline produces managed PEs — written to disk by `dotnet build`/`gsc /out:`, or loaded straight from memory by the in-process drivers ([ADR-0156](adr/0156-gsi-emit-to-memory-execution.md)) — and it is the execution path for every driver, including the interactive REPL. ADR-0156 Phase 3c removed the legacy tree-walking evaluator and `Compilation.Evaluate`.
 
 ```
 .gs source ──► Lexer ──► Parser ──► Syntax tree
@@ -155,9 +155,9 @@ The end-to-end correctness of this pipeline is gated by [`e2etests/multitarget-e
 
 The emit path does **not** depend on Roslyn — `ReflectionMetadataEmitter` writes PE bytes directly via `System.Reflection.Metadata`, and v1.0 ships on this path. [ADR-0027](adr/0027-roslyn-fork-decision.md) records the decision to close the Roslyn-fork track (issue #51) as `wontfix` for v1.0; NuGet-distributable libraries and full cross-language debugger support (Portable PDB, Source Link, embedded sources) are delivered by extending the bespoke emitter rather than by adopting Roslyn. The vendored Roslyn submodule that previously lived at `src/Roslyn` and the dependent `src/CodeAnalysis/` stub project were removed in the follow-up PR called out by ADR-0027; the fork repo (`DavidObando/gsharp-roslyn`) is preserved out-of-tree in case any of the four triggers in issue #51 (analyzer `ISymbol` interop, shared Roslyn workspaces, in-GSharp source generators, shared metadata-import at scale) materialises post-v1.0.
 
-## Interpreter vs. emit
+## Unified emitted execution
 
-Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md) the emitted pipeline is the execution backend for every driver by default — `gsc`, `gsi <file>` (Phase 1), and the interactive REPL (Phases 2–3a). The in-process `Evaluator` remains reachable only via gsi's deprecated `--engine evaluator` escape hatch and as the `Compilation.Evaluate` oracle in existing language tests; where the two disagree, the emitted semantics are authoritative (evaluator/emit divergence is the bug class ADR-0156 retires), and the evaluator is deleted in Phase 3c. Both paths share the `Binder`, `BoundProgram`, and lowering stages — only the final code-generation step differs.
+Since [ADR-0156](adr/0156-gsi-emit-to-memory-execution.md), the emitted pipeline has become the execution backend for every driver — `gsc`, `gsi <file>` (Phase 1), and the interactive REPL (Phases 2–3a). Phase 3c deleted the in-process evaluator, its command-line escape hatch, and `Compilation.Evaluate`; all execution now continues from the shared `Binder`, `BoundProgram`, and lowering stages into the emitter.
 
 ## File map
 

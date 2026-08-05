@@ -297,7 +297,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 
 ### Internal diagnostics (GS9996–GS9999)
 
-These diagnostics indicate a fatal compiler or evaluator failure. If you encounter them, please file an issue.
+These diagnostics indicate a fatal compiler or runtime execution failure. If you encounter them, please file an issue.
 
 | ID | Severity | Description |
 |----|----------|-------------|
@@ -1890,4 +1890,3 @@ was deleted in
 [ADR-0156](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0156-gsi-emit-to-memory-execution.md)
 Phase 3c; every driver executes emitted code, where ByRefLike values work
 natively.
-

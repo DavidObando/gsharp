@@ -9,51 +9,50 @@
 
 The compiled backend has a CLR storage model. It can emit managed byrefs,
 unmanaged pointers, pinned locals, `localloc`, `sizeof`, `ldftn`, and `calli`.
-The tree-walking interpreter models values, not storage locations. Its local
-frames contain values, and it has no address space, alias identity, pointer
+The deleted tree-walking interpreter modeled values, not storage locations. Its
+local frames contained values, and it had no address space, alias identity, pointer
 lifetime, or GC-pinning mechanism.
 
-ADR-0039's interpreter support for `ref` and `out` does not provide a general
-pointer model. `&x` and `*p` are evaluated as identity operations. Ref/out calls
-work only because the call-site machinery recognizes an address-of argument,
-records its source slot, and writes the result back after the call. Outside
+ADR-0039's interpreter support for `ref` and `out` did not provide a general
+pointer model. `&x` and `*p` were evaluated as identity operations. Ref/out calls
+worked only because the call-site machinery recognized an address-of argument,
+recorded its source slot, and wrote the result back after the call. Outside
 that position, an address was previously reduced to a value copy. Issue #3004
-demonstrated the consequence; #3028 now rejects free-standing unmanaged pointer
+demonstrated the consequence; #3028 then rejected free-standing unmanaged pointer
 operations with `GS0513` and exit code 1.
 
-`fixed` is the cleanest existing boundary message: the evaluator explains that
+`fixed` was the cleanest boundary message: the evaluator explained that
 pinning requires the CIL pinned-local emit path. `stackalloc`, `sizeof` over
 unmanaged storage, method function pointers, and function-pointer invocation
-use the same pattern. These older guards are still wrapped as legacy GS9999
-diagnostics; #3199 tracks moving deliberate boundary failures out of the
+used the same pattern. These older guards were wrapped as legacy GS9999
+diagnostics; #3199 tracked moving deliberate boundary failures out of the
 internal-error category.
 
-Diagnostic presentation is not part of this boundary contract. Boundary
-messages must still name the construct, state that the evaluator does not
-support it, and explain which compiled runtime facility it requires. They
-cannot rely on surrounding rendering for meaning.
+Diagnostic presentation was not part of this boundary contract. Boundary
+messages had to name the construct, state that the evaluator did not support
+it, and explain which compiled runtime facility it required. They could not
+rely on surrounding rendering for meaning.
 
 ## Decision
 
-Constructs whose interpreter behavior requires real address identity —
+Constructs whose interpreter behavior required real address identity —
 including pinning, stack allocation, unmanaged-pointer storage or dereference,
-and function-pointer execution — are **compiled-only in the tree evaluator**.
-Interactive `gsi --engine evaluator` must report a self-contained boundary
-diagnostic instead of attempting a value-only approximation. Since ADR-0156
-Phases 1–3a, all default drivers use emitted execution and run these constructs
-natively. The evaluator path is deprecated and scheduled for removal in
-Phase 3c.
+and function-pointer execution — were **compiled-only in the tree evaluator**.
+Interactive `gsi --engine evaluator` had to report a self-contained boundary
+diagnostic instead of attempting a value-only approximation. During ADR-0156
+Phases 1–3b, all default drivers used emitted execution and ran these constructs
+natively. Phase 3c deleted the evaluator path and its boundary diagnostics.
 
-This ADR governs only the evaluator's storage-model boundary. It does not
+This ADR governed only the evaluator's storage-model boundary. It did not
 redefine unsafe/native language validity or CIL emission.
 
-The `unsafe` context itself remains supported. It is a permission boundary, not
+The `unsafe` context itself remained supported. It was a permission boundary, not
 a storage operation; an `unsafe` block containing only otherwise-supported
-value operations continues to evaluate normally.
+value operations continued to evaluate normally.
 
-The current implementation status is:
+The final pre-deletion implementation status was:
 
-| Construct | Current tree-evaluator behavior | Contract status |
+| Construct | Final tree-evaluator behavior | Contract status |
 |---|---|---|
 | `unsafe { ... }` without a storage-only construct | Evaluates normally | Supported |
 | `fixed` over array/slice, string, or a pinnable-reference source | Self-contained legacy GS9999 boundary | Message meets contract; diagnostic category tracked by #3199 |
@@ -67,21 +66,21 @@ The current implementation status is:
 | Free-standing `&x` followed by `*p` | `GS0513` compiled-only boundary | Meets contract |
 | Pointer arithmetic or comparison over copied values | May return coincidentally plausible results | Must become a boundary |
 
-The evaluator reports unmanaged `&`/`*` storage boundaries through `GS0513`.
-The older construct-specific guards listed above still use self-contained
-messages carried by GS9999; #3199 tracks that diagnostic-classification gap.
-Outside those named legacy guards, `GS9999` remains a failure.
+The evaluator reported unmanaged `&`/`*` storage boundaries through `GS0513`.
+The older construct-specific guards listed above still used self-contained
+messages carried by GS9999; #3199 tracked that diagnostic-classification gap.
+Outside those named legacy guards, `GS9999` remained a failure.
 
 ## Consequences
 
-- The tree evaluator does not promise parity for storage-dependent unsafe
-  constructs; default drivers use emitted execution.
-- Existing ref/out argument write-back at call sites remains supported; this
-  does not provide stable ref-local aliasing.
-- Boundary tests pin non-zero exit status, empty standard output, and the
+- The tree evaluator did not promise parity for storage-dependent unsafe
+  constructs; default drivers used emitted execution.
+- Existing ref/out argument write-back at call sites remained supported; this
+  did not provide stable ref-local aliasing.
+- Boundary tests pinned non-zero exit status, empty standard output, and the
   self-contained diagnostic message while tolerating surrounding renderer
   context.
-- Issue #3004's free-standing address-of and dereference case is now rejected
+- Issue #3004's free-standing address-of and dereference case was rejected
   by `GS0513`.
 
 ## Alternatives considered

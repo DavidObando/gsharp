@@ -45,7 +45,7 @@ G# combines a structured concurrency surface with .NET primitives. `go f` starts
 
 ## How does `async` work?
 
-`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. Emitted code lowers async functions and lambdas to .NET state machines; the deprecated evaluator instead blocks on the awaiter.
+`async func` and `await` exist for direct .NET interop with `Task`, `Task[T]`, and compatible awaitable shapes. Emitted code lowers async functions and lambdas to .NET state machines.
 
 ## How do optional parameters, named arguments, and overloading work in G# functions?
 
@@ -71,7 +71,7 @@ Import the relevant CLR namespace or reference the assembly through the compiler
 
 ## What is the difference between the direct `gsc` modes?
 
-Every driver uses the emitter by default, including bare `gsc`, file-mode `gsi`, and the interactive REPL. Without `/out:`, `gsc` runs the emitted program immediately and prints `Success.` afterward; with `/out:`, it saves the assembly for later use. `gsi --engine evaluator` or `GSI_ENGINE=evaluator` selects the deprecated interactive evaluator, which is scheduled for removal. See the [`gsc` reference](/docs/tooling/gsc).
+Every driver uses the emitter, including bare `gsc`, file-mode `gsi`, and the interactive REPL. Without `/out:`, `gsc` runs the emitted program immediately and prints `Success.` afterward; with `/out:`, it saves the assembly for later use. `gsi` accepts `emit` as its only engine choice. See the [`gsc` reference](/docs/tooling/gsc).
 
 ## Does G# have a Playground?
 

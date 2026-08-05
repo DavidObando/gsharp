@@ -98,6 +98,44 @@ public sealed class Adr0156DefaultEngineFlipTests
         Assert.DoesNotContain("deprecated", stdout);
     }
 
+    [Fact]
+    public void WebsiteHelpTranscript_MatchesDriverOutput()
+    {
+        var (exitCode, stdout, _) = RunMain("--help");
+        var documentation = File.ReadAllText(Path.Combine(
+            FindRepoRoot(),
+            "website",
+            "docs",
+            "tooling",
+            "repl.md")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        const string opening = "```text\nUsage: gsi ";
+        var blockStart = documentation.IndexOf(opening, StringComparison.Ordinal);
+        Assert.True(blockStart >= 0, "website/docs/tooling/repl.md has no gsi --help transcript.");
+        blockStart += "```text\n".Length;
+        var blockEnd = documentation.IndexOf("\n```", blockStart, StringComparison.Ordinal);
+        Assert.True(blockEnd >= 0, "gsi --help transcript has no closing code fence.");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            stdout.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd(),
+            documentation[blockStart..blockEnd].TrimEnd());
+    }
+
+    private static string FindRepoRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
+    }
+
     private static (int ExitCode, string Stdout, string Stderr) RunMain(params string[] args)
     {
         using var stdout = new StringWriter();

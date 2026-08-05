@@ -11,11 +11,11 @@ Per ADR-0002 (D2) GSharp adopts a **synthesis** concurrency model: a Go-shaped s
 
 At the time of this decision, the interpreter was the project's semantic
 oracle. ADR-0156 later moved production file drivers and the conformance oracle
-to emitted execution. The evaluator backend is deprecated and scheduled for
-removal in ADR-0156 Phase 3c. This ADR still documents both backends:
+to emitted execution. ADR-0156 Phase 3c deleted the evaluator backend. This ADR
+preserves both backend descriptions as a historical implementation record:
 
 1. The Go-shaped surface the user sees.
-2. The .NET surface the interpreter (and, later, the emitter) lowers to.
+2. The .NET surface the interpreter (and, later, the emitter) lowered to.
 
 ## Decision
 
@@ -78,7 +78,7 @@ In `async` contexts the same algorithm uses `await Task.WhenAny(...)` instead of
 - A scoped `CancellationTokenSource` is exposed as the implicit `ctx` binding inside the scope (lookup name to be locked in 5.7 implementation; default proposal: `ctx`).
 - On the first failure the scope **cancels** its CTS so cooperating tasks can short-circuit.
 
-Lowering: the binder rewrites `scope { … }` into a `BoundScopeStatement` whose body's `go` statements emit into a synthesized `List<Task>` field. The evaluator instantiates `CancellationTokenSource`, runs the body, then awaits the task list and propagates the first exception.
+Lowering: the binder rewrites `scope { … }` into a `BoundScopeStatement` whose body's `go` statements emit into a synthesized `List<Task>` field. Before its deletion, the evaluator instantiated `CancellationTokenSource`, ran the body, then awaited the task list and propagated the first exception.
 
 ### Receive-via-`for range`
 

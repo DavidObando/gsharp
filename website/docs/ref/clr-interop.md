@@ -92,7 +92,7 @@ var handler = func(sender object, e EventArgs) {
 }
 ```
 
-Deprecated evaluator limitation: function-literal-to-delegate marshalling for some imported delegate scenarios is an emit-path feature. Every driver emits by default, so this does not apply unless `gsi --engine evaluator` or `GSI_ENGINE=evaluator` is selected. The evaluator supports G# closure values and many reflection calls, but delegate materialization is not identical to emitted IL in every case.
+Every driver uses emitted IL for these conversions.
 
 ## Events
 

@@ -195,13 +195,12 @@ The emitted FNPTR signature is bit-compatible with the C# / Roslyn `delegate*` e
 ### 9. Interpreter behavior
 
 ADR-0152 supersedes the original empty-body/default-value behavior. Valid
-Shape A and Shape B declarations bind, then the tree evaluator reports GS0514
-before evaluation; it neither invokes the delegate nor fabricates `default(R)`.
-Binder diagnostics GS0353–GS0356 still take precedence. ADR-0156 default
-drivers emit and run the native transition. The evaluator is deprecated and
-scheduled for removal in Phase 3c.
+Shape A and Shape B declarations bound, then the tree evaluator reported GS0514
+before evaluation; it neither invoked the delegate nor fabricated `default(R)`.
+Binder diagnostics GS0353–GS0356 still took precedence. ADR-0156 default
+drivers emitted and ran the native transition. Phase 3c deleted the evaluator.
 
-The interpreter test suite covers valid Shape A/Shape B declarations reaching
+The interpreter test suite covered valid Shape A/Shape B declarations reaching
 GS0514 and invalid shapes reaching their binder diagnostics first.
 
 ### 10. Interaction with ADR-0086, ADR-0092, ADR-0093, ADR-0094
@@ -224,8 +223,8 @@ See §5. ADR-0086 §1 GS0323 continues to fire for every other unsupported funct
 - A single new `SyntaxKind` is added — `FunctionPointerType` — and surfaces in the CoverageMatrix golden snapshot.
 - The `EncodeTypeSymbol` emit-side fork adds one branch (FNPTR encoding via `SignatureTypeEncoder.FunctionPointer(...)`); every other emit path is unchanged.
 - `ilverify` is clean on the emitted assemblies. The ADR-0095 emit tests gate verification through `IlVerifier.Verify` exactly as the ADR-0086 / ADR-0092 / ADR-0093 / ADR-0094 emit tests do.
-- The tree evaluator accepts both declaration shapes, then reports GS0514
-  before execution. Default drivers use emitted execution, so callback
+- The tree evaluator accepted both declaration shapes, then reported GS0514
+  before execution. Default drivers used emitted execution, so callback
   invocation can flow through native code there.
 - The remaining v1 P/Invoke gaps (issue #762 `@MarshalAs` custom marshallers, slices of structs, fixed-size buffers, direct `calli` invocation of `FunctionPointerTypeSymbol` values without a `Marshal.GetDelegateForFunctionPointer` round-trip) are unchanged. The direct-invocation gap in particular is the only foreseeable follow-up that would require a new `BoundNodeKind` and is deliberately deferred to a future ADR.
 

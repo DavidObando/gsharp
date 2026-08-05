@@ -1,6 +1,6 @@
 # ADR-0156: Emit-to-memory execution for gsi and bare gsc
 
-- **Status**: Accepted — Phases 1–3c implemented (Phase 3c, [#3176](https://github.com/DavidObando/gsharp/issues/3176): the tree-walking evaluator, `Compilation.Evaluate`, the evaluator SessionEngine, and the `--engine evaluator` escape hatch are deleted; the conformance gate is the two-host emitted parity gate); Phase 3d (docs sweep) remains
+- **Status**: Accepted — Phases 1–3d implemented (Phase 3c, [#3176](https://github.com/DavidObando/gsharp/issues/3176): the tree-walking evaluator, `Compilation.Evaluate`, the evaluator SessionEngine, and the `--engine evaluator` escape hatch were deleted; Phase 3d removed stale evaluator guidance and pinned the website `gsi --help` transcript; the conformance gate is the two-host emitted parity gate)
 - **Date**: 2026-08-03
 - **Phase**: Interpreter conformance / execution architecture
 - **Related**: #3176 (tracking), #3163 (code-health P2 headline item), ADR-0152
@@ -100,24 +100,21 @@ protocol.
 ### Implementation status (2026-08-04)
 
 Phase 1 shipped in #3182. Phase 2's emitted submission engine shipped in #3186,
-and Phase 3a made it the interactive default in #3201. The evaluator remains
-available through the deprecated `--engine evaluator` compatibility path and
-direct `Compilation.Evaluate` consumers until Phase 3c.
+Phase 3a made it the interactive default in #3201, and Phase 3c deleted the
+tree-walking evaluator, `Compilation.Evaluate`, the evaluator `SessionEngine`,
+and the `--engine evaluator` / `GSI_ENGINE=evaluator` escape hatches.
 
 | Invocation | Current execution path |
 |---|---|
 | bare `gsc file.gs` | `EmittedProgramHost.Run` |
 | `gsc /out:program.dll file.gs` | emit PE to disk; the CLR runs it separately |
 | `gsi file.gs` | `EmittedProgramHost.Run` |
-| interactive `gsi` | `EmittedSessionEngine` (default) |
-| interactive `gsi --engine evaluator` | `SessionEngine` → `Compilation.Evaluate` |
+| interactive `gsi` | `EmittedSessionEngine` |
 
 Therefore the former "three-driver" model no longer identifies three
-execution semantics: every default driver compiles through the emitter. The
-tree evaluator remains reachable only through its deprecated interactive
-escape hatch and direct API/test consumers. This partially supersedes
-ADR-0068's original `deinit` interpreter boundary (and ADR-0152/ADR-0153) for
-default drivers, while leaving those boundaries in force for evaluator residue.
+execution semantics: every driver compiles through the emitter. This fully
+supersedes ADR-0068's original `deinit` interpreter boundary and the
+ADR-0152/ADR-0153 evaluator boundaries.
 
 ### Phased migration plan
 

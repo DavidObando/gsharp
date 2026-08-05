@@ -37,10 +37,9 @@ Usage: gsi [file.gs] [/r:<assembly> ...] [--engine <name>] [--help] [--version]
   file.gs                Run the given G# script and exit.
   /r:<file>              Reference an assembly (repeatable).
   /reference:<file>      Alias for /r: (also -r: and --reference:).
-  --engine <name>        Interactive engine: 'emit' (default) or 'evaluator'
-                         (also via GSI_ENGINE). 'evaluator' selects the legacy
-                         tree-walking engine; it is deprecated and will be
-                         removed in ADR-0156 Phase 3c.
+  --engine <name>        Interactive engine: 'emit' (the default and only
+                         engine; also via GSI_ENGINE). The legacy 'evaluator'
+                         engine was removed in ADR-0156 Phase 3c.
   --help, -h             Show this help and exit.
   --version              Show the gsi version and exit.
   (no args)              Start the interactive REPL.
@@ -119,10 +118,9 @@ without adding an explicit reference.
 
 ## How it relates to `gsc`
 
-Every driver uses the emitter by default, including `gsi file.gs` and
-the interactive REPL. Pass `--engine evaluator` or set
-`GSI_ENGINE=evaluator` to select the deprecated in-process evaluator,
-which is scheduled for removal. `--engine emit` explicitly selects the
-default. Both direct `gsc` modes use the emitter, with `/out:` only
-controlling whether the assembly is saved. See the
+Every driver uses the emitter, including `gsi file.gs` and the
+interactive REPL. `--engine emit` explicitly selects the only engine;
+any other command-line or `GSI_ENGINE` value is rejected. Both direct
+`gsc` modes use the emitter, with `/out:` only controlling whether the
+assembly is saved. See the
 [`gsc` reference](./gsc.md) and [introduction](../intro.md) for details.

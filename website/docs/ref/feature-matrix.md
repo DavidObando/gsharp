@@ -6,14 +6,14 @@ draft: false
 
 # Feature matrix
 
-This matrix summarizes feature support in the emitter and interactive evaluator. Every driver uses the emitter by default, including the interactive `gsi` REPL. `gsi --engine evaluator` or `GSI_ENGINE=evaluator` selects the deprecated evaluator, which is scheduled for removal. Legend: **Supported** means implemented on that path; **Mostly supported** means ordinary cases work with known edge limitations; **Partial** means syntax or binding exists but execution or emit is incomplete; **Not supported** means rejected or intentionally absent; **N/A** means the feature belongs to tooling rather than one execution path.
+This matrix summarizes current feature support in the emitter, which every driver uses. The historical evaluator column is retained to explain older ADRs and tests; ADR-0156 Phase 3c removed that backend and its command-line selection. Legend: **Supported** means implemented on that path; **Mostly supported** means ordinary cases work with known edge limitations; **Partial** means syntax or binding exists but execution or emit is incomplete; **Not supported** means rejected or intentionally absent; **N/A** means the feature belongs to tooling rather than one execution path.
 
 ## Lexical and source structure
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | Lexing, parsing, keywords, tokens, literals | Supported | Supported | Shared lexer and parser. |
-| Packages, imports, import aliases | Supported | Supported | Emit supports multi-package assemblies; interpreter binds the same model. |
+| Packages, imports, import aliases | Supported | Supported | Emit supports multi-package assemblies; both backends shared the same binder. |
 | Implicit `System` import | Supported | Supported | Enabled by default; disabled with `/noimplicitimports` or `/no-implicit-imports`. |
 | Top-level statements and `func Main` | Supported | Supported | Mixing top-level statements and explicit `Main` is diagnosed by `GS0165`/`GS0166`. |
 | Comments | Supported | Supported | Line (`//`), block (`/* … */`), and Markdown documentation (`///`) comments. |
@@ -23,20 +23,20 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Types and values
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
-| Primitive types and numeric operators | Supported | Mostly supported | Evaluator implements primitive arithmetic; address/deref unary operators are limited. |
+| Primitive types and numeric operators | Supported | Mostly supported | The evaluator implemented primitive arithmetic; address/deref unary operators were limited. |
 | Width-bearing integer names | Supported | Supported | Canonical names are `int32`, `uint64`, and related widths. Friendly aliases are also accepted: `int`, `uint`, `long`, `ulong`, `short`, `ushort`, `byte`, `sbyte`, `float`, and `double`; they resolve to the canonical `TypeSymbol` at the binder, so diagnostics, `typeof`, hover, and IL print the canonical name. |
 | Numeric conversions | Supported | Supported | Widening numeric conversions plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
-| Nullable `T?`, `nil`, `!!`, `??`, `?.`, `?[i]` | Supported | Supported | `!!` throws in the evaluator when the value is nil. `?[i]` short-circuits indexing to `nil` when the receiver is nil. |
+| Nullable `T?`, `nil`, `!!`, `??`, `?.`, `?[i]` | Supported | Supported | The evaluator threw on a nil `!!`; `?[i]` short-circuited indexing to `nil` when the receiver was nil. |
 | Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. `len` / `cap` / `append` require `import Gsharp.Extensions.Go` (GS0317); the .NET-idiomatic alternative is `.Length` and (for mutable lists) `List[T].Add`. |
 | Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. Both require `import Gsharp.Extensions.Go` (GS0317); .NET-idiomatic alternatives are `.Remove(k)` and `.Count`. |
 | Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
 | Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword is not supported; migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |
-| Classes and primary constructors | Supported | Partially supported | Evaluator supports G# classes; CLR base initializer modeling is limited. |
+| Classes and primary constructors | Supported | Partially supported | The evaluator supported G# classes, with limited CLR base-initializer modeling. |
 | Explicit class `init` constructors | Supported | Supported | G# class constructors are parsed, bound, and evaluated. |
 | Interfaces | Supported | Supported for checking/upcasts | Default-interface methods, static-virtual interface members declared inside the interface's `shared { … }` block, `private` interface helper methods — instance helpers in the interface body, static helpers as `private func` inside the interface's `shared { … }` block — and the explicit-base interface call syntax `base[IFoo].M(...)` for DIM diamond disambiguation are supported. |
 | Properties | Supported | Supported | Auto/computed and static/shared forms are represented. |
@@ -45,7 +45,7 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 | Function types, literals, closures | Supported | Supported | Delegate conversions are strongest on the emit path. |
 | Generics and method inference | Supported | Supported for binding/evaluation | Reified CLR generics: user-declared generic types/methods emit `GenericParam` rows; signatures over `T` encode `Var`/`MVar`; closed CLR generics over an in-scope type parameter (`List[T]`) emit honest `GenericInstantiation` blobs; open-bearing delegates (`func(T) U`) dispatch through `Func`N::Invoke` MemberRefs on constructed `TypeSpec`. |
 | Variance and constraints | Supported semantically | Supported semantically | Diagnostics include `GS0150` through `GS0153`. |
-| By-ref and pointers | Partial | Limited/not supported | `&` / `*` / `*T` for CLR `ref`/`out`/`in` interop; ref returns auto-dereference in rvalue position. Evaluator rejects generic address/deref execution. |
+| By-ref and pointers | Partial | Limited/not supported | `&` / `*` / `*T` for CLR `ref`/`out`/`in` interop; ref returns auto-dereference in rvalue position. The evaluator rejected generic address/deref execution. |
 | `ref`/`out`/`in` parameters | Supported | Supported | Declaration-site and call-site modifiers; diagnostics `GS0235`–`GS0243`. Includes `out var/let/_` inline declarations. |
 | Ref-aliasing locals (`let ref` / `var ref`) | Supported | Supported | Local whose IL slot is `T&` and aliases another lvalue. Diagnostics `GS0256`–`GS0258`. |
 | `ref`-returning functions | Supported | Supported | `func f(...) ref T { ... }` paired with `return ref <lvalue>`. Diagnostics `GS0248`–`GS0255`. |
@@ -54,12 +54,12 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Declarations and members
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | Top-level functions and variables | Supported | Supported | `var`, `let`, and `const` are implemented. The legacy `:=` short variable declaration is not supported; the parser hard-rejects it with `GS0305`. |
 | Visibility modifiers | Supported | Supported | `public`, `internal`, and `private`; invalid locations report `GS0180`. |
 | Receiver methods and extension functions | Supported | Supported | G# receiver style and imported CLR extension dispatch. The receiver-clause form is reserved for non-owned receiver types and warns (`GS0314`) when it targets an owned class or struct; in-body declarations are the canonical form for owned-type methods. |
-| Operator declarations | Supported | Supported where evaluator invokes user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
+| Operator declarations | Supported | Supported where the evaluator invoked user/CLR op paths | Receiver `operator` declarations map to CLR `op_*` names. |
 | Interface implementation | Supported | Supported for checks/upcasts | Missing members and sealed-interface violations are diagnosed. |
 | Inheritance and overrides | Supported | Partially supported | Base classes must be `open`; override diagnostics are implemented. |
 | Default parameter values in G# declarations | Supported | Supported | Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
@@ -69,7 +69,7 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Statements and control flow
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | `if` | Supported | Supported | Includes simple-statement form. The `if let name = expr { ... } [else { ... }]` binding form strips a nullable layer and narrows `name` to the underlying type inside the then-branch. `if` is also available as a value-producing expression — see the *If expression* and *`if let` expression* rows below. |
 | `if` expression | Supported | Supported | `let x = if cond { a } else { b }` and `else if` chains in value position. Requires a terminal `else` (`GS0276`); blocks must end in a value-producing expression (`GS0277`); branches with no common type report `GS0263` (shared with the ternary). Lowers through the same `BoundConditionalExpression` / `BoundBlockExpression` nodes the ternary and switch expression use. |
@@ -93,7 +93,7 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Expressions
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | Calls and generic calls | Supported | Supported | Bracketed type arguments. |
 | Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). The legacy `Foo(timeout = 30)` shape is deprecated and emits `GS0315`; both spellings still parse for one release. Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`, `GS0315`. |
@@ -110,20 +110,20 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Concurrency, async, and iterators
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
-| `go` | Supported | Supported with evaluator scheduling limits | Operand must be a call expression. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
+| `go` | Supported | Supported with scheduling limits | Operand must be a call expression. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
 | `scope` structured concurrency | Supported | Supported | Child tasks are joined and failures propagate. Not gated. |
 | Channels, send, receive, `close` | Supported | Supported | Backed by `System.Threading.Channels`. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
 | `select` | Supported | Supported | Receive, receive-bind, send, and default cases. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
-| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; evaluator blocks on awaiters. Not gated. |
+| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; the evaluator blocked on awaiters. Not gated. |
 | Async state-machine edge cases | Partial | N/A | Unsupported emit shapes report `GS0190`. |
-| `sequence[T]` and `yield` | Supported | Supported | Sync iterator state machines in emit; evaluator collects sequence values. |
+| `sequence[T]` and `yield` | Supported | Supported | Sync iterator state machines in emit; the evaluator collected sequence values. |
 | `async sequence[T]` and `await for` | Supported | Supported by blocking | Maps to `IAsyncEnumerable[T]`. |
 
 ## CLR interop
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | Imported constructors | Supported | Supported by reflection | Includes simple-name construction when imported. |
 | Imported instance/static methods | Supported | Supported by reflection | Overload resolution and conversions apply. |
@@ -133,13 +133,13 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 | Imported optional/default arguments | Supported | Supported | Verified by sample coverage. |
 | Function literal to delegate | Supported | Partial | Some marshalling scenarios are emit-path only. |
 | Method group to delegate | Supported | Supported in covered scenarios | Includes imported CLR method groups. |
-| Imported operator overloads and conversions | Supported | Supported where evaluator invokes paths | Bound as CLR operator/conversion calls. |
+| Imported operator overloads and conversions | Supported | Supported where the evaluator invoked paths | Bound as CLR operator/conversion calls. |
 | Attributes | Supported | Semantically recognized | Includes `@Attribute` sugar and `@Obsolete`; `@DllImport` opts into P/Invoke; `@LibraryImport` opts into the source-generator-shaped P/Invoke. |
 | P/Invoke/`extern` | Supported | Supported (emit-only) | Attribute-driven via `@DllImport("lib")` on a `;`-body `func`, or via the source-generator-shaped `@LibraryImport("lib", StringMarshalling: …)`, which is AOT-friendly with an explicit IL stub. v1 marshals primitives, `string`, `*T` (byref), slices of primitives, and blittable / explicit-layout structs via `@StructLayout(LayoutKind.…)` + `@FieldOffset(N)`. `ref` / `out` / `in` parameters are supported for blittable pointees (primitives and `@StructLayout` structs); the runtime marshals the byref slot as `T*` to the unmanaged callee. Function-pointer marshalling supports both managed delegate callbacks (`@UnmanagedFunctionPointer(CallingConvention.Cdecl)` on the delegate type) and raw `unmanaged[Cdecl] (T) -> R` function pointers (encoded as `ELEMENT_TYPE_FNPTR` in metadata). Per-parameter `@MarshalAs(UnmanagedType.…)` overrides opt a parameter into a different unmanaged form (`LPWStr` for Windows `…W` entry-points, `LPUTF8Str` for modern C APIs, `I4` to widen a `bool` to a C `int` flag, `LPArray` with `SizeParamIndex:` for sibling-sized buffers, etc.). |
 
 ## Gsharp.Extensions helper namespaces
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Value-typed (`T : struct`) helpers carry a `*Value` suffix and require `import Gsharp.Extensions.Optional`. |
 | `Gsharp.Extensions.Sequences` | Supported | Supported | Static builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil`, `LastOrNil`, `SingleOrNil` plus `*ValueOrNil` companions), and G#-shaped collectors (`ToSlice`, `ToMap`). Requires `import Gsharp.Extensions.Sequences`. |
@@ -148,12 +148,12 @@ This matrix summarizes feature support in the emitter and interactive evaluator.
 
 ## Tooling and build
 
-| Feature | Emit (`gsc`) | Interpreter | Notes |
+| Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
 | PE assembly emit | Supported | N/A | Direct `System.Reflection.Metadata` emitter. |
 | Portable PDB, Source Link, embedded sources, deterministic IDs | Supported | N/A | Emit-only debug information. |
 | Reference assemblies | Supported | N/A | SDK can produce reference assemblies. |
 | SDK `.gsproj` build/run/pack | Supported | N/A | `Gsharp.NET.Sdk` integrates with MSBuild and `dotnet`. |
-| REPL | Supported (default) | Deprecated (`--engine evaluator`) | `gsi` starts the interactive REPL when no file is supplied. |
+| REPL | Supported | Removed | `gsi` starts the emitted interactive REPL when no file is supplied. |
 | Language server and VS Code extension | N/A | N/A | Pull-based diagnostics, semantic tokens, hover for CLR XML docs, CodeLens reference counts on members of types/structs/interfaces/enums, signature help, inlay hints, completion, go-to-definition, references, rename, formatting, debug + test integration. |
 | VS Code color themes | N/A | N/A | Six bundled themes (Ember, Magma, Synthwave — Dark + Light each). |

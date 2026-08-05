@@ -305,7 +305,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 
 ### Internal diagnostics (GS9996–GS9999)
 
-These diagnostics indicate a fatal compiler or evaluator failure. If you encounter them, please file an issue.
+These diagnostics indicate a fatal compiler or runtime execution failure. If you encounter them, please file an issue.
 
 | ID | Severity | Description |
 |----|----------|-------------|

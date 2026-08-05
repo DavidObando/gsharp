@@ -164,9 +164,9 @@ The interpreter (`Evaluator`) gains a parallel "attribute table" keyed by GSharp
 
 This originally followed the project's interpreter-authority convention.
 ADR-0156 later made emitted execution the production oracle; evaluator parity
-remains relevant only while direct `Compilation.Evaluate` consumers and the
-deprecated `gsi --engine evaluator` compatibility path remain. Phase 3c
-removes the evaluator.
+remained relevant only while direct `Compilation.Evaluate` consumers and the
+deprecated `gsi --engine evaluator` compatibility path remained. Phase 3c
+removed the evaluator.
 
 ### 10. Grammar additions (summary)
 

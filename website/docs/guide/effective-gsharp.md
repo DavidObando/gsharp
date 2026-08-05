@@ -123,4 +123,4 @@ Import CLR namespaces directly, pass function values to delegates, and rely on i
 
 ## Document implementation differences
 
-Every driver emits CIL by default, including the interactive REPL. `gsi --engine evaluator` and `GSI_ENGINE=evaluator` are deprecated escape hatches scheduled for removal. Add `gsc /out:` when you need to inspect the saved assembly, metadata, or Portable PDB rather than run it immediately.
+Every driver emits CIL, including the interactive REPL. `gsi` accepts only the `emit` engine choice. Add `gsc /out:` when you need to inspect the saved assembly, metadata, or Portable PDB rather than run it immediately.

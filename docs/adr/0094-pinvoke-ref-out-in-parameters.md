@@ -135,12 +135,12 @@ The binder lowers `ref t` to a `BoundAddressOfExpression` wrapping a `BoundVaria
 
 ADR-0152 supersedes the original empty-body/default-value behavior. Valid
 ref-kind P/Invoke declarations bind without GS0326/GS0352, then the tree
-evaluator reports GS0514 before evaluation; no call-site write-back or native
-transition occurs. Binder errors such as GS0352 still take precedence.
-ADR-0156 default drivers emit the byref signature and execute the real native
-transition. The evaluator is deprecated and scheduled for removal in Phase 3c.
+evaluator reported GS0514 before evaluation; no call-site write-back or native
+transition occurred. Binder errors such as GS0352 still took precedence.
+ADR-0156 default drivers emitted the byref signature and executed the real native
+transition. Phase 3c deleted the evaluator.
 
-The interpreter test suite covers valid `ref`/`out`/`in` declarations reaching
+The interpreter test suite covered valid `ref`/`out`/`in` declarations reaching
 GS0514 and invalid pointees reaching GS0352 before that boundary.
 
 ### 7. Interaction with ADR-0086, ADR-0092, ADR-0093
@@ -164,8 +164,8 @@ GS0514 and invalid pointees reaching GS0352 before that boundary.
 - The bound tree gains **no new** `BoundNodeKind` (per the rule of engagement). The bound model already represented ref-kind parameters via `ParameterSymbol.RefKind` and ref-kind arguments via `BoundAddressOfExpression`; the only changes are the binder's narrowed validation (GS0326 → GS0349 / GS0352 routing) and a tighter `IsSupportedMarshallingType` byref pointee classifier.
 - The emit pipeline is unchanged. `EmitPInvokeFunction` and `EmitLibraryImportFunction` already encode `isByRef: p.RefKind != RefKind.None`; the resulting metadata signature carries `ELEMENT_TYPE_BYREF` before the pointee type. The runtime marshaller sees a `T*` and passes the caller's managed slot address straight to the unmanaged callee.
 - `ilverify` is clean on the emitted assemblies. The ADR-0094 emit tests gate verification through `IlVerifier.Verify` exactly as the ADR-0086 / ADR-0092 / ADR-0093 emit tests do.
-- The tree evaluator accepts the ref-kind declaration shape, then reports
-  GS0514 before execution. Default drivers emit the signature and round-trip
+- The tree evaluator accepted the ref-kind declaration shape, then reported
+  GS0514 before execution. Default drivers emitted the signature and round-tripped
   the byref slot through the native call.
 - The remaining v1 P/Invoke gaps (issue #761 function pointers, #762 `@MarshalAs` custom marshallers, slices of structs, fixed-size buffers inside marshalled structs) are unchanged.
 
