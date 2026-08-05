@@ -161,6 +161,26 @@ public class Issue2956InterpreterBoundaryTests
     }
 
     [Fact]
+    public void FunctionPointerNilComparisonsExecute()
+    {
+        var result = RunGsi(
+            nameof(FunctionPointerNilComparisonsExecute),
+            """
+            import System
+
+            unsafe {
+                let pointer *func(int32) int32 = nil
+                Console.WriteLine(pointer == nil)
+                Console.WriteLine(nil == pointer)
+                Console.WriteLine(pointer != nil)
+                Console.WriteLine(nil != pointer)
+            }
+            """);
+
+        AssertRan(result, "True\nTrue\nFalse\nFalse\n");
+    }
+
+    [Fact]
     public void UnsafeBlockWithoutStorageOnlyConstructEvaluatesNormally()
     {
         var result = RunGsi(

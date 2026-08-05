@@ -355,10 +355,9 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0122 / issue #1014: lowers a pointer arithmetic or comparison
-    /// binary expression where at least one operand is an unmanaged pointer
-    /// (<see cref="PointerTypeSymbol"/>). Returns <see langword="null"/> when
-    /// the operator/operand shape is not a supported pointer operation, so the
+    /// ADR-0122 / issues #1014 and #3286: lowers unmanaged-pointer arithmetic
+    /// and native pointer comparisons. Returns <see langword="null"/> when the
+    /// operator/operand shape is not a supported pointer operation, so the
     /// caller falls back to the normal (error-reporting) path.
     /// </summary>
     /// <param name="syntax">The binary expression syntax.</param>
@@ -584,7 +583,12 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)
     {
-        var pointerType = (left.Type as PointerTypeSymbol) ?? (right.Type as PointerTypeSymbol);
+        if (!CanLowerPointerComparisonOperand(left.Type) || !CanLowerPointerComparisonOperand(right.Type))
+        {
+            return null;
+        }
+
+        var pointerType = left.Type == TypeSymbol.Null ? right.Type : left.Type;
         var leftNint = ToNativeIntForPointerComparison(left, pointerType);
         var rightNint = ToNativeIntForPointerComparison(right, pointerType);
         var op = BoundBinaryOperator.Bind(operatorKind, TypeSymbol.NInt, TypeSymbol.NInt);
@@ -596,7 +600,10 @@ internal sealed partial class ExpressionBinder
         return new BoundBinaryExpression(null, leftNint, op, rightNint);
     }
 
-    private BoundExpression ToNativeIntForPointerComparison(BoundExpression operand, PointerTypeSymbol pointerType)
+    private static bool CanLowerPointerComparisonOperand(TypeSymbol type) =>
+        type == TypeSymbol.Null || Conversion.Classify(type, TypeSymbol.NInt).Exists;
+
+    private BoundExpression ToNativeIntForPointerComparison(BoundExpression operand, TypeSymbol pointerType)
     {
         if (operand.Type == TypeSymbol.NInt)
         {
@@ -604,7 +611,7 @@ internal sealed partial class ExpressionBinder
         }
 
         // `nil` becomes a null pointer (zero native int) before the comparison.
-        if (operand.Type == TypeSymbol.Null && pointerType != null)
+        if (operand.Type == TypeSymbol.Null)
         {
             var nullPointer = new BoundConversionExpression(null, pointerType, operand);
             return new BoundConversionExpression(null, TypeSymbol.NInt, nullPointer);
@@ -1458,7 +1465,8 @@ internal sealed partial class ExpressionBinder
         // and pointer comparison (`==`, `!=`, `<`, …) inside an unsafe context.
         // Lowered to native-int (`nint`) arithmetic/comparison plus pointer
         // reinterpret conversions — no dedicated bound node is required.
-        if (boundLeft.Type is PointerTypeSymbol || boundRight.Type is PointerTypeSymbol)
+        if (boundLeft.Type is PointerTypeSymbol or FunctionPointerTypeSymbol
+            || boundRight.Type is PointerTypeSymbol or FunctionPointerTypeSymbol)
         {
             var pointerResult = TryBindPointerBinaryExpression(syntax, boundLeft, boundRight);
             if (pointerResult != null)
