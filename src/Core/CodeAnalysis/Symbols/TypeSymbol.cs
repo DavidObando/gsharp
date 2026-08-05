@@ -555,41 +555,33 @@ public class TypeSymbol : Symbol
                 }
 
                 return;
-            case StructSymbol ssNested when !ssNested.EnclosingTypeArguments.IsDefaultOrEmpty:
-                foreach (var arg in ssNested.EnclosingTypeArguments)
+            case StructSymbol ss:
+                if (!ss.EnclosingTypeArguments.IsDefaultOrEmpty)
                 {
-                    CollectReferencedTypeParameters(arg, sink);
+                    foreach (var arg in ss.EnclosingTypeArguments)
+                    {
+                        CollectReferencedTypeParameters(arg, sink);
+                    }
                 }
-
-                foreach (var arg in ssNested.TypeArguments)
+                else
                 {
-                    CollectReferencedTypeParameters(arg, sink);
-                }
-
-                if (ssNested.TypeArguments.IsDefaultOrEmpty)
-                {
-                    foreach (var tp in ssNested.TypeParameters)
+                    foreach (var tp in StructSymbol.CollectEnclosingTypeParameters(ss))
                     {
                         CollectReferencedTypeParameters(tp, sink);
                     }
                 }
 
-                return;
-            case StructSymbol ss when !ss.TypeArguments.IsDefaultOrEmpty:
                 foreach (var arg in ss.TypeArguments)
                 {
                     CollectReferencedTypeParameters(arg, sink);
                 }
 
-                return;
-            case StructSymbol ssOpen when !ssOpen.TypeParameters.IsDefaultOrEmpty:
-                // Issue #1477: a captured `this` of a generic type `G[T]` is the
-                // OPEN definition (TypeParameters set, no TypeArguments) — its
-                // own parameters ARE the enclosing parameters the capture field
-                // references (`G`1<!0>`), so collect them.
-                foreach (var tp in ssOpen.TypeParameters)
+                if (ss.TypeArguments.IsDefaultOrEmpty)
                 {
-                    CollectReferencedTypeParameters(tp, sink);
+                    foreach (var tp in ss.TypeParameters)
+                    {
+                        CollectReferencedTypeParameters(tp, sink);
+                    }
                 }
 
                 return;

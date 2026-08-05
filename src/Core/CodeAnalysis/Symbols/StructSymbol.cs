@@ -1501,14 +1501,15 @@ public sealed class StructSymbol : TypeSymbol
         Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
-            // Issue #1521: a constructed reference to a type nested inside a
-            // generic enclosing type (`Box[int32].Tag`) already carries the
-            // enclosing arguments on EnclosingTypeArguments and declares no own
-            // type arguments to compose. When such a receiver directly declares
-            // the sought member, return it verbatim so the field/method
-            // reference is parented at its own `Box`1+Tag`1<int32>` TypeSpec
-            // rather than a rebuilt open self-instantiation.
-            if (c.IsConstructedNestedType && declaringDefinitionPredicate(c.Definition ?? c))
+            // A constructed nested receiver already carries the argument shape
+            // needed by its TypeSpec. Keep it verbatim: rebuilding a generic
+            // nested type whose open enclosing arguments are implicit would
+            // mistake its own arguments for the flattened enclosing slots.
+            var isConstructedNested = c.IsConstructedNestedType
+                || (c.Definition != null
+                    && !c.TypeArguments.IsDefaultOrEmpty
+                    && !CollectEnclosingTypeParameters(c).IsDefaultOrEmpty);
+            if (isConstructedNested && declaringDefinitionPredicate(c.Definition ?? c))
             {
                 return c;
             }
@@ -1748,7 +1749,7 @@ public sealed class StructSymbol : TypeSymbol
 
     private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
     {
-        StructSymbol s => s.ContainingType,
+        StructSymbol s => (s.Definition ?? s).ContainingType,
         InterfaceSymbol i => i.ContainingType,
         EnumSymbol e => e.ContainingType,
         _ => null,

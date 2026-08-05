@@ -23,6 +23,9 @@ public class Issue3254EnclosingGenericClosureEmitTests
             package Issue3254.Lambda
             import System
 
+            class Thing {
+            }
+
             class Owner[T] {
                 struct Payload[U] {
                     var First T
@@ -30,18 +33,65 @@ public class Issue3254EnclosingGenericClosureEmitTests
                 }
             }
 
-            func Run[T](value Owner[T].Payload[string]) T {
+            func Run[T, U](value Owner[T].Payload[U]) {
                 let read = () -> value
-                return read().First
+                Console.WriteLine([]T{ read().First }.GetType())
+                Console.WriteLine(read().First)
+                Console.WriteLine([]U{ read().Second }.GetType())
+                Console.WriteLine(read().Second)
+            }
+
+            func ShowTypes[T, U](value Owner[T].Payload[U]) {
+                let read = () -> value
+                Console.WriteLine([]T{ read().First }.GetType())
+                Console.WriteLine([]U{ read().Second }.GetType())
             }
 
             func Main() {
-                Console.WriteLine(Run[int32](Owner[int32].Payload[string]{ First: 42, Second: "int" }))
-                Console.WriteLine(Run[string](Owner[string].Payload[string]{ First: "right", Second: "string" }))
+                Run[int32, string](Owner[int32].Payload[string]{ First: 42, Second: "right" })
+                Run[string, int32](Owner[string].Payload[int32]{ First: "left", Second: 7 })
+                ShowTypes[string, Thing](Owner[string].Payload[Thing]{ First: "ref", Second: Thing{} })
             }
             """;
 
-        AssertCompilesAndRuns(Source, "42\nright\n", nameof(LambdaCapturingNestedTypeWithEnclosingTypeParameterRuns));
+        AssertCompilesAndRuns(
+            Source,
+            "System.Int32[]\n42\nSystem.String[]\nright\n"
+                + "System.String[]\nleft\nSystem.Int32[]\n7\n"
+                + "System.String[]\nIssue3254.Lambda.Thing[]\n",
+            nameof(LambdaCapturingNestedTypeWithEnclosingTypeParameterRuns));
+    }
+
+    [Fact]
+    public void LambdaCapturingUnqualifiedNestedTypeInsideGenericClassRuns()
+    {
+        const string Source = """
+            package Issue3254.UnqualifiedLambda
+            import System
+
+            class Owner[T] {
+                struct Payload[U] {
+                    var First T
+                    var Second U
+                }
+
+                func Show(value Payload[string]) {
+                    let read = () -> value
+                    Console.WriteLine([]T{ read().First }.GetType())
+                    Console.WriteLine(read().First)
+                }
+            }
+
+            func Main() {
+                Owner[int32]{}.Show(Owner[int32].Payload[string]{ First: 42, Second: "int" })
+                Owner[string]{}.Show(Owner[string].Payload[string]{ First: "right", Second: "string" })
+            }
+            """;
+
+        AssertCompilesAndRuns(
+            Source,
+            "System.Int32[]\n42\nSystem.String[]\nright\n",
+            nameof(LambdaCapturingUnqualifiedNestedTypeInsideGenericClassRuns));
     }
 
     [Fact]
@@ -53,6 +103,7 @@ public class Issue3254EnclosingGenericClosureEmitTests
             import Gsharp.Extensions.Go
 
             func Show[T](value T) int32 {
+                Console.WriteLine([]T{ value }.GetType())
                 Console.WriteLine(value)
                 return 0
             }
@@ -63,13 +114,27 @@ public class Issue3254EnclosingGenericClosureEmitTests
                 }
             }
 
+            class Runner[T] {
+                func Run(value T) {
+                    scope {
+                        go Show[T](value)
+                    }
+                }
+            }
+
             func Main() {
                 Run[int32](42)
                 Run[string]("right")
+                Runner[int32]{}.Run(7)
+                Runner[string]{}.Run("class")
             }
             """;
 
-        AssertCompilesAndRuns(Source, "42\nright\n", nameof(GoInsideGenericFunctionPreservesCapturedTypeParameter));
+        AssertCompilesAndRuns(
+            Source,
+            "System.Int32[]\n42\nSystem.String[]\nright\n"
+                + "System.Int32[]\n7\nSystem.String[]\nclass\n",
+            nameof(GoInsideGenericFunctionPreservesCapturedTypeParameter));
     }
 
     [Fact]
@@ -83,6 +148,7 @@ public class Issue3254EnclosingGenericClosureEmitTests
 
             async func Show[T](value T) {
                 await Task.Delay(1)
+                Console.WriteLine([]T{ value }.GetType())
                 Console.WriteLine(value)
             }
 
@@ -98,7 +164,10 @@ public class Issue3254EnclosingGenericClosureEmitTests
             }
             """;
 
-        AssertCompilesAndRuns(Source, "42\nright\n", nameof(AsyncGoInsideGenericFunctionPreservesCapturedTypeParameter));
+        AssertCompilesAndRuns(
+            Source,
+            "System.Int32[]\n42\nSystem.String[]\nright\n",
+            nameof(AsyncGoInsideGenericFunctionPreservesCapturedTypeParameter));
     }
 
     private static void AssertCompilesAndRuns(string source, string expectedOutput, string testName)
