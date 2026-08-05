@@ -121,6 +121,61 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(ctorHandle);
     }
 
+    private void EmitReifiedUserCallArgument(
+        BoundExpression argument,
+        ParameterSymbol parameter,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
+        ImmutableArray<TypeSymbol> methodTypeArguments,
+        StructSymbol constructedOwner)
+    {
+        if (parameter.RefKind != RefKind.None)
+        {
+            this.EmitExpression(argument);
+            return;
+        }
+
+        var targetType = constructedOwner?.SubstituteMemberType(parameter.Type) ?? parameter.Type;
+        if (targetType is TypeParameterSymbol targetParameter
+            && !methodTypeArguments.IsDefault
+            && !methodTypeParameters.IsDefault
+            && methodTypeArguments.Length == methodTypeParameters.Length)
+        {
+            for (var i = 0; i < methodTypeParameters.Length; i++)
+            {
+                if (ReferenceEquals(targetParameter, methodTypeParameters[i]))
+                {
+                    targetType = methodTypeArguments[i];
+                    break;
+                }
+            }
+        }
+
+        var sourceType = argument.Type;
+        var sourceNeedsBox = ReflectionMetadataEmitter.IsValueTypeSymbol(sourceType)
+            || sourceType is TypeParameterSymbol
+            || sourceType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol };
+        var unwrappedTarget = targetType is NullableTypeSymbol nullableTarget
+            && !ReflectionMetadataEmitter.IsValueTypeNullable(nullableTarget)
+                ? nullableTarget.UnderlyingType
+                : targetType;
+        var targetClr = unwrappedTarget?.ClrType;
+        var targetAcceptsBox = targetClr?.IsSameAs(typeof(object)) == true
+            || IsInterfaceTargetType(targetType)
+            || targetClr?.IsSameAs(typeof(ValueType)) == true
+            || targetClr?.IsSameAs(typeof(Enum)) == true;
+
+        if (sourceNeedsBox && targetAcceptsBox)
+        {
+            // Match the already-working shared-method path: materialize the
+            // same conversion node so canonical conversion emission supplies
+            // the required box opcode.
+            this.EmitExpression(new BoundConversionExpression(null, targetType, argument));
+            return;
+        }
+
+        this.EmitExpression(argument);
+    }
+
     private void EmitUserInstanceCall(BoundUserInstanceCallExpression call)
     {
         // Issue #1052: a call dispatched through a type parameter's
@@ -228,10 +283,24 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitInstanceReceiver(call.Receiver);
         var calleeParameterOffset = call.Method.ExplicitReceiverParameter == null ? 0 : 1;
+        var constructedOwner = inheritedGenericBase ?? receiverType;
+        var hasReifiedParameters = call.Method.IsGeneric || constructedOwner?.Definition != null;
         for (var i = 0; i < call.Arguments.Length; i++)
         {
             var arg = call.Arguments[i];
-            this.EmitExpression(arg);
+            if (hasReifiedParameters)
+            {
+                this.EmitReifiedUserCallArgument(
+                    arg,
+                    call.Method.Parameters[i + calleeParameterOffset],
+                    call.Method.TypeParameters,
+                    call.MethodTypeArguments,
+                    constructedOwner);
+            }
+            else
+            {
+                this.EmitExpression(arg);
+            }
         }
 
         var receiverIsValueType = call.Method.ReceiverType is StructSymbol receiverStruct && !receiverStruct.IsClass;

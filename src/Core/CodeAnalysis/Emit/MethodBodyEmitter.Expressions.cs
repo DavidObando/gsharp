@@ -132,11 +132,25 @@ internal sealed partial class MethodBodyEmitter
                 // `!!T`, so a value-type instantiation must be lifted to
                 // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
                 var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
+                var hasReifiedParameters = call.Function.IsGeneric || call.StaticGenericOwnerType != null;
 
                 for (int i = 0; i < call.Arguments.Length; i++)
                 {
                     var arg = call.Arguments[i];
-                    this.EmitExpression(arg);
+                    if (hasReifiedParameters)
+                    {
+                        this.EmitReifiedUserCallArgument(
+                            arg,
+                            call.Function.Parameters[i],
+                            call.Function.TypeParameters,
+                            call.MethodTypeArguments,
+                            call.StaticGenericOwnerType);
+                    }
+                    else
+                    {
+                        this.EmitExpression(arg);
+                    }
+
                     if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
                     {
                         this.EmitUnconstrainedNullableLiftWrap(liftWrap);
