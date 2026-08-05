@@ -852,12 +852,18 @@ public partial class Parser
             return false;
         }
 
-        // CLR generic arguments cannot be pointer types. Speculatively
-        // accepting `*T` here moves the failure from parsing/binding to a
-        // top-level "Cannot encode '*'" internal error.
+        // CLR generic arguments cannot be pointer types. Keep `*T` on its
+        // existing rejection path, but scan the distinct `*func(T) R`
+        // production accepted by ParseTypeClauseCore.
         if (Peek(pos).Kind == SyntaxKind.StarToken)
         {
-            return false;
+            if (Peek(pos + 1).Kind != SyntaxKind.FuncKeyword)
+            {
+                return false;
+            }
+
+            isComplex = true;
+            pos++;
         }
 
         // ADR-0075: `async (T) -> R` and `func(T) R` start a function-type clause.
@@ -1560,7 +1566,7 @@ public partial class Parser
                Current.Kind != SyntaxKind.CloseSquareBracketToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseTypeClause());
+            nodesAndSeparators.Add(ParseGenericTypeArgument());
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {

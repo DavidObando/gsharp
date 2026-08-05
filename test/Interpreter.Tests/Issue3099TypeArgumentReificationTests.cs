@@ -121,6 +121,48 @@ public class Issue3099TypeArgumentReificationTests
     }
 
     [Fact]
+    public void LegacyFunctionEnclosingTypeArgument_CompilesAndRuns()
+    {
+        const string Source = """
+            package Issue3255LegacyFunction
+            import System
+            class Box[T] {}
+            class Owner[T] { class Payload[U] {} }
+            func Reify() {
+                let value = Box[Owner[func(int32) int32].Payload[string]]()
+                let functionType = value.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine("func:" + functionType.GetGenericTypeDefinition().FullName)
+                Console.WriteLine("func-arg:" + functionType.GenericTypeArguments[0].FullName)
+                Console.WriteLine("func-return:" + functionType.GenericTypeArguments[1].FullName)
+            }
+            Reify()
+            """;
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3255-legacy-function-{Guid.NewGuid():N}");
+
+        try
+        {
+            var output = RunSourceDriver(root, Source, Program.Main);
+            Assert.Contains(
+                "func:System.Func`2\nfunc-arg:System.Int32\nfunc-return:System.Int32\n",
+                output,
+                StringComparison.Ordinal);
+            Assert.Contains("warning GS0303:", output, StringComparison.Ordinal);
+            Assert.EndsWith("Success.\n", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void PointerEnclosingTypeArgument_RemainsRejectedBeforeEmit()
     {
         const string Source = """
@@ -147,6 +189,53 @@ public class Issue3099TypeArgumentReificationTests
             Assert.Equal(1, result.ExitCode);
             Assert.Contains(
                 "(5,28,5,33): error GS0125: Variable 'int32' doesn't exist.",
+                result.Stdout,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("Cannot encode", result.Stdout, StringComparison.Ordinal);
+            Assert.Equal("Failed.\n", result.Stderr);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ManagedFunctionPointerEnclosingTypeArgument_ReportsAnchoredDiagnostic()
+    {
+        const string Source = """
+            package Issue3255ManagedFunctionPointer
+            import System
+            import Gsharp.Extensions.Go
+            class Box[T] {}
+            class Owner[T] { class Payload[U] {} }
+            unsafe func Reify[T]() {
+                let value = Box[Owner[*func(int32) int32].Payload[string]]()
+                let enclosing = value.GetType().GenericTypeArguments[0].GenericTypeArguments[0]
+                Console.WriteLine(enclosing.FullName)
+            }
+            Reify[int32]()
+            """;
+        var root = Path.Combine(
+            GetRepositoryRoot(),
+            "out",
+            "test-artifacts",
+            $"issue3255-managed-function-pointer-{Guid.NewGuid():N}");
+
+        try
+        {
+            var probeDirectory = PrepareEmptyDirectory(root);
+            var sourcePath = Path.Combine(probeDirectory, "Probe.gs");
+            File.WriteAllText(sourcePath, Source);
+            var result = CaptureDriverResult(() => Program.Main([sourcePath]));
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains(
+                "(7,27,7,45): error GS0521: Pointer and function-pointer types cannot be used as generic type arguments.",
                 result.Stdout,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);

@@ -1197,6 +1197,12 @@ decisions `make` exists to force. Declare-then-assign of a bare channel slot
 is rejected until a definite-assignment analysis (or a nullable-channel
 spelling) exists — both recorded as follow-ups in ADR-0159.
 
+## Pointer generic type arguments (GS0521)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. |
+
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
 GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage
