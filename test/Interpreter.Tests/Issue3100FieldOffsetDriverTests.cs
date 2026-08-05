@@ -1,4 +1,4 @@
-// <copyright file="Issue3100FieldOffsetParityTests.cs" company="GSharp">
+// <copyright file="Issue3100FieldOffsetDriverTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -13,9 +13,12 @@ using Xunit;
 
 namespace GSharp.Interpreter.Tests;
 
-/// <summary>Issues #3100 and #3115: explicit field layout must match the CLR.</summary>
+/// <summary>
+/// Issues #3100 and #3115: explicit field layout must match the CLR across
+/// bare <c>gsc</c>, explicit-output <c>gsc</c>, and <c>gsi</c> emitted drivers.
+/// </summary>
 [Collection("ConsoleIo")]
-public class Issue3100FieldOffsetParityTests
+public class Issue3100FieldOffsetDriverTests
 {
     public static TheoryData<string> LayoutCases => new()
     {
@@ -28,7 +31,7 @@ public class Issue3100FieldOffsetParityTests
 
     [Theory]
     [MemberData(nameof(LayoutCases))]
-    public void FieldLayout_EmitEvaluateAndGsiAgree(string layoutCase)
+    public void FieldLayout_AgreesAcrossEmittedDrivers(string layoutCase)
     {
         var source = SourceFor(layoutCase);
         var root = CreateEmptyDirectory(layoutCase);
@@ -36,14 +39,14 @@ public class Issue3100FieldOffsetParityTests
         {
             var bare = RunBareGsc(source, CreateEmptyDirectory(root, "bare"));
             var emitted = RunEmitted(source, layoutCase, CreateEmptyDirectory(root, "emit"));
-            var interpreted = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
+            var gsi = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
 
             var expected = layoutCase is "FullOverlap" or "PartialOverlap"
                 ? "2\n11\n22\n33\n44\n44"
                 : "1\n11\n22\n33\n33\n44";
             Assert.Equal(expected, emitted);
             Assert.Equal(emitted, bare);
-            Assert.Equal(emitted, interpreted);
+            Assert.Equal(emitted, gsi);
         }
         finally
         {
@@ -54,7 +57,7 @@ public class Issue3100FieldOffsetParityTests
     [Theory]
     [InlineData(0, "int64")]
     [InlineData(4, "int32")]
-    public void ReferenceAndPrimitiveOverlapReportsGs0518AcrossDrivers(
+    public void ReferenceAndPrimitiveOverlapReportsGs0518AcrossEmittedDrivers(
         int primitiveOffset,
         string primitiveType)
     {
@@ -72,11 +75,11 @@ public class Issue3100FieldOffsetParityTests
             var value = Bad{Text: "x", Bits: 0}
             Console.WriteLine(value.Bits)
             """;
-        AssertGs0518AcrossDrivers(source, "ReferencePrimitiveOverlap");
+        AssertGs0518AcrossEmittedDrivers(source, "ReferencePrimitiveOverlap");
     }
 
     [Fact]
-    public void ForwardDeclaredValueTypeOverlapReportsGs0518AcrossDrivers()
+    public void ForwardDeclaredValueTypeOverlapReportsGs0518AcrossEmittedDrivers()
     {
         const string Source = """
             package Issue3115ForwardOverlap
@@ -94,11 +97,11 @@ public class Issue3100FieldOffsetParityTests
             Console.WriteLine(value.Bits.Value)
             """;
 
-        AssertGs0518AcrossDrivers(Source, "ForwardValueOverlap");
+        AssertGs0518AcrossEmittedDrivers(Source, "ForwardValueOverlap");
     }
 
     [Fact]
-    public void NestedStructOverlapReportsGs0518AcrossDrivers()
+    public void NestedStructOverlapReportsGs0518AcrossEmittedDrivers()
     {
         const string Source = """
             package Issue3115NestedOverlap
@@ -115,13 +118,13 @@ public class Issue3100FieldOffsetParityTests
             Console.WriteLine(value)
             """;
 
-        AssertGs0518AcrossDrivers(Source, "NestedOverlap", 8, 29, 33);
+        AssertGs0518AcrossEmittedDrivers(Source, "NestedOverlap", 8, 29, 33);
     }
 
     [Theory]
     [InlineData(0, 6)]
     [InlineData(24, 30)]
-    public void MisalignedReferenceReportsGs0518WithRealLocationAcrossDrivers(
+    public void MisalignedReferenceReportsGs0518WithRealLocationAcrossEmittedDrivers(
         int paddingLines,
         int expectedLine)
     {
@@ -145,7 +148,7 @@ public class Issue3100FieldOffsetParityTests
                 "Console.WriteLine(value.Bits)",
             ]));
 
-        AssertGs0518AcrossDrivers(
+        AssertGs0518AcrossEmittedDrivers(
             source,
             $"MisalignedReference{paddingLines}",
             expectedLine,
@@ -155,7 +158,7 @@ public class Issue3100FieldOffsetParityTests
     }
 
     [Fact]
-    public void WorkingReferenceLayoutsRemainValidAcrossDrivers()
+    public void WorkingReferenceLayoutsRemainValidAcrossEmittedDrivers()
     {
         var source = ReferenceLayoutCorpusSource();
         var root = CreateEmptyDirectory("ReferenceLayoutCorpus");
@@ -163,11 +166,11 @@ public class Issue3100FieldOffsetParityTests
         {
             var bare = RunBareGsc(source, CreateEmptyDirectory(root, "bare"));
             var emitted = RunEmitted(source, CreateEmptyDirectory(root, "emit"));
-            var interpreted = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
+            var gsi = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
 
             Assert.Equal("A\n11\nC\nD\n22\n44\nE\n55", emitted);
             Assert.Equal(emitted, bare);
-            Assert.Equal(emitted, interpreted);
+            Assert.Equal(emitted, gsi);
         }
         finally
         {
@@ -262,7 +265,7 @@ public class Issue3100FieldOffsetParityTests
         return (sourcePath, stdout + stderr);
     }
 
-    private static void AssertGs0518AcrossDrivers(
+    private static void AssertGs0518AcrossEmittedDrivers(
         string source,
         string name,
         int line = 8,
@@ -282,14 +285,14 @@ public class Issue3100FieldOffsetParityTests
                 CreateEmptyDirectory(root, "emit"),
                 path => GSharp.Compiler.Program.Main(
                     ["/out:" + Path.Combine(root, "emit", "probe.dll"), path]));
-            var interpreted = RunDiagnostic(
+            var gsi = RunDiagnostic(
                 source,
                 CreateEmptyDirectory(root, "gsi"),
                 path => GSharp.Repl.Program.Main([path]));
 
             AssertGs0518(bare.SourcePath, bare.Output, line, startColumn, endColumn, reason);
             AssertGs0518(emitted.SourcePath, emitted.Output, line, startColumn, endColumn, reason);
-            AssertGs0518(interpreted.SourcePath, interpreted.Output, line, startColumn, endColumn, reason);
+            AssertGs0518(gsi.SourcePath, gsi.Output, line, startColumn, endColumn, reason);
         }
         finally
         {

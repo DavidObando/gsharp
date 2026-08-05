@@ -1,4 +1,4 @@
-// <copyright file="Issue2928TupleFunctionParityTests.cs" company="GSharp">
+// <copyright file="Issue2928TupleFunctionEmitTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -14,29 +14,18 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #2928: tuple-contained function values execute correctly through the
-/// compiled backend. The interpreter parity arm was retired with the
-/// evaluator in ADR-0156 Phase 3c (#3176); its cross-checked output is pinned
-/// as the golden value.
+/// compiled backend, pinned to an explicit output value.
 /// </summary>
-public class Issue2928TupleFunctionParityTests
+public class Issue2928TupleFunctionEmitTests
 {
     private const string Source = """
-        package TupleFunctionInterpreter
+        package TupleFunctionEmit
         import System
 
         let handler (int32) -> int32 = (value int32) -> value + 1
         let t = (handler, 0)
         Console.WriteLine(t.Item1(41))
         """;
-
-    [Fact]
-    public void TupleFunction_EmittedOutputMatchesPinnedParityValue()
-    {
-        // "42\n" is the cross-checked interpreter/emit parity value, pinned
-        // as a literal golden when the evaluator retired in ADR-0156
-        // Phase 3c (#3176): t.Item1 invokes handler, which returns 41 + 1.
-        Assert.Equal("42\n", CompileAndRun(Source));
-    }
 
     [Fact]
     public void TupleFunction_CompiledBackendExecutes()

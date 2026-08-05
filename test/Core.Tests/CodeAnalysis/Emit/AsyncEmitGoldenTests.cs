@@ -1,4 +1,4 @@
-// <copyright file="AsyncInterpVsEmitParityTests.cs" company="GSharp">
+// <copyright file="AsyncEmitGoldenTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -22,12 +22,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// the tree-walking evaluator in ADR-0156 Phase 3c (#3176) — the goldens were
 /// the cross-checked parity values and are preserved verbatim.
 /// </summary>
-public class AsyncInterpVsEmitParityTests
+public class AsyncEmitGoldenTests
 {
     [Fact]
-    public void Parity_PureAsyncSequence_TaskFromResult()
+    public void Emit_PureAsyncSequence_TaskFromResult()
     {
-        const string Source = @"package ParityPure
+        const string Source = @"package AsyncEmitPure
 import System
 import System.Threading.Tasks
 
@@ -44,13 +44,13 @@ t2.Wait()
 Console.WriteLine(t2.Result)
 ";
         const string Expected = "6\n15\n";
-        AssertParity(Source, Expected, nameof(Parity_PureAsyncSequence_TaskFromResult));
+        AssertEmitOutput(Source, Expected, nameof(Emit_PureAsyncSequence_TaskFromResult));
     }
 
     [Fact]
-    public void Parity_RealSuspension_TaskDelay()
+    public void Emit_RealSuspension_TaskDelay()
     {
-        const string Source = @"package ParityDelay
+        const string Source = @"package AsyncEmitDelay
 import System
 import System.Threading.Tasks
 
@@ -65,13 +65,13 @@ async func run() {
 run().Wait()
 ";
         const string Expected = "A\nB\nC\n";
-        AssertParity(Source, Expected, nameof(Parity_RealSuspension_TaskDelay));
+        AssertEmitOutput(Source, Expected, nameof(Emit_RealSuspension_TaskDelay));
     }
 
     [Fact]
-    public void Parity_AsyncWithMultipleAwaitsInTry()
+    public void Emit_AsyncWithMultipleAwaitsInTry()
     {
-        const string Source = @"package ParityMultiAwaitTry
+        const string Source = @"package AsyncEmitMultiAwaitTry
 import System
 import System.Threading.Tasks
 
@@ -95,13 +95,13 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "7\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncWithMultipleAwaitsInTry));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithMultipleAwaitsInTry));
     }
 
     [Fact]
-    public void Parity_AsyncWithNestedTryAroundAwait()
+    public void Emit_AsyncWithNestedTryAroundAwait()
     {
-        const string Source = @"package ParityNestedTry
+        const string Source = @"package AsyncEmitNestedTry
 import System
 import System.Threading.Tasks
 
@@ -127,16 +127,16 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "11\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncWithNestedTryAroundAwait));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithNestedTryAroundAwait));
     }
 
     [Fact]
-    public void Parity_AsyncTryFinally_RunsOnceOnNormalCompletion()
+    public void Emit_AsyncTryFinally_RunsOnceOnNormalCompletion()
     {
         // Regression for #137: with the IL `leave` fix, the finally must run
         // exactly once (after the try body completes), not on every async
         // suspension.
-        const string Source = @"package ParityFinallyOnce
+        const string Source = @"package AsyncEmitFinallyOnce
 import System
 import System.Threading.Tasks
 
@@ -157,13 +157,13 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "1\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncTryFinally_RunsOnceOnNormalCompletion));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncTryFinally_RunsOnceOnNormalCompletion));
     }
 
     [Fact]
-    public void Parity_AsyncWithTryCatch_AroundAwait()
+    public void Emit_AsyncWithTryCatch_AroundAwait()
     {
-        const string Source = @"package ParityTryCatch
+        const string Source = @"package AsyncEmitTryCatch
 import System
 import System.Threading.Tasks
 
@@ -183,13 +183,13 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "42\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncWithTryCatch_AroundAwait));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithTryCatch_AroundAwait));
     }
 
     [Fact]
-    public void Parity_AsyncWithTryFinally_AroundAwait()
+    public void Emit_AsyncWithTryFinally_AroundAwait()
     {
-        const string Source = @"package ParityTryFinally
+        const string Source = @"package AsyncEmitTryFinally
 import System
 import System.Threading.Tasks
 
@@ -209,13 +209,13 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "11\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncWithTryFinally_AroundAwait));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithTryFinally_AroundAwait));
     }
 
     [Fact]
-    public void Parity_AsyncAccumulator_MultipleAwaits()
+    public void Emit_AsyncAccumulator_MultipleAwaits()
     {
-        const string Source = @"package ParityAccum
+        const string Source = @"package AsyncEmitAccum
 import System
 import System.Threading.Tasks
 
@@ -233,13 +233,13 @@ t.Wait()
 Console.WriteLine(t.Result)
 ";
         const string Expected = "30\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncAccumulator_MultipleAwaits));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncAccumulator_MultipleAwaits));
     }
 
     [Fact]
-    public void Parity_SyncIterator_Sequence()
+    public void Emit_SyncIterator_Sequence()
     {
-        const string Source = @"package ParitySyncIter
+        const string Source = @"package AsyncEmitSyncIter
 import System
 import System.Collections.Generic
 
@@ -254,13 +254,13 @@ for x in nums() {
 }
 ";
         const string Expected = "1\n2\n3\n";
-        AssertParity(Source, Expected, nameof(Parity_SyncIterator_Sequence));
+        AssertEmitOutput(Source, Expected, nameof(Emit_SyncIterator_Sequence));
     }
 
     [Fact]
-    public void Parity_AsyncIterator_YieldWithAwait()
+    public void Emit_AsyncIterator_YieldWithAwait()
     {
-        const string Source = @"package ParityAsyncIter
+        const string Source = @"package AsyncEmitAsyncIter
 import System
 import System.Collections.Generic
 import System.Threading.Tasks
@@ -282,7 +282,7 @@ async func consume() {
 consume().Wait()
 ";
         const string Expected = "10\n20\n30\n";
-        AssertParity(Source, Expected, nameof(Parity_AsyncIterator_YieldWithAwait));
+        AssertEmitOutput(Source, Expected, nameof(Emit_AsyncIterator_YieldWithAwait));
     }
 
     [Fact]
@@ -315,10 +315,10 @@ await for x in gen() {
     }
 
     [Fact]
-    public void Parity_GoScope_AsyncTarget()
+    public void Emit_GoScope_AsyncTarget()
     {
         // Exercises the go+scope emit fix (Func<Task> path).
-        const string Source = @"package ParityGoScope
+        const string Source = @"package AsyncEmitGoScope
 import System
 import System.Threading.Tasks
 import Gsharp.Extensions.Go
@@ -334,10 +334,10 @@ scope {
 Console.WriteLine(""end"")
 ";
         const string Expected = "hello\nend\n";
-        AssertParity(Source, Expected, nameof(Parity_GoScope_AsyncTarget));
+        AssertEmitOutput(Source, Expected, nameof(Emit_GoScope_AsyncTarget));
     }
 
-    private static void AssertParity(string source, string expected, string contextName)
+    private static void AssertEmitOutput(string source, string expected, string contextName)
     {
         var emitOutput = RunEmitter(source, contextName);
 

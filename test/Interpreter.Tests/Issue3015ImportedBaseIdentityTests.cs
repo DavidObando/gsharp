@@ -190,10 +190,10 @@ public class Issue3015ImportedBaseIdentityTests
     }
 
     [Fact]
-    public void CompilerAndInterpreter_AgreeOnDerivedRuntimeType()
+    public void ExplicitEmitAndOracle_AgreeOnDerivedRuntimeType()
     {
         const string Source = """
-            package Issue3015.CompilerParity
+            package Issue3015.CompilerDriver
             import System
 
             class Sentinel : EventArgs {
@@ -203,7 +203,7 @@ public class Issue3015ImportedBaseIdentityTests
             Console.WriteLine(value.GetType().FullName)
             """;
 
-        var interpreterTypeName = Evaluate(Source).Trim();
+        var oracleTypeName = Evaluate(Source).Trim();
         var artifactDirectory = Path.Combine(
             GetRepositoryRoot(),
             "out",
@@ -228,8 +228,8 @@ public class Issue3015ImportedBaseIdentityTests
             var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
             var emittedType = Assert.Single(
                 assembly.GetTypes(),
-                static type => type.FullName == "Issue3015.CompilerParity.Sentinel");
-            Assert.Equal(emittedType.FullName, interpreterTypeName);
+                static type => type.FullName == "Issue3015.CompilerDriver.Sentinel");
+            Assert.Equal(emittedType.FullName, oracleTypeName);
         }
         finally
         {
@@ -263,10 +263,10 @@ public class Issue3015ImportedBaseIdentityTests
     }
 
     [Fact]
-    public void GenericTypeArguments_AgreeAcrossCompilerEmitAndInterpreter()
+    public void GenericTypeArguments_AgreeAcrossEmittedDrivers()
     {
         const string Source = """
-            package Issue3015.GenericParity
+            package Issue3015.GenericDrivers
             import System
 
             class Payload {
@@ -280,9 +280,9 @@ public class Issue3015ImportedBaseIdentityTests
             Console.WriteLine(Box[Box[Payload]]().GetType().FullName)
             """;
         const string Expected = """
-            Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Payload]]
-            Issue3015.GenericParity.Box`1[[System.String]]
-            Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Box`1[[Issue3015.GenericParity.Payload]]]]
+            Issue3015.GenericDrivers.Box`1[[Issue3015.GenericDrivers.Payload]]
+            Issue3015.GenericDrivers.Box`1[[System.String]]
+            Issue3015.GenericDrivers.Box`1[[Issue3015.GenericDrivers.Box`1[[Issue3015.GenericDrivers.Payload]]]]
 
             """;
 
@@ -290,18 +290,18 @@ public class Issue3015ImportedBaseIdentityTests
             GetRepositoryRoot(),
             "out",
             "test-artifacts",
-            $"issue3015-generic-parity-{Guid.NewGuid():N}");
+            $"issue3015-generic-drivers-{Guid.NewGuid():N}");
 
         try
         {
-            var compilerEvaluation = RunSourceDriver(Path.Combine(root, "gsc-eval"), Source, Program.Main);
-            Assert.EndsWith("Success.\n", compilerEvaluation);
-            compilerEvaluation = compilerEvaluation[..^"Success.\n".Length];
-            var interpreter = RunSourceDriver(Path.Combine(root, "gsi"), Source, GSharp.Repl.Program.Main);
+            var gscScript = RunSourceDriver(Path.Combine(root, "gsc-script"), Source, Program.Main);
+            Assert.EndsWith("Success.\n", gscScript);
+            gscScript = gscScript[..^"Success.\n".Length];
+            var gsiScript = RunSourceDriver(Path.Combine(root, "gsi"), Source, GSharp.Repl.Program.Main);
             var emitDirectory = Path.Combine(root, "gsc-emit");
             Directory.CreateDirectory(emitDirectory);
-            var emitSourcePath = Path.Combine(emitDirectory, "GenericParity.gs");
-            var assemblyPath = Path.Combine(emitDirectory, $"GenericParity-{Guid.NewGuid():N}.dll");
+            var emitSourcePath = Path.Combine(emitDirectory, "GenericDrivers.gs");
+            var assemblyPath = Path.Combine(emitDirectory, $"GenericDrivers-{Guid.NewGuid():N}.dll");
             File.WriteAllText(emitSourcePath, Source);
             _ = CaptureDriver(() => Program.Main(new[]
             {
@@ -314,7 +314,7 @@ public class Issue3015ImportedBaseIdentityTests
             Assert.NotEmpty(assembly.GetTypes());
             var entryPoint = assembly.EntryPoint
                 ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
-            var emitted = CaptureDriver(() =>
+            var explicitEmit = CaptureDriver(() =>
             {
                 entryPoint.Invoke(
                     null,
@@ -322,9 +322,9 @@ public class Issue3015ImportedBaseIdentityTests
                 return 0;
             });
 
-            Assert.Equal(Expected, NormalizeGenericTypeNames(compilerEvaluation));
-            Assert.Equal(Expected, NormalizeGenericTypeNames(emitted));
-            Assert.Equal(Expected, NormalizeGenericTypeNames(interpreter));
+            Assert.Equal(Expected, NormalizeGenericTypeNames(gscScript));
+            Assert.Equal(Expected, NormalizeGenericTypeNames(explicitEmit));
+            Assert.Equal(Expected, NormalizeGenericTypeNames(gsiScript));
         }
         finally
         {

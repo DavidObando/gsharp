@@ -15,11 +15,12 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #3099: interpreter-created generic backing types must preserve every
+/// Issue #3099: emitted generic backing types must preserve every
 /// G# type-argument kind instead of erasing value types to <see cref="object"/>.
 /// Issue #3137 extends the same emit-oracle matrix to reflected field shape.
-/// Issue #3180 covers enclosing generic parameters in the interactive evaluator;
-/// ADR-0156 file drivers remain compared against the emitted oracle.
+/// Issue #3180 covers enclosing generic parameters in the interactive emitted
+/// engine; ADR-0156 file drivers remain compared against explicit and interactive
+/// emitted hosts.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue3099TypeArgumentReificationTests
@@ -46,7 +47,7 @@ public class Issue3099TypeArgumentReificationTests
 
     [Theory]
     [MemberData(nameof(TypeArgumentCases))]
-    public void TypeArguments_AgreeAcrossInteractiveEvaluationEmitAndFileDrivers(
+    public void TypeArguments_AgreeAcrossEmittedHostsAndFileDrivers(
         string caseName,
         string declaration,
         string typeArgument)
@@ -60,18 +61,18 @@ public class Issue3099TypeArgumentReificationTests
 
         try
         {
-            var compilerFile = RunSourceDriver(
-                Path.Combine(root, "gsc-eval"),
+            var gscScript = RunSourceDriver(
+                Path.Combine(root, "gsc-script"),
                 source,
                 Program.Main);
-            Assert.EndsWith("Success.\n", compilerFile);
-            compilerFile = compilerFile[..^"Success.\n".Length];
+            Assert.EndsWith("Success.\n", gscScript);
+            gscScript = gscScript[..^"Success.\n".Length];
 
-            var gsiFile = RunSourceDriver(
+            var gsiScript = RunSourceDriver(
                 Path.Combine(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
-            var interactive = RunInteractive(source);
+            var interactiveEmit = RunInteractiveEmit(source);
 
             var emitDirectory = PrepareEmptyDirectory(Path.Combine(root, "gsc-emit"));
             var sourcePath = Path.Combine(emitDirectory, "Probe.gs");
@@ -90,7 +91,7 @@ public class Issue3099TypeArgumentReificationTests
             Assert.Contains(assembly.GetTypes(), type => type.FullName?.EndsWith(".Pair`2", StringComparison.Ordinal) == true);
             var entryPoint = assembly.EntryPoint
                 ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
-            var emitted = CaptureDriver(() =>
+            var explicitEmit = CaptureDriver(() =>
             {
                 entryPoint.Invoke(
                     null,
@@ -98,19 +99,19 @@ public class Issue3099TypeArgumentReificationTests
                 return 0;
             });
 
-            var expected = NormalizeGenericTypeNames(emitted);
-            var evaluated = NormalizeGenericTypeNames(interactive);
-            var compiledFile = NormalizeGenericTypeNames(compilerFile);
-            var interpretedFile = NormalizeGenericTypeNames(gsiFile);
+            var expected = NormalizeGenericTypeNames(explicitEmit);
+            var interactiveOutput = NormalizeGenericTypeNames(interactiveEmit);
+            var gscOutput = NormalizeGenericTypeNames(gscScript);
+            var gsiOutput = NormalizeGenericTypeNames(gsiScript);
             const string ControlShape =
                 "44\n2|Eleven:System.Int32:True:False:False|TwentyTwo:System.String:False:False:False\n";
             Assert.Contains(ControlShape, expected, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, evaluated, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, compiledFile, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, interpretedFile, StringComparison.Ordinal);
-            Assert.Equal(expected, evaluated);
-            Assert.Equal(expected, compiledFile);
-            Assert.Equal(expected, interpretedFile);
+            Assert.Contains(ControlShape, interactiveOutput, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, gscOutput, StringComparison.Ordinal);
+            Assert.Contains(ControlShape, gsiOutput, StringComparison.Ordinal);
+            Assert.Equal(expected, interactiveOutput);
+            Assert.Equal(expected, gscOutput);
+            Assert.Equal(expected, gsiOutput);
             Assert.Contains("11\n", expected);
             Assert.Contains("22\n", expected);
             Assert.Contains("33\n", expected);
@@ -192,7 +193,7 @@ public class Issue3099TypeArgumentReificationTests
         return CaptureDriver(() => driver([sourcePath]));
     }
 
-    private static string RunInteractive(string source)
+    private static string RunInteractiveEmit(string source)
     {
         // ADR-0156 Phase 3c (#3176): the interactive column runs on the
         // emitted submission-chaining engine.

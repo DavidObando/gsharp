@@ -20,7 +20,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// <summary>
 /// End-to-end emit tests for async iterator functions (IAsyncEnumerable/IAsyncEnumerator with yield + await).
 /// Tests consume the produced stream via C# reflection; the consumer-side `await for` lowering is exercised
-/// by <see cref="AsyncInterpVsEmitParityTests"/>.
+/// by <see cref="AsyncEmitGoldenTests"/>.
 /// </summary>
 public class AsyncIteratorEmitTests
 {

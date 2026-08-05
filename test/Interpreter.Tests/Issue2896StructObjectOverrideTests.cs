@@ -76,7 +76,7 @@ public class Issue2896StructObjectOverrideTests
     {
         Assert.Equal(
             "OVERRIDDEN-11\nOVERRIDDEN-11\nFalse\nFalse\n289611\n289611\n",
-            Evaluate(source));
+            RunEmittedOracle(source));
     }
 
     [Theory]
@@ -124,7 +124,7 @@ public class Issue2896StructObjectOverrideTests
     [InlineData("operatorEquals")]
     [InlineData("equals")]
     [InlineData("getHashCode")]
-    public async Task Issue3134_ClassIdentityAndStructValueEqualityMatchEmitter(string surface)
+    public async Task Issue3134_ClassIdentityAndStructValueEqualityAgreeAcrossEmittedDrivers(string surface)
     {
         var suffix = Guid.NewGuid().ToString("N");
         var source = BuildIssue3134Source(surface, suffix);
@@ -149,7 +149,7 @@ public class Issue2896StructObjectOverrideTests
     [InlineData("dataClass", "DataClass|True|True|False|False|False|True")]
     [InlineData("version", "Version|True|True|False|False|False|True")]
     [InlineData("typedStrings", "TypedStrings|True|True|False|False|False|True")]
-    public async Task Issue3173_ObjectReferenceEqualityMatchesEmitter(string specimen, string expected)
+    public async Task Issue3173_ObjectReferenceEqualityAgreesAcrossEmittedDrivers(string specimen, string expected)
     {
         var suffix = Guid.NewGuid().ToString("N");
         var source = BuildIssue3173Source(specimen, suffix);
@@ -289,7 +289,7 @@ public class Issue2896StructObjectOverrideTests
             SHARED-OVERRIDDEN-43
             SHARED-OVERRIDDEN-43
             """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
-            Evaluate(Source));
+            RunEmittedOracle(Source));
     }
 
     [Fact]
@@ -327,10 +327,10 @@ public class Issue2896StructObjectOverrideTests
         Assert.Equal(
             "DataValue(Number=7)\nDataValue(Number=7)\n"
                 + "Issue2896.Controls.DefaultValue\nIssue2896.Controls.DefaultValue\n",
-            Evaluate(Source));
+            RunEmittedOracle(Source));
     }
 
-    private static string Evaluate(string source)
+    private static string RunEmittedOracle(string source)
     {
         var result = EmittedOracle.Evaluate(source);
         var errors = result.Diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
@@ -884,9 +884,9 @@ public class Issue2896StructObjectOverrideTests
 
             return driver switch
             {
-                "gsc-script" => RunCompilerEvaluation(sourcePath),
+                "gsc-script" => RunGscScript(sourcePath),
                 "gsc-emit" => await RunEmittedBinaryAsync(directory, sourcePath, suffix),
-                "gsi" => RunInterpreter(sourcePath),
+                "gsi" => RunGsiScript(sourcePath),
                 _ => throw new ArgumentOutOfRangeException(nameof(driver), driver, null),
             };
         }
@@ -902,18 +902,18 @@ public class Issue2896StructObjectOverrideTests
         }
     }
 
-    private static string RunCompilerEvaluation(string sourcePath)
+    private static string RunGscScript(string sourcePath)
     {
         var result = CaptureConsole(() => CompilerProgram.Main(new[] { sourcePath }));
         Assert.True(
             result.ExitCode == 0,
-            $"gsc evaluation failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+            $"gsc script failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
         Assert.Equal(string.Empty, result.StandardError);
         Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
         return result.StandardOutput[..^"Success.\n".Length];
     }
 
-    private static string RunInterpreter(string sourcePath)
+    private static string RunGsiScript(string sourcePath)
     {
         var result = CaptureConsole(() => GSharp.Repl.Program.Main(new[] { sourcePath }));
         Assert.True(
