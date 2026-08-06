@@ -1464,6 +1464,22 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
+            // Issue #3292: a value-typed element of an array-backed
+            // collection (`ps[0]` over `[N]T`, `[]T`, or an imported CLR
+            // array) is real heap storage. Load the element's address
+            // (`ldelema`) so member writes and mutating instance calls hit
+            // the stored element in place instead of a spilled copy —
+            // mirroring the `ldsflda` chains issue #3185 established for
+            // submission globals and exactly what C# emits for
+            // `arr[i].M()` / `arr[i].X = v`. Map and CLR-indexer elements
+            // (no element address) keep the spill-to-temp copy path below.
+            if (receiver is BoundIndexExpression elementReceiver
+                && elementReceiver.IsArrayBackedElementAccess)
+            {
+                this.EmitElementAddress(elementReceiver);
+                return;
+            }
+
             // Issue #409 follow-up: a value-type receiver computed as an
             // rvalue (e.g. `makePoint(5, 6).Sum()` or
             // `makeOuter().Inner.Sum()` or `(a + b).Method()`) has no
@@ -1641,6 +1657,14 @@ internal sealed partial class MethodBodyEmitter
             return this.IsAddressableClrFieldChain(clrReceiver);
         }
 
+        // Issue #3292: an array-backed element is addressable via `ldelema`
+        // regardless of how the collection reference itself was produced
+        // (the array reference is the storage root).
+        if (fa.Receiver is BoundIndexExpression elementReceiver)
+        {
+            return elementReceiver.IsArrayBackedElementAccess;
+        }
+
         return false;
     }
 
@@ -1666,6 +1690,15 @@ internal sealed partial class MethodBodyEmitter
         if (access.Receiver == null)
         {
             return access.IsAddressableStaticField;
+        }
+
+        // Issue #3292: the value-typed field walk rests on an array-backed
+        // element load (`qs[0].B2.C = v` over an imported element struct) —
+        // the element address (`ldelema`) roots the chain, so the remaining
+        // `ldflda` links reach real storage.
+        if (access.Receiver is BoundIndexExpression elementReceiver)
+        {
+            return elementReceiver.IsArrayBackedElementAccess;
         }
 
         if (access.Receiver is not BoundClrPropertyAccessExpression inner)
@@ -1712,20 +1745,48 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        var inner = (BoundClrPropertyAccessExpression)access.Receiver;
-        if (!ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type))
+        if (access.Receiver is BoundIndexExpression elementReceiver)
         {
-            // Reference-typed link: the loaded object reference is the
-            // storage root for the remaining `ldflda` chain.
-            this.EmitExpression(inner);
+            // Issue #3292: the chain rests on an array/slice element — its
+            // `ldelema` address is the storage root for the remaining
+            // `ldflda` links.
+            this.EmitElementAddress(elementReceiver);
         }
         else
         {
-            this.EmitClrFieldAddressCore(inner);
+            var inner = (BoundClrPropertyAccessExpression)access.Receiver;
+            if (!ReflectionMetadataEmitter.IsValueTypeSymbol(inner.Type))
+            {
+                // Reference-typed link: the loaded object reference is the
+                // storage root for the remaining `ldflda` chain.
+                this.EmitExpression(inner);
+            }
+            else
+            {
+                this.EmitClrFieldAddressCore(inner);
+            }
         }
 
         this.il.OpCode(ILOpCode.Ldflda);
         this.il.Token(this.outer.memberRefs.GetFieldReference(field));
+    }
+
+    /// <summary>
+    /// Issue #3292: emits the managed-pointer address of an array-backed
+    /// element (<c>&lt;collection&gt;; &lt;index&gt;; ldelema T</c>). The
+    /// collection reference and index are each evaluated exactly once here;
+    /// duplicating contexts (compound member writes sharing this receiver
+    /// between their read and write sides) have any side-effecting
+    /// collection/index sub-expression pre-spilled into temp locals by
+    /// <c>SideEffectSpiller</c>, so re-emitting this chain is observably
+    /// pure there.
+    /// </summary>
+    /// <param name="element">The array-backed element access.</param>
+    private void EmitElementAddress(BoundIndexExpression element)
+    {
+        this.EmitExpression(element.Target);
+        this.EmitExpression(element.Index);
+        this.EmitLoadElementAddress(element.Type);
     }
 
     /// <summary>
@@ -1940,6 +2001,15 @@ internal sealed partial class MethodBodyEmitter
         {
             // Issue #3185: the receiver is a prior-cell submission global (or
             // a CLR field chain rooted at one); its address is on the stack.
+        }
+        else if (!receiverIsClass
+            && fa.Receiver is BoundIndexExpression elementReceiver
+            && elementReceiver.IsArrayBackedElementAccess)
+        {
+            // Issue #3292: the receiver is an array/slice element — root the
+            // address chain at the element (`ldelema`) so the field write
+            // mutates the stored element in place.
+            this.EmitElementAddress(elementReceiver);
         }
         else
         {
