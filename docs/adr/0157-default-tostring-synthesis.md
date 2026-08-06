@@ -1,7 +1,8 @@
 # ADR-0157: Default pretty-printing for user types — display-side, not synthesized
 
-- **Status**: Proposed — owner decision requested
-  ([#3208](https://github.com/DavidObando/gsharp/issues/3208))
+- **Status**: Accepted — 2026-08-06
+  ([#3208](https://github.com/DavidObando/gsharp/issues/3208); implementation
+  of the display-side `ReplValueFormatter` follows in a separate PR)
 - **Date**: 2026-08-06
 - **Phase**: Language surface / REPL ergonomics (ADR-0156 Phase 3
   semantic-alignment follow-up)
