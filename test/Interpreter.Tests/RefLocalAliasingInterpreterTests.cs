@@ -17,7 +17,7 @@ namespace GSharp.Interpreter.Tests;
 /// on the tree-walking evaluator; since ADR-0156 Phase 3c (#3176) submissions
 /// execute emitted, and the sources swapped the evaluator-only
 /// <c>print(string(x))</c> builtins for <c>Console.WriteLine</c> (the
-/// <c>print</c>/<c>string(T)</c> builtins have no emitted lowering — issues
+/// <c>print</c>/<c>string(T)</c> builtins were subsequently retired — issues
 /// #3245 and #3246).
 /// </summary>
 public class RefLocalAliasingInterpreterTests
@@ -201,9 +201,9 @@ probe()
         // evaluator-only diagnostic that retired with the tree-walking engine.
         // Under the emitted engine pointer ref-aliasing compiles and runs; the
         // nil dereference surfaces as a runtime NullReferenceException on the
-        // cell (GSI002). The source swaps the interpreter-only
-        // `print(string(r))` builtin for Console.WriteLine, which the emitter
-        // supports.
+        // cell (GSI002). The source swaps the interpreter-only (and since
+        // #3245/#3246 retired) `print(string(r))` builtin for
+        // Console.WriteLine, which the emitter supports.
         const string Source = """
             import System
             func probe() {
