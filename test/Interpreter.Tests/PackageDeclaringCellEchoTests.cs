@@ -18,8 +18,10 @@ namespace GSharp.Interpreter.Tests;
 /// because the chain recorded the wrong package. The engine now records
 /// the emitted package (<c>GlobalScope.Package</c>), making the echo and
 /// cross-cell visibility work. The one structural residue — two cells
-/// redeclaring the <em>same</em> package — is pinned below and tracked by
-/// <see href="https://github.com/DavidObando/gsharp/issues/3297">#3297</see>.
+/// redeclaring the <em>same</em> package — was
+/// <see href="https://github.com/DavidObando/gsharp/issues/3297">#3297</see>,
+/// fixed by assembly-qualified steering in <c>SubmissionImports</c>; see
+/// <see cref="PackageRedeclarationAcrossCellsTests"/> for the full matrix.
 /// </summary>
 public sealed class PackageDeclaringCellEchoTests : IDisposable
 {
@@ -71,15 +73,17 @@ public sealed class PackageDeclaringCellEchoTests : IDisposable
     }
 
     [Fact]
-    public void SamePackageTwiceOlderDeclarationCurrentlyUnreachable()
+    public void SamePackageTwiceExtendsThePackage()
     {
-        // Pins the #3297 limitation: SubmissionImports resolves a prior
-        // cell's members via the namespace-qualified "foo.<Program>" name
-        // only, so when two submission assemblies both emit namespace
-        // `foo`, resolution collides on the newest and the older cell's
-        // declarations cannot be reached. When #3297 lands
-        // assembly-qualified steering, `a()` should evaluate to 1 and this
-        // pin flips into the positive assertion.
+        // #3297: a later `package foo` cell EXTENDS the package. Each
+        // submission emits into its own assembly (`gsi$1`, `gsi$2`), so the
+        // two `foo.<Program>` containers never physically collide; the
+        // historical failure was that SubmissionImports resolved a prior
+        // cell's container through the namespace-qualified name only, and
+        // the flat lookup always answered with the newest assembly's copy.
+        // Assembly-qualified steering (ReferenceResolver.TryResolveTypeInAssembly)
+        // resolves each submission's members from that submission's own
+        // assembly, so both cells' declarations stay reachable.
         Assert.False(engine.Evaluate("package foo\nfunc a() int {\n    return 1\n}").HasError);
         Assert.False(engine.Evaluate("package foo\nfunc b() int {\n    return 2\n}").HasError);
 
@@ -88,7 +92,7 @@ public sealed class PackageDeclaringCellEchoTests : IDisposable
         Assert.Equal(2, useNewest.Value);
 
         var useOldest = engine.Evaluate("a()");
-        Assert.True(useOldest.HasError);
-        Assert.Contains(useOldest.Diagnostics, d => d.Message.Contains("a", StringComparison.Ordinal));
+        Assert.False(useOldest.HasError, string.Join("; ", useOldest.Diagnostics));
+        Assert.Equal(1, useOldest.Value);
     }
 }

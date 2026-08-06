@@ -728,6 +728,74 @@ public sealed class ReferenceResolver : IDisposable
     }
 
     /// <summary>
+    /// Issue #3297: tries to resolve a fully-qualified type name from the
+    /// specific referenced assembly whose simple name is
+    /// <paramref name="assemblySimpleName"/>, rather than across the whole
+    /// reference set. Interactive submission binding needs this
+    /// assembly-qualified steering: two REPL cells that redeclare the same
+    /// <c>package foo</c> emit into distinct submission assemblies
+    /// (<c>gsi$1</c>, <c>gsi$2</c>) that each define a <c>foo.&lt;Program&gt;</c>
+    /// container, so the flat name lookup of
+    /// <see cref="TryResolveType(string, out System.Type)"/> can only ever answer with one
+    /// of them and the other submission's declarations become unreachable.
+    /// Resolving against the declaring submission's own assembly keeps every
+    /// submission's members addressable. Enforces the same external-visibility
+    /// gate as the user-facing flat lookup.
+    /// </summary>
+    /// <param name="assemblySimpleName">The simple name of the declaring assembly (e.g. <c>gsi$3</c>).</param>
+    /// <param name="fullName">The fully-qualified type name (e.g. <c>foo.&lt;Program&gt;</c>).</param>
+    /// <param name="type">The resolved <see cref="Type"/>, if found.</param>
+    /// <returns><c>true</c> if the named assembly defines a matching, externally visible type; otherwise <c>false</c>.</returns>
+    public bool TryResolveTypeInAssembly(string assemblySimpleName, string fullName, out Type type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(assemblySimpleName) || string.IsNullOrEmpty(fullName))
+        {
+            return false;
+        }
+
+        // "::" cannot occur in a CLR type full name (nested types use '+',
+        // generics use '`'), so these keys never collide with the flat
+        // full-name keys sharing the cache.
+        var cacheKey = assemblySimpleName + "::" + fullName;
+        if (resolveCache.TryGetValue(cacheKey, out var cached))
+        {
+            if (ReferenceEquals(cached, MissTypeSentinel))
+            {
+                return false;
+            }
+
+            type = cached;
+            return true;
+        }
+
+        Type resolved = null;
+        foreach (var asm in assemblies)
+        {
+            if (!string.Equals(asm.GetName().Name, assemblySimpleName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            resolved = SafeGetType(asm, fullName);
+            if (resolved != null)
+            {
+                break;
+            }
+        }
+
+        if (resolved == null || !IsExternallyResolvable(resolved))
+        {
+            resolveCache.TryAdd(cacheKey, MissTypeSentinel);
+            return false;
+        }
+
+        resolveCache.TryAdd(cacheKey, resolved);
+        type = resolved;
+        return true;
+    }
+
+    /// <summary>
     /// Issue #526: resolves a nested CLR type by name on a containing
     /// <paramref name="containingType"/>. Used by the binder to walk a
     /// dotted-qualifier type clause (e.g. <c>Outer.Inner.DeepInner</c>) one
