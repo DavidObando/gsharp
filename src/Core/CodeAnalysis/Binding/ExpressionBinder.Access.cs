@@ -57,13 +57,34 @@ internal sealed partial class ExpressionBinder
         if (methods.Length == 1 && !methods[0].IsGeneric)
         {
             var only = methods[0];
+
+            // Issue #3248: the candidate comes from the receiver type's
+            // DEFINITION (a constructed StructSymbol forwards `Methods` to
+            // it), so its parameter/return types still reference the
+            // declaring class's own type parameters. Substitute the
+            // signature through the receiver's construction of the declaring
+            // definition (resolved along the base chain) so the group's
+            // FunctionType carries the receiver's instantiation. Without
+            // this, a deferred method group like `holder.Count` inside
+            // `GetCounter[T](holder Holder[T])` kept `Holder`'s class type
+            // parameter in its function type and the emitter encoded the
+            // delegate TypeSpec with a class `Var` slot in a context that
+            // only has method generics (invalid metadata;
+            // BadImageFormatException at runtime).
+            var owner = receiver?.Type is StructSymbol receiverStruct
+                && only.ReceiverType is StructSymbol declaredReceiver
+                    ? TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver)
+                    : null;
+
             var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(only.Parameters.Length);
             foreach (var p in only.Parameters)
             {
-                paramTypes.Add(p.Type);
+                paramTypes.Add(owner?.SubstituteMemberType(p.Type) ?? p.Type);
             }
 
-            var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), this.MethodGroupObservableReturnType(only));
+            var returnType = this.MethodGroupObservableReturnType(only);
+            returnType = owner?.SubstituteMemberType(returnType) ?? returnType;
+            var fnType = FunctionTypeSymbol.Get(paramTypes.MoveToImmutable(), returnType);
             return new BoundMethodGroupExpression(null, receiver, only, fnType);
         }
 

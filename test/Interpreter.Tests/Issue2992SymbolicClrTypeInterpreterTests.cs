@@ -204,7 +204,7 @@ public class Issue2992SymbolicClrTypeInterpreterTests
         Assert.Equal("2\n", RunSubmission(source));
     }
 
-    [Fact(Skip = "Issue #3248: a method group over an open-generic receiver method deferred through a generic function emits bad IL (BadImageFormatException at runtime). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip when #3248 lands.")]
+    [Fact]
     public void DeferredMethodGroupRetainsClassTypeArguments()
     {
         var source = """
@@ -230,6 +230,130 @@ public class Issue2992SymbolicClrTypeInterpreterTests
             """;
 
         Assert.Equal("3\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredMethodGroupRetainsClassTypeArgumentsAtReferenceType()
+    {
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                func Count(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            func GetCounter[T](holder Holder[T]) (List[T]) -> int32 {
+                return holder.Count
+            }
+
+            var holder = Holder[string]()
+            var counter = GetCounter[string](holder)
+            var words = List[string]()
+            words.Add("a")
+            words.Add("b")
+            Console.WriteLine(counter(words))
+            """;
+
+        Assert.Equal("2\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredMethodGroupOverloadPickRetainsClassTypeArguments()
+    {
+        // Issue #3248 (overload path): a multi-candidate group defers overload
+        // selection to the target-typed conversion, which closes each candidate
+        // signature through the receiver's construction.
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                func Count(items List[T]) int32 {
+                    return items.Count
+                }
+
+                func Count(items List[T], extra int32) int32 {
+                    return items.Count + extra
+                }
+            }
+
+            func GetCounter[T](holder Holder[T]) (List[T]) -> int32 {
+                return holder.Count
+            }
+
+            var holder = Holder[int32]()
+            var counter = GetCounter[int32](holder)
+            var numbers = List[int32]()
+            numbers.Add(4)
+            numbers.Add(5)
+            Console.WriteLine(counter(numbers))
+            """;
+
+        Assert.Equal("2\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredMethodGroupThroughBaseChainRetainsClassTypeArguments()
+    {
+        // Issue #3248 (base-chain shape): the candidate is declared on the
+        // generic base, so the substitution owner is resolved along the
+        // receiver's base chain.
+        var source = """
+            import System.Collections.Generic
+
+            open class Base[T any] {
+                func Count(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            class Derived[T any] : Base[T] {
+            }
+
+            func GetCounter[T](d Derived[T]) (List[T]) -> int32 {
+                return d.Count
+            }
+
+            var d = Derived[int32]{}
+            var counter = GetCounter[int32](d)
+            var numbers = List[int32]()
+            numbers.Add(7)
+            Console.WriteLine(counter(numbers))
+            """;
+
+        Assert.Equal("1\n", RunSubmission(source));
+    }
+
+    [Fact]
+    public void DeferredMethodGroupNaturalTypeRetainsClassTypeArguments()
+    {
+        // Issue #3248 (natural-type shape): the group materializes into a
+        // `var` local (no conversion target), so the natural FunctionType
+        // built at member lookup must already carry the receiver's
+        // instantiation.
+        var source = """
+            import System.Collections.Generic
+
+            class Holder[T any] {
+                func Count(items List[T]) int32 {
+                    return items.Count
+                }
+            }
+
+            func GetCount[T](holder Holder[T], items List[T]) int32 {
+                var counter = holder.Count
+                return counter(items)
+            }
+
+            var holder = Holder[int32]()
+            var numbers = List[int32]()
+            numbers.Add(1)
+            numbers.Add(2)
+            Console.WriteLine(GetCount[int32](holder, numbers))
+            """;
+
+        Assert.Equal("2\n", RunSubmission(source));
     }
 
     [Fact]
