@@ -169,7 +169,7 @@ public sealed class SubmissionImports
             var metadataName = arity == 0
                 ? name
                 : name + "`" + arity.ToString(CultureInfo.InvariantCulture);
-            return references.TryResolveType(submission.PackageName + "." + metadataName, out clrType);
+            return references.TryResolveTypeInAssembly(submission.AssemblyName, submission.PackageName + "." + metadataName, out clrType);
         }
 
         return false;
@@ -225,8 +225,14 @@ public sealed class SubmissionImports
         return arities.Contains(0) ? 0 : arities[0];
     }
 
+    // Issue #3297: resolve against the declaring submission's own assembly,
+    // not the flat namespace-qualified name. Two cells that redeclare the
+    // same `package foo` each emit a `foo.<Program>` container into their own
+    // submission assembly (`gsi$1`, `gsi$2`); the flat lookup collides on the
+    // newest, which made the older cell's declarations unreachable even
+    // though the newest-first declaration walk had correctly found them.
     private static bool TryResolveProgramType(ReferenceResolver references, SubmissionReference submission, out Type programType)
-        => references.TryResolveType(submission.PackageName + "." + ProgramTypeName, out programType);
+        => references.TryResolveTypeInAssembly(submission.AssemblyName, submission.PackageName + "." + ProgramTypeName, out programType);
 }
 
 /// <summary>
