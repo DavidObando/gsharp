@@ -1,8 +1,9 @@
 # ADR-0157: Default pretty-printing for user types — display-side, not synthesized
 
 - **Status**: Accepted — 2026-08-06
-  ([#3208](https://github.com/DavidObando/gsharp/issues/3208); implementation
-  of the display-side `ReplValueFormatter` follows in a separate PR)
+  ([#3208](https://github.com/DavidObando/gsharp/issues/3208); implemented in
+  the same change — `src/Repl/Engine/ReplValueFormatter.cs`, wired at the
+  three REPL echo sites and pinned by `Adr0157ReplValueFormatterTests`)
 - **Date**: 2026-08-06
 - **Phase**: Language surface / REPL ergonomics (ADR-0156 Phase 3
   semantic-alignment follow-up)
@@ -139,11 +140,14 @@ spike validates:
 - **Cost**: zero metadata; measured ~5 µs per echo (spike), paid once per
   cell render, only in the REPL.
 
-One scoping knob is left to the implementation PR: whether the trigger
-applies to *any* override-less value (Roslyn's `ObjectFormatter` posture —
-also improves override-less imported CLR types) or is restricted to types
-from session/user assemblies. The spike implements and this ADR recommends
-the general trigger, with the throwing-getter guard as the safety net.
+One scoping knob stays open for tuning: whether the trigger applies to
+*any* override-less value (Roslyn's `ObjectFormatter` posture — also
+improves override-less imported CLR types) or is restricted to types from
+session/user assemblies. The implementation ships the general trigger, as
+the spike validated and this ADR recommends, with the throwing-getter guard
+as the safety net; it may be tightened later if real sessions surface
+pathological BCL shapes (the format is diagnostics-only, so tightening is
+not a compatibility event).
 
 ### What this deliberately leaves alone
 
@@ -186,8 +190,11 @@ Measurements (Debug, .NET 10, Apple Silicon; all 7 tests green):
   ever printed.
 
 The formatter prototype (~130 lines including the contract's guards) lives
-in the spike as `SpikeValueFormatter`; the implementation PR moves it to
-`src/Repl/Engine` and swaps the three echo sites.
+in the spike as `SpikeValueFormatter`; the accepted implementation is
+`src/Repl/Engine/ReplValueFormatter.cs`, wired at the three echo sites,
+with behavioral pins (including the ADR-0154 reverted-hunk witness) in
+`test/Interpreter.Tests/Adr0157ReplValueFormatterTests.cs`. The spike file
+stays untouched as ADR evidence, per the ADR-0156 precedent.
 
 ## Consequences
 
