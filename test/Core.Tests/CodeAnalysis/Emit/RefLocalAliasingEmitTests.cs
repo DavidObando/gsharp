@@ -110,6 +110,52 @@ tweak()
         Assert.Contains("17", output);
     }
 
+    [Fact]
+    public void LetRef_FromEndIndex_WritesThroughAlias()
+    {
+        // Issue #3247: `let ref m = arr[^1]` — the from-end lowering spills
+        // the receiver and offset into temps; the alias then takes the element
+        // address (ldelema) once the prefix has run.
+        const string Source = @"package LetRefFromEnd
+import System
+
+func tweak() {
+    var arr = []int32{10, 20, 30}
+    let ref m = arr[^1]
+    m = 99
+    Console.WriteLine(""${arr[0]},${arr[1]},${arr[2]}"")
+}
+
+tweak()
+";
+        var output = CompileAndRun(Source, "LetRefFromEnd");
+        Assert.Contains("10,20,99", output);
+    }
+
+    [Fact]
+    public void LetRef_FromEndNonConstantOffset_CapturesElementAtDeclaration()
+    {
+        // Issue #3247: `^expr` with a non-constant offset — the offset is
+        // evaluated once at the declaration; later mutation of the offset
+        // variable must not re-target the alias.
+        const string Source = @"package LetRefFromEndVar
+import System
+
+func tweak() {
+    var arr = []int32{10, 20, 30}
+    var k int32 = 2
+    let ref m = arr[^k]
+    k = 1
+    m = 77
+    Console.WriteLine(""${arr[0]},${arr[1]},${arr[2]}"")
+}
+
+tweak()
+";
+        var output = CompileAndRun(Source, "LetRefFromEndVar");
+        Assert.Contains("10,77,30", output);
+    }
+
     private static string CompileAndRun(string source, string contextName)
     {
         using var peStream = new MemoryStream();

@@ -76,6 +76,63 @@ tweak()
     }
 
     [Fact]
+    public void LetRef_FromEndIndex_BindsCleanly()
+    {
+        // Issue #3247: `xs[^1]` binds as a BoundBlockExpression (receiver +
+        // offset spilled into temps); the ref-alias binder must sink the
+        // address-of onto the trailing element access instead of wrapping the
+        // block (which ICEd the emitter with GS9998).
+        var source = @"
+func tweak() {
+    var arr = []int32{10, 20, 30}
+    let ref m = arr[^1]
+    m = 99
+}
+tweak()
+0
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void LetRef_FromEndIndexOnString_ReportsGS0256()
+    {
+        // Issue #3247: a string's from-end element access lowers to the CLR
+        // counted indexer (get_Chars), which is not an lvalue — diagnostic,
+        // never an ICE.
+        var source = @"
+func tweak() {
+    var s = ""abc""
+    let ref c = s[^1]
+    c = 'z'
+}
+tweak()
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0256");
+    }
+
+    [Fact]
+    public void LetRef_FromEndIndexOnMap_ReportsGS0116()
+    {
+        // Issue #3247: a map has no length-based element order, so `m[^1]` is
+        // not indexable by System.Index — diagnostic, never an ICE.
+        var source = @"
+func tweak() {
+    var m = map[string,int32]{""a"": 1}
+    let ref v = m[^1]
+    v = 2
+}
+tweak()
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0116");
+    }
+
+    [Fact]
     public void LetRef_NonLvalueRhs_ReportsGS0256()
     {
         var source = @"
