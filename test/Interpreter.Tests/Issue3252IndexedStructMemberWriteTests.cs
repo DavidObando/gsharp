@@ -185,8 +185,9 @@ public sealed class Issue3252IndexedStructMemberWriteTests
     /// a mutating method call on a map element fails outright with a
     /// PRE-EXISTING emitter error (GS9998 NullReferenceException — present
     /// on main before #3292, reproducible with `gsc` on
-    /// <c>m[1].Bump()</c>); pinned here only as "does not silently succeed",
-    /// so a change in either direction (fix or in-place leak) is caught.
+    /// <c>m[1].Bump()</c>; tracked as issue #3301); pinned here only as
+    /// "does not silently succeed", so a change in either direction (fix or
+    /// in-place leak) is caught.
     /// </summary>
     [Fact]
     public void MutatingMethodOnMapElementDoesNotSilentlySucceed()
