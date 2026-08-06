@@ -2044,6 +2044,80 @@ internal sealed class ImportedMemberRefFactory
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
     }
 
+    /// <summary>
+    /// Issue #3301: gets a MemberRef for
+    /// <c>Dictionary`2::TryGetValue(!0, out !1)</c> parented at the reified
+    /// <see cref="GetMapTypeSpec"/> TypeSpec, for a <c>map[K, V]</c> index
+    /// read whose <see cref="TypeSymbol.ClrType"/> is null — a map keyed or
+    /// valued by a same-compilation user struct (or an in-scope type
+    /// parameter, #1481). Mirrors <see cref="GetMapSetItemReference"/>.
+    /// </summary>
+    /// <param name="mapType">The map type whose backing dictionary is read.</param>
+    /// <returns>The <c>TryGetValue</c> MemberRef handle.</returns>
+    internal MemberReferenceHandle GetMapTryGetValueReference(MapTypeSymbol mapType)
+    {
+        var parent = this.GetMapTypeSpec(mapType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                2,
+                returnType: r => r.Type().Boolean(),
+                parameters: ps =>
+                {
+                    ps.AddParameter().Type().GenericTypeParameter(0);
+                    ps.AddParameter().Type(isByRef: true).GenericTypeParameter(1);
+                });
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("TryGetValue"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #3301: gets a MemberRef for <c>Dictionary`2::Remove(!0)</c>
+    /// parented at the reified <see cref="GetMapTypeSpec"/> TypeSpec, for a
+    /// <c>delete(m, k)</c> on a <c>map[K, V]</c> whose
+    /// <see cref="TypeSymbol.ClrType"/> is null. Mirrors
+    /// <see cref="GetMapSetItemReference"/>.
+    /// </summary>
+    /// <param name="mapType">The map type whose backing dictionary is mutated.</param>
+    /// <returns>The <c>Remove</c> MemberRef handle.</returns>
+    internal MemberReferenceHandle GetMapRemoveReference(MapTypeSymbol mapType)
+    {
+        var parent = this.GetMapTypeSpec(mapType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(
+                1,
+                returnType: r => r.Type().Boolean(),
+                parameters: ps => ps.AddParameter().Type().GenericTypeParameter(0));
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("Remove"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
+    /// <summary>
+    /// Issue #3301: gets a MemberRef for <c>Dictionary`2::get_Count()</c>
+    /// parented at the reified <see cref="GetMapTypeSpec"/> TypeSpec, for a
+    /// <c>len(m)</c> on a <c>map[K, V]</c> whose
+    /// <see cref="TypeSymbol.ClrType"/> is null. Mirrors
+    /// <see cref="GetMapSetItemReference"/>.
+    /// </summary>
+    /// <param name="mapType">The map type whose backing dictionary is counted.</param>
+    /// <returns>The <c>get_Count</c> MemberRef handle.</returns>
+    internal MemberReferenceHandle GetMapGetCountReference(MapTypeSymbol mapType)
+    {
+        var parent = this.GetMapTypeSpec(mapType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, returnType: r => r.Type().Int32(), parameters: _ => { });
+        return this.emitCtx.Metadata.AddMemberReference(
+            parent: parent,
+            name: this.emitCtx.Metadata.GetOrAddString("get_Count"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+    }
+
     // ADR-0087 §3 R6: cache reified delegate metadata by function shape and
     // the active generic-remap scope (issue #3163). The same interned
     // FunctionTypeSymbol can encode as VAR inside a synthesized generic class

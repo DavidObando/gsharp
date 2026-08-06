@@ -367,18 +367,34 @@ internal sealed partial class MethodBodyEmitter
         // `get_Item` would.
         var mapType = (MapTypeSymbol)idx.Target.Type;
         var dictType = mapType.ClrType;
-        var tryGet = dictType.GetMethod(
-            "TryGetValue",
-            new[] { mapType.KeyType.ClrType, mapType.ValueType.ClrType.MakeByRefType() })
-            ?? throw new InvalidOperationException(
-                $"Dictionary type '{dictType.FullName}' has no TryGetValue(K, out V) method.");
+
+        // Issue #3301: a map keyed or valued by a same-compilation user
+        // struct has no erased CLR Dictionary<,> to reflect on
+        // (MapTypeSymbol.ClrType is null until after emission — the #409
+        // symbol-only value types), so the reflection lookup below would
+        // NRE. Route the call through the reified TypeSpec-parented
+        // MemberRef instead, mirroring the #1481 symbolic map-literal path.
+        MemberReferenceHandle tryGetRef;
+        if (dictType == null)
+        {
+            tryGetRef = this.outer.memberRefs.GetMapTryGetValueReference(mapType);
+        }
+        else
+        {
+            var tryGet = dictType.GetMethod(
+                "TryGetValue",
+                new[] { mapType.KeyType.ClrType, mapType.ValueType.ClrType.MakeByRefType() })
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no TryGetValue(K, out V) method.");
+            tryGetRef = this.outer.memberRefs.GetMethodReference(tryGet);
+        }
 
         var slot = this.mapIndexSlots[idx];
         this.EmitExpression(idx.Target);
         this.EmitExpression(idx.Index);
         this.il.LoadLocalAddress(slot);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(tryGet));
+        this.il.Token(tryGetRef);
 
         // Issue #1714: TryGetValue zero-initialises the out V parameter via the
         // CLR default when the key is missing — for V == string that CLR
@@ -415,9 +431,15 @@ internal sealed partial class MethodBodyEmitter
         var targetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
         var mapType = (MapTypeSymbol)targetType;
         var dictType = mapType.ClrType;
-        var setItem = dictType.GetMethod("set_Item")
-            ?? throw new InvalidOperationException(
-                $"Dictionary type '{dictType.FullName}' has no set_Item method.");
+
+        // Issue #3301: same-compilation user-struct key/value — no erased
+        // CLR Dictionary<,> to reflect on; use the #1481 symbolic MemberRef.
+        var setItemRef = dictType == null
+            ? this.outer.memberRefs.GetMapSetItemReference(mapType)
+            : this.outer.memberRefs.GetMethodReference(
+                dictType.GetMethod("set_Item")
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no set_Item method."));
 
         var tmp = this.indexAssignmentValueSlots[ixa];
         if (ixa.TargetExpression != null)
@@ -434,7 +456,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(tmp);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(setItem));
+        this.il.Token(setItemRef);
         this.il.LoadLocal(tmp);
     }
 
