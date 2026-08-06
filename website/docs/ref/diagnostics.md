@@ -624,15 +624,15 @@ Cause/fix:
 
 ## Function-type clause `func(...)` deprecation (GS0303)
 
-`(T1, T2,...) -> R` the canonical function-type clause spelling — the type spelling now matches the lambda expression form introduced in. The legacy `func(...) R` and `async func(...) R` type-clause spellings remain accepted for one release to ease migration, but every legacy occurrence produces a warning.
+`(T1, T2,...) -> R` the canonical function-type clause spelling — the type spelling now matches the lambda expression form introduced in. The legacy `func(...) R` and `async func(...) R` type-clause spellings remain accepted for one release to ease migration, but every legacy occurrence produces a warning. The managed function-pointer form `*func(...) R` is a distinct ADR-0122 construct and is not deprecated.
 
 | Code | Severity | Message | Example trigger |
 |------|----------|--------------------------|-----------------|
-| GS0303 | Warning | `'func(...)' function-type clauses are deprecated; use '(T) -> R' instead (ADR-0075).` | `var f func(int32) int32 = …` — rewrite as `var f (int32) -> int32 = …`. Async variant: `async func(T) R` → `async (T) -> R`. |
+| GS0303 | Warning | `'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122).` | `var f func(int32) int32 = …` — rewrite as `var f (int32) -> int32 = …`. Async variant: `async func(T) R` → `async (T) -> R`. |
 
 Cause/fix:
 
-- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), and `delegate func(...)` named-delegate declarations all keep `func`. A future release will remove the legacy type-clause spelling and turn it into a parse error.
+- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), `delegate func(...)` named-delegate declarations, and `*func(...) R` managed function-pointer types all keep `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398. A future release will remove the legacy type-clause spelling and turn it into a parse error.
 
 
 ## Lambda binding type-inference diagnostics (GS0304)
