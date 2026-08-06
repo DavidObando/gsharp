@@ -36,7 +36,7 @@ public class Compilation
     /// </summary>
     /// <param name="syntaxTrees">The syntax trees.</param>
     public Compilation(params SyntaxTree[] syntaxTrees)
-        : this(null, references: null, syntaxTrees)
+        : this(references: null, syntaxTrees)
     {
     }
 
@@ -47,28 +47,13 @@ public class Compilation
     /// <param name="references">The reference resolver to use for imported CLR type lookups.</param>
     /// <param name="syntaxTrees">The syntax trees.</param>
     public Compilation(ReferenceResolver references, params SyntaxTree[] syntaxTrees)
-        : this(null, references, syntaxTrees)
     {
-    }
-
-    private Compilation(Compilation previous, ReferenceResolver references, SyntaxTree[] syntaxTrees)
-    {
-        Previous = previous;
         SyntaxTrees = syntaxTrees.ToImmutableArray();
-        References = references ?? previous?.References;
-        ImplicitSystemImport = previous?.ImplicitSystemImport ?? true;
-        IsLibrary = previous?.IsLibrary ?? false;
-        PreprocessorSymbols = previous?.PreprocessorSymbols ?? ImmutableHashSet<string>.Empty;
-        WarnOnMissingDocumentation = previous?.WarnOnMissingDocumentation ?? false;
-        Logger = previous?.Logger ?? NullLogger.Instance;
-        EmbeddedResources = previous?.EmbeddedResources ?? ImmutableArray<(string Name, byte[] Data, bool IsPublic)>.Empty;
-        debugInformation = CloneDebugInformation(previous?.DebugInformation);
+        References = references;
+        ImplicitSystemImport = true;
+        EmbeddedResources = ImmutableArray<(string Name, byte[] Data, bool IsPublic)>.Empty;
+        debugInformation = CloneDebugInformation(null);
     }
-
-    /// <summary>
-    /// Gets the previous compilation.
-    /// </summary>
-    public Compilation Previous { get; }
 
     /// <summary>
     /// Gets the syntax trees.
@@ -96,9 +81,7 @@ public class Compilation
     /// executable. When <see langword="true"/>, top-level statements are an
     /// error (ADR-0066 deferred decision D4 — mirrors C#'s CS8805), since
     /// the synthesized <c>&lt;Main&gt;$</c> would never run from a library
-    /// assembly. Defaults to <see langword="false"/>. Inherits from
-    /// <see cref="Previous"/> when chained, matching the inheritance shape
-    /// of <see cref="ImplicitSystemImport"/>.
+    /// assembly. Defaults to <see langword="false"/>.
     /// </summary>
     public bool IsLibrary { get; set; } = false;
 
@@ -117,9 +100,7 @@ public class Compilation
     /// emitted normally. Defaults to <see cref="ImmutableHashSet{T}.Empty"/>
     /// — equivalent to "no preprocessor symbols defined" — so
     /// conditional methods are elided by default unless the embedder opts
-    /// in. Setting <c>null</c> is normalised to the empty set. Inherits
-    /// from <see cref="Previous"/> when chained, matching the inheritance
-    /// shape of <see cref="ImplicitSystemImport"/>.
+    /// in. Setting <c>null</c> is normalised to the empty set.
     /// </summary>
     public ImmutableHashSet<string> PreprocessorSymbols
     {
@@ -132,11 +113,8 @@ public class Compilation
     /// <see cref="DebugInformationOptions"/> instance with
     /// <see cref="DebugInformationOptions.Format"/> set to
     /// <see cref="DebugInformationFormat.None"/>, so callers that do not
-    /// opt in produce bit-for-bit identical PE output. Inherits from
-    /// <see cref="Previous"/> when chained, mirroring
-    /// <see cref="ImplicitSystemImport"/> / <see cref="PreprocessorSymbols"/>.
-    /// Setting <see langword="null"/> is normalised to a fresh default
-    /// instance.
+    /// opt in produce bit-for-bit identical PE output. Setting
+    /// <see langword="null"/> is normalised to a fresh default instance.
     /// </summary>
     public DebugInformationOptions DebugInformation
     {
@@ -253,7 +231,7 @@ public class Compilation
                 // Emit.
                 PrepareReferencesForBinding(assemblyName);
                 var globalScope = ReusedGlobalScope
-                    ?? Binder.BindGlobalScope(Previous?.GlobalScope, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
+                    ?? Binder.BindGlobalScope(previous: null, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
                 Interlocked.CompareExchange(ref this.globalScope, globalScope, null);
             }
 
