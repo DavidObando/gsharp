@@ -17,7 +17,7 @@ public class ParenthesizedReceiverEmittedSessionTests
 {
     [Theory]
     [InlineData("(10 + 32).GetType()", "System.Int32")]
-    [InlineData("(10 + 32).ToString()", "42")]
+    [InlineData("(10 + 32).ToString()", "\"42\"")] // string result echoes quoted (ADR-0157 display formatter)
     [InlineData("(\"hello\").Length", "5")]
     [InlineData("([3]int32{10, 20, 30})[1]", "20")]
     public void EmittedSession_ParenthesizedReceiver_PrintsExpectedValue(string expr, string expected)
