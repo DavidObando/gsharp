@@ -169,9 +169,71 @@ they do in straight-line code. The runtime is the standard .NET
 (`SemaphoreSlim`, channels, locks) from `System.Threading.*` are all
 available through normal imports.
 
+## Synchronization and shared state
+
+The first answer to "how do concurrent tasks share state" is the same
+as Go's: prefer not to — pass values through channels (or task results)
+and let `scope` own the joins.
+
+When sharing is unavoidable, the toolbox is, in order:
+
+1. **`lock`** — a statement that guards a critical section with the
+   .NET monitor:
+
+   ```gsharp
+   lock guard {
+       // critical section
+   }
+   ```
+
+   The target must be a reference type, is evaluated once, and the body
+   runs under `Monitor.Enter`/`Monitor.Exit` with an implicit
+   `try`/`finally`. Lock on a private object that never leaves your
+   type — never on a value other code can reach.
+
+2. **The BCL via interop** — `ConcurrentDictionary[K, V]`
+   (`import System.Collections.Concurrent`) for concurrent maps,
+   `Interlocked` for atomic counters, `ReaderWriterLockSlim`,
+   `SemaphoreSlim`, and friends (`import System.Threading`).
+
+3. **`SyncMap[K, V]`** (`import Gsharp.Extensions.Sync`) — the
+   idiomatic G# shape for a map shared across goroutines, analogous to
+   Go's `sync.Map`. It is method-based on purpose: on a shared map
+   `m[k] = m[k] + 1` *looks* atomic and races, so compound
+   read-modify-write is spelled `Update` and is atomic:
+
+   ```gsharp
+   import Gsharp.Extensions.Go
+   import Gsharp.Extensions.Sync
+
+   func bump(m SyncMap[string, int32]) int32 {
+       m.Update("hits", func(v int32) int32 { return v + 1 })
+       return 0
+   }
+
+   func run() int32 {
+       var m = SyncMap[string, int32]()
+       scope {
+           for var i = 0; i < 50; i++ {
+               go bump(m)
+           }
+       }
+
+       return m.Load("hits")   // exactly 50
+   }
+   ```
+
+Plain `map[K,V]` is **not** goroutine-safe: it is a bare
+`Dictionary<K,V>` with no implicit synchronization, and concurrent
+access to one is undefined behavior — the same posture as Go maps. See
+the [standard-library reference](../ref/standard-library#gsharpextensionssync)
+for the full `SyncMap` API.
+
 ## See also
 
 - [Tutorial: Async and sequences](../tutorials/async-and-sequences)
 - [Extensions: Go-flavored concurrency](../extensions/go-concurrency)
   — channels, `go`, `select`, and `close` for projects that import
   `Gsharp.Extensions.Go`.
+- [Standard library: Gsharp.Extensions.Sync](../ref/standard-library#gsharpextensionssync)
+  — the `SyncMap[K, V]` API reference.
