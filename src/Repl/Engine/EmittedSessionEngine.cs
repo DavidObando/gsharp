@@ -329,6 +329,14 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         var dllPath = Path.Combine(submissionsDirectory, assemblyName + ".dll");
         File.WriteAllBytes(dllPath, peImage);
 
+        // A cell that declares its own `package X` emits its members (and the
+        // synthesized `<Program>` holding `<Result>$` and the globals) under
+        // that namespace, not under the session default. Track the package the
+        // members were actually emitted under so the echo read below and the
+        // chain's SubmissionReference stay truthful (Phase 3d follow-up to the
+        // 3c note "a package-declaring cell succeeds silently with no echo").
+        var emittedPackageName = compilation.GlobalScope.Package?.Name ?? packageName;
+
         var runResult = host.RunSubmission(peImage, assemblyName);
         if (runResult.UnhandledException is not null)
         {
@@ -345,7 +353,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
 
         var value = host.ReadStaticField(
             runResult.Assembly,
-            packageName + "." + SubmissionImports.ProgramTypeName,
+            emittedPackageName + "." + SubmissionImports.ProgramTypeName,
             SubmissionImports.ResultFieldName)
             ?? runResult.ReturnValue;
 
@@ -354,7 +362,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         // instead of committing it to the transcript or the chain.
         cancellationToken.ThrowIfCancellationRequested();
 
-        submissions.Insert(0, new SubmissionState(compilation, compilation.GlobalScope, assemblyName, packageName, dllPath, runResult.Assembly));
+        submissions.Insert(0, new SubmissionState(compilation, compilation.GlobalScope, assemblyName, emittedPackageName, dllPath, runResult.Assembly));
         foreach (var import in compilation.GlobalScope.Imports)
         {
             if (!sessionImports.Any(i =>
