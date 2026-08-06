@@ -1571,9 +1571,28 @@ internal sealed partial class StatementBinder
 
         // Lower the initializer to BoundAddressOfExpression so the emitter
         // populates the alias slot with the managed pointer (§5 / §6 of ADR-0060).
-        BoundExpression boundInitializer = rhsValid
-            ? new BoundAddressOfExpression(syntax.Initializer, initializer)
-            : new BoundErrorExpression(null);
+        // Issue #3247: an index-from-end initializer (`xs[^1]`) binds as a
+        // BoundBlockExpression whose prefix statements spill the receiver and
+        // offset into temps. Sink the address-of onto the trailing element
+        // access (mirroring the `return ref` path in BindReturnStatement) so
+        // the emitter runs the prefix once and then takes the element address
+        // (ldelema) instead of ICEing on the block wrapper.
+        BoundExpression boundInitializer;
+        if (!rhsValid)
+        {
+            boundInitializer = new BoundErrorExpression(null);
+        }
+        else if (initializer is BoundBlockExpression block)
+        {
+            boundInitializer = new BoundBlockExpression(
+                syntax.Initializer,
+                block.Statements,
+                new BoundAddressOfExpression(syntax.Initializer, block.Expression));
+        }
+        else
+        {
+            boundInitializer = new BoundAddressOfExpression(syntax.Initializer, initializer);
+        }
 
         return new BoundVariableDeclaration(syntax, variable, boundInitializer);
     }
