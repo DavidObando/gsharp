@@ -1,9 +1,13 @@
 # ADR-0158: The G# synchronization story — a Sync library type plus documented interop, not a `synchronized` modifier
 
-- **Status**: Proposed — owner decision requested
-  ([#3209](https://github.com/DavidObando/gsharp/issues/3209); feasibility
-  spike in `test/Interpreter.Tests/Adr0158SyncMapSpikeTests.cs`, no product
-  changes in this PR)
+- **Status**: Accepted — 2026-08-06
+  ([#3209](https://github.com/DavidObando/gsharp/issues/3209); implemented
+  in the same change — `src/Sdk/Gsharp.Extensions/Sync/Sync.gs`, pinned by
+  `test/Extensions.Tests/SyncMapTests.cs` (behavior + the four successor
+  guarantees) and `test/Interpreter.Tests/SyncMapImportEmittedOracleTests.cs`
+  (G#-side `import` consumption); the feasibility spike stays untouched as
+  evidence at `test/Interpreter.Tests/Adr0158SyncMapSpikeTests.cs`, per the
+  ADR-0156/0157 precedent)
 - **Date**: 2026-08-06
 - **Phase**: Language surface / concurrency ergonomics (ADR-0156 Phase 3
   semantic-alignment follow-up)
@@ -89,7 +93,7 @@ the wrong shape (fact 3) for a need that does not exist (fact 4) and is
 already served (facts 1–2), while a plausible future language surface for
 shared state — actors, #2485, open — would supersede it.
 
-## Decision (proposed — owner decides)
+## Decision
 
 **Ship the synchronization story as library plus documentation, and add no
 language surface:**
@@ -110,13 +114,17 @@ language surface:**
    m.Range(func(k string, v int32) { ... })
    ```
 
-   Sketched surface (implementation PR finalizes): `Store`, `Load`,
-   `Update(key, f)` (atomic read-modify-write), `Delete`, `Len`,
-   `Contains`, `Keys()` (snapshot slice), `Range(action)`. Absent-key
-   `Load` returns the zero value, mirroring G# map reads (which lower to
-   `TryGetValue`, not `get_Item`). The backing dictionary is private and
+   Shipped surface (`Sync.gs`): `Store(key, value)`, `Load(key) V`
+   (zero value when absent, mirroring G# map reads — which lower to
+   `TryGetValue`, not `get_Item`), `Update(key, f) V` (atomic
+   read-modify-write, returns the stored result), `Delete(key) bool`,
+   `Len() int32`, `Contains(key) bool`, `Keys() []K` (snapshot),
+   `Range(action)`. Reads and enumeration are lock-free on the concurrent
+   backing; the three writes serialize on the private backing instance as
+   hidden monitor — that is what makes `Update` atomic against *all*
+   writes, not just other `Update`s. The backing dictionary is private and
    never leaked — the hidden-monitor discipline #3209 requires — and the
-   nullable-interop `!!` and function-literal papercuts the spike hit stay
+   nullable-interop and function-literal papercuts the spike hit stay
    *inside* the library, which is itself an ergonomics argument for
    shipping it rather than documenting the raw pattern.
 
@@ -125,14 +133,19 @@ language surface:**
    *looks* atomic and is not. `Update` exists precisely because per-call
    locking cannot express compound operations through indexer sugar.
 
-2. **A `docs/concurrency.md` page** (the first concurrency topic page; flat
-   docs convention) that teaches, in order: the idiom (goroutines +
-   channels + `scope` — "share memory by communicating"), `lock` for
-   protecting arbitrary state, the CLR interop menu
-   (`ConcurrentDictionary`, `Interlocked`, `ReaderWriterLockSlim`,
-   `Mutex`/`SemaphoreSlim`), and `SyncMap` for the shared-map case. This is
-   the "documented interim guidance" leg of #3209, kept even after the
-   library lands.
+2. **Documentation** teaching, in order: the idiom (goroutines + channels
+   + `scope` — "share memory by communicating"), `lock` for protecting
+   arbitrary state, the CLR interop menu (`ConcurrentDictionary`,
+   `Interlocked`, `ReaderWriterLockSlim`, `Mutex`/`SemaphoreSlim`), and
+   `SyncMap` for the shared-map case — the "documented interim guidance"
+   leg of #3209, kept even after the library lands. Shipped as
+   `docs/concurrency.md` (engineering-side) plus the user-facing website
+   pages: a "Synchronization and shared state" section in
+   `website/docs/guide/concurrency.md`, a `Gsharp.Extensions.Sync` API
+   reference in `website/docs/ref/standard-library.md` (with the map
+   non-guarantee noted in its Maps section), and the
+   `website/docs/extensions/go-concurrency.md` shared-map note updated to
+   point at `SyncMap` instead of at #3209.
 
 3. **Plain `map[K, V]` stays unsynchronized, and concurrent access stays
    undefined behavior, documented** — #3205's stance becomes the permanent
@@ -158,6 +171,66 @@ language surface:**
 | `len` / `ContainsKey` / `Keys` under write load: never throws | Same, via `Len` / `Contains` / `Keys()` (spike: 30 stress runs) |
 
 Plain `map[K, V]` carries none of these — that is #3205, unchanged.
+
+### Representation and magic — map vs SyncMap
+
+Two owner-settled decisions bound this design's representation choices, and
+they are two faces of one rule.
+
+**Plain `map[K, V]` stays a compiler-known ("magic") type with `Dictionary`
+identity — a library `Map[K, V]` was considered and rejected.**
+
+- **Identity is the interop superpower.** A G# `map[K, V]` *is* a
+  `Dictionary<K, V>`: it flows directly into every BCL and C# API that
+  takes one, comes back unchanged, and makes cs2gs's `Dictionary`→`map`
+  translation trivially correct. A wrapper type would trade that away for
+  nothing — either it leaks its backing (no encapsulation gained) or it
+  interposes on every boundary crossing (friction everywhere).
+- **Zero-runtime-dependency.** A program that uses maps needs only the
+  BCL. A library-defined map would make every G# program depend on
+  `Gsharp.Extensions` and deepen the SDK bootstrap cycle (`Gsharp.Extensions`
+  itself is compiled by a bootstrap that exists precisely because an
+  assembly cannot reference itself while being built).
+- **Precedent.** Go keeps `map` intrinsic and ships `sync.Map` in a
+  package; languages with map *syntax* keep the syntactic type intrinsic.
+- **The bug-factory concern has a better answer.** The intrinsic's magic
+  plumbing has produced real bugs (#3301, and this campaign's #3303), but
+  the fix is consolidating the emit surface — the symbolic-MemberRef
+  funnel PR [#3306](https://github.com/DavidObando/gsharp/pull/3306)
+  landed for #3301 — not changing representation. If an ergonomic method
+  surface on maps is ever wanted, extension functions provide it without
+  touching representation.
+
+**`SyncMap` is deliberately NOT magic — the inverse of the same
+principle.** A type earns compiler magic only when it carries syntax the
+compiler must bind, and `SyncMap`'s design rejects syntax on purpose:
+
+- **Index syntax on a concurrent map is a lie.** `sm[k] = sm[k] + 1`
+  looks atomic and races; the method API *is* the safety contract, with
+  atomicity boundaries visible at every call site. `ConcurrentDictionary`'s
+  own history makes the point: it has an indexer, but its real API is
+  `GetOrAdd`/`AddOrUpdate`/`TryUpdate`.
+- **The valuable operations are method-shaped and want to grow.**
+  `Update` today; `GetOrAdd`, compare-and-swap, richer snapshots later —
+  in library releases, not compiler releases.
+- **Concurrency semantics belong to library-versioned doc contracts.**
+  Range's snapshot-vs-live behavior, `Keys` timing, and memory-model notes
+  can evolve with the library; baked into language syntax they would be
+  spec commitments requiring compiler releases to change.
+- **Identity would be a bug here.** If the backing `ConcurrentDictionary`
+  were reachable, callers could bypass `Update`'s atomicity or lock the
+  monitor from outside (the Java pitfall above). Encapsulation is
+  load-bearing — the exact property that would be wrong for `map` is the
+  one `SyncMap` cannot live without.
+- **Zero compiler cost, proven.** The spike and the shipped implementation
+  required no compiler change at all; a magic `syncmap` would buy a second
+  copy of the intrinsic-plumbing maintenance tax (#3301/#3303's class)
+  for negative value.
+
+**The composed rule:** syntax-bearing types are compiler-known and
+identity-transparent to their BCL backing (`map` ≡ `Dictionary`);
+concurrency types are library-defined, method-shaped, and
+encapsulation-opaque (`SyncMap` hides its `ConcurrentDictionary`).
 
 ## Evidence — feasibility spike
 
@@ -210,6 +283,38 @@ than footnotes:
   Unrelated to synchronization, but it is the largest concurrency-ergonomics
   papercut the spike actually hit — worth fixing regardless of this ADR's
   outcome.
+
+### Implementation evidence (same change)
+
+The shipped `SyncMap` (`src/Sdk/Gsharp.Extensions/Sync/Sync.gs`, ~200
+lines of documented G#) compiles through the normal bootstrap build with
+no compiler changes, confirming the spike's central claim. Its pins:
+
+- `test/Extensions.Tests/SyncMapTests.cs` — 17 tests directly against the
+  compiled assembly with real threads: unit coverage of every method plus
+  the four successor guarantees (64 distinct keys × 200 runs; 200
+  concurrent `Update` increments × 100 runs, exact every run; `Update`
+  atomic against interleaved `Store`/`Delete` churn; `Range` and
+  `Len`/`Contains`/`Keys` looped against 8 continuous writer tasks). Also
+  pins the hidden-monitor rule structurally (no public fields, no
+  dictionary-typed properties).
+- `test/Interpreter.Tests/SyncMapImportEmittedOracleTests.cs` — G#-side
+  `import Gsharp.Extensions.Sync` consumption through real emitted
+  execution: full-surface smoke plus the #3205 repro shape (50 goroutines
+  bumping one key in a `scope`), exactly 50 every run.
+- **Product-mutant witnesses (ADR-0154)**, run against the real library:
+  stripping `Sync.gs`'s `lock` statements fails both increment guarantees
+  (observed 72/200 and 1/200); swapping the `ConcurrentDictionary` backing
+  for a plain `Dictionary` fails both enumeration guarantees with the
+  CLR's "Collection was modified" exception. Each guarantee is killed by
+  the mutation it exists to police.
+
+Two boundary notes recorded while implementing, both stays-inside-the-
+library per the ergonomics argument above: the `append` builtin is gated
+behind `Gsharp.Extensions.Go` (GS0317), so `Keys()` builds its snapshot
+via `List[K]` + `ToArray`; and across the imported-assembly boundary
+`Keys()`'s `[]K` binds as a CLR array (`.Length`, not `len`) — noted in
+the consumption test.
 
 ## Consequences
 
