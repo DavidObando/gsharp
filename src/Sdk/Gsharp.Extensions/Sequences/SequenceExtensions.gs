@@ -59,7 +59,7 @@ import System.Runtime.CompilerServices
 ///
 /// ```gs
 /// for w in Sequences.Of(1, 2, 3, 4).Windowed(2) {
-///     print(string.Join(",", w))   // "1,2", "2,3", "3,4"
+///     Console.WriteLine(string.Join(",", w))   // "1,2", "2,3", "3,4"
 /// }
 /// ```
 ///
@@ -87,7 +87,7 @@ func (source IEnumerable[T]) Windowed[T](size int32) IEnumerable[IList[T]] {
 ///
 /// ```gs
 /// for c in Sequences.Of(1, 2, 3, 4, 5).Chunked(2) {
-///     print(string.Join(",", c))   // "1,2", "3,4", "5"
+///     Console.WriteLine(string.Join(",", c))   // "1,2", "3,4", "5"
 /// }
 /// ```
 ///
@@ -114,7 +114,7 @@ func (source IEnumerable[T]) Chunked[T](size int32) IEnumerable[IList[T]] {
 ///
 /// ```gs
 /// for (i, name) in names.Indexed() {
-///     print($"{i}: {name}")
+///     Console.WriteLine($"{i}: {name}")
 /// }
 /// ```
 ///
@@ -254,7 +254,7 @@ func (source IEnumerable[T]) LastOrNil[T class]() T? {
 ///
 /// ```gs
 /// let lastScore = scores.LastOrNil()
-/// lastScore.IfPresent(s => print($"final: {s}"))
+/// lastScore.IfPresent(s => Console.WriteLine($"final: {s}"))
 /// ```
 ///
 /// See also [FirstOrNil](cref:Gsharp.Extensions.Sequences.FirstOrNil),

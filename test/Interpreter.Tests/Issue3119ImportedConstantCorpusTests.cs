@@ -158,8 +158,14 @@ public class Issue3119ImportedConstantCorpusTests
                 };
             var result = RunCompiler(root, arguments);
 
+            // Issue #3246: `string? -> string` used to classify as an
+            // existing-but-explicit conversion (GS0156) only because the
+            // retired builtin to-string arm accepted it; with that arm gone
+            // the reference-nullable narrowing reports the standard GS0155,
+            // matching every other reference type's `S? -> S` per #1627
+            // (the caller must write `!!`).
             Assert.Equal(1, result.ExitCode);
-            Assert.Contains("GS0156", result.Combined, StringComparison.Ordinal);
+            Assert.Contains("GS0155", result.Combined, StringComparison.Ordinal);
             Assert.Contains("'string?' to 'string'", result.Combined, StringComparison.Ordinal);
         }
         finally

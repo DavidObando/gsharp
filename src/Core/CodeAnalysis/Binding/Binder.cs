@@ -2876,14 +2876,10 @@ public sealed class Binder
 
     private static BoundScope CreateRootScope(ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
     {
-        var result = new BoundScope(parent: null, references: references, preprocessorSymbols: preprocessorSymbols);
-
-        foreach (var f in BuiltinFunctions.GetAll())
-        {
-            result.TryDeclareFunction(f);
-        }
-
-        return result;
+        // Issues #3245/#3246: the legacy `print`/`input`/`rnd` builtins were
+        // retired (clean cut) — the root scope declares no builtin functions.
+        // Console interop (`System.Console`) is the supported story.
+        return new BoundScope(parent: null, references: references, preprocessorSymbols: preprocessorSymbols);
     }
 
     private void BindImport(ImportSyntax import)

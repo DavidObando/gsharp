@@ -6,7 +6,7 @@ draft: false
 
 # Standard library and built-ins
 
-G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, function values, and a few legacy built-in functions are provided by the compiler. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
+G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, and function values are provided by the compiler. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
 
 ## Primitive types
 
@@ -176,9 +176,9 @@ The Go-flavored concurrency cluster — `go`, `chan T`, `<-`, `select`, `close(c
 
 Function values use `(P1, P2) -> R` type clauses and function literals. Compatible function literals and method groups can convert to CLR delegate types during interop. Delegate construction and invocation are documented in [CLR interop](/docs/ref/clr-interop). The legacy `func(P1, P2) R` type-clause spelling continues to parse for one release with the `GS0303` deprecation warning.
 
-## Console and legacy built-in functions
+## Console
 
-The curated documentation prefers .NET console APIs:
+Console input and output use the .NET console APIs:
 
 ```gsharp
 import System
@@ -186,4 +186,4 @@ import System
 Console.WriteLine("hello")
 ```
 
-The compiler also contains legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32`. They are not the shape used by current reference samples.
+The legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32` were retired; `System.Console` (and `System.Random`) via CLR interop are the supported replacements.

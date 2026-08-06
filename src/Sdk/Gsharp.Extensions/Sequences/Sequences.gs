@@ -115,7 +115,7 @@ class Sequences {
         ///
         /// ```gs
         /// for i in Sequences.Range(0, 5) {
-        ///     print(i)                  // 0, 1, 2, 3, 4
+        ///     Console.WriteLine(i)                  // 0, 1, 2, 3, 4
         /// }
         /// ```
         ///
@@ -145,10 +145,10 @@ class Sequences {
         ///
         /// ```gs
         /// for i in Sequences.RangeStep(0, 10, 2) {
-        ///     print(i)                  // 0, 2, 4, 6, 8
+        ///     Console.WriteLine(i)                  // 0, 2, 4, 6, 8
         /// }
         /// for i in Sequences.RangeStep(10, 0, -3) {
-        ///     print(i)                  // 10, 7, 4, 1
+        ///     Console.WriteLine(i)                  // 10, 7, 4, 1
         /// }
         /// ```
         ///

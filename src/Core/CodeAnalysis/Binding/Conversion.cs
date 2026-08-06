@@ -787,14 +787,6 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
-        if (from == TypeSymbol.Bool || from == TypeSymbol.Int32)
-        {
-            if (to == TypeSymbol.String)
-            {
-                return Conversion.Explicit;
-            }
-        }
-
         if (from == TypeSymbol.String)
         {
             if (to == TypeSymbol.Bool || to == TypeSymbol.Int32)
@@ -803,8 +795,16 @@ public sealed class Conversion
             }
         }
 
-        // Any value backed by a CLR type can be converted to string via ToString().
-        if (to == TypeSymbol.String && from?.ClrType != null)
+        // Issues #3245/#3246: the legacy builtin `string(T)` conversion
+        // ("any value backed by a CLR type converts to string via
+        // ToString()") was retired — CLR interop (`.ToString()`) is the
+        // supported story. The `[]char → string` conversion (#1441, the G#
+        // rendering of C# `new string(char[])`) is a real conversion with a
+        // dedicated emit path and remains.
+        if (to == TypeSymbol.String
+            && from?.ClrType is { IsArray: true } fromCharArray
+            && fromCharArray.GetElementType() is System.Type fromCharElement
+            && fromCharElement.IsSameAs(typeof(char)))
         {
             return Conversion.Explicit;
         }

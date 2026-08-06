@@ -11,7 +11,9 @@ namespace GSharp.Interpreter.Tests;
 /// <summary>
 /// End-to-end tests that exercise interop with imported .NET types: importing a
 /// namespace, calling a static factory method that returns a non-primitive .NET
-/// type, calling an instance method on that value, and converting it to string.
+/// type, calling an instance method on that value, and converting it to string
+/// via <c>ToString()</c> (the legacy <c>string(T)</c> builtin cast was retired
+/// by #3246).
 /// </summary>
 public class ImportedTypeInteropTests
 {
@@ -38,19 +40,6 @@ public class ImportedTypeInteropTests
             "y\n");
         Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Unable to find", output);
-        Assert.Matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", output);
-    }
-
-    [Fact(Skip = "Issue #3246: the string(T) builtin cast has no emitted lowering (NotSupportedException in MethodBodyEmitter.Conversions); its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip when #3246 lands.")]
-    public void Can_Convert_Imported_Type_To_String_Via_Builtin_Cast()
-    {
-        var output = RunSubmission(
-            "import System\n" +
-            "var x = Guid.NewGuid()\n" +
-            "var y = string(x)\n" +
-            "y\n");
-        Assert.DoesNotContain("ERROR", output, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("cannot convert", output, StringComparison.OrdinalIgnoreCase);
         Assert.Matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", output);
     }
 
