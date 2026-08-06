@@ -131,7 +131,9 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
                         v.Name);
                     if (value is not null)
                     {
-                        display += $" = {Truncate(value.ToString(), 20)}";
+                        // ADR-0157: display-side pretty rendering for the
+                        // sidebar values column, same contract as the echo.
+                        display += $" = {Truncate(ReplValueFormatter.Format(value), 20)}";
                     }
 
                     vars.Add(new ReplSymbol(display));

@@ -29,7 +29,8 @@ public sealed class GSharpRepl : IDisposable
 
         if (!cell.HasError && cell.Value is not null)
         {
-            Console.WriteLine(cell.Value);
+            // ADR-0157: display-side pretty echo — never emitted semantics.
+            Console.WriteLine(ReplValueFormatter.Format(cell.Value));
         }
     }
 
