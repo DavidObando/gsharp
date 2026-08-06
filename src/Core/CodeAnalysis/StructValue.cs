@@ -115,9 +115,6 @@ public sealed class StructValue
     /// </summary>
     public object ClrBacking { get; set; }
 
-    /// <summary>Gets a value indicating whether this value represents a CLR box.</summary>
-    internal bool IsBoxed { get; private set; }
-
     /// <summary>Creates a shallow copy of this struct value (value-semantics).</summary>
     /// <returns>A new instance with the same fields.</returns>
     public StructValue Copy()
@@ -146,7 +143,7 @@ public sealed class StructValue
         var copy = new ConcurrentDictionary<string, object>();
         foreach (var kvp in Fields)
         {
-            copy[kvp.Key] = kvp.Value is StructValue { IsBoxed: false, StructType.IsClass: false } inner
+            copy[kvp.Key] = kvp.Value is StructValue { StructType.IsClass: false } inner
                 ? inner.Copy()
                 : kvp.Value;
         }
@@ -247,15 +244,6 @@ public sealed class StructValue
 
         sb.Append(')');
         return sb.ToString();
-    }
-
-    /// <summary>Creates an identity-preserving boxed copy of this struct value.</summary>
-    /// <returns>A boxed copy.</returns>
-    internal StructValue Box()
-    {
-        var box = Copy();
-        box.IsBoxed = true;
-        return box;
     }
 
     internal static bool TryGetStorageSize(StructSymbol structType, out int size)
