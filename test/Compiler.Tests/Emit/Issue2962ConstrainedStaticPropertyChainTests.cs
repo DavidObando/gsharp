@@ -200,7 +200,11 @@ public class Issue2962ConstrainedStaticPropertyChainTests
                 sourcePath);
 
             Assert.Equal(1, exitCode);
-            Assert.Contains("error GS0156: Cannot convert type 'string?' to 'string'.", output, StringComparison.Ordinal);
+
+            // #3296 retired the legacy any-to-string conversion arm and
+            // re-anchored the string? -> string rejection to GS0155 (the
+            // #1627 Kotlin-model nullability rule); same message, new id.
+            Assert.Contains("error GS0155: Cannot convert type 'string?' to 'string'.", output, StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal);
         }
         finally
