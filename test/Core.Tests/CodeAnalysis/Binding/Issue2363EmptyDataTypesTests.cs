@@ -15,17 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #2363 / ADR-0029 amendment: a zero-field <c>data class</c>/<c>data
-/// struct</c> (needed for C# <c>record Name();</c> and empty positional
-/// record structs) previously failed to bind at all — <c>GS0104</c> fired
-/// unconditionally for any <c>IsData</c> declaration with zero bound fields,
-/// and mis-reported the kind as "struct" even for a rejected <c>data
-/// class</c>. These tests exercise the binder-level legality relaxation
-/// (top-level/nested, class/struct, sealed/open, with/without an explicit
-/// empty <c>()</c>) and interpreter-level structural-equality semantics for
-/// the degenerate zero-field case, plus the exact Oahu
-/// <c>CallbackChallenge</c>/<c>MfaChallenge</c>/<c>CvfChallenge</c>/
-/// <c>ApprovalChallenge</c> shape (<c>Oahu.Cli.App/Auth/CallbackBroker.cs</c>).
+/// Issue #2363: Emitted-oracle coverage for empty data types.
+/// Traceability: ADR-0029; diagnostic GS0104.
 /// </summary>
 public class Issue2363EmptyDataTypesTests
 {

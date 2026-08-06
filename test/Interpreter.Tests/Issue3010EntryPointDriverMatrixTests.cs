@@ -11,8 +11,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issues #2984 and #3010: entry-point result behavior agrees across compiler
-/// evaluation, emitted execution, and interpretation.
+/// Driver-matrix coverage for issues #2984 and #3010; every driver path uses emitted execution.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue3010EntryPointDriverMatrixTests

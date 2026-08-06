@@ -4,7 +4,7 @@
 
 namespace GSharp.Interpreter.Tests.Issue3076Probe;
 
-/// <summary>CLR generic static storage used by issue #3076 interpreter tests.</summary>
+/// <summary>CLR generic static storage used by issue #3076 emitted-session tests.</summary>
 public static class GenericStaticSlot<T>
 {
     /// <summary>Gets or sets per-construction property storage.</summary>
@@ -22,7 +22,7 @@ public static class GenericStaticSlot<T>
     public static int ReadField() => Field;
 }
 
-/// <summary>CLR two-parameter generic static storage used by issue #3076 interpreter tests.</summary>
+/// <summary>CLR two-parameter generic static storage used by issue #3076 emitted-session tests.</summary>
 public static class GenericPairSlot<TFirst, TSecond>
 {
     /// <summary>Gets or sets per-construction property storage.</summary>

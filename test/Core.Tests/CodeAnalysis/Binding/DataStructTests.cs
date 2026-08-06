@@ -16,10 +16,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.B.2 — <c>data struct</c> declarations (ADR-0029). Interpreter-side
-/// behaviour: structural equality, hash, ToString, and <c>==</c>/<c>!=</c>
-/// operators on data-struct values. Emit-side support lands in a follow-up
-/// commit.
+/// Emitted-oracle coverage for data struct.
+/// Traceability: ADR-0029.
 /// </summary>
 public class DataStructTests
 {

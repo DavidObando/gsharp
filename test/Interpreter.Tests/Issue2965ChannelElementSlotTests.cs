@@ -9,13 +9,12 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2965 interpreter control: boxed channel storage already preserves
-/// same-compilation value-type values despite its CLR-object fallback.
+/// Issue #2965: Emitted-session coverage for channel element slot.
 /// </summary>
 public class Issue2965ChannelElementSlotTests
 {
     [Fact]
-    public void UserStructChannelsRemainCorrectInInterpreter()
+    public void UserStructChannelsRemainCorrectInEmittedSession()
     {
         const string Source = """
             import System

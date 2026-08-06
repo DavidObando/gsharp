@@ -15,13 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 1.1 / ADR-0055: string interpolation. <c>"$ident"</c> and
-/// <c>"${expr,alignment:format}"</c> inside an interpreted string literal bind
-/// to a dedicated <see cref="BoundInterpolatedStringExpression"/> (static type
-/// <c>string</c>) carrying ordered literal/hole parts. The tree-walk
-/// interpreter renders the node directly via composite formatting; the IL
-/// emitter lowers it to the <c>DefaultInterpolatedStringHandler</c> pattern.
-/// <c>$$</c> escapes to a literal <c>$</c>.
+/// Emitted-oracle coverage for interpolated string.
+/// Traceability: ADR-0055.
 /// </summary>
 public class InterpolatedStringTests
 {

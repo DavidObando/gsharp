@@ -14,11 +14,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #986: binder/interpreter tests for the base-class call expression
-/// <c>base.Method(args)</c> (and the bracketed <c>base[BaseClass].Method(args)</c>
-/// form). Verifies the happy paths resolve to the nearest base implementation
-/// and run without recursion, and that the GS0383 / GS0384 / GS0385
-/// diagnostics fire on the expected ill-formed inputs.
+/// Issue #986: Emitted-oracle coverage for base class call.
+/// Traceability: diagnostics GS0383, GS0384 and GS0385.
 /// </summary>
 public class Issue986BaseClassCallBinderTests
 {

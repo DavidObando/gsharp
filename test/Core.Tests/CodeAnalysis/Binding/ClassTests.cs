@@ -14,11 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.B.3 (sub-step 1) — <c>class</c> declarations as reference-typed
-/// aggregates. Same composite-literal / field-access surface as <c>struct</c>,
-/// but assignment and field writes go through reference semantics: aliases
-/// observe each other's writes. Methods, inheritance, and <c>open</c> /
-/// <c>override</c> land in later sub-steps. Interpreter-only for now.
+/// Emitted-oracle coverage for class.
 /// </summary>
 public class ClassTests
 {

@@ -15,16 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1260: a <c>base.Member(...)</c>/<c>base.Prop</c> access into an
-/// imported / BCL base class (e.g. <c>System.IO.Stream.Dispose(bool)</c>,
-/// <see cref="object.ToString"/>, <c>System.IO.MemoryStream.Position</c>) must
-/// bind, resolving the inherited member against the class's CLR base type and
-/// honoring accessibility/virtuality. A base call to an <c>abstract</c> BCL
-/// member with no implementation (e.g. <c>Stream.Read</c>) stays an error
-/// (GS0413). Method bodies are bound (and their diagnostics captured) without
-/// being executed, so these are pure binder coverage independent of the tree
-/// interpreter (which cannot materialize a real CLR base instance for a
-/// <c>base</c> call).
+/// Issue #1260: Emitted-oracle coverage for base bcl call.
+/// Traceability: diagnostic GS0413.
 /// </summary>
 public class Issue1260BaseBclCallBinderTests
 {

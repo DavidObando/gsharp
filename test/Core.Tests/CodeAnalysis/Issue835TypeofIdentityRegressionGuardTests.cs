@@ -27,7 +27,7 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 /// <para>
 /// The guard intentionally errs on the side of being noisy: it flags *every*
 /// surviving <c>== typeof(</c> / <c>!= typeof(</c> in source-position code,
-/// even ones that today are reachable only from the gsc interpreter and would
+/// even ones that today are not reached through the BuildTask path and would
 /// never see an MLC type. Migrating those keeps the codebase consistent and
 /// removes the trap for future contributors who reuse an existing helper from
 /// the BuildTask path.

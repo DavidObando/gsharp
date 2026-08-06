@@ -14,9 +14,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 3.A.4 binding and interpretation tests for the
-/// <c>map[K,V]</c> type, literal, indexing, <c>len</c>, and
-/// <c>delete</c>.
+/// Emitted-oracle coverage for map type.
 /// </summary>
 public class MapTypeTests
 {

@@ -8,14 +8,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1104: binder/interpreter tests for base-class property access
-/// <c>base.Prop</c> (read) and <c>base.Prop = value</c> (write), plus the
-/// explicit-ancestor bracketed form <c>base[BaseClass].Prop</c> (read/write).
-/// Verifies the happy paths bind with no GS0157 ("cannot find type base"),
-/// resolve to the requested base implementation (reaching grandparents
-/// non-virtually), and run without infinite recursion through the derived
-/// override. Also verifies the GS0383 / GS0384 / GS0385 diagnostics still fire
-/// on the expected ill-formed inputs, mirroring the base-method-call path.
+/// Issue #1104: Emitted-oracle coverage for base property access.
+/// Traceability: diagnostics GS0157, GS0383, GS0384 and GS0385.
 /// </summary>
 public class Issue1104BasePropertyAccessBinderTests
 {

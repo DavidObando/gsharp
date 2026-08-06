@@ -15,14 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Binder + tree-walking interpreter coverage for issue #751 / ADR-0084 §L2.
-/// Verifies that each rich receiver shape accepted by the parser fix
-/// (nullable, generic application, tuple, array-of-nullable, map[K,V])
-/// binds as an extension method and is dispatched via the dot-syntax
-/// call site. Only concrete (non-type-parameter) receiver shapes are
-/// covered here — receivers that close over a function-level type
-/// parameter (e.g. <c>sequence[T]</c>, <c>T?</c>) hit a separate binder
-/// gap tracked in a follow-up issue.
+/// Binder and emitted-oracle coverage for rich extension receiver shapes from issue #751.
+/// Traceability: ADR-0084.
 /// </summary>
 public class Issue751RichReceiverBinderTests
 {

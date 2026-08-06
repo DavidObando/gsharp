@@ -11,7 +11,7 @@ using ReplProgram = GSharp.Repl.Program;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #3081: interpreter results remain aligned with both compiler modes.
+/// Issue #3081: Emitted-execution coverage for composite literal inherited field.
 /// </summary>
 public class Issue3081CompositeLiteralInheritedFieldTests
 {

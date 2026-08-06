@@ -17,9 +17,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 4.8 — variadic parameters (<c>func f(xs ...T)</c>). Inside the
-/// body the parameter has type <c>[]T</c>; at call sites trailing
-/// arguments are packed into a slice. Interpreter-only for now.
+/// Emitted-oracle coverage for variadic.
 /// </summary>
 public class VariadicTests
 {

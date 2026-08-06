@@ -14,10 +14,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Phase 4.1 / ADR-0020 — generic function declarations with Go-style square
-/// brackets, plus explicit and inferred type-argument lists at call sites.
-/// Interpreter behaviour is type-erased: every value flows as <c>object</c>
-/// so the substitution machinery only needs to satisfy the binder.
+/// Emitted-oracle coverage for generic function.
+/// Traceability: ADR-0020.
 /// </summary>
 public class GenericFunctionTests
 {

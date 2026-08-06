@@ -13,14 +13,8 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// ADR-0156 Phase 3b.0 — the emitted test oracle's own witness suite. Pins
-/// the <see cref="EmittedOracle"/> assertion surface that the
-/// <c>Compilation.Evaluate</c> migration relies on: trailing-expression value
-/// capture, compile-failure short-circuit, the GS9999 runtime-failure
-/// protocol, console capture, ALC lifetime, and the known, pinned
-/// evaluator-vs-emit divergences (deinit boundary GS0510 and struct
-/// <c>Equals</c>/<c>GetHashCode</c> dispatch, #3116) that migrated tests may
-/// reference.
+/// Witness coverage for emitted-oracle value capture, diagnostics, console output, exceptions, and lifetime handling.
+/// Traceability: ADR-0156; issue #3116; diagnostics GS0510 and GS9999.
 /// </summary>
 [Collection("ConsoleIo")]
 public class EmittedOracleTests

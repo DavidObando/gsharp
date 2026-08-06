@@ -17,16 +17,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1912: cs2gs silently dropped explicit C# enum member values
-/// (`Banana = 2`), `[Flags]`, negative values, and alias members
-/// (`DefaultError = ServerError`), re-numbering every case sequentially from
-/// 0 and silently changing the runtime int32 value. G# itself had no grammar
-/// for an explicit enum-member value at all — this adds that language
-/// feature (`Name = constExpr`), constant-folded at bind time, so the
-/// translator has somewhere to put the preserved value. Covers positive
-/// literals, negative literals, `[Flags]`-style bit-shift/OR expressions, and
-/// name-reference aliases, both at the binder (<see cref="EnumMemberSymbol.Value"/>)
-/// and at runtime (the interpreter's evaluated int32 cast).
+/// Issue #1912: Emitted-oracle coverage for explicit enum member value.
 /// </summary>
 public class Issue1912ExplicitEnumMemberValueTests
 {

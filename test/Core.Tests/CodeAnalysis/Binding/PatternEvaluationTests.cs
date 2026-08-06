@@ -12,7 +12,9 @@ using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
-/// <summary>Interpreter coverage for Phase 6.2 switch patterns.</summary>
+/// <summary>
+/// Emitted-oracle coverage for pattern evaluation.
+/// </summary>
 public class PatternEvaluationTests
 {
     [Fact]
