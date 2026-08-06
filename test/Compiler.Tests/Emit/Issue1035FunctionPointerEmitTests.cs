@@ -158,6 +158,26 @@ public class Issue1035FunctionPointerEmitTests
         Assert.Equal("True\n", output);
     }
 
+    [Theory]
+    [InlineData("*func(int32) int32")]
+    [InlineData("unmanaged[Cdecl] (int32) -> int32")]
+    public void FunctionPointer_NilParameter_CompilesAndRuns(string pointerType)
+    {
+        var source = $$"""
+            package Probe
+            import System
+
+            unsafe func printPointer(fp {{pointerType}}) {
+                Console.WriteLine(nint(fp))
+            }
+
+            printPointer(nil)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("0\n", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue1035_").FullName;
