@@ -1,8 +1,8 @@
 # `samples/aspirational/`
 
-Per ADR-0010 (aspirational samples policy), this folder holds samples that exercise GSharp features for which **emit is deferred**. They are deliberately excluded from `test/Compiler.Tests`' end-to-end conformance harness (which compiles through `gsc` and runs the emitted assembly under `dotnet`) and are instead run through the interpreter only.
+Per ADR-0010 (aspirational samples policy), this folder held samples that exercised GSharp features for which **emit was deferred**. They were deliberately excluded from `test/Compiler.Tests`' end-to-end conformance harness (which compiles through `gsc` and runs the emitted assembly under `dotnet`) and were instead run through the tree-walking interpreter only.
 
-A sibling test, `test/Core.Tests/LanguageConformance/AspirationalSamplesTests`, discovers every `*.gs` file in this folder that has a paired `*.golden`, parses + binds + evaluates it through the same `Compilation.Evaluate(...)` path as the in-repo unit tests, and compares captured stdout against the golden.
+That interpreter-only harness (`AspirationalSamplesTests`, built on `Compilation.Evaluate(...)`) was removed together with the evaluator in ADR-0156 Phase 3c — emit is now the only execution backend, so an "interpreter-runs-it, emit-doesn't" sample can no longer execute at all.
 
 ## Current contents
 
@@ -26,4 +26,4 @@ backend caught up. See "Previously promoted samples" below for the history._
 
 ## When to add a sample here
 
-Add a sample here if it exercises a surface that the **interpreter** accepts end-to-end but the **emit backend** does not yet (see the coverage matrix's Emit column). Once emit catches up, the sample MAY be promoted out of `aspirational/` into top-level `samples/` so the regular conformance suite covers it on both backends.
+Historically: a sample landed here when the **interpreter** accepted it end-to-end but the **emit backend** did not yet; once emit caught up it was promoted into top-level `samples/`. With the evaluator removed (ADR-0156 Phase 3c) that split no longer exists — a new sample for an unimplemented emit surface has nowhere to run, so this folder is expected to stay empty. If a future feature ships parsing/binding ahead of emit and wants a parked sample, it needs a new policy (e.g. a bind-only golden), decided at that time.

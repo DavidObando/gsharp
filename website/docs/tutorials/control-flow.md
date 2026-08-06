@@ -352,7 +352,7 @@ A `default` arm is the easiest way to make the result total.
 Some pattern features originated on the interpreter path. The `Patterns` sample remains useful as the shortest expression-switch walkthrough:
 
 ```gsharp title="Patterns.gs"
-// file: aspirational/Patterns.gs
+// file: Patterns.gs
 //
 // Short expression-switch walkthrough using relational and list patterns.
 
