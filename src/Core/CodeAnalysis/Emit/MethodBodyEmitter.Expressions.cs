@@ -933,12 +933,17 @@ internal sealed partial class MethodBodyEmitter
         else if (len.Operand.Type is MapTypeSymbol mapType)
         {
             // Phase 3.A.4 emit: `len(m)` -> `callvirt Dictionary<K,V>.get_Count`.
-            var dictType = mapType.ClrType;
-            var getCount = dictType.GetMethod("get_Count")
-                ?? throw new InvalidOperationException(
-                    $"Dictionary type '{dictType.FullName}' has no get_Count method.");
+            // Issue #3301: same-compilation user-struct key/value — no erased
+            // CLR Dictionary<,> to reflect on; use the #1481-style symbolic
+            // TypeSpec-parented MemberRef instead.
+            var getCountRef = mapType.ClrType is { } dictType
+                ? this.outer.memberRefs.GetMethodReference(
+                    dictType.GetMethod("get_Count")
+                    ?? throw new InvalidOperationException(
+                        $"Dictionary type '{dictType.FullName}' has no get_Count method."))
+                : this.outer.memberRefs.GetMapGetCountReference(mapType);
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.outer.memberRefs.GetMethodReference(getCount));
+            this.il.Token(getCountRef);
         }
         else
         {
@@ -1118,14 +1123,21 @@ internal sealed partial class MethodBodyEmitter
         // and pops the returned bool — `delete` is typed as void.
         var mapType = (MapTypeSymbol)del.Map.Type;
         var dictType = mapType.ClrType;
-        var remove = dictType.GetMethod("Remove", new[] { mapType.KeyType.ClrType })
-            ?? throw new InvalidOperationException(
-                $"Dictionary type '{dictType.FullName}' has no Remove(K) method.");
+
+        // Issue #3301: same-compilation user-struct key/value — no erased
+        // CLR Dictionary<,> to reflect on; use the #1481-style symbolic
+        // TypeSpec-parented MemberRef instead.
+        var removeRef = dictType == null
+            ? this.outer.memberRefs.GetMapRemoveReference(mapType)
+            : this.outer.memberRefs.GetMethodReference(
+                dictType.GetMethod("Remove", new[] { mapType.KeyType.ClrType })
+                ?? throw new InvalidOperationException(
+                    $"Dictionary type '{dictType.FullName}' has no Remove(K) method."));
 
         this.EmitExpression(del.Map);
         this.EmitExpression(del.Key);
         this.il.OpCode(ILOpCode.Callvirt);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(remove));
+        this.il.Token(removeRef);
         this.il.OpCode(ILOpCode.Pop);
     }
 
