@@ -180,22 +180,64 @@ public sealed class Issue3252IndexedStructMemberWriteTests
     }
 
     /// <summary>
-    /// Mutating-method map guard: a map element has no address, so the
-    /// element-address receiver path must not leak into map elements. Today
-    /// a mutating method call on a map element fails outright with a
-    /// PRE-EXISTING emitter error (GS9998 NullReferenceException — present
-    /// on main before #3292, reproducible with `gsc` on
-    /// <c>m[1].Bump()</c>; tracked as issue #3301); pinned here only as
-    /// "does not silently succeed", so a change in either direction (fix or
-    /// in-place leak) is caught.
+    /// Mutating-method map arm (issue #3301): a map element has no address
+    /// (the Dictionary indexer returns a copy), so the element-address
+    /// receiver path must not leak into map elements. A mutating method
+    /// call on a map element instead operates on the returned COPY and the
+    /// mutation is discarded — C# parity for <c>dict[k].M()</c> and the
+    /// same rvalue-receiver semantics G# already gives
+    /// <c>MakeItem().Bump()</c>. Previously this crashed the emitter with
+    /// GS9998 (NullReferenceException in EmitMapIndexRead: a map keyed or
+    /// valued by a same-cell user struct has a null <c>ClrType</c>).
     /// </summary>
     [Fact]
-    public void MutatingMethodOnMapElementDoesNotSilentlySucceed()
+    public void SameCellMutatingMethodOnMapElementCallsOnCopyAndDiscardsMutation()
     {
         using var engine = new EmittedSessionEngine();
         var result = engine.Evaluate(
             "struct P { var X int\n func Bump() { this.X = this.X + 1 } }\nvar m = map[int, P]{1: P{}}\nm[1].Bump()\nm[1].X");
-        Assert.True(result.HasError, "map-element mutating call unexpectedly succeeded — semantics changed");
+        Assert.False(result.HasError, string.Join("; ", result.Diagnostics));
+        Assert.Equal(0, result.Value);
+    }
+
+    /// <summary>
+    /// Cross-cell flavor of the #3301 map arm: the mutating call through a
+    /// prior-cell submission-global map also runs on the element copy and
+    /// discards the mutation — parity with the same-cell form, and the
+    /// deliberate contrast with the in-place #3292 array/slice arm.
+    /// </summary>
+    [Fact]
+    public void CrossCellMutatingMethodOnMapElementCallsOnCopyAndDiscardsMutation()
+    {
+        using var engine = new EmittedSessionEngine();
+        AssertOk(engine, "struct P { var X int\n func Bump() { this.X = this.X + 1 } }\nvar m = map[int, P]{1: P{}}");
+        AssertOk(engine, "m[1].Bump()");
+
+        var probe = engine.Evaluate("m[1].X");
+        Assert.False(probe.HasError, string.Join("; ", probe.Diagnostics));
+        Assert.Equal(0, probe.Value);
+    }
+
+    /// <summary>
+    /// Non-mutating method calls on a map element read through the same
+    /// copy receiver; #3301's fix must keep (same-cell) and leave
+    /// (cross-cell) them working.
+    /// </summary>
+    [Fact]
+    public void NonMutatingMethodOnMapElementReturnsValueInBothForms()
+    {
+        const string decls = "struct P { var X int\n func Get() int { return this.X } }\nvar m = map[int, P]{1: P{X: 5}}";
+
+        using var sameCell = new EmittedSessionEngine();
+        var same = sameCell.Evaluate(decls + "\nm[1].Get()");
+        Assert.False(same.HasError, string.Join("; ", same.Diagnostics));
+        Assert.Equal(5, same.Value);
+
+        using var crossCell = new EmittedSessionEngine();
+        AssertOk(crossCell, decls);
+        var probe = crossCell.Evaluate("m[1].Get()");
+        Assert.False(probe.HasError, string.Join("; ", probe.Diagnostics));
+        Assert.Equal(5, probe.Value);
     }
 
     /// <summary>
