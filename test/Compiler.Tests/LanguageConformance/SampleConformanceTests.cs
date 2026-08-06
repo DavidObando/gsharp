@@ -30,7 +30,7 @@ namespace GSharp.Compiler.Tests.LanguageConformance;
 /// </summary>
 public class SampleConformanceTests
 {
-    private const int MinimumSingleFileSampleCount = 122;
+    private const int MinimumSingleFileSampleCount = 123;
 
     private static readonly string[] MainOnlySamples =
     {
