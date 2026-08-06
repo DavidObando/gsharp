@@ -1,6 +1,6 @@
 # ADR-0023: `async func` / `await` — state-machine strategy
 
-- **Status**: Shipped (interpreter and emit)
+- **Status**: Shipped (emit; originally also the interpreter, whose backend was removed by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 3c — the state-machine emission design remains current)
 - **Date**: 2026-05-25
 - **Phase**: Phase 5 (lock before 5.1)
 - **Related**: ADR-0002 (concurrency model), ADR-0022 (go/chan/select lowering), ADR-0040 (`sequence[T]` + `yield`); execution plan §§5.1 – 5.2, 5.8; issue #51 (Roslyn-fork option)

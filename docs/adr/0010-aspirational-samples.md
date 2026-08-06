@@ -1,6 +1,6 @@
 # ADR-0010: Aspirational samples policy — rewrite to today's subset, re-expand per phase
 
-- **Status**: Accepted
+- **Status**: Accepted; dormant — the interpreter-only harness this policy relied on (`AspirationalSamplesTests` over `Compilation.Evaluate`) was removed by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 3c, and `samples/aspirational/` is empty; a future parked sample would need a new runner policy
 - **Date**: 2026-05-22
 - **Phase**: Phase 0 (policy), every later phase (re-expansion)
 - **Related**: gaps doc §5.6; execution plan §0 D10, §0.2; design doc D10

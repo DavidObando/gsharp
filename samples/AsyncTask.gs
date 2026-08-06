@@ -1,4 +1,4 @@
-// file: aspirational/AsyncTask.gs
+// file: AsyncTask.gs
 //
 // Phase 5 exit sample. Pure async/await interoperating with the BCL `Task`
 // surface — `async func` declarations (5.1), `await` (5.1+5.2), and a top-level

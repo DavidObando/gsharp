@@ -147,7 +147,7 @@ Malformed holes are diagnosed: an unterminated hole is **GS0222**, an empty hole
 
 Binding and lowering are unified through a dedicated `BoundInterpolatedStringExpression` node that preserves each literal/hole part with its alignment/format intent (ADR-0055). Lowering is *late* and chosen by context:
 
-* Default — formatting defaults to the current culture. The tree-walk interpreter renders the node directly via composite formatting; compiled code lowers it to the .NET `DefaultInterpolatedStringHandler` pattern, so value-type holes are appended without boxing (issue #368).
+* Default — formatting defaults to the current culture. The expression lowers to the .NET `DefaultInterpolatedStringHandler` pattern, so value-type holes are appended without boxing (issue #368).
 * The contextual target type is `System.IFormattable` or `System.FormattableString` → `FormattableStringFactory.Create(format, args)` (ADR-0055 Tier 4, #369). Formatting is **deferred**: the caller chooses the culture via `ToString(IFormatProvider)`, e.g. `fs.ToString(CultureInfo.InvariantCulture)`. The default culture is `CultureInfo.CurrentCulture`.
 
 A *contextual target type* is supplied by a typed `let` declaration, a function return whose declared type is `IFormattable`/`FormattableString`, an explicit conversion (cast), or a **call argument** whose parameter type is one of those (functions, methods, constructors, and imported CLR overloads). In an overloaded call the interpolation keeps its natural `string` type for applicability, so a `string` overload is still preferred over a `FormattableString` overload (C# parity); the interpolation is re-lowered to `FormattableStringFactory.Create` only once a `FormattableString`/`IFormattable` parameter is actually chosen.

@@ -220,7 +220,7 @@ Array and slice element access (`a[i]`, read or write) accepts **any** integer-t
 
 ### Maps
 
-Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries.
+Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly (`lock`, or concurrent CLR collections via interop); a first-class synchronization surface is tracked in [#3209](https://github.com/DavidObando/gsharp/issues/3209).
 
 ```gsharp
 let counts = map[string,int32]{"g": 1, "sharp": 2}
