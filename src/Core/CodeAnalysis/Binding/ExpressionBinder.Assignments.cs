@@ -2737,13 +2737,32 @@ internal sealed partial class ExpressionBinder
     /// <see cref="SubmissionWriteReceiverKind.None"/>. Crossing a
     /// reference-typed link makes the remaining chain heap-rooted (writable
     /// regardless of the root's read-only flag); crossing a computed
-    /// (property) link makes an in-place write impossible.
+    /// (property) link makes an in-place write impossible. Issue #3252: a
+    /// value-typed ELEMENT link (<c>ps[0]</c>, <c>m[k]</c>) is a struct
+    /// temporary — the element loads as a copy, so a member write through it
+    /// can never reach the stored element; when the collection chain roots
+    /// at a submission global the write classifies as
+    /// <see cref="SubmissionWriteReceiverKind.NotAddressable"/>, matching
+    /// the GS0499 rejection the identical same-cell shape reports.
     /// </summary>
     /// <param name="receiver">The bound member-write receiver.</param>
     /// <returns>The chain classification.</returns>
     private static SubmissionWriteReceiverKind ClassifySubmissionGlobalWriteReceiver(BoundExpression receiver)
     {
-        if (receiver is not BoundClrPropertyAccessExpression access || ReceiverTypeIsReference(access.Type))
+        if (receiver == null || ReceiverTypeIsReference(receiver.Type))
+        {
+            return SubmissionWriteReceiverKind.None;
+        }
+
+        // Issue #3252: the receiver IS an element load (`ps[0].X = v`).
+        if (TryGetElementAccessTarget(receiver, out var elementCollection))
+        {
+            return ChainHasSubmissionGlobalRoot(elementCollection)
+                ? SubmissionWriteReceiverKind.NotAddressable
+                : SubmissionWriteReceiverKind.None;
+        }
+
+        if (receiver is not BoundClrPropertyAccessExpression access)
         {
             return SubmissionWriteReceiverKind.None;
         }
@@ -2790,6 +2809,17 @@ internal sealed partial class ExpressionBinder
                 return SubmissionWriteReceiverKind.None;
             }
 
+            // Issue #3252: the value-typed field walk rests on an element
+            // load (`qs[0].B2.C = v`) — the chain bottoms out in a copied
+            // element, so the write is blocked when the collection roots at
+            // a submission global.
+            if (TryGetElementAccessTarget(access.Receiver, out var linkCollection))
+            {
+                return ChainHasSubmissionGlobalRoot(linkCollection)
+                    ? SubmissionWriteReceiverKind.NotAddressable
+                    : SubmissionWriteReceiverKind.None;
+            }
+
             if (access.Receiver is not BoundClrPropertyAccessExpression inner)
             {
                 return SubmissionWriteReceiverKind.None;
@@ -2800,19 +2830,60 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #3185: whether a CLR member-access chain bottoms out at a prior
-    /// submission's addressable global static field.
+    /// Issue #3252: extracts the indexed collection from a bound element
+    /// load — <see cref="BoundIndexExpression"/> (arrays, slices, maps) or
+    /// <see cref="BoundClrIndexExpression"/> (CLR indexer, e.g. an imported
+    /// <c>Dictionary</c>).
     /// </summary>
-    /// <param name="access">The chain's innermost inspected link.</param>
-    /// <returns><c>true</c> when the chain root is a flagged submission global.</returns>
-    private static bool ChainHasSubmissionGlobalRoot(BoundClrPropertyAccessExpression access)
+    /// <param name="expression">The candidate element-access expression.</param>
+    /// <param name="collection">The indexed collection expression, when <paramref name="expression"/> is an element load.</param>
+    /// <returns><c>true</c> when <paramref name="expression"/> is an element load.</returns>
+    private static bool TryGetElementAccessTarget(BoundExpression expression, out BoundExpression collection)
     {
-        while (access.Receiver is BoundClrPropertyAccessExpression inner)
+        switch (expression)
         {
-            access = inner;
+            case BoundIndexExpression index:
+                collection = index.Target;
+                return true;
+            case BoundClrIndexExpression clrIndex:
+                collection = clrIndex.Target;
+                return true;
+            default:
+                collection = null;
+                return false;
         }
+    }
 
-        return access.Receiver == null && access.IsAddressableStaticField;
+    /// <summary>
+    /// Issue #3185: whether a CLR member-access chain bottoms out at a prior
+    /// submission's addressable global static field. Issue #3252: the walk
+    /// also crosses element-access links (<c>obj.Arr[0]</c>) so an indexed
+    /// collection reached through fields of a submission global still
+    /// classifies against the seam rules.
+    /// </summary>
+    /// <param name="expression">The chain's innermost inspected link.</param>
+    /// <returns><c>true</c> when the chain root is a flagged submission global.</returns>
+    private static bool ChainHasSubmissionGlobalRoot(BoundExpression expression)
+    {
+        while (true)
+        {
+            switch (expression)
+            {
+                case BoundClrPropertyAccessExpression { Receiver: null } root:
+                    return root.IsAddressableStaticField;
+                case BoundClrPropertyAccessExpression link:
+                    expression = link.Receiver;
+                    continue;
+                case BoundIndexExpression index:
+                    expression = index.Target;
+                    continue;
+                case BoundClrIndexExpression clrIndex:
+                    expression = clrIndex.Target;
+                    continue;
+                default:
+                    return false;
+            }
+        }
     }
 
     /// <summary>
