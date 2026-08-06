@@ -1786,6 +1786,27 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // Issue #3248: an instance method group's candidates come from the
+        // receiver type's DEFINITION (a constructed StructSymbol forwards
+        // `Methods` to it), so their parameter/return types still reference
+        // the declaring class's own type parameters. Resolve the receiver's
+        // construction of the declaring definition (walking the base chain)
+        // and substitute the signature through it, so the closed signature —
+        // and the delegate FunctionType the conversion builds from it —
+        // carries the receiver's instantiation. Without this, a deferred
+        // method group like `holder.Count` inside `GetCounter[T](holder
+        // Holder[T])` kept `Holder`'s class type parameter in its function
+        // type and the emitter encoded the delegate TypeSpec with a class
+        // `Var` slot in a context that only has method generics (invalid
+        // metadata; BadImageFormatException at runtime).
+        if (candidateOwner == null
+            && !candidate.IsExtension
+            && receiver?.Type is StructSymbol receiverStruct
+            && candidate.ReceiverType is StructSymbol declaredReceiver)
+        {
+            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
+        }
+
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
         if (candidate.IsGeneric)
         {
