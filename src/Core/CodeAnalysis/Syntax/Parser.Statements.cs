@@ -390,9 +390,24 @@ public partial class Parser
                 // correctly takes the address of a struct-local receiver in
                 // value position (the chained member form copies a value-type
                 // receiver by value, which would drop the mutation).
-                write = receiver is NameExpressionSyntax simpleReceiver
-                    ? new FieldAssignmentExpressionSyntax(syntaxTree, simpleReceiver.IdentifierToken, dotToken, fieldIdentifier, equalsToken, newValue)
-                    : new MemberFieldAssignmentExpressionSyntax(syntaxTree, receiver, dotToken, fieldIdentifier, equalsToken, newValue);
+                //
+                // Issue #3292: a CHAINED receiver (`ps[i].X++`, `a.B.C++`)
+                // routes through the compound-assignment desugar
+                // (`operand ±= 1`) instead of `operand = operand ± 1`: the
+                // member-field form binds the receiver chain twice (once for
+                // the write, once inside the re-parsed read), double-firing
+                // any side-effecting sub-expression (`ps[idx()].X++`) —
+                // while the compound path binds the chain exactly once and
+                // shares it between the read and write sides.
+                if (receiver is NameExpressionSyntax simpleReceiver)
+                {
+                    write = new FieldAssignmentExpressionSyntax(syntaxTree, simpleReceiver.IdentifierToken, dotToken, fieldIdentifier, equalsToken, newValue);
+                }
+                else
+                {
+                    var memberCompoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetText(compoundOpKind), null);
+                    write = new EventSubscriptionExpressionSyntax(syntaxTree, operand, memberCompoundToken, OneLiteral());
+                }
             }
             else
             {

@@ -417,6 +417,20 @@ internal sealed partial class ExpressionBinder
             return TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type);
         }
 
+        // Issue #3292: an array/slice element is real storage — the emitter
+        // roots the write chain at the element address (`ldelema`), exactly
+        // as C# does for `ps[0].X = v`. This holds regardless of how the
+        // collection itself was produced (variable, field, call result, or a
+        // `let` binding: the write mutates the heap array, not the binding —
+        // issue #1132's shallow-immutability rule). Map elements
+        // (Dictionary indexer copies) and CLR indexer results
+        // (BoundClrIndexExpression) have no element address and keep the
+        // GS0499 struct-temporary rejection.
+        if (receiver is BoundIndexExpression indexReceiver)
+        {
+            return indexReceiver.IsArrayBackedElementAccess;
+        }
+
         if (receiver is not BoundFieldAccessExpression fieldAccess)
         {
             return false;
@@ -2737,11 +2751,12 @@ internal sealed partial class ExpressionBinder
     /// <see cref="SubmissionWriteReceiverKind.None"/>. Crossing a
     /// reference-typed link makes the remaining chain heap-rooted (writable
     /// regardless of the root's read-only flag); crossing a computed
-    /// (property) link makes an in-place write impossible. Issue #3252: a
-    /// value-typed ELEMENT link (<c>ps[0]</c>, <c>m[k]</c>) is a struct
-    /// temporary — the element loads as a copy, so a member write through it
-    /// can never reach the stored element; when the collection chain roots
-    /// at a submission global the write classifies as
+    /// (property) link makes an in-place write impossible. Issue #3252 /
+    /// issue #3292: a value-typed ELEMENT link classifies by its storage —
+    /// an array-backed element (<c>ps[0]</c> over an array or slice) has a
+    /// real address (<c>ldelema</c>) and is
+    /// <see cref="SubmissionWriteReceiverKind.Addressable"/>, while a
+    /// map/indexer element (<c>m[k]</c> — the getter returns a copy) is
     /// <see cref="SubmissionWriteReceiverKind.NotAddressable"/>, matching
     /// the GS0499 rejection the identical same-cell shape reports.
     /// </summary>
@@ -2755,11 +2770,21 @@ internal sealed partial class ExpressionBinder
         }
 
         // Issue #3252: the receiver IS an element load (`ps[0].X = v`).
+        // Issue #3292: an array-backed element has a real address
+        // (`ldelema`), so the write reaches the stored element in place —
+        // crossing the element link is heap-rooted, so the root's read-only
+        // flag no longer applies (same rule as a reference-typed link). An
+        // indexer/map element load stays a struct temporary.
         if (TryGetElementAccessTarget(receiver, out var elementCollection))
         {
-            return ChainHasSubmissionGlobalRoot(elementCollection)
-                ? SubmissionWriteReceiverKind.NotAddressable
-                : SubmissionWriteReceiverKind.None;
+            if (!ChainHasSubmissionGlobalRoot(elementCollection))
+            {
+                return SubmissionWriteReceiverKind.None;
+            }
+
+            return IsAddressableElementLoad(receiver)
+                ? SubmissionWriteReceiverKind.Addressable
+                : SubmissionWriteReceiverKind.NotAddressable;
         }
 
         if (receiver is not BoundClrPropertyAccessExpression access)
@@ -2810,14 +2835,22 @@ internal sealed partial class ExpressionBinder
             }
 
             // Issue #3252: the value-typed field walk rests on an element
-            // load (`qs[0].B2.C = v`) — the chain bottoms out in a copied
-            // element, so the write is blocked when the collection roots at
-            // a submission global.
+            // load (`qs[0].B2.C = v`). Issue #3292: when the element is
+            // array-backed and every link walked so far is a real field, the
+            // address chain (`ldelema` + `ldflda`…) reaches the stored
+            // element in place; an indexer/map element (or a computed link
+            // above the element) still bottoms out in a copy and stays
+            // blocked.
             if (TryGetElementAccessTarget(access.Receiver, out var linkCollection))
             {
-                return ChainHasSubmissionGlobalRoot(linkCollection)
-                    ? SubmissionWriteReceiverKind.NotAddressable
-                    : SubmissionWriteReceiverKind.None;
+                if (!ChainHasSubmissionGlobalRoot(linkCollection))
+                {
+                    return SubmissionWriteReceiverKind.None;
+                }
+
+                return !sawComputedLink && IsAddressableElementLoad(access.Receiver)
+                    ? SubmissionWriteReceiverKind.Addressable
+                    : SubmissionWriteReceiverKind.NotAddressable;
             }
 
             if (access.Receiver is not BoundClrPropertyAccessExpression inner)
@@ -2853,6 +2886,19 @@ internal sealed partial class ExpressionBinder
                 return false;
         }
     }
+
+    /// <summary>
+    /// Issue #3292: whether an element load denotes addressable element
+    /// storage — an array-backed <see cref="BoundIndexExpression"/> whose
+    /// element address the emitter can root a write chain at
+    /// (<c>ldelema</c>). A map element load or a CLR indexer result
+    /// (<see cref="BoundClrIndexExpression"/>) returns a copy and is never
+    /// addressable.
+    /// </summary>
+    /// <param name="expression">The element-load expression.</param>
+    /// <returns><c>true</c> when the element has a real address.</returns>
+    private static bool IsAddressableElementLoad(BoundExpression expression)
+        => expression is BoundIndexExpression { IsArrayBackedElementAccess: true };
 
     /// <summary>
     /// Issue #3185: whether a CLR member-access chain bottoms out at a prior
