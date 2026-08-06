@@ -118,7 +118,7 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0153 | Error | Constraint is neither an interface nor a class. | A generic type-parameter constraint must be an interface (any interface — sealed or not, generic or not;) or a base class; a value type such as a struct or enum is rejected. |
 | GS0154 | Error | Wrong argument type. | A positional argument's type does not match the parameter type. |
 | GS0155 | Error | Cannot convert type. | An explicit cast between incompatible types. |
-| GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `int x = 3.14` — an explicit cast is available but was not written. |
+| GS0156 | Error | Cannot convert implicitly. | The source value is not implicitly compatible with the required target type; provide a value of the target type instead. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
 | GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
 | GS0159 | Error | Cannot resolve function call. | A function name does not resolve, or its nullable receiver lacks valid non-null narrowing. |
