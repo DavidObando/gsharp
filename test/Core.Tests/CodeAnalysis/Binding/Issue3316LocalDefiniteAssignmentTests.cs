@@ -567,11 +567,17 @@ public class Issue3316LocalDefiniteAssignmentTests
     public void Goroutine_AssignedLocalAsGoArgument_IsLegal()
     {
         // The `go f(c)` argument is a value read of `c` through the
-        // GoStatement's expression — legal once assigned. (The closure-
-        // capturing spelling `go func() { c <- 11 }()` currently trips a
-        // pre-existing emit defect on main — GS9998 "Variable 'c' has no
-        // local slot" — unrelated to definite assignment, so this witness
-        // uses the argument-passing shape the Go samples use.)
+        // GoStatement's expression — legal once assigned. (At the time this
+        // test was written, the closure-capturing spelling
+        // `go func() { c <- 11 }()` tripped a pre-existing emit defect —
+        // GS9998 "Variable 'c' has no local slot" — unrelated to definite
+        // assignment, so this witness used the argument-passing shape the Go
+        // samples use. That defect is now fixed by #3323 — see
+        // Issue3323GoroutineChannelCaptureTests, including its
+        // Goroutine_InlineLiteral_CapturesChannel_DeclaredThenAssignedBeforeGo
+        // witness for the identical declare-then-assign-then-capture shape —
+        // but this test keeps the argument-passing spelling as a stable,
+        // definite-assignment-focused witness.)
         var result = Compile("""
             package P3316Goroutine
 
