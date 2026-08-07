@@ -266,6 +266,26 @@ public class ClrTypeUtilitiesTests
             [argument]));
     }
 
+    [Fact]
+    public void GetMethodSafe_TypeBuilderConstructedGeneric_ResolvesInheritedParameterType()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("GetMethodSafeInheritedTypeBuilder"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("GetMethodSafeInheritedTypeBuilder");
+        var argument = module.DefineType("Argument", TypeAttributes.Public);
+        var constructed = typeof(TypeBuilderDerivedMethodFixture<>).MakeGenericType(argument);
+
+        Assert.Throws<NotSupportedException>(() => constructed.GetMethod(
+            nameof(TypeBuilderBaseMethodFixture<object>.Accept),
+            [argument]));
+        Assert.NotNull(constructed.GetMethodSafe(
+            nameof(TypeBuilderBaseMethodFixture<object>.Accept)));
+        Assert.NotNull(constructed.GetMethodSafe(
+            nameof(TypeBuilderBaseMethodFixture<object>.Accept),
+            [argument]));
+    }
+
     /// <summary>
     /// Loads <see cref="Fixture338"/> through a MetadataLoadContext whose
     /// reference set intentionally omits <c>System.Text.RegularExpressions</c>,
@@ -382,4 +402,13 @@ file sealed class TypeBuilderAmbiguousMethodFixture<TFirst, TSecond>
     public void Accept(TFirst value) => _ = value;
 
     public void Accept(TSecond value) => _ = value;
+}
+
+file class TypeBuilderBaseMethodFixture<T>
+{
+    public void Accept(T value) => _ = value;
+}
+
+file sealed class TypeBuilderDerivedMethodFixture<T> : TypeBuilderBaseMethodFixture<T>
+{
 }

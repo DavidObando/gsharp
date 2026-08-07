@@ -63,7 +63,7 @@ public static class ClrTypeUtilities
             }
 
             var openMethod = type.GetGenericTypeDefinition().GetMethod(name);
-            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+            return openMethod != null ? GetConstructedGenericMethod(type, openMethod) : null;
         }
     }
 
@@ -105,7 +105,7 @@ public static class ClrTypeUtilities
                 types,
                 openTypeArguments,
                 typeArguments);
-            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+            return openMethod != null ? GetConstructedGenericMethod(type, openMethod) : null;
         }
     }
 
@@ -1135,6 +1135,71 @@ public static class ClrTypeUtilities
         return type != null
             && type.IsConstructedGenericType
             && ContainsTypeBuilderGenericArgument(type);
+    }
+
+    private static MethodInfo GetConstructedGenericMethod(Type type, MethodInfo openMethod)
+    {
+        var declaringType = openMethod.DeclaringType;
+        if (!declaringType.IsGenericType)
+        {
+            return openMethod;
+        }
+
+        var declaringDefinition = declaringType.GetGenericTypeDefinition();
+        var methodDefinition = declaringType.IsGenericTypeDefinition
+            ? openMethod
+            : declaringDefinition.GetMethods()
+                .Single(method => method.Module == openMethod.Module
+                    && method.MetadataToken == openMethod.MetadataToken);
+        var openType = type.GetGenericTypeDefinition();
+        var constructedDeclaringType = SubstituteGenericTypeArguments(
+            declaringType,
+            openType.GetGenericArguments(),
+            type.GetGenericArguments());
+        return TypeBuilder.GetMethod(constructedDeclaringType, methodDefinition);
+    }
+
+    private static Type SubstituteGenericTypeArguments(
+        Type type,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        if (type.IsGenericParameter)
+        {
+            var position = Array.IndexOf(openTypeArguments, type);
+            return position >= 0 ? typeArguments[position] : type;
+        }
+
+        if (type.HasElementType)
+        {
+            var elementType = SubstituteGenericTypeArguments(
+                type.GetElementType(),
+                openTypeArguments,
+                typeArguments);
+            if (type.IsByRef)
+            {
+                return elementType.MakeByRefType();
+            }
+
+            if (type.IsPointer)
+            {
+                return elementType.MakePointerType();
+            }
+
+            return type.IsSZArray
+                ? elementType.MakeArrayType()
+                : elementType.MakeArrayType(type.GetArrayRank());
+        }
+
+        return type.IsGenericType
+            ? type.GetGenericTypeDefinition().MakeGenericType(
+                type.GetGenericArguments()
+                    .Select(argument => SubstituteGenericTypeArguments(
+                        argument,
+                        openTypeArguments,
+                        typeArguments))
+                    .ToArray())
+            : type;
     }
 
     private static MethodInfo FindOpenGenericMethod(
