@@ -1892,6 +1892,37 @@ internal sealed class MemberLookup
                 }
 
                 return false;
+            case MapTypeSymbol map:
+                // Issue #3303: a `map[K, V]` whose key or value structurally
+                // references an open type parameter (e.g. the `map[K, V]`
+                // field of a generic class) or a same-compilation user type
+                // has a null ClrType, so the ClrType gate above missed it.
+                // Its runtime backing is still `Dictionary<K, V>` — erase the
+                // key/value (type parameter → `object`, mirroring the slice
+                // and sequence cases) and re-form the closed dictionary so
+                // overload resolution can rank `object`-shaped parameters as
+                // applicable (`Console.WriteLine(items)` previously
+                // dead-ended with GS0159 while the monomorphic map bound
+                // fine). Symbolic recovery downstream re-derives the real
+                // key/value types when a generic candidate is chosen.
+                if (TryProjectErasedClrType(map.KeyType, out var mapKeyErased)
+                    && TryProjectErasedClrType(map.ValueType, out var mapValueErased)
+                    && !mapKeyErased.IsByRef && !mapKeyErased.IsPointer
+                    && !mapValueErased.IsByRef && !mapValueErased.IsPointer)
+                {
+                    try
+                    {
+                        erased = typeof(System.Collections.Generic.Dictionary<,>)
+                            .MakeGenericType(mapKeyErased, mapValueErased);
+                        return true;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+
+                return false;
             case PointerTypeSymbol pointer:
                 // Issue #2838: `*T` under `T : unmanaged` — canonically the
                 // pointer bound by `fixed p *T = span` — has a null ClrType
