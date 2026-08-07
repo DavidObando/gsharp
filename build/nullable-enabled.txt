@@ -32,3 +32,8 @@ src/Core/CodeAnalysis/Binding/Bound*.cs
 !src/Core/CodeAnalysis/Binding/BoundTreeWalker.cs
 !src/Core/CodeAnalysis/Binding/BoundNodePrinter.cs
 !src/Core/CodeAnalysis/Binding/BoundBinaryOperator.cs
+
+# Slice 4 -- genuine leaves.
+src/Core/Resx/**/*.cs
+src/Core/CodeAnalysis/CodeGen/**/*.cs
+src/Core/CodeAnalysis/PEWriter/**/*.cs
