@@ -37,11 +37,13 @@ public static class ClrTypeUtilities
     /// <summary>
     /// Resolves a named method without asking a constructed
     /// <see cref="TypeBuilder"/> generic instantiation to resolve members
-    /// directly.
+    /// directly. The name must be unambiguous; use the parameter-type overload
+    /// for overloaded methods.
     /// </summary>
     /// <param name="type">The type that declares or inherits the method.</param>
     /// <param name="name">The method name to resolve.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    /// <exception cref="AmbiguousMatchException"><paramref name="name"/> identifies multiple methods.</exception>
     public static MethodInfo GetMethodSafe(this Type type, string name)
     {
         if (type is null || name is null)
@@ -61,7 +63,7 @@ public static class ClrTypeUtilities
             }
 
             var openMethod = type.GetGenericTypeDefinition().GetMethod(name);
-            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+            return openMethod != null ? GetConstructedGenericMethod(type, openMethod) : null;
         }
     }
 
@@ -74,6 +76,8 @@ public static class ClrTypeUtilities
     /// <param name="name">The method name to resolve.</param>
     /// <param name="types">The method's parameter types.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
+    /// <exception cref="AmbiguousMatchException">More than one method matches the supplied signature.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="types"/> contains a <see langword="null"/> element.</exception>
     public static MethodInfo GetMethodSafe(this Type type, string name, Type[] types)
     {
         if (type is null || name is null || types is null)
@@ -92,8 +96,16 @@ public static class ClrTypeUtilities
                 return null;
             }
 
-            var openMethod = type.GetGenericTypeDefinition().GetMethod(name, types);
-            return openMethod != null ? TypeBuilder.GetMethod(type, openMethod) : null;
+            var openType = type.GetGenericTypeDefinition();
+            var typeArguments = type.GetGenericArguments();
+            var openTypeArguments = openType.GetGenericArguments();
+            var openMethod = FindOpenGenericMethod(
+                openType,
+                name,
+                types,
+                openTypeArguments,
+                typeArguments);
+            return openMethod != null ? GetConstructedGenericMethod(type, openMethod) : null;
         }
     }
 
@@ -1123,6 +1135,174 @@ public static class ClrTypeUtilities
         return type != null
             && type.IsConstructedGenericType
             && ContainsTypeBuilderGenericArgument(type);
+    }
+
+    private static MethodInfo GetConstructedGenericMethod(Type type, MethodInfo openMethod)
+    {
+        var declaringType = openMethod.DeclaringType;
+        if (!declaringType.IsGenericType)
+        {
+            return openMethod;
+        }
+
+        var declaringDefinition = declaringType.GetGenericTypeDefinition();
+        var methodDefinition = declaringType.IsGenericTypeDefinition
+            ? openMethod
+            : declaringDefinition.GetMethods()
+                .Single(method => method.Module == openMethod.Module
+                    && method.MetadataToken == openMethod.MetadataToken);
+        var openType = type.GetGenericTypeDefinition();
+        var constructedDeclaringType = SubstituteGenericTypeArguments(
+            declaringType,
+            openType.GetGenericArguments(),
+            type.GetGenericArguments());
+        return TypeBuilder.GetMethod(constructedDeclaringType, methodDefinition);
+    }
+
+    private static Type SubstituteGenericTypeArguments(
+        Type type,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        if (type.IsGenericParameter)
+        {
+            var position = Array.IndexOf(openTypeArguments, type);
+            return position >= 0 ? typeArguments[position] : type;
+        }
+
+        if (type.HasElementType)
+        {
+            var elementType = SubstituteGenericTypeArguments(
+                type.GetElementType(),
+                openTypeArguments,
+                typeArguments);
+            if (type.IsByRef)
+            {
+                return elementType.MakeByRefType();
+            }
+
+            if (type.IsPointer)
+            {
+                return elementType.MakePointerType();
+            }
+
+            return type.IsSZArray
+                ? elementType.MakeArrayType()
+                : elementType.MakeArrayType(type.GetArrayRank());
+        }
+
+        return type.IsGenericType
+            ? type.GetGenericTypeDefinition().MakeGenericType(
+                type.GetGenericArguments()
+                    .Select(argument => SubstituteGenericTypeArguments(
+                        argument,
+                        openTypeArguments,
+                        typeArguments))
+                    .ToArray())
+            : type;
+    }
+
+    private static MethodInfo FindOpenGenericMethod(
+        Type openType,
+        string name,
+        Type[] parameterTypes,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        var matches = openType.GetMethods()
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+            .Where(method =>
+            {
+                var parameters = method.GetParameters();
+                return parameters.Length == parameterTypes.Length
+                    && parameters.Select(parameter => parameter.ParameterType)
+                    .Zip(parameterTypes, (open, constructed) =>
+                        MatchesConstructedParameterType(
+                            open,
+                            constructed,
+                            openTypeArguments,
+                            typeArguments))
+                    .All(matches => matches);
+            })
+            .Take(2)
+            .ToArray();
+
+        return matches.Length switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new AmbiguousMatchException(),
+        };
+    }
+
+    private static bool MatchesConstructedParameterType(
+        Type open,
+        Type constructed,
+        Type[] openTypeArguments,
+        Type[] typeArguments)
+    {
+        if (open.IsGenericParameter)
+        {
+            var position = Array.IndexOf(openTypeArguments, open);
+            if (position >= 0)
+            {
+                return constructed == typeArguments[position];
+            }
+        }
+
+        if (open.IsByRef || constructed.IsByRef)
+        {
+            return open.IsByRef
+                && constructed.IsByRef
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsPointer || constructed.IsPointer)
+        {
+            return open.IsPointer
+                && constructed.IsPointer
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsArray || constructed.IsArray)
+        {
+            return open.IsArray
+                && constructed.IsArray
+                && open.IsSZArray == constructed.IsSZArray
+                && open.GetArrayRank() == constructed.GetArrayRank()
+                && MatchesConstructedParameterType(
+                    open.GetElementType(),
+                    constructed.GetElementType(),
+                    openTypeArguments,
+                    typeArguments);
+        }
+
+        if (open.IsConstructedGenericType || constructed.IsConstructedGenericType)
+        {
+            return open.IsConstructedGenericType
+                && constructed.IsConstructedGenericType
+                && open.GetGenericTypeDefinition() == constructed.GetGenericTypeDefinition()
+                && open.GetGenericArguments()
+                    .Zip(
+                        constructed.GetGenericArguments(),
+                        (openArgument, constructedArgument) =>
+                            MatchesConstructedParameterType(
+                                openArgument,
+                                constructedArgument,
+                                openTypeArguments,
+                                typeArguments))
+                    .All(matches => matches);
+        }
+
+        return open == constructed;
     }
 
     private static bool ContainsTypeBuilderGenericArgument(Type type)
