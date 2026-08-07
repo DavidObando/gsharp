@@ -186,6 +186,90 @@ public sealed class Issue3240RefStructInheritedVirtualBoxingTests
     }
 
     [Fact]
+    public void InheritedMethodGroup_OnRefStruct_ReportsBoxing()
+    {
+        const string Source = """
+            ref struct Bare {
+                var id int32
+            }
+
+            func Run() {
+                var b = Bare{id: 42}
+                let f () -> string = b.ToString
+            }
+            Run()
+            """;
+
+        AssertRejectedWithoutAssembly(
+            Source,
+            "b.ToString",
+            "be captured as a delegate target because that requires boxing the receiver");
+    }
+
+    [Fact]
+    public void DeclaredMethodGroup_OnRefStruct_ReportsBoxing()
+    {
+        const string Source = """
+            ref struct Bare {
+                var id int32
+                func Get() int32 -> id
+            }
+
+            func Run() {
+                var b = Bare{id: 42}
+                let f () -> int32 = b.Get
+            }
+            Run()
+            """;
+
+        AssertRejectedWithoutAssembly(
+            Source,
+            "b.Get",
+            "be captured as a delegate target because that requires boxing the receiver");
+    }
+
+    [Fact]
+    public void UserExtensionMethodGroup_OnImportedRefStruct_ReportsBoxing()
+    {
+        const string Source = """
+            import System
+
+            func (span ReadOnlySpan[int32]) Ext() int32 -> span.Length
+
+            func Run() {
+                var values []int32 = []int32{11, 22}
+                var span ReadOnlySpan[int32] = values
+                let f () -> int32 = span.Ext
+            }
+            Run()
+            """;
+
+        AssertRejectedWithoutAssembly(
+            Source,
+            "span.Ext",
+            "be captured as a delegate target because that requires boxing the receiver");
+    }
+
+    [Fact]
+    public void ImportedExtensionMethodGroup_OnImportedRefStruct_ReportsBoxing()
+    {
+        const string Source = """
+            import System
+
+            func Run() {
+                var span ReadOnlySpan[char] = " "
+                let f () -> bool = span.IsWhiteSpace
+            }
+            Run()
+            """;
+
+        AssertRejectedWithoutAssembly(
+            Source,
+            "span.IsWhiteSpace",
+            "be captured as a delegate target because that requires boxing the receiver");
+    }
+
+    [Fact]
     public void DeclaredObjectMethods_OnRefStruct_RemainDirectCalls()
     {
         const string Source = """
