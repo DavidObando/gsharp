@@ -112,8 +112,11 @@ public sealed class Issue3303GenericMapFieldReplTests
     }
 
     [Fact]
-    public void SameCell_UnassignedGenericMapField_ObservedAsNil()
+    public void SameCell_UnassignedGenericMapField_ObservedAsEmptyNotNil()
     {
+        // Issue #3310 / ADR-0159 flipped this pin's observation: the
+        // uninitialized field now holds the sound empty-instance zero value
+        // (synthesized field initializer), so it is NOT nil.
         using var engine = new EmittedSessionEngine();
         var result = engine.Evaluate("""
             class H[K, V any] {
@@ -127,7 +130,7 @@ public sealed class Issue3303GenericMapFieldReplTests
             """);
 
         Assert.False(result.HasError, string.Join("; ", result.Diagnostics));
-        Assert.Equal(true, result.Value);
+        Assert.Equal(false, result.Value);
     }
 
     private static void AssertOk(EmittedSessionEngine engine, string cell)

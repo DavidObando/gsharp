@@ -1245,10 +1245,19 @@ internal sealed partial class StatementBinder
         if (syntax.Initializer == null)
         {
             // Bare `var x T` declaration: the variable is initialized to the
-            // type's default value (Go-style zero value). The parser only
-            // produces a null initializer when a type clause is present.
+            // type's zero value. The parser only produces a null initializer
+            // when a type clause is present. For the magic collection types
+            // (map/slice/array/sequence) the zero value is a SOUND EMPTY
+            // INSTANCE, not a null reference — the bare (non-`?`) spelling
+            // promises non-null, and ADR-0159 (issue #3310, the #2262 NRE)
+            // makes that promise true. Channels are carved out: an
+            // auto-created channel has no sensible default, so a bare
+            // `chan T` slot requires an explicit initializer (GS0520). All
+            // other types keep the CLR default (0 / false / "" / all-zero
+            // struct / null for reference types) per ADR-0008.
             variableType = type ?? TypeSymbol.Error;
-            convertedInitializer = new BoundDefaultExpression(syntax, variableType);
+            convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType)
+                ?? new BoundDefaultExpression(syntax, variableType);
         }
         else
         {

@@ -285,38 +285,40 @@ public class Issue3303GenericMapFieldEmitTests
     }
 
     [Fact]
-    public void GenericMapField_UnassignedField_IsNil()
+    public void GenericMapField_UnassignedField_IsEmptyNotNil()
     {
-        // A declared-but-unassigned map field genuinely holds a CLR null:
-        // `items == nil` must bind AND observe it (the issue's silent-nil
-        // state made observable).
+        // Issue #3310 / ADR-0159 flipped this pin's observation: a
+        // declared-but-uninitialized map field no longer holds a CLR null —
+        // it holds the SOUND EMPTY-INSTANCE zero value (synthesized field
+        // initializer, symbolic Dictionary`2 ctor for open K/V), so the
+        // bare non-`?` spelling's non-null promise is true. The comparison
+        // still binds; it now observes non-nil at every point.
         var result = EmittedOracle.Evaluate("""
             package P3303UnassignedNil
+
+            import Gsharp.Extensions.Go
 
             class H[K, V any] {
                 var items map[K, V]
                 init() { }
                 func IsNil() bool { return items == nil }
-                func Fill() { items = map[K, V]{} }
+                func Count() int32 { return len(items) }
             }
 
             func run() int32 {
                 var h = H[string, int32]()
-                var before = h.IsNil()
-                h.Fill()
-                var after = h.IsNil()
-                if before && !after {
-                    return 1
+                if h.IsNil() {
+                    return -1
                 }
 
-                return 0
+                return h.Count()
             }
 
             run()
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
-        Assert.Equal(1, result.Value);
+        Assert.Equal(0, result.Value);
     }
 
     [Theory]

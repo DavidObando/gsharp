@@ -818,6 +818,20 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
+        // Issue #3310 / ADR-0159: same-element `[]T → sequence[T]` is a no-op
+        // reference conversion at the IL level (`T[]` implements
+        // `IEnumerable<T>`), including the open shapes where the element type
+        // references an in-scope type parameter or same-compilation struct
+        // and both symbols carry a null ClrType. Mirrors the binder's
+        // matching arm in Conversion.ClassifyCore; used by the synthesized
+        // empty-sequence zero value and by user-written `[]K{}` assignments
+        // into `sequence[K]` slots.
+        if (a is SliceTypeSymbol aSliceToSeq && b is SequenceTypeSymbol bSeqFromSlice
+            && aSliceToSeq.ElementType == bSeqFromSlice.ElementType)
+        {
+            return true;
+        }
+
         if (a is StructSymbol aClass && b is StructSymbol bClass && aClass.IsClass && bClass.IsClass)
         {
             // Issue #1248: a constructed generic class's base-type reference is
