@@ -146,6 +146,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.UndefinedBinaryOperator, operatorText, leftType, rightType);
 
     /// <summary>
+    /// Issue #3317 / ADR-0159: reports that a nil comparison against a bare
+    /// (non-<c>?</c>) magic collection type is statically constant — with
+    /// sound empty-instance zero values such a value can never be nil, so
+    /// <c>==</c> is always false and <c>!=</c> is always true.
+    /// </summary>
+    /// <param name="location">The text location of the comparison.</param>
+    /// <param name="operandType">The bare collection-typed operand's static type.</param>
+    /// <param name="constantResult">The constant outcome text: <c>"false"</c> for <c>==</c>, <c>"true"</c> for <c>!=</c>.</param>
+    public void ReportNilComparisonAlwaysConstant(TextLocation location, TypeSymbol operandType, string constantResult)
+    => Report(location, DiagnosticDescriptors.NilComparisonAlwaysConstant, operandType, constantResult);
+
+    /// <summary>
     /// Reports that the function doesn't exist.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

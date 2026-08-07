@@ -128,6 +128,25 @@ parse, so the `?` escape hatch is **not currently expressible for channels**
 behind the greedy element TypeClause). A `chan?` or parenthesized type
 clause is the natural future fix.
 
+> **Addendum (2026-08, issue #3315):** follow-up (b) is implemented via
+> parenthesized type clauses. A parenthesized single type clause `(T)` is
+> grouping, and its trailing `?` marks the **whole** inner type nullable:
+> `(chan int32)?` is a nullable channel of `int32`, satisfying GS0520's
+> optional-channel escape hatch (the slot's zero value is nil, `make(chan
+> int32)` assigns into it, and nil comparison / `?`-flow apply). The
+> element-binding of an unparenthesized trailing `?` is **kept** —
+> `chan int32?` remains `chan (int32?)` — because that is the suffix-family
+> rule for open-tailed composite types (`[]T?` is element-nullable per
+> #1212 and `(T) -> R?` is return-nullable per ADR-0075/ADR-0137, each with
+> an explicit whole-type spelling: `[]?T` and `((T) -> R)?` respectively).
+> The spec grammar's unreachable `'chan' TypeClause '?'?` outer marker is
+> replaced by `'chan' TypeClause` plus the general
+> `'(' TypeClause ')' '?'?` grouping production, which also gives `([]T)?`
+> (≡ `[]?T`) and `(map[K, V])?` (≡ `map[K, V]?`) for free. The statically-
+> false nil-compare warning follow-up is implemented as GS0523 (issue
+> #3317; renumbered from an initially-assigned GS0521 to avoid a collision
+> with the unrelated `PointerGenericTypeArgument` diagnostic).
+
 ### Honesty clauses (explicit limitations)
 
 - **Element defaults stay CLR defaults.** Array/slice *elements* of map (or

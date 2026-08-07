@@ -110,6 +110,7 @@ internal sealed partial class DeclarationBinder
             || !syntax.HasTypeArguments
             || syntax.IsArray
             || syntax.IsNullable
+            || syntax.IsParenthesizedNullable
             || !scope.TryLookupTypeAlias(syntax.Identifier.Text, syntax.TypeArguments.Count, out var candidate)
             || candidate is not StructSymbol candidateStruct)
         {
@@ -133,6 +134,7 @@ internal sealed partial class DeclarationBinder
                 || argument.HasTypeArguments
                 || argument.IsArray
                 || argument.IsNullable
+                || argument.IsParenthesizedNullable
                 || argument.IsTuple
                 || argument.IsFunction
                 || argument.IsMap
