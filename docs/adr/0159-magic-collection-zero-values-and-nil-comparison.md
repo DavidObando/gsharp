@@ -119,8 +119,9 @@ on main), soundness is enforced at the declaration site instead:
 
 This is deliberately stricter than Go (declare-then-assign-later of a bare
 channel slot is rejected). Two relaxations are recorded as follow-ups, not
-implemented: (a) a real definite-assignment analysis for locals would allow
-declare-then-assign; (b) a nullable-channel spelling — maps have `map[K, V]?`
+implemented (follow-up (a) has since shipped for locals via issue #3316 —
+see the addendum at the end of this document): (a) a real
+definite-assignment analysis for locals would allow declare-then-assign; (b) a nullable-channel spelling — maps have `map[K, V]?`
 (ADR-0104) and slices have `[]?T`, but `chan int32?` parses with the `?`
 bound to the **element** (`chan (int32?)`) and `(chan int32)?` does not
 parse, so the `?` escape hatch is **not currently expressible for channels**
@@ -208,3 +209,55 @@ clause is the natural future fix.
   taken on the user's behalf; rejected in the issue.
 - **Warning-only (keep null, warn on use).** Leaves the type system lying;
   rejected with approach A's acceptance.
+
+## Addendum (issue #3316): definite-assignment relaxation for channel locals
+
+Follow-up (a) has shipped. G# now has a definite-assignment analysis for
+locals — `DefiniteAssignmentAnalyzer`, the generalization of the ADR-0060
+ref-kind analyzer (`RefKindDefiniteAssignmentAnalyzer`, renamed), running
+its forward must-assign fixpoint over the same per-function CFG the GS0100
+definite-return check builds — and the channel carve-out is its first
+consumer:
+
+- A **local** `var c chan T` without an initializer no longer reports
+  GS0520 at the declaration. Declaring is free; the error is **GS0521**, at
+  any *use* that some control-flow path can reach without a preceding
+  assignment (C#'s CS0165 model). Go's declare-then-assign-then-use shape
+  is now legal.
+- **Globals and fields keep GS0520** at the declaration: they are emitted
+  as static or instance fields readable from any function or REPL cell, so
+  per-function flow analysis cannot police them. (REPL cross-cell hoisted
+  globals are fields — explicitly out of scope, per the issue.)
+
+Flow semantics follow C# definite assignment: an assignment in only one
+`if` arm, only inside a loop body (zero iterations possible), or only in a
+`try` body (an exception may skip it) does not reach the code after; an
+assignment in every `switch` arm including `default`, in every `select`
+arm, in a `finally`, or an `out`-argument position does. A function literal
+checks captured channel locals against the assignment state at the capture
+point; assigning inside the literal does not make later outer uses safe,
+and vice versa. An explicit `= default` initializer still counts as
+assignment — the honesty clause above keeps `default`'s CLR meaning, so
+that spelling remains the deliberate opt-in to a null channel slot.
+
+**The general-local question, decided.** The analysis applies **only to
+kinds with no usable zero value** — channels today, future no-zero-value
+kinds if any. It is *not* C#'s blanket CS0165: locals whose types have
+sound zero values (ints, bools, strings, structs, and this ADR's
+map/slice/array/sequence empty instances) keep G#'s documented zero-value
+initialization with no definite-assignment errors. That is the coherent
+synthesis of this ADR's two commitments: Go-style "declarations bind zero
+values" wherever a zero value exists and is sound, Kotlin/C#-style
+flow-checked soundness exactly where no zero value can exist. Applying
+CS0165 to all locals would break every existing program that relies on
+zero-valued declarations — the semantics this ADR just made *more* sound —
+and is recorded as a deliberate rejection, not an open item. (If a future
+owner decision wants opt-in strictness for all locals, the analyzer
+machinery is now in place; that would be a new ADR.)
+
+Known best-effort edges, inherited from the shared analyzer: reads nested
+in conditionally-evaluated subexpressions of a single statement (e.g. the
+right side of a short-circuit operator) are checked against the statement's
+entry state, and the fail-safe catch path that guards the whole analysis
+skips GS0521 like it skips GS0239. The nullable-channel spelling
+(follow-up (b)) remains open.
