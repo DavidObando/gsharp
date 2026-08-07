@@ -850,17 +850,13 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
-        // Issue #1218: an enum value boxes implicitly to its CLR reference base
-        // types — System.Object, System.ValueType, and System.Enum. An
-        // EnumSymbol carries no ClrType during binding (the enum is still being
-        // compiled), so the general object-boxing rule above cannot fire. This
-        // makes inherited Enum/ValueType/Object members callable on enum values
-        // (e.g. passing an enum to System.Enum.HasFlag(System.Enum)); the
-        // emitter lowers the conversion to a single `box <Enum>`.
-        if (from is EnumSymbol && to?.ClrType is System.Type enumBoxTarget
-            && (enumBoxTarget.IsSameAs(typeof(object))
-                || enumBoxTarget.IsSameAs(typeof(System.ValueType))
-                || enumBoxTarget.IsSameAs(typeof(System.Enum))))
+        // Issues #1218/#3280: value types box implicitly to System.ValueType,
+        // while enum values additionally box to System.Enum. A same-compilation
+        // EnumSymbol has no ClrType yet, so retain its object-boxing path too.
+        if (to?.ClrType is System.Type valueTypeBaseTarget
+            && ((IsValueTypeLikeFrom(from) && valueTypeBaseTarget.IsSameAs(typeof(System.ValueType)))
+                || (IsEnumLikeType(from) && valueTypeBaseTarget.IsSameAs(typeof(System.Enum)))
+                || (from is EnumSymbol && valueTypeBaseTarget.IsSameAs(typeof(object)))))
         {
             return Conversion.Implicit;
         }
@@ -2719,6 +2715,11 @@ public sealed class Conversion
 
     private static bool IsValueTypeLikeFrom(TypeSymbol type)
     {
+        if (type is TypeParameterSymbol { HasValueTypeConstraint: true })
+        {
+            return true;
+        }
+
         if (type is NullableTypeSymbol nullable
             && NullableLifting.IsAnyValueTypeNullable(nullable))
         {
