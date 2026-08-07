@@ -533,6 +533,12 @@ internal sealed partial class DeclarationBinder
                 // initializers so it flows into every constructor body.
                 pendingZeroValueInstanceFields.Add((fieldSymbol, fieldSyntax));
             }
+            else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
+            {
+                // Issue #3310 / ADR-0159 channel carve-out: a bare `chan T`
+                // field has no usable default and no auto-created instance.
+                Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
+            }
 
             fields.Add(fieldSymbol);
         }
@@ -2208,6 +2214,12 @@ internal sealed partial class DeclarationBinder
                     // for an initializer-less static collection field,
                     // synthesized into the `.cctor` in the deferred pass.
                     fieldBinding.PendingZeroValueStaticFields.Add((fieldSymbol, fieldSyntax));
+                }
+                else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
+                {
+                    // Issue #3310 / ADR-0159 channel carve-out: a bare
+                    // `chan T` static field has no usable default.
+                    Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
                 }
 
                 staticFieldsBuilder.Add(fieldSymbol);

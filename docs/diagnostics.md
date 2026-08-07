@@ -1183,6 +1183,20 @@ CLR `ToString()` method because
 generic arguments. GS0519 is the source-anchored fallback when no usable
 parameterless method is available, preventing a GS9998 reflection exception.
 
+## Channel declaration requires an initializer (GS0520)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0520 | Error | A `chan T` local, global, or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the ADR-0159 empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`. |
+
+The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
+bind a sound empty instance when declared without an initializer
+([ADR-0159](adr/0159-magic-collection-zero-values-and-nil-comparison.md)); a
+channel cannot, because bounded-versus-unbounded and capacity are semantic
+decisions `make` exists to force. Declare-then-assign of a bare channel slot
+is rejected until a definite-assignment analysis (or a nullable-channel
+spelling) exists — both recorded as follow-ups in ADR-0159.
+
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
 GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage

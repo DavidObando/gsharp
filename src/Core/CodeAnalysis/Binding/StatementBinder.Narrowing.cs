@@ -1256,6 +1256,11 @@ internal sealed partial class StatementBinder
             // other types keep the CLR default (0 / false / "" / all-zero
             // struct / null for reference types) per ADR-0008.
             variableType = type ?? TypeSymbol.Error;
+            if (MagicCollectionZeroValue.RequiresExplicitInitializer(variableType))
+            {
+                Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.Text, variableType.Name);
+            }
+
             convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType)
                 ?? new BoundDefaultExpression(syntax, variableType);
         }
