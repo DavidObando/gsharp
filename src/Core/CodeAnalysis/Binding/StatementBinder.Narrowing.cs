@@ -1242,6 +1242,7 @@ internal sealed partial class StatementBinder
 
         BoundExpression convertedInitializer;
         TypeSymbol variableType;
+        var channelSlotWithoutInitializer = false;
         if (syntax.Initializer == null)
         {
             // Bare `var x T` declaration: the variable is initialized to the
@@ -1252,15 +1253,13 @@ internal sealed partial class StatementBinder
             // promises non-null, and ADR-0159 (issue #3310, the #2262 NRE)
             // makes that promise true. Channels are carved out: an
             // auto-created channel has no sensible default, so a bare
-            // `chan T` slot requires an explicit initializer (GS0520). All
+            // `chan T` slot has no zero value at all — whether that is an
+            // error, and where, depends on the declared symbol's kind and is
+            // decided after the symbol is created below (issue #3316). All
             // other types keep the CLR default (0 / false / "" / all-zero
             // struct / null for reference types) per ADR-0008.
             variableType = type ?? TypeSymbol.Error;
-            if (MagicCollectionZeroValue.RequiresExplicitInitializer(variableType))
-            {
-                Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.Text, variableType.Name);
-            }
-
+            channelSlotWithoutInitializer = MagicCollectionZeroValue.RequiresExplicitInitializer(variableType);
             convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType)
                 ?? new BoundDefaultExpression(syntax, variableType);
         }
@@ -1369,6 +1368,20 @@ internal sealed partial class StatementBinder
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var variable = bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, variableType, accessibility);
+
+        // Issue #3316 (ADR-0159 follow-up (a)): a bare `chan T` slot without an
+        // initializer is only a declaration-site error (GS0520) for a GLOBAL —
+        // a top-level declaration is emitted as a static field readable from
+        // any function or REPL cell, which per-function flow analysis cannot
+        // police. A genuine LOCAL declares freely; the definite-assignment
+        // analysis (DefiniteAssignmentAnalyzer) instead reports GS0522 at any
+        // use a path can reach without a preceding assignment — the C# CS0165
+        // model, and Go's declare-then-assign shape becomes legal.
+        if (channelSlotWithoutInitializer && variable is not LocalVariableSymbol)
+        {
+            Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.Text, variableType.Name);
+        }
+
         variable.HasDefinitelyNonNullValue = isReadOnly
             && variableType is not NullableTypeSymbol
             && IsDefinitelyNonNullValue(convertedInitializer);

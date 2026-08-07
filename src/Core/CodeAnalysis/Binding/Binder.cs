@@ -2365,7 +2365,7 @@ public sealed class Binder
         DiagnosticBag diagnostics)
     {
         var body = lowered.PreEmitAnalysisBody ?? lowered;
-        RefKindDefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
+        DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
         RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics);
     }
 

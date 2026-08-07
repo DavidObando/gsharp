@@ -1,4 +1,4 @@
-// <copyright file="RefKindDefiniteAssignmentAnalyzer.cs" company="GSharp">
+// <copyright file="DefiniteAssignmentAnalyzer.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -13,35 +13,47 @@ using GSharp.Core.CodeAnalysis.Text;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0060 items #4 and #5: definite-assignment analysis specialized
-/// for ref-kind parameters.
+/// Definite-assignment analysis. Two consumers share the same forward
+/// "must be assigned" data-flow:
 /// <list type="bullet">
-///   <item>GS0238 — every <c>out</c> parameter must be definitely assigned on
+///   <item>ADR-0060 items #4 and #5 (ref-kind parameters; formerly the
+///     <c>RefKindDefiniteAssignmentAnalyzer</c>):
+///     GS0238 — every <c>out</c> parameter must be definitely assigned on
 ///     every path that reaches a <c>return</c> (or falls off the function
-///     end for <c>void</c> bodies).</item>
-///   <item>GS0239 — a variable passed via <c>ref</c> (NOT <c>out</c>) at a
-///     call site must be definitely assigned at that point.</item>
+///     end for <c>void</c> bodies); GS0239 — a variable passed via
+///     <c>ref</c> (NOT <c>out</c>) at a call site must be definitely
+///     assigned at that point.</item>
+///   <item>ADR-0159 / issue #3316 (no-zero-value locals): GS0522 — a local
+///     whose type has no usable zero value (today: a bare <c>chan T</c>
+///     slot, see <see cref="MagicCollectionZeroValue.RequiresExplicitInitializer"/>)
+///     may be declared without an initializer, but every USE reachable by
+///     a path without a preceding assignment is an error — C#'s CS0165
+///     model. Locals whose types have sound zero values (ints, maps and
+///     the other magic collections post-ADR-0159, structs, …) keep their
+///     documented zero-value initialization and are deliberately NOT
+///     flow-checked.</item>
 /// </list>
 /// The analyzer builds a <see cref="ControlFlowGraph"/> for the function body
 /// (and, recursively, for the body of every try/catch/finally, <c>select</c>
-/// case, <c>scope</c>, and <c>fixed</c> block it contains — issue #1642: the
-/// outer CFG treats those as single opaque statements, see
+/// case, <c>scope</c>, <c>fixed</c>, and await-for-range block it contains —
+/// issue #1642: the outer CFG treats those as single opaque statements, see
 /// <see cref="ControlFlowGraph"/>'s <c>BasicBlockBuilder</c>) and runs a
 /// forward "must be assigned" data-flow with intersect-meet over
 /// predecessors. Reads are checked before writes apply within a basic block,
 /// so a single statement that both writes and reads the same variable is
 /// classified using the set at the start of that statement.
 /// </summary>
-internal static class RefKindDefiniteAssignmentAnalyzer
+internal static class DefiniteAssignmentAnalyzer
 {
     public static void Analyze(BoundBlockStatement body, FunctionSymbol function, DiagnosticBag diagnostics)
-        => AnalyzeWithCaptured(body, function, diagnostics, capturedAssigned: null);
+        => AnalyzeWithCaptured(body, function, diagnostics, capturedAssigned: null, capturedTracked: null);
 
     private static void AnalyzeWithCaptured(
         BoundBlockStatement body,
         FunctionSymbol function,
         DiagnosticBag diagnostics,
-        IEnumerable<VariableSymbol> capturedAssigned)
+        IEnumerable<VariableSymbol> capturedAssigned,
+        IEnumerable<VariableSymbol> capturedTracked)
     {
         if (body == null || function == null)
         {
@@ -72,6 +84,21 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         // narrow) semantics.
         var pointerAliases = new Dictionary<VariableSymbol, VariableSymbol>();
 
+        // Issue #3316: the no-zero-value locals subject to the GS0522
+        // use-site check. Populated when a declared-without-initializer
+        // channel local's BoundVariableDeclaration is simulated.
+        // Function-scoped, like pointerAliases: the set only ever grows, and
+        // reporting happens in the final diagnostics pass once every
+        // declaration has been seen. A function literal's analysis is seeded
+        // with the tracked locals it captures so a capture-before-assignment
+        // use inside the literal reports against the state at the capture
+        // point (the C# model).
+        var tracked = new HashSet<VariableSymbol>();
+        if (capturedTracked != null)
+        {
+            tracked.UnionWith(capturedTracked);
+        }
+
         try
         {
             AnalyzeRegion(
@@ -81,6 +108,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 function,
                 diagnostics,
                 pointerAliases,
+                tracked,
                 FindMethodExitLabel(body),
                 isFunctionBody: true);
         }
@@ -95,7 +123,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             // silently returning (the previous behavior) would let a possibly-
             // unassigned `out` parameter compile with no diagnostic at all.
             // Report it instead of swallowing the failure; GS0239 (ref-read)
-            // checks are best-effort and are simply skipped on this rare path.
+            // and GS0522 (no-zero-value local use) checks are best-effort and
+            // are simply skipped on this rare path.
             foreach (var op in outParams)
             {
                 diagnostics.ReportOutParameterNotAssigned(function.Declaration?.Location ?? default(TextLocation), op.Name);
@@ -123,6 +152,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel,
         bool isFunctionBody = false)
     {
@@ -184,7 +214,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                     changed = true;
                 }
 
-                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(entryAssigned[block]), outParams, function, null, pointerAliases, methodExitLabel);
+                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(entryAssigned[block]), outParams, function, null, pointerAliases, tracked, methodExitLabel);
                 var prevExit = exitAssigned[block];
                 if (prevExit == null || !SetsEqual(prevExit, exit))
                 {
@@ -207,7 +237,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 }
 
                 var entry = entryAssigned[block] ?? new HashSet<VariableSymbol>(initialAssigned);
-                SimulateBlock(block, new HashSet<VariableSymbol>(entry), outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                SimulateBlock(block, new HashSet<VariableSymbol>(entry), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
             }
         }
 
@@ -341,8 +371,8 @@ internal static class RefKindDefiniteAssignmentAnalyzer
     /// <summary>
     /// Walks a basic block linearly, updating <paramref name="assigned"/>
     /// in place. When <paramref name="diagnostics"/> is non-null, reports
-    /// GS0239/GS0238 at every detected violation (including ones nested
-    /// inside try/select/scope/fixed bodies). Returns the exit set.
+    /// GS0239/GS0238/GS0522 at every detected violation (including ones
+    /// nested inside try/select/scope/fixed bodies). Returns the exit set.
     /// </summary>
     private static HashSet<VariableSymbol> SimulateBlock(
         ControlFlowGraph.BasicBlock block,
@@ -351,11 +381,12 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
         foreach (var statement in block.Statements)
         {
-            ProcessStatement(statement, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+            ProcessStatement(statement, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
         }
 
         return assigned;
@@ -368,44 +399,66 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
         switch (statement)
         {
             case BoundExpressionStatement es:
-                ProcessExpression(es.Expression, assigned, diagnostics, pointerAliases);
+                ProcessExpression(es.Expression, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundVariableDeclaration vd:
+            {
+                var definitelyAssigned = false;
                 if (vd.Initializer != null)
                 {
-                    ProcessExpression(vd.Initializer, assigned, diagnostics, pointerAliases);
+                    ProcessExpression(vd.Initializer, assigned, diagnostics, pointerAliases, tracked);
 
                     // Synthesised default expressions (BoundDefaultExpression)
                     // emitted for `var x T` without an explicit initializer
                     // should NOT count as definite assignment — Roslyn DA
-                    // treats `int x;` as unassigned for the same reason.
+                    // treats `int x;` as unassigned for the same reason. An
+                    // EXPLICIT `= default` initializer DOES count: the user
+                    // opted into the CLR default (ADR-0159's honesty clause
+                    // keeps `default`'s CLR meaning).
                     if (vd.Initializer is not BoundDefaultExpression
                         || vd.Syntax is VariableDeclarationSyntax { Initializer: not null })
                     {
                         assigned.Add(vd.Variable);
+                        definitelyAssigned = true;
                     }
 
                     TrackPointerAlias(vd.Variable, vd.Initializer, pointerAliases);
                 }
 
+                // Issue #3316: a declared-without-initializer local whose type
+                // has no usable zero value joins the GS0522 use-site check.
+                // Only user-declared locals qualify — parameters are assigned
+                // on entry, globals are static fields readable from any
+                // function or REPL cell (they keep the GS0520 declaration-site
+                // rule), and synthesized temps are the lowerer's business.
+                if (!definitelyAssigned
+                    && vd.Variable is LocalVariableSymbol
+                    && MagicCollectionZeroValue.RequiresExplicitInitializer(vd.Variable.Type))
+                {
+                    tracked.Add(vd.Variable);
+                }
+
                 break;
+            }
+
             case BoundReturnStatement rs:
                 if (rs.Expression != null)
                 {
-                    ProcessExpression(rs.Expression, assigned, diagnostics, pointerAliases);
+                    ProcessExpression(rs.Expression, assigned, diagnostics, pointerAliases, tracked);
                 }
 
                 break;
             case BoundThrowStatement th:
-                ProcessExpression(th.Expression, assigned, diagnostics, pointerAliases);
+                ProcessExpression(th.Expression, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundConditionalGotoStatement cgs:
-                ProcessExpression(cgs.Condition, assigned, diagnostics, pointerAliases);
+                ProcessExpression(cgs.Condition, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundLabelStatement:
             case BoundGotoStatement:
@@ -417,14 +470,14 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             // nested bodies must be recursively analyzed here or assignments
             // inside them are invisible to this analyzer.
             case BoundTryStatement tryStmt:
-                ProcessTryStatement(tryStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                ProcessTryStatement(tryStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
             case BoundSelectStatement selectStmt:
-                ProcessSelectStatement(selectStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                ProcessSelectStatement(selectStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
             case BoundScopeStatement scopeStmt:
             {
-                var exit = AnalyzeRegion(scopeStmt.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                var exit = AnalyzeRegion(scopeStmt.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 if (exit != null)
                 {
                     assigned.Clear();
@@ -435,21 +488,35 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             }
 
             case BoundFixedStatement fixedStmt:
-                ProcessFixedStatement(fixedStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                ProcessFixedStatement(fixedStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
             case BoundPatternSwitchStatement switchStmt:
-                ProcessPatternSwitchStatement(switchStmt, assigned, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+                ProcessPatternSwitchStatement(switchStmt, assigned, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
+                break;
+            case BoundAwaitForRangeStatement awaitForRange:
+                // Issue #3316: the stream expression always evaluates; the
+                // body runs zero or more times. Analyze the body as a nested
+                // region (so an assign-then-use INSIDE the body resolves
+                // precisely, and internal returns are checked against out
+                // params like every other opaque region) but DISCARD its
+                // exit set: the zero-iteration path contributes the untouched
+                // incoming state, and since assignments are never killed the
+                // loop back edge cannot shrink the body's entry set below the
+                // pre-loop state — ignoring it is exact, not just
+                // conservative.
+                ProcessExpression(awaitForRange.Stream, assigned, diagnostics, pointerAliases, tracked);
+                AnalyzeRegion(awaitForRange.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
             default:
-                // Other opaque statement kinds (go/channel-send/await-for-range/
-                // yield) fall through to the next statement at the CFG level
-                // too, but their bodies either don't run unconditionally
-                // (a loop body may run zero times) or don't affect the
-                // enclosing function's locals. Their nested function literals
-                // still require their own analysis.
+                // Other opaque statement kinds (go/channel-send/yield) fall
+                // through to the next statement at the CFG level too, and
+                // carry expressions but no conditionally-executed bodies. The
+                // report-only walker visits their expression operands — value
+                // reads of tracked no-zero-value locals (GS0522) — and any
+                // nested function literals, which require their own analysis.
                 if (diagnostics != null)
                 {
-                    new FunctionLiteralFinder(assigned, diagnostics).VisitStatement(statement);
+                    new FunctionLiteralAndUseWalker(assigned, tracked, diagnostics).VisitStatement(statement);
                 }
 
                 break;
@@ -478,11 +545,12 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
         var preTry = new HashSet<VariableSymbol>(assigned);
 
-        var tryExit = AnalyzeRegion(tryStmt.TryBlock, preTry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+        var tryExit = AnalyzeRegion(tryStmt.TryBlock, preTry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
         var meet = tryExit;
         var anyReachable = tryExit != null;
 
@@ -494,7 +562,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 catchEntry.Add(clause.Variable);
             }
 
-            var catchExit = AnalyzeRegion(clause.Body, catchEntry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+            var catchExit = AnalyzeRegion(clause.Body, catchEntry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
             if (catchExit == null)
             {
                 continue;
@@ -520,7 +588,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
 
         if (tryStmt.FinallyBlock != null)
         {
-            var finallyExit = AnalyzeRegion(tryStmt.FinallyBlock, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
+            var finallyExit = AnalyzeRegion(tryStmt.FinallyBlock, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
             if (finallyExit != null)
             {
                 assigned.Clear();
@@ -542,6 +610,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
         HashSet<VariableSymbol> meet = null;
@@ -551,12 +620,12 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         {
             if (c.Channel != null)
             {
-                ProcessExpression(c.Channel, assigned, diagnostics, pointerAliases);
+                ProcessExpression(c.Channel, assigned, diagnostics, pointerAliases, tracked);
             }
 
             if (c.Value != null)
             {
-                ProcessExpression(c.Value, assigned, diagnostics, pointerAliases);
+                ProcessExpression(c.Value, assigned, diagnostics, pointerAliases, tracked);
             }
 
             var caseEntry = new HashSet<VariableSymbol>(assigned);
@@ -565,7 +634,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
                 caseEntry.Add(c.Variable);
             }
 
-            var caseExit = AnalyzeRegion(c.Body, caseEntry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+            var caseExit = AnalyzeRegion(c.Body, caseEntry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
             if (caseExit == null)
             {
                 continue;
@@ -592,9 +661,10 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
-        ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases);
+        ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases, tracked);
 
         var entry = new HashSet<VariableSymbol>(assigned)
         {
@@ -606,7 +676,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             entry.Add(fixedStmt.SourceVariable);
         }
 
-        var exit = AnalyzeRegion(fixedStmt.Body, entry, outParams, function, diagnostics, pointerAliases, methodExitLabel);
+        var exit = AnalyzeRegion(fixedStmt.Body, entry, outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
         if (exit != null)
         {
             assigned.Clear();
@@ -627,9 +697,10 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         FunctionSymbol function,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         BoundLabel methodExitLabel)
     {
-        ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases);
+        ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases, tracked);
 
         HashSet<VariableSymbol> meet = null;
         var any = false;
@@ -644,10 +715,10 @@ internal static class RefKindDefiniteAssignmentAnalyzer
 
             if (arm.Guard != null)
             {
-                ProcessExpression(arm.Guard, assigned, diagnostics, pointerAliases);
+                ProcessExpression(arm.Guard, assigned, diagnostics, pointerAliases, tracked);
             }
 
-            var armExit = AnalyzeRegion(arm.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, methodExitLabel);
+            var armExit = AnalyzeRegion(arm.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
             if (armExit == null)
             {
                 continue;
@@ -714,7 +785,34 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         return false;
     }
 
-    private static void ProcessExpression(BoundExpression expression, HashSet<VariableSymbol> assigned, DiagnosticBag diagnostics, Dictionary<VariableSymbol, VariableSymbol> pointerAliases)
+    /// <summary>
+    /// Issue #3316: reports GS0522 when a value read of a tracked
+    /// no-zero-value local (a bare <c>chan T</c> local declared without an
+    /// initializer) is reachable while the local may still be unassigned.
+    /// Reporting happens only in the final diagnostics pass, once every
+    /// declaration in the function has populated the tracked set.
+    /// </summary>
+    private static void CheckTrackedUse(
+        BoundVariableExpression read,
+        HashSet<VariableSymbol> assigned,
+        HashSet<VariableSymbol> tracked,
+        DiagnosticBag diagnostics)
+    {
+        if (diagnostics == null
+            || read.Variable == null
+            || !tracked.Contains(read.Variable)
+            || assigned.Contains(read.Variable))
+        {
+            return;
+        }
+
+        diagnostics.ReportChannelLocalUsedBeforeAssignment(
+            read.Syntax?.Location ?? default(TextLocation),
+            read.Variable.Name,
+            read.Variable.Type.Name);
+    }
+
+    private static void ProcessExpression(BoundExpression expression, HashSet<VariableSymbol> assigned, DiagnosticBag diagnostics, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, HashSet<VariableSymbol> tracked)
     {
         if (expression == null)
         {
@@ -723,64 +821,72 @@ internal static class RefKindDefiniteAssignmentAnalyzer
 
         switch (expression)
         {
+            case BoundVariableExpression read:
+                // Issue #3316: a direct value read of a tracked no-zero-value
+                // local. (Reads nested inside expression kinds without an
+                // explicit case here are found by FunctionLiteralAndUseWalker
+                // via the default arm.)
+                CheckTrackedUse(read, assigned, tracked, diagnostics);
+                break;
             case BoundCallExpression call:
-                ProcessCallArguments(call.Arguments, call.Function.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.Function.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundImportedCallExpression call:
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundImportedInstanceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundConstrainedStaticCallExpression call:
-                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundConstructorCallExpression call:
                 var constructorParameters = call.SelectedConstructor != null
                     ? call.SelectedConstructor.Parameters
                     : call.StructType.PrimaryConstructorParameters;
-                ProcessCallArguments(call.Arguments, constructorParameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, constructorParameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundConstructorChainingExpression call:
-                ProcessCallArguments(call.Arguments, call.SelectedConstructor.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.SelectedConstructor.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundUserInstanceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
-                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundBaseInterfaceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
-                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundBaseClassCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
                 ProcessCallArguments(
                     call.Arguments,
                     call.Method?.Parameters ?? ImmutableArray<ParameterSymbol>.Empty,
                     assigned,
                     diagnostics,
                     pointerAliases,
+                    tracked,
                     call.Syntax);
                 break;
             case BoundIndirectCallExpression call:
-                ProcessExpression(call.Target, assigned, diagnostics, pointerAliases);
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessExpression(call.Target, assigned, diagnostics, pointerAliases, tracked);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundClrConstructorCallExpression call:
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
                 break;
             case BoundClrConversionCallExpression call:
-                ProcessExpression(call.Source, assigned, diagnostics, pointerAliases);
+                ProcessExpression(call.Source, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundAssignmentExpression assign:
-                ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases);
+                ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases, tracked);
                 assigned.Add(assign.Variable);
                 TrackPointerAlias(assign.Variable, assign.Expression, pointerAliases);
                 break;
             case BoundIndirectAssignmentExpression indirect:
-                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases);
-                ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases);
+                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases, tracked);
                 if (TryResolvePointerTarget(indirect.Pointer, pointerAliases, out var indirectTarget))
                 {
                     assigned.Add(indirectTarget);
@@ -788,25 +894,25 @@ internal static class RefKindDefiniteAssignmentAnalyzer
 
                 break;
             case BoundBinaryExpression bin:
-                ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases);
-                ProcessExpression(bin.Right, assigned, diagnostics, pointerAliases);
+                ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(bin.Right, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundUnaryExpression un:
-                ProcessExpression(un.Operand, assigned, diagnostics, pointerAliases);
+                ProcessExpression(un.Operand, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundAddressOfExpression aof:
-                ProcessExpression(aof.Operand, assigned, diagnostics, pointerAliases);
+                ProcessExpression(aof.Operand, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundDereferenceExpression deref:
-                ProcessExpression(deref.Operand, assigned, diagnostics, pointerAliases);
+                ProcessExpression(deref.Operand, assigned, diagnostics, pointerAliases, tracked);
                 break;
             case BoundConversionExpression conv:
-                ProcessExpression(conv.Expression, assigned, diagnostics, pointerAliases);
+                ProcessExpression(conv.Expression, assigned, diagnostics, pointerAliases, tracked);
                 break;
             default:
                 if (diagnostics != null)
                 {
-                    new FunctionLiteralFinder(assigned, diagnostics).VisitExpression(expression);
+                    new FunctionLiteralAndUseWalker(assigned, tracked, diagnostics).VisitExpression(expression);
                 }
 
                 break;
@@ -819,12 +925,13 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         SyntaxNode callSyntax)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
             var refKind = i < parameters.Length ? parameters[i].RefKind : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, callSyntax);
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax);
         }
     }
 
@@ -834,12 +941,13 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         SyntaxNode callSyntax)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
             var refKind = !refKinds.IsDefault && i < refKinds.Length ? refKinds[i] : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, callSyntax);
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax);
         }
     }
 
@@ -849,6 +957,7 @@ internal static class RefKindDefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         DiagnosticBag diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
         SyntaxNode callSyntax)
     {
         if (refKind != RefKind.None
@@ -869,34 +978,67 @@ internal static class RefKindDefiniteAssignmentAnalyzer
             return;
         }
 
-        ProcessExpression(argument, assigned, diagnostics, pointerAliases);
+        ProcessExpression(argument, assigned, diagnostics, pointerAliases, tracked);
     }
 
-    private sealed class FunctionLiteralFinder : BoundTreeWalker
+    /// <summary>
+    /// Report-only walker for expression/statement kinds the linear
+    /// simulation has no explicit case for (channel receive/send/close,
+    /// index and member access, interpolated strings, …). It never mutates
+    /// the assignment set — so it cannot desynchronize the fixpoint phase,
+    /// which does not run it — and does three things:
+    /// <list type="bullet">
+    ///   <item>recursively analyzes nested function literals against the
+    ///     assignment state at their capture point (the C# model: a use of a
+    ///     captured local inside the literal is an error unless the local was
+    ///     definitely assigned before the literal, or is assigned inside
+    ///     it);</item>
+    ///   <item>reports GS0522 for value reads of tracked no-zero-value
+    ///     locals (issue #3316);</item>
+    ///   <item>skips <c>&amp;v</c> subtrees: an address-of operand is a
+    ///     ref/out argument position, not a value read — unassigned
+    ///     ref-reads are GS0239/GS9003 territory, and reporting them here
+    ///     would double-report against the ref-kind checks.</item>
+    /// </list>
+    /// </summary>
+    private sealed class FunctionLiteralAndUseWalker : BoundTreeWalker
     {
         private readonly HashSet<VariableSymbol> assigned;
+        private readonly HashSet<VariableSymbol> tracked;
         private readonly DiagnosticBag diagnostics;
 
-        public FunctionLiteralFinder(HashSet<VariableSymbol> assigned, DiagnosticBag diagnostics)
+        public FunctionLiteralAndUseWalker(HashSet<VariableSymbol> assigned, HashSet<VariableSymbol> tracked, DiagnosticBag diagnostics)
         {
             this.assigned = assigned;
+            this.tracked = tracked;
             this.diagnostics = diagnostics;
         }
 
         public override void VisitExpression(BoundExpression node)
         {
-            if (node is BoundFunctionLiteralExpression literal)
+            switch (node)
             {
-                var lowered = (BoundBlockStatement)Lowerer.Lower(literal.Body);
-                AnalyzeWithCaptured(
-                    lowered.PreEmitAnalysisBody ?? lowered,
-                    literal.Function,
-                    diagnostics,
-                    literal.CapturedVariables.Where(assigned.Contains));
-                return;
-            }
+                case BoundFunctionLiteralExpression literal:
+                {
+                    var lowered = (BoundBlockStatement)Lowerer.Lower(literal.Body);
+                    AnalyzeWithCaptured(
+                        lowered.PreEmitAnalysisBody ?? lowered,
+                        literal.Function,
+                        diagnostics,
+                        literal.CapturedVariables.Where(assigned.Contains),
+                        literal.CapturedVariables.Where(tracked.Contains));
+                    return;
+                }
 
-            base.VisitExpression(node);
+                case BoundVariableExpression read:
+                    CheckTrackedUse(read, assigned, tracked, diagnostics);
+                    return;
+                case BoundAddressOfExpression:
+                    return;
+                default:
+                    base.VisitExpression(node);
+                    return;
+            }
         }
     }
 }

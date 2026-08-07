@@ -18,7 +18,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// must not throw; instead it must be treated exactly like a
 /// <c>return</c>/<c>throw</c> and routed to <see cref="ControlFlowGraph.End"/>.
 /// This is the exact situation <see cref="RefStructAsyncLivenessAnalyzer"/> and
-/// <see cref="RefKindDefiniteAssignmentAnalyzer"/> create when they build a
+/// <see cref="DefiniteAssignmentAnalyzer"/> create when they build a
 /// region-scoped graph for just a try/catch body whose lowered <c>return</c>
 /// has been rewritten into a <c>goto</c> targeting a method-exit label that
 /// lives outside that region (see <c>Lowerer.RewriteReturnStatement</c> /

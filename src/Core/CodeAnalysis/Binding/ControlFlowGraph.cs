@@ -909,7 +909,7 @@ public sealed class ControlFlowGraph
         /// </summary>
         /// <remarks>
         /// <para>Issue #2360: several analyses (<see cref="RefStructAsyncLivenessAnalyzer"/>,
-        /// <see cref="RefKindDefiniteAssignmentAnalyzer"/>) build a fresh, narrowly
+        /// <see cref="DefiniteAssignmentAnalyzer"/>) build a fresh, narrowly
         /// scoped <see cref="ControlFlowGraph"/> over just one nested compound
         /// statement's body — a <c>try</c>/<c>catch</c>/<c>finally</c> block, a
         /// <c>select</c> case, a <c>scope</c>, or a <c>fixed</c> body — because the

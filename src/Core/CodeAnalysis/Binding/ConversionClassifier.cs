@@ -1773,7 +1773,7 @@ internal sealed class ConversionClassifier
         // Readonly check: for `ref` (and bare `&`), neither branch may be a
         // read-only local. For `in` either branch may be read-only. For `out`
         // both must be writable. (Definite-assignment is enforced elsewhere
-        // by RefKindDefiniteAssignmentAnalyzer.)
+        // by DefiniteAssignmentAnalyzer.)
         bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
         if (requiresWritable)
         {

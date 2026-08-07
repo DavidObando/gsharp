@@ -1187,20 +1187,38 @@ parameterless method is available, preventing a GS9998 reflection exception.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0520 | Error | A `chan T` local, global, or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the ADR-0159 empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. |
+| GS0520 | Error | A `chan T` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the ADR-0159 empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer since issue #3316: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
 
 The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
 bind a sound empty instance when declared without an initializer
 ([ADR-0159](adr/0159-magic-collection-zero-values-and-nil-comparison.md)); a
 channel cannot, because bounded-versus-unbounded and capacity are semantic
-decisions `make` exists to force. Declare-then-assign of a bare channel slot
-is rejected until a definite-assignment analysis exists (recorded as a
-follow-up in ADR-0159). A genuinely optional channel is spelled with the
-parenthesized nullable form `(chan T)?` (issue #3315): the slot zero value is
-`nil`, nil comparison and `?`-flow narrowing apply, and `make(chan T)` assigns
-into it. A trailing `?` without parens binds to the element type — `chan
-int32?` is a channel of nullable `int32` — consistent with `[]T?` and
-`(T) -> R?`.
+decisions `make` exists to force. Globals and fields are readable from any
+function (they are emitted as static or instance fields), so they must
+initialize at the declaration. A genuinely optional channel is spelled with
+the parenthesized nullable form `(chan T)?` (issue #3315): the slot zero
+value is `nil`, nil comparison and `?`-flow narrowing apply, and
+`make(chan T)` assigns into it. A trailing `?` without parens binds to the
+element type — `chan int32?` is a channel of nullable `int32` — consistent
+with `[]T?` and `(T) -> R?`.
+
+## Channel local possibly used before assignment (GS0522)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0522 | Error | A use of a channel-typed local is reachable by a control-flow path with no preceding assignment. A bare `chan T` slot has no zero value, so every path from the declaration to a use must assign it first — e.g. `c = make(chan T)` or via an `out` argument position. |
+
+This is the definite-assignment relaxation recorded as follow-up (a) in
+ADR-0159 (issue #3316): declaring an uninitialized `chan T` local is free,
+and the C# CS0165 model applies at use sites — an assignment in only one
+`if` arm, only inside a loop body (which may run zero times), or only in a
+`try` body (which an exception may skip) does not count; an assignment in
+every `switch`/`select` arm, in a `finally`, or before the use on every path
+does. A function literal checks captured channel locals against the
+assignment state at the capture point. Locals whose types **have** sound
+zero values (ints, strings, structs, and the ADR-0159 magic collections)
+keep G#'s documented zero-value initialization and are never flow-checked —
+this analysis applies only to kinds with no usable zero value.
 
 ## Pointer generic type arguments (GS0521)
 

@@ -433,6 +433,21 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.VariableNotAssignedBeforeRef, variableName);
 
     /// <summary>
+    /// Issue #3316 / ADR-0159: reports a use of a channel-typed local that some
+    /// control-flow path can reach without a preceding assignment. A bare
+    /// <c>chan T</c> slot has no usable zero value (the ADR-0159 carve-out),
+    /// so — unlike zero-valued locals — declared-without-initializer channel
+    /// locals are flow-checked by <see cref="Binding.DefiniteAssignmentAnalyzer"/>
+    /// with C#'s CS0165 semantics: declaring is free, using before definite
+    /// assignment is the error.
+    /// </summary>
+    /// <param name="location">The location of the offending use.</param>
+    /// <param name="name">The local's name.</param>
+    /// <param name="channelTypeName">The channel type name (e.g. <c>chan int32</c>), spliced into the suggested <c>make</c> remedy.</param>
+    public void ReportChannelLocalUsedBeforeAssignment(TextLocation location, string name, string channelTypeName)
+    => Report(location, DiagnosticDescriptors.ChannelLocalUsedBeforeAssignment, name, channelTypeName);
+
+    /// <summary>
     /// Issue #490 (ADR-0060 follow-up): a function declaration carries a <c>ref</c> return modifier
     /// without an explicit return type clause (e.g. <c>func foo() ref { ... }</c>).
     /// </summary>
