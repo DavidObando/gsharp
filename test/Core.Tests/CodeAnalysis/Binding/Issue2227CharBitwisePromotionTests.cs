@@ -69,8 +69,7 @@ var c = a | b
 
     /// <summary>
     /// Exercises <c>char &amp;^ char</c> (BitClear, lowered to <c>a &amp; ~b</c>),
-    /// the one path that makes the <c>char ch =&gt; (char)~ch</c> unary arm in
-    /// <c>Evaluator.OnesComplement</c> reachable.
+    /// through the emitted oracle and verifies the promoted <c>int32</c> result.
     /// </summary>
     [Fact]
     public void CharBitClearChar_PromotesToInt32()
@@ -149,8 +148,8 @@ while i < 4 {{
     /// Compiles the exact repro from issue #2227 to IL, loads it, and calls
     /// the compiled <c>constantTimeCompare</c> function directly (no
     /// top-level statements, no <see cref="Console"/> capture) — verifying
-    /// the emitter (not just the tree-walking evaluator) produces the
-    /// correct `int32` XOR-accumulated result for `char` operands sourced
+    /// the emitter produces the correct `int32` XOR-accumulated result for
+    /// `char` operands sourced
     /// from string indexing. Asserting on the returned value directly
     /// avoids the process-global <c>Console.SetOut</c> state that would
     /// otherwise race with other tests under xUnit's default parallelization.

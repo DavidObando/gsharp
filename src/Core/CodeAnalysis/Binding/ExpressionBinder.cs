@@ -1525,6 +1525,31 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #3303: a `map[K, V]` whose key or value has no CLR backing (a
+        // generic type parameter or a same-compilation user type) has a null
+        // `ClrType`, so `GetEffectiveArgumentClrType` returned null above. Its
+        // runtime backing is still a `Dictionary<,>` reference whose key/value
+        // ride through to their erasure (type parameter / user type →
+        // `object`, enum → `int`), exactly like the slice arm above — so
+        // surface the erased closed `Dictionary<…>` shape. Without this the
+        // argument produced no effective CLR type at all, overload resolution
+        // never ran, and `Console.WriteLine(items)` on a generic class's
+        // `map[K, V]` field dead-ended with GS0159 while the monomorphic
+        // equivalent bound fine. The emitter needs no adjustment: the
+        // `map → object`-shaped parameter slots this unlocks are no-op
+        // reference conversions (MethodBodyEmitter.IsReferenceCompatible).
+        if (typeSymbol is MapTypeSymbol openMapArg)
+        {
+            var keyClr = GetEffectiveArgumentClrTypeForOverloadResolution(openMapArg.KeyType);
+            var valueClr = GetEffectiveArgumentClrTypeForOverloadResolution(openMapArg.ValueType);
+            if (keyClr != null && valueClr != null
+                && !keyClr.IsByRef && !keyClr.IsPointer
+                && !valueClr.IsByRef && !valueClr.IsPointer)
+            {
+                return typeof(System.Collections.Generic.Dictionary<,>).MakeGenericType(keyClr, valueClr);
+            }
+        }
+
         // Issue #2142: a nullable user reference type (`UserClass?`) erases to
         // the same CLR ride-through as its non-nullable form — nullability is an
         // annotation only for reference types, so overload resolution (and the
@@ -1784,6 +1809,27 @@ internal sealed partial class ExpressionBinder
         if (candidate.Parameters.Length - parameterOffset != targetParameterTypes.Count)
         {
             return false;
+        }
+
+        // Issue #3248: an instance method group's candidates come from the
+        // receiver type's DEFINITION (a constructed StructSymbol forwards
+        // `Methods` to it), so their parameter/return types still reference
+        // the declaring class's own type parameters. Resolve the receiver's
+        // construction of the declaring definition (walking the base chain)
+        // and substitute the signature through it, so the closed signature —
+        // and the delegate FunctionType the conversion builds from it —
+        // carries the receiver's instantiation. Without this, a deferred
+        // method group like `holder.Count` inside `GetCounter[T](holder
+        // Holder[T])` kept `Holder`'s class type parameter in its function
+        // type and the emitter encoded the delegate TypeSpec with a class
+        // `Var` slot in a context that only has method generics (invalid
+        // metadata; BadImageFormatException at runtime).
+        if (candidateOwner == null
+            && !candidate.IsExtension
+            && receiver?.Type is StructSymbol receiverStruct
+            && candidate.ReceiverType is StructSymbol declaredReceiver)
+        {
+            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
         }
 
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;

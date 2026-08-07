@@ -1146,7 +1146,9 @@ internal sealed partial class OverloadResolver
         for (var i = 0; i < permutedArguments.Length; i++)
         {
             var paramType = extension.Parameters[i + 1].Type;
-            if (substitution != null && TypeSymbol.ContainsTypeParameter(paramType))
+            var expectedType = substitution != null ? substituteType(paramType, substitution) : paramType;
+            if (substitution != null
+                && TypeSymbol.ContainsTypeParameter(paramType))
             {
                 if (paramType is FunctionTypeSymbol openFunctionParameter
                     && tryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument))
@@ -1160,17 +1162,18 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                // A parameter typed as an open T is encoded as System.Object in
-                // the emitted signature; pass the argument unconverted so the
-                // emitter inserts box / unbox.any around the erased boundary.
-                convertedArgs.Add(permutedArguments[i]);
+                if (TypeSymbol.ContainsTypeParameter(expectedType))
+                {
+                    // A parameter typed as an open T is encoded as System.Object in
+                    // the emitted signature; pass the argument unconverted so the
+                    // emitter inserts box / unbox.any around the erased boundary.
+                    convertedArgs.Add(permutedArguments[i]);
+                    continue;
+                }
             }
-            else
-            {
-                var expectedType = substitution != null ? substituteType(paramType, substitution) : paramType;
-                var argLoc = i < permutedSyntax.Length ? permutedSyntax[i].Location : ce.Location;
-                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
-            }
+
+            var argLoc = i < permutedSyntax.Length ? permutedSyntax[i].Location : ce.Location;
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
         }
 
         // Issue #1931: stash the extension function's own (explicit or
@@ -1509,6 +1512,7 @@ internal sealed partial class OverloadResolver
         {
             var parameter = method.Parameters[i + parameterOffset];
             var paramType = parameter.Type;
+            var expectedType = substitution != null ? substituteType(paramType, substitution) : paramType;
 
             // ADR-0060 / issue #1133: an inline-decl `out var n` / `out let n` /
             // `out _` was bound with TypeSymbol.Error in the first pass (from
@@ -1537,13 +1541,11 @@ internal sealed partial class OverloadResolver
             // An argument bound to an open type parameter is left untouched —
             // the emitter boxes value types at the call boundary (the parameter
             // is encoded as System.Object under the type-erased model).
-            if (paramType is TypeParameterSymbol)
+            if (paramType is TypeParameterSymbol && TypeSymbol.ContainsTypeParameter(expectedType))
             {
                 convertedArgs.Add(permutedArguments[i]);
                 continue;
             }
-
-            var expectedType = substitution != null ? substituteType(paramType, substitution) : paramType;
 
             if (substitution != null
                 && tryGetFunctionLiteral(permutedArguments[i], out var functionLiteralArgument))

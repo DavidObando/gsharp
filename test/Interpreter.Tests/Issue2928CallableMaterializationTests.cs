@@ -13,8 +13,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2928: interpreter closures must materialize as CLR delegates before
-/// entering CLR tuples, arrays, collections, constructors, and method calls.
+/// Issue #2928: Emitted-oracle coverage for callable materialization.
 /// </summary>
 public class Issue2928CallableMaterializationTests
 {
@@ -131,7 +130,7 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
-    public void Callable_StoredInInterpreterField_StillInvokes()
+    public void Callable_StoredInEmittedOracleField_StillInvokes()
     {
         const string Source = """
             class Holder {
@@ -187,7 +186,7 @@ public class Issue2928CallableMaterializationTests
     }
 
     [Fact]
-    public void Callable_ExceptionStillReachesInterpreterCatch()
+    public void Callable_ExceptionStillReachesEmittedOracleCatch()
     {
         const string Source = """
             import System

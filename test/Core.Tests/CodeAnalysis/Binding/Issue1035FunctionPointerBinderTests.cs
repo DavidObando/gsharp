@@ -99,6 +99,58 @@ func run() {
         Assert.Contains(diagnostics, d => d.Id == "GS0404");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" = nil")]
+    public void ManagedFunctionPointer_TopLevel_ReportsGS0404(string initializer)
+    {
+        var source = @"
+package P
+import System
+
+var fp *func(int32) int32" + initializer + @"
+";
+        var diagnostics = GetDiagnostics(source).ToArray();
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "GS0404");
+        Assert.Equal("*", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0303");
+    }
+
+    [Fact]
+    public void DelegatePointer_InsideUnsafe_ReportsGS0398()
+    {
+        const string source = @"
+package P
+
+unsafe func run() {
+    var fp *((int32) -> int32) = nil
+}
+";
+        var diagnostics = GetDiagnostics(source).ToArray();
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "GS0398");
+        Assert.Equal("(int32) -> int32", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0303");
+    }
+
+    [Fact]
+    public void ManagedFunctionPointer_ConversionDiagnostic_UsesSourceSpelling()
+    {
+        const string source = @"
+package P
+
+unsafe func Take(fp *func(int32) int32) {
+}
+
+unsafe func run() {
+    Take(1)
+}
+";
+        var diagnostics = GetDiagnostics(source).ToArray();
+        var diagnostic = Assert.Single(diagnostics, d => d.Id == "GS0154");
+        Assert.Equal("1", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.Contains("*func(int32) int32", diagnostic.Message);
+    }
+
     [Fact]
     public void AddressOfInstanceMethod_ReportsGS0405()
     {

@@ -1,6 +1,6 @@
 # ADR-0039: By-ref pointers (`&` / `*`) and CLR interop for `ref` / `out` / `in` parameters
 
-- **Status**: Accepted
+- **Status**: Accepted (the emit design remains current; §6's evaluator mapping is historical — the tree-walking evaluator was removed by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 3c)
 - **Date**: 2026-05-25
 - **Phase**: Phase 7 follow-up — async emitter milestone (state-machine kickoff / MoveNext); also closes CLR interop gaps tracked since ADR-0034
 - **Related**: ADR-0023 (async state machine), ADR-0034 (imported CLR interop), ADR-0035 (user operator overloads), ADR-0038 (generic method inference); async emitter plan (field-map, kickoff, MoveNext)

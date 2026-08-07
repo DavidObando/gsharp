@@ -15,9 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #1016: binder/interpreter coverage for the range/slice operator. The
-/// closed and open forms bind against arrays, slices, and strings and evaluate
-/// to the expected slice; a non-sliceable target reports GS0392.
+/// Issue #1016: Emitted-oracle coverage for range slice binding.
+/// Traceability: diagnostic GS0392.
 /// </summary>
 public class Issue1016RangeSliceBindingTests
 {

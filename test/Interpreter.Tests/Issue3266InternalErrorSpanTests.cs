@@ -28,12 +28,12 @@ public class Issue3266InternalErrorSpanTests
     {
         yield return
         [
-            "print(string(42))\n",
-            "print(string(42))",
+            "Console.WriteLine(42)\n",
+            "Console.WriteLine(42)",
             0,
             0,
             0,
-            17,
+            21,
             "NotSupportedException",
             "unsupported conversion",
         ];

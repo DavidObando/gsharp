@@ -17,7 +17,7 @@ namespace GSharp.Interpreter.Tests;
 /// on the tree-walking evaluator; since ADR-0156 Phase 3c (#3176) submissions
 /// execute emitted, and the sources swapped the evaluator-only
 /// <c>print(string(x))</c> builtins for <c>Console.WriteLine</c> (the
-/// <c>print</c>/<c>string(T)</c> builtins have no emitted lowering — issues
+/// <c>print</c>/<c>string(T)</c> builtins were subsequently retired — issues
 /// #3245 and #3246).
 /// </summary>
 public class RefLocalAliasingInterpreterTests
@@ -160,7 +160,7 @@ probe()
         Assert.Equal($"99|99|20{Environment.NewLine}", output);
     }
 
-    [Fact(Skip = "Issue #3247: `let ref r = xs[^1]` fails with GS9998 'Cannot take address of expression kind BoundBlockExpression' (the index-from-end lowering wraps the element access in a block). Its only passing coverage was the tree-walking evaluator, retired in ADR-0156 Phase 3c (#3176). Unskip when #3247 lands.")]
+    [Fact]
     public void LetRef_BlockExpression_EvaluatesPrefixOnceAndCapturesElement()
     {
         var output = RunSubmission(@"
@@ -175,6 +175,46 @@ func probe() {
 probe()
 ");
         Assert.Equal($"99|10,20,99|40,50,60{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LetRef_FromEndNonConstantOffset_CapturesElementAtDeclaration()
+    {
+        // Issue #3247: `^expr` with a non-constant offset. The from-end prefix
+        // (receiver + offset) is evaluated once at the declaration; mutating
+        // the offset variable afterwards must not re-target the alias.
+        var output = RunSubmission(@"
+func probe() {
+    var arr = []int32{10, 20, 30}
+    var k int32 = 2
+    let ref r = arr[^k]
+    k = 1
+    r = 99
+    Console.WriteLine(""${r}|${arr[0]},${arr[1]},${arr[2]}"")
+}
+probe()
+");
+        Assert.Equal($"99|10,99,30{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void VarRef_FromEndIndex_ReadsAndWritesThroughAlias()
+    {
+        // Issue #3247: the `var ref` spelling over `xs[^1]` — reads observe
+        // direct element writes, and writes through the alias land in the
+        // aliased element.
+        var output = RunSubmission(@"
+func probe() {
+    var arr = []int32{10, 20, 30}
+    var ref r = arr[^1]
+    arr[2] = 77
+    Console.WriteLine(r)
+    r = 99
+    Console.WriteLine(""${arr[0]},${arr[1]},${arr[2]}"")
+}
+probe()
+");
+        Assert.Equal($"77{Environment.NewLine}10,20,99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -201,9 +241,9 @@ probe()
         // evaluator-only diagnostic that retired with the tree-walking engine.
         // Under the emitted engine pointer ref-aliasing compiles and runs; the
         // nil dereference surfaces as a runtime NullReferenceException on the
-        // cell (GSI002). The source swaps the interpreter-only
-        // `print(string(r))` builtin for Console.WriteLine, which the emitter
-        // supports.
+        // cell (GSI002). The source swaps the interpreter-only (and since
+        // #3245/#3246 retired) `print(string(r))` builtin for
+        // Console.WriteLine, which the emitter supports.
         const string Source = """
             import System
             func probe() {

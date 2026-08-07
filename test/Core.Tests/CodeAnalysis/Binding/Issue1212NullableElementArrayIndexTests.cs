@@ -138,14 +138,18 @@ public class Issue1212NullableElementArrayIndexTests
     [Fact]
     public void NullableElementSlice_DisplayName_BindsQuestionToElement()
     {
-        // The element-nullable spelling renders `[]int32?` (no conversion to string).
+        // The element-nullable spelling renders `[]int32?`. Since #3246
+        // retired the builtin to-string conversion no conversion exists at
+        // all, so the mismatch reports GS0155 (cannot convert) rather than
+        // the historical GS0156 (explicit conversion exists) — the subject
+        // here is the display-name rendering, not the conversion arm.
         var diagnostics = Bind("""
             package p
             func F(a []int32?) string { return a }
             """);
-        var gs0156 = Assert.Single(diagnostics, d => d.Id == "GS0156");
-        Assert.Contains("[]int32?", gs0156.Message);
-        Assert.DoesNotContain("[]?int32", gs0156.Message);
+        var gs0155 = Assert.Single(diagnostics, d => d.Id == "GS0155");
+        Assert.Contains("[]int32?", gs0155.Message);
+        Assert.DoesNotContain("[]?int32", gs0155.Message);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

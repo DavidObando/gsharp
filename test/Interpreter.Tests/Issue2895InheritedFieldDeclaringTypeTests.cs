@@ -9,8 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2895 interpreter guards: inherited field access must agree with the compiler
-/// at top level and inside a function.
+/// Issue #2895: Emitted-execution coverage for inherited field declaring type.
 /// </summary>
 [Collection("ConsoleIo")]
 public class Issue2895InheritedFieldDeclaringTypeTests

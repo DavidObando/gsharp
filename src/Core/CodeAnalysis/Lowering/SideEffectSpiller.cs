@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -206,9 +207,14 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         // ADR-0156 Phase 2 (issue #3185): a prior-cell submission global (or
         // a field chain rooted at one) is pure, re-evaluable, addressable
         // storage — spilling it to a temp would silently redirect the write
-        // into the copy.
+        // into the copy. Issue #3292: the same holds for a value-typed
+        // array/slice element chain (`ps[0]`, `qs[0].B2`): the emitter roots
+        // the write at the element address (`ldelema`), so only the
+        // side-effecting collection/index sub-expressions are spilled (see
+        // SpillElementChainParts), never the element value itself.
         var spillReceiver = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
-            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver);
+            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver)
+            && !IsInPlaceElementWriteReceiver(rewritten.Receiver);
         var value = rewritten.Value;
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -228,9 +234,22 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             // temp so both sides observe exactly one evaluation.
             value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
         }
+        else if (IsInPlaceElementWriteReceiver(rewritten.Receiver))
+        {
+            // Issue #3292: once-only evaluation for the element chain — the
+            // emitter re-emits the collection/index pair on both the read
+            // and write sides of a compound write, so any side-effecting
+            // sub-expression is hoisted into a temp first and the rebuilt
+            // (pure) chain is substituted into both sides.
+            receiver = this.SpillElementChainParts(rewritten.Receiver, statements);
+            if (!ReferenceEquals(receiver, rewritten.Receiver))
+            {
+                value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+            }
+        }
 
         var spillValue = SideEffectAnalyzer.HasObservableSideEffect(value);
-        if (!spillReceiver && !spillValue)
+        if (!spillReceiver && !spillValue && ReferenceEquals(receiver, rewritten.Receiver))
         {
             return rewritten;
         }
@@ -254,9 +273,12 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 
         // ADR-0156 Phase 2 (issue #3185): see RewritePropertyAssignmentExpression —
         // an addressable submission-global receiver chain must not be spilled.
+        // Issue #3292: an addressable array/slice element chain likewise —
+        // only its side-effecting collection/index parts are hoisted.
         var spillReceiver = rewritten.Receiver != null
             && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
-            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver);
+            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver)
+            && !IsInPlaceElementWriteReceiver(rewritten.Receiver);
         var value = rewritten.Value;
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -269,9 +291,19 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             // path above, for CLR properties (`obj.ClrProp += x`).
             value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
         }
+        else if (receiver != null && IsInPlaceElementWriteReceiver(receiver))
+        {
+            // Issue #3292: once-only evaluation for the element chain (see
+            // RewritePropertyAssignmentExpression).
+            receiver = this.SpillElementChainParts(rewritten.Receiver, statements);
+            if (!ReferenceEquals(receiver, rewritten.Receiver))
+            {
+                value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+            }
+        }
 
         var spillValue = SideEffectAnalyzer.HasObservableSideEffect(value);
-        if (!spillReceiver && !spillValue)
+        if (!spillReceiver && !spillValue && ReferenceEquals(receiver, rewritten.Receiver))
         {
             return rewritten;
         }
@@ -289,6 +321,161 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             rewritten.ConstrainedInterfaceType);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
+    }
+
+    /// <inheritdoc/>
+    protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+    {
+        var rewritten = (BoundFieldAssignmentExpression)base.RewriteFieldAssignmentExpression(node);
+
+        // Issue #3292: a struct-field write whose expression receiver is an
+        // addressable array/slice element chain (`ps[i].X = v`,
+        // `qs[i].B2.C op= v`) is emitted through the element address
+        // (`ldelema` + `ldflda`…), and a compound form re-emits that chain
+        // on both the read and write sides. Hoist any side-effecting
+        // collection/index sub-expression into a temp and substitute the
+        // rebuilt (pure) chain into both sides so each part is evaluated
+        // exactly once. Class receivers and plain variable receivers keep
+        // their existing emit-side handling.
+        if (rewritten.ReceiverExpression == null
+            || !IsInPlaceElementWriteReceiver(rewritten.ReceiverExpression))
+        {
+            return rewritten;
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var receiver = this.SpillElementChainParts(rewritten.ReceiverExpression, statements);
+        if (ReferenceEquals(receiver, rewritten.ReceiverExpression))
+        {
+            return rewritten;
+        }
+
+        var value = ReceiverSubstitutionRewriter.Replace(rewritten.Value, rewritten.ReceiverExpression, receiver);
+        var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(
+            rewritten.Syntax,
+            receiver,
+            rewritten.StructType,
+            rewritten.Field,
+            value,
+            rewritten.ResultType);
+
+        return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
+    }
+
+    /// <summary>
+    /// Issue #3292: whether <paramref name="receiver"/> is a value-typed
+    /// member-write receiver chain the emitter roots at an array-backed
+    /// element address (<c>ldelema</c> + <c>ldflda</c>…): zero or more
+    /// value-typed field links over an array/slice element load. Such a
+    /// receiver must NOT be spilled to a temp — the write must reach the
+    /// element's storage — but its collection/index sub-expressions may be
+    /// (see <see cref="SpillElementChainParts"/>).
+    /// </summary>
+    /// <param name="receiver">The candidate receiver expression.</param>
+    /// <returns><see langword="true"/> for an addressable element chain.</returns>
+    private static bool IsInPlaceElementWriteReceiver(BoundExpression receiver)
+    {
+        while (true)
+        {
+            if (receiver == null || Binding.Binder.IsReferenceTypeForConstraint(receiver.Type))
+            {
+                return false;
+            }
+
+            switch (receiver)
+            {
+                case BoundIndexExpression element:
+                    return element.IsArrayBackedElementAccess;
+                case BoundFieldAccessExpression fieldLink when fieldLink.Receiver != null:
+                    receiver = fieldLink.Receiver;
+                    continue;
+                case BoundClrPropertyAccessExpression { Member: FieldInfo } clrLink when clrLink.Receiver != null:
+                    receiver = clrLink.Receiver;
+                    continue;
+                default:
+                    return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #3292: rewrites an addressable element receiver chain (see
+    /// <see cref="IsInPlaceElementWriteReceiver"/>), hoisting each
+    /// side-effecting collection or index sub-expression into a fresh temp
+    /// local appended to <paramref name="statements"/>. The chain SHAPE is
+    /// preserved (field links over an element load) so the emitter still
+    /// recognises it as addressable; only the leaf value producers are
+    /// replaced by pure variable reads. Returns the original instance when
+    /// nothing needed spilling.
+    /// </summary>
+    /// <param name="receiver">The element receiver chain to rewrite.</param>
+    /// <param name="statements">The statement-list builder receiving temp declarations.</param>
+    /// <returns>The rewritten (or original) receiver.</returns>
+    private BoundExpression SpillElementChainParts(
+        BoundExpression receiver,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        switch (receiver)
+        {
+            case BoundIndexExpression element:
+            {
+                var target = this.MaybeSpill(
+                    element.Target,
+                    SideEffectAnalyzer.HasObservableSideEffect(element.Target),
+                    "coll",
+                    statements);
+                var index = this.MaybeSpill(
+                    element.Index,
+                    SideEffectAnalyzer.HasObservableSideEffect(element.Index),
+                    "idx",
+                    statements);
+                if (ReferenceEquals(target, element.Target) && ReferenceEquals(index, element.Index))
+                {
+                    return element;
+                }
+
+                return new BoundIndexExpression(element.Syntax, target, index, element.Type);
+            }
+
+            case BoundFieldAccessExpression fieldLink when fieldLink.Receiver != null:
+            {
+                var inner = this.SpillElementChainParts(fieldLink.Receiver, statements);
+                if (ReferenceEquals(inner, fieldLink.Receiver))
+                {
+                    return fieldLink;
+                }
+
+                return new BoundFieldAccessExpression(
+                    fieldLink.Syntax,
+                    inner,
+                    fieldLink.StructType,
+                    fieldLink.Field,
+                    fieldLink.NarrowedType);
+            }
+
+            case BoundClrPropertyAccessExpression clrLink when clrLink.Receiver != null:
+            {
+                var inner = this.SpillElementChainParts(clrLink.Receiver, statements);
+                if (ReferenceEquals(inner, clrLink.Receiver))
+                {
+                    return clrLink;
+                }
+
+                return new BoundClrPropertyAccessExpression(
+                    clrLink.Syntax,
+                    inner,
+                    clrLink.Member,
+                    clrLink.Type,
+                    clrLink.StaticContainerType,
+                    clrLink.ConstrainedReceiverTypeParameter,
+                    clrLink.ConstrainedInterfaceType,
+                    clrLink.IsAddressableStaticField,
+                    clrLink.IsReadOnlySubmissionGlobal);
+            }
+
+            default:
+                return receiver;
+        }
     }
 
     /// <summary>

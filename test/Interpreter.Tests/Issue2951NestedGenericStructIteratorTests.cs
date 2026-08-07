@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2951 interpreter parity for nested generic struct iterators.
+/// Emitted-session coverage for issue #2951 nested generic struct iterators.
 /// </summary>
 public class Issue2951NestedGenericStructIteratorTests
 {

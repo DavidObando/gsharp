@@ -21,18 +21,13 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// Issue #368: <c>[InterpolatedStringHandlerArgument]</c> forwarding. An
-/// interpolated string passed to a parameter typed as a user
-/// <c>[InterpolatedStringHandler]</c> forwards the named sibling arguments (or
-/// the receiver) to the handler constructor alongside
-/// <c>(literalLength, formattedCount)</c> and an optional <c>out bool</c>
-/// short-circuit flag. These tests cover tree-walk interpreter parity and
-/// end-to-end emit/run across the static, receiver, and out-bool forms.
+/// Emitted-oracle and end-to-end emit/run coverage for interpolated-string-handler argument forwarding.
+/// Traceability: issue #368.
 /// </summary>
 public class InterpolatedStringHandlerArgumentTests
 {
     [Fact]
-    public void Forwarded_Argument_Evaluates_Through_Interpreter()
+    public void Forwarded_Argument_Evaluates_Through_EmittedOracle()
     {
         const string Source = @"package HandlerEval
 import GSharp.Core.Tests.Fixtures
@@ -45,7 +40,7 @@ let msg = InterpolationHarness.Format(""PFX:"", ""x=${40 + 2}"")
     }
 
     [Fact]
-    public void Receiver_Forwarding_Evaluates_Through_Interpreter()
+    public void Receiver_Forwarding_Evaluates_Through_EmittedOracle()
     {
         const string Source = @"package HandlerReceiver
 import GSharp.Core.Tests.Fixtures

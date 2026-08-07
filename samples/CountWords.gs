@@ -18,9 +18,8 @@
 // Runs on both backends. Originally landed under `samples/aspirational/`
 // (PR #66) because the emit pipeline could not yet encode CLR
 // constructors / member access / for-range. The emit-parity work in PRs
-// #67+ closes that gap, so this sample is now part of the top-level
-// emit conformance harness (SampleConformanceTests) in addition to its
-// interpreter-side sibling CountWordsSampleTests.
+// #67+ closed that gap, so this sample is part of the top-level
+// emit conformance harness (SampleConformanceTests).
 
 package GSharp.Example.CountWords
 

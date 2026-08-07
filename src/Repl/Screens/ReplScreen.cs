@@ -313,7 +313,8 @@ public sealed class ReplScreen : ITabScreen, IDisposable
 
             if (!cell.HasError && cell.Value is not null)
             {
-                cellRows.Add(new Markup($"    [{primary}]{Markup.Escape(cell.Value.ToString() ?? string.Empty)}[/]"));
+                // ADR-0157: display-side pretty echo — never emitted semantics.
+                cellRows.Add(new Markup($"    [{primary}]{Markup.Escape(ReplValueFormatter.Format(cell.Value))}[/]"));
             }
 
             transcript.Add(new Backdrop(new Rows(cellRows), cellBg));

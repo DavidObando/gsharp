@@ -10,11 +10,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Phase 4 emit-parity tests for CLR interop: instance constructor calls,
-/// property reads, indexer reads, and indexer writes. Mirrors the interpreter
-/// coverage from Phase 4 PRs #63 and #64, but exercises the
-/// <see cref="GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter"/> path
-/// end-to-end (gsc → PE → dotnet exec).
+/// Emit coverage for clr interop.
+/// Traceability: issues #63 and #64.
 /// </summary>
 public class ClrInteropEmitTests
 {

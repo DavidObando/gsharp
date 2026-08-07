@@ -10,19 +10,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Phase 3.A.4 emit-parity tests for <c>map[K,V]</c>. The backing CLR type is
-/// <c>System.Collections.Generic.Dictionary&lt;K, V&gt;</c>:
-/// <list type="bullet">
-/// <item><description>Map literal <c>map[K,V]{k: v, ...}</c> →
-/// <c>newobj Dictionary&lt;K,V&gt;..ctor()</c> + <c>callvirt set_Item</c> per entry.</description></item>
-/// <item><description>Indexing read <c>m[k]</c> →
-/// <c>callvirt TryGetValue(k, out tmp)</c>; pop bool; load tmp — yields the
-/// Go zero value when the key is missing, matching the interpreter.</description></item>
-/// <item><description>Indexed assignment <c>m[k] = v</c> →
-/// <c>callvirt set_Item(k, v)</c>.</description></item>
-/// <item><description><c>len(m)</c> → <c>callvirt get_Count</c>.</description></item>
-/// <item><description><c>delete(m, k)</c> → <c>callvirt Remove(k)</c>; pop bool.</description></item>
-/// </list>
+/// Emit coverage for map.
 /// </summary>
 public class MapEmitTests
 {

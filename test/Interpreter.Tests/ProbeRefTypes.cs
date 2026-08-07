@@ -6,7 +6,7 @@ namespace GSharp.Interpreter.Tests.ProbeRef;
 
 /// <summary>
 /// CLR interface with a default interface method (DIM). Used to verify
-/// interpreter DIM dispatch parity with the emitter (#572 / #608).
+/// emitted-session DIM dispatch coverage (#572 / #608).
 /// </summary>
 public interface IWithDIM
 {
@@ -51,7 +51,7 @@ public interface IReadWrite
     /// <summary>Gets or sets the value.</summary>
     string Value { get; set; }
 }
-/// <summary>Generic CLR static property used by symbolic-container interpreter tests.</summary>
+/// <summary>Generic CLR static property used by symbolic-container emitted-session tests.</summary>
 public static class GenericStaticSlot<T>
 {
     /// <summary>Gets or sets the per-construction value.</summary>

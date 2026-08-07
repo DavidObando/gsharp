@@ -13,12 +13,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #810 — emit + IL-verify coverage for open-generic iterator
-/// state machines. Follow-up to #798: the binder and interpreter
-/// already accept <c>func Empty[T any]() IEnumerable[T] { yield ... }</c>
-/// shapes; this batch exercises end-to-end IL emission. The
-/// state-machine class must be generic over the outer method's type
-/// parameters (mirroring how Roslyn emits <c>&lt;Empty&gt;d__0&lt;T&gt;</c>).
+/// Issue #810: Emit coverage for open generic iterator.
+/// Traceability: issue #798.
 /// </summary>
 public class Issue810OpenGenericIteratorEmitTests
 {

@@ -28,9 +28,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// methods over <c>IEnumerable&lt;T&gt;</c>.
 /// </summary>
 /// <remarks>
-/// These assert through full compilation (bind + lower + emit) rather than the
-/// tree-walking interpreter, because the interpreter does not marshal GSharp
-/// closures into CLR delegates for reflection-invoked imported methods. The
+/// These assert through full compilation (bind + lower + emit). The retired
+/// tree-walking evaluator did not marshal GSharp closures into CLR delegates
+/// for reflection-invoked imported methods. The
 /// end-to-end execution path is covered by the <c>LinqExtensions</c>
 /// conformance sample.
 /// </remarks>

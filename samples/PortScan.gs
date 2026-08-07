@@ -1,16 +1,16 @@
-// file: aspirational/PortScan.gs
+// file: PortScan.gs
 //
 // Phase 5 exit sample. Combines the entire Go-shaped concurrency surface that
 // landed in Phase 5: `chan T` (5.4), send/receive (5.5), `go` (5.3), structured
 // concurrency `scope { ... }` (5.7), and a `select { ... }` with a timeout arm
-// (5.6) — all on the interpreter backend. The synthetic "scanner" assigns even
+// (5.6). The synthetic "scanner" assigns even
 // ports as open and odd ports as closed; the timeout demo prefers a pre-loaded
 // timeout channel over a worker that never sends.
 //
-// Lives under samples/aspirational/ because Phase 5 emit is deferred (ADR-0022
-// §Consequences). The matching test harness — AspirationalSamplesTests in
-// test/Core.Tests/LanguageConformance — runs this through the interpreter and
-// matches stdout against PortScan.golden.
+// Originally lived under samples/aspirational/ while Phase 5 emit was
+// deferred (ADR-0022 §Consequences); it was promoted here once the emit
+// backend covered the full concurrency surface, and the regular conformance
+// harness now matches stdout against PortScan.golden.
 
 package GSharp.Samples.PortScan
 

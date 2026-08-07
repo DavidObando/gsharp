@@ -38,10 +38,11 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitConversion(BoundConversionExpression conv)
     {
-        // ADR-0122 / issue #1014: `nil -> *T` materialises a null pointer as a
-        // zero native int. Emit it directly (the source `nil` would otherwise
-        // push an object `ldnull`, which is not a verifiable pointer value).
-        if (conv.Type is Symbols.PointerTypeSymbol && conv.Expression.Type == TypeSymbol.Null)
+        // ADR-0122 / issues #1014 and #3268: `nil` materialises a null pointer
+        // as a zero native int. Emit it directly (the source `nil` would
+        // otherwise push an object `ldnull`, which is not a pointer value).
+        if (conv.Type is PointerTypeSymbol or FunctionPointerTypeSymbol
+            && conv.Expression.Type == TypeSymbol.Null)
         {
             this.il.LoadConstantI4(0);
             this.il.OpCode(ILOpCode.Conv_i);

@@ -38,4 +38,22 @@ public sealed class BoundIndexExpression : BoundExpression
 
     /// <summary>Gets the index expression.</summary>
     public BoundExpression Index { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this element load reads real,
+    /// addressable array storage (issue #3292). Fixed arrays (<c>[N]T</c>),
+    /// slices (<c>[]T</c>, ADR-0016: CLR-array-backed), and imported CLR
+    /// single-dimensional arrays all store their elements in a heap array
+    /// whose element address is expressible in IL (<c>ldelema</c>), so a
+    /// struct member write through the element can mutate it in place. Map
+    /// elements (<see cref="MapTypeSymbol"/> — the Dictionary indexer
+    /// returns a copy) and string elements (<c>get_Chars</c>) have no
+    /// element address and stay non-addressable.
+    /// </summary>
+    public bool IsArrayBackedElementAccess =>
+        Target.Type is ArrayTypeSymbol or SliceTypeSymbol
+        || (Target.Type is not MapTypeSymbol
+            && Target.Type != TypeSymbol.String
+            && Target.Type?.ClrType is { IsArray: true } clrArray
+            && clrArray.GetArrayRank() == 1);
 }

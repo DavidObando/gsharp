@@ -15,12 +15,8 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0100 / issue #795 — binder + interpreter coverage for
-/// <c>default(T)</c> and the bare <c>default</c> literal. Semantics:
-/// zero-initialised value for value types, <c>nil</c> for reference
-/// types and nullable types. The interpreter mirrors the emit
-/// semantics, so these tests also exercise the
-/// <see cref="Evaluator"/> path.
+/// Issue #795: Emitted-oracle coverage for default expression.
+/// Traceability: ADR-0100.
 /// </summary>
 public class Issue795DefaultExpressionBinderTests
 {

@@ -380,13 +380,6 @@ public class ProjectState
             return null;
         }
 
-        // The REPL/append chain shape is not produced here; only handle the flat
-        // single-compilation shape the language server builds.
-        if (previous.Previous != null)
-        {
-            return null;
-        }
-
         // Pair the previous and current trees by file path. Any added or removed
         // file makes this not a single-file body edit.
         var previousTrees = previous.SyntaxTrees;

@@ -234,6 +234,7 @@ verification regressions without weakening ilverify globally.
   (GS0405 rejects instance / overloaded / generic methods). A function-pointer
   value is invoked directly with `fp(args)`, emitting CIL `calli` against a
   standalone method signature (`BoundFunctionPointerInvocationExpression`).
+  `nil` denotes the null function-pointer value.
   Function pointers round-trip through `nint`/`IntPtr` and cast to/from other
   function pointers (explicit). The two new bound-node kinds are threaded
   through the walker/rewriter/printer/side-effect/spiller/evaluator and the

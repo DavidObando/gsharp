@@ -1,7 +1,7 @@
-// file: aspirational/Patterns.gs
+// file: Patterns.gs
 //
-// Phase 6.2 sample. Pattern matching is interpreter-only for now;
-// emit is deferred with the same posture as Phase 5 surfaces.
+// Phase 6.2 sample. Pattern matching originally landed interpreter-only
+// under samples/aspirational/; it was promoted here once emit caught up.
 
 package GSharp.Samples.Patterns
 

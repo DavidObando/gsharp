@@ -10,19 +10,8 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// End-to-end emit tests for issue #479 — C#/Swift-style collection
-/// initializers. Each test compiles a G# program that uses a collection
-/// initializer (list/set/dictionary/indexed/ctor-args), IL-verifies the
-/// produced assembly, runs it, and asserts the runtime contents
-/// (counts, membership, lookups) so the lowering to ctor + <c>Add</c> /
-/// indexer-set is exercised at execution time.
-/// <para>
-/// The forms under test are specified by ADR-0117. The lowering produces
-/// a synthetic local seeded by the constructor call followed by a chain
-/// of <c>Add</c> / indexer-set statements; because that reuses existing
-/// bound nodes, the emitter and interpreter execute it unchanged. These
-/// tests lock the surface in at the emit layer.
-/// </para>
+/// Issue #479: Emit coverage for collection initializer.
+/// Traceability: ADR-0117.
 /// </summary>
 public class Issue479CollectionInitializerEmitTests
 {

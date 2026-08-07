@@ -6,7 +6,7 @@ draft: false
 
 # Standard library and built-ins
 
-G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, function values, and a few legacy built-in functions are provided by the compiler. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
+G# deliberately keeps its language-defined library small. Primitive types, collection intrinsics, channels, and function values are provided by the compiler. Most everyday library APIs are the .NET Base Class Library reached through imports and CLR interop; for example, printing in samples normally uses `Console.WriteLine` from the implicit or explicit `System` import. See [CLR interop](/docs/ref/clr-interop) for constructors, members, delegates, events, generics, attributes, and other .NET surface.
 
 ## Primitive types
 
@@ -97,6 +97,8 @@ Console.WriteLine(len(counts))
 
 The .NET `Dictionary[K,V]` type is also usable through CLR interop when you import `System.Collections.Generic`; that surface is the BCL, not the language-defined map intrinsic.
 
+Maps are **not goroutine-safe**: `map[K,V]` carries no implicit synchronization, and concurrent access from multiple goroutines is undefined behavior — the same posture as Go maps. For a map that is meant to be shared across goroutines, use [`SyncMap[K, V]`](#gsharpextensionssync) from `Gsharp.Extensions.Sync`.
+
 ## Sequences and iteration
 
 `sequence[T]` is the G# type-clause spelling for `IEnumerable[T]`. Iterator functions that return a sequence can use `yield expr`. `async sequence[T]` is the spelling for `IAsyncEnumerable[T]`, and `await for` iterates async streams. Sequence APIs beyond iteration come from the BCL, such as LINQ extension methods imported from `System.Linq`.
@@ -108,6 +110,7 @@ The `Gsharp.Extensions` assembly ships with `Gsharp.NET.Sdk` and is referenced b
 - `Gsharp.Extensions.Optional` — extension methods on `T?` for projection, fallback, side-effects, and filtering.
 - `Gsharp.Extensions.Sequences` — static builders and extension transformers over `sequence[T]`.
 - `Gsharp.Extensions.Go` — Go-flavored concurrency surface and built-ins gated behind the import.
+- `Gsharp.Extensions.Sync` — synchronization helpers for state shared across goroutines; currently `SyncMap[K, V]`.
 
 ### Gsharp.Extensions.Optional
 
@@ -172,13 +175,40 @@ G#-shaped collectors:
 
 The Go-flavored concurrency cluster — `go`, `chan T`, `<-`, `select`, `close(ch)`, `make(chan T)` — and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make` are all gated behind `import Gsharp.Extensions.Go`. The [Intrinsic functions](#intrinsic-functions-and-operations) table above summarises the diagnostic codes the binder emits when the import is missing.
 
+### Gsharp.Extensions.Sync
+
+Synchronization helpers for state shared across goroutines (ADR-0158). The first type is `SyncMap[K, V]`, G#'s analog of Go's `sync.Map`: a goroutine-safe map with a method-based API — deliberately no literal or index syntax, because `m[k] = m[k] + 1` on a shared map looks atomic and races. Reads and enumeration are lock-free on a private concurrent backing store; writes serialize on a hidden monitor so `Update` is an atomic read-modify-write.
+
+```gsharp
+import Gsharp.Extensions.Sync
+
+var m = SyncMap[string, int32]()
+m.Store("hits", 1)
+m.Update("hits", func(v int32) int32 { return v + 1 })   // atomic; returns 2
+Console.WriteLine(m.Load("hits"))
+```
+
+| Symbol | Form | One-line description |
+| --- | --- | --- |
+| `SyncMap` | `SyncMap[K, V]()` | Construct an empty goroutine-safe map. |
+| `Store` | `func Store(key K, value V)` | Set `key` to `value`, replacing any existing entry. |
+| `Load` | `func Load(key K) V` | Read `key`; returns `V`'s zero value when absent (map-read parity). Lock-free. |
+| `Update` | `func Update(key K, f (V) -> V) V` | Atomically replace the value with `f(current)` (`current` is the zero value when absent); returns the stored result. Atomic against all other writes. |
+| `Delete` | `func Delete(key K) bool` | Remove the entry; reports whether one was present. |
+| `Len` | `func Len() int32` | Entry count. Lock-free snapshot. |
+| `Contains` | `func Contains(key K) bool` | Membership test. Lock-free. |
+| `Keys` | `func Keys() []K` | Snapshot slice of the keys. Safe under concurrent writes. |
+| `Range` | `func Range(action (K, V) -> void)` | Invoke `action` per entry; safe under concurrent writes, and `action` may itself write to the map (the monitor is not held). |
+
+`Load`, `Len`, and `Contains` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. `Update` runs `f` while the internal write monitor is held — keep it small and non-blocking. Plain `map[K,V]` deliberately carries none of these guarantees; see [Maps](#maps).
+
 ## Functions, delegates, and closures
 
 Function values use `(P1, P2) -> R` type clauses and function literals. Compatible function literals and method groups can convert to CLR delegate types during interop. Delegate construction and invocation are documented in [CLR interop](/docs/ref/clr-interop). The legacy `func(P1, P2) R` type-clause spelling continues to parse for one release with the `GS0303` deprecation warning.
 
-## Console and legacy built-in functions
+## Console
 
-The curated documentation prefers .NET console APIs:
+Console input and output use the .NET console APIs:
 
 ```gsharp
 import System
@@ -186,4 +216,4 @@ import System
 Console.WriteLine("hello")
 ```
 
-The compiler also contains legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32`. They are not the shape used by current reference samples.
+The legacy built-in functions `print(text string)`, `input() string`, and `rnd(max int32) int32` were retired; `System.Console` (and `System.Random`) via CLR interop are the supported replacements.

@@ -176,10 +176,18 @@ ran
 done
 ```
 
-In the interpreter, `go` is implemented with `Task.Run` and some
-evaluation is serialized internally; timing behavior may differ from
-emitted assemblies. Use emitted builds when reasoning about production
-concurrency behavior.
+`go` lowers to task-based scheduling in the emitted assembly, which is
+what every driver (including `gsi`) executes since ADR-0156.
+
+Note that G# maps (`map[K,V]`) are backed by plain `Dictionary<K,V>`
+with no implicit synchronization, so concurrent access from multiple
+goroutines is not goroutine-safe — the same posture as Go maps. For a
+map that is meant to be shared across goroutines, use
+[`SyncMap[K, V]`](../ref/standard-library#gsharpextensionssync) from
+`Gsharp.Extensions.Sync` (ADR-0158) — its `Update` is an atomic
+read-modify-write. For other shared state, `lock` and the
+`System.Collections.Concurrent` / `System.Threading` types via CLR
+interop are one import away.
 
 ## See also
 
