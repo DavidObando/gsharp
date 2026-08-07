@@ -24,7 +24,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <see cref="RequiresExplicitInitializer"/>). Globals and fields must
 /// initialize explicitly (GS0520); locals may declare freely and are instead
 /// flow-checked at use sites by <see cref="DefiniteAssignmentAnalyzer"/>
-/// (GS0521, issue #3316).
+/// (GS0522, issue #3316).
 /// </summary>
 internal static class MagicCollectionZeroValue
 {
@@ -83,7 +83,7 @@ internal static class MagicCollectionZeroValue
     /// channel carve-out: a bare <c>chan T</c> slot has no usable default
     /// value. Declaring a global or field without an initializer is an error
     /// (GS0520); a declared-without-initializer local is legal and instead
-    /// subject to the definite-assignment use-site check (GS0521,
+    /// subject to the definite-assignment use-site check (GS0522,
     /// issue #3316).
     /// </summary>
     /// <param name="type">The declared slot type.</param>

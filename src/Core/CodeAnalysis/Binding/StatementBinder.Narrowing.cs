@@ -1374,7 +1374,7 @@ internal sealed partial class StatementBinder
         // a top-level declaration is emitted as a static field readable from
         // any function or REPL cell, which per-function flow analysis cannot
         // police. A genuine LOCAL declares freely; the definite-assignment
-        // analysis (DefiniteAssignmentAnalyzer) instead reports GS0521 at any
+        // analysis (DefiniteAssignmentAnalyzer) instead reports GS0522 at any
         // use a path can reach without a preceding assignment — the C# CS0165
         // model, and Go's declare-then-assign shape becomes legal.
         if (channelSlotWithoutInitializer && variable is not LocalVariableSymbol)

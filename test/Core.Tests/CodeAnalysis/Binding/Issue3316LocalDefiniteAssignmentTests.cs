@@ -13,7 +13,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// consumer. A bare <c>chan T</c> LOCAL now declares freely (on main the
 /// declaration itself reported GS0520); the error moves to any USE that
 /// some control-flow path can reach without a preceding assignment
-/// (GS0521 — C#'s CS0165 model). Zero-valued kinds (ints, maps/slices/
+/// (GS0522 — C#'s CS0165 model). Zero-valued kinds (ints, maps/slices/
 /// arrays/sequences post-ADR-0159, structs, strings) keep their documented
 /// zero-value initialization and are never flow-checked; globals and
 /// fields keep the declaration-site GS0520.
@@ -54,7 +54,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     }
 
     [Fact]
-    public void UseBeforeAnyAssignment_Receive_ReportsGS0521()
+    public void UseBeforeAnyAssignment_Receive_ReportsGS0522()
     {
         var result = Compile("""
             package P3316UseRecv
@@ -69,12 +69,12 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0520");
     }
 
     [Fact]
-    public void UseBeforeAnyAssignment_Send_ReportsGS0521()
+    public void UseBeforeAnyAssignment_Send_ReportsGS0522()
     {
         var result = Compile("""
             package P3316UseSend
@@ -90,11 +90,11 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
-    public void UseBeforeAnyAssignment_PassedAsArgument_ReportsGS0521()
+    public void UseBeforeAnyAssignment_PassedAsArgument_ReportsGS0522()
     {
         var result = Compile("""
             package P3316UseArg
@@ -113,14 +113,14 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
     public void ExplicitDefaultInitializer_CountsAsAssignment()
     {
         // ADR-0159 honesty clause: `= default` keeps its CLR meaning — the
-        // user explicitly opted into the null slot, so no GS0521.
+        // user explicitly opted into the null slot, so no GS0522.
         var result = Compile("""
             package P3316ExplicitDefault
 
@@ -171,7 +171,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     }
 
     [Fact]
-    public void If_OnlyThenArmAssigns_UseAfterJoin_ReportsGS0521()
+    public void If_OnlyThenArmAssigns_UseAfterJoin_ReportsGS0522()
     {
         var result = Compile("""
             package P3316IfOne
@@ -190,7 +190,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run(true)
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     // ----- Loops -----------------------------------------------------------
 
     [Fact]
-    public void Loop_AssignOnlyInBody_UseAfterLoop_ReportsGS0521()
+    public void Loop_AssignOnlyInBody_UseAfterLoop_ReportsGS0522()
     {
         // The C# rule: a loop body may execute zero times, so an assignment
         // inside it does not reach the code after the loop.
@@ -246,7 +246,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run(0)
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
@@ -310,7 +310,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     // ----- try/catch/finally ----------------------------------------------
 
     [Fact]
-    public void Try_AssignOnlyInTryBody_UseAfter_ReportsGS0521()
+    public void Try_AssignOnlyInTryBody_UseAfter_ReportsGS0522()
     {
         // An exception can skip the try-body assignment and land in the
         // (non-assigning) catch, then fall through to the use.
@@ -333,7 +333,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
@@ -424,7 +424,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     }
 
     [Fact]
-    public void Switch_NoDefault_UseAfter_ReportsGS0521()
+    public void Switch_NoDefault_UseAfter_ReportsGS0522()
     {
         // Without a default the discriminant can match no arm at all; that
         // "nothing matched" path reaches the use unassigned.
@@ -447,7 +447,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run(1)
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
@@ -485,7 +485,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     }
 
     [Fact]
-    public void Select_UnassignedLocalAsCaseChannel_ReportsGS0521()
+    public void Select_UnassignedLocalAsCaseChannel_ReportsGS0522()
     {
         var result = Compile("""
             package P3316SelectChan
@@ -508,13 +508,13 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     // ----- Captures (lambdas / goroutines) ---------------------------------
 
     [Fact]
-    public void Capture_BeforeAnyAssignment_UseInsideLiteral_ReportsGS0521()
+    public void Capture_BeforeAnyAssignment_UseInsideLiteral_ReportsGS0522()
     {
         // The C# model: a use inside the literal is checked against the
         // assignment state at the capture point — assigning AFTER creating
@@ -535,7 +535,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     [Fact]
@@ -597,7 +597,7 @@ public class Issue3316LocalDefiniteAssignmentTests
     }
 
     [Fact]
-    public void Goroutine_CapturesUnassignedLocal_ReportsGS0521()
+    public void Goroutine_CapturesUnassignedLocal_ReportsGS0522()
     {
         var result = Compile("""
             package P3316GoroutineBad
@@ -616,7 +616,7 @@ public class Issue3316LocalDefiniteAssignmentTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0521");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0522");
     }
 
     // ----- out arguments count as assignment --------------------------------

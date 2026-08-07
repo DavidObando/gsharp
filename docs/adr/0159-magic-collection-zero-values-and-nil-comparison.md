@@ -220,7 +220,7 @@ definite-return check builds — and the channel carve-out is its first
 consumer:
 
 - A **local** `var c chan T` without an initializer no longer reports
-  GS0520 at the declaration. Declaring is free; the error is **GS0521**, at
+  GS0520 at the declaration. Declaring is free; the error is **GS0522**, at
   any *use* that some control-flow path can reach without a preceding
   assignment (C#'s CS0165 model). Go's declare-then-assign-then-use shape
   is now legal.
@@ -259,5 +259,5 @@ Known best-effort edges, inherited from the shared analyzer: reads nested
 in conditionally-evaluated subexpressions of a single statement (e.g. the
 right side of a short-circuit operator) are checked against the statement's
 entry state, and the fail-safe catch path that guards the whole analysis
-skips GS0521 like it skips GS0239. The nullable-channel spelling
+skips GS0522 like it skips GS0239. The nullable-channel spelling
 (follow-up (b)) remains open.

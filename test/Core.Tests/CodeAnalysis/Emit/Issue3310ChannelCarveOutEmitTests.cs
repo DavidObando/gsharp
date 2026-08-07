@@ -15,7 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// rejected with GS0520 at the global and field declaration surfaces. On
 /// main these declarations compiled and NRE'd on first use. LOCALS were
 /// originally rejected at the declaration too; since issue #3316 they
-/// declare freely and are flow-checked at use sites instead (GS0521 — see
+/// declare freely and are flow-checked at use sites instead (GS0522 — see
 /// <c>Issue3316LocalDefiniteAssignmentTests</c>).
 /// </summary>
 public class Issue3310ChannelCarveOutEmitTests

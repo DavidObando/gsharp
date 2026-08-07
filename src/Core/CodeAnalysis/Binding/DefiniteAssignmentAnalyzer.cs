@@ -23,7 +23,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 ///     end for <c>void</c> bodies); GS0239 — a variable passed via
 ///     <c>ref</c> (NOT <c>out</c>) at a call site must be definitely
 ///     assigned at that point.</item>
-///   <item>ADR-0159 / issue #3316 (no-zero-value locals): GS0521 — a local
+///   <item>ADR-0159 / issue #3316 (no-zero-value locals): GS0522 — a local
 ///     whose type has no usable zero value (today: a bare <c>chan T</c>
 ///     slot, see <see cref="MagicCollectionZeroValue.RequiresExplicitInitializer"/>)
 ///     may be declared without an initializer, but every USE reachable by
@@ -84,7 +84,7 @@ internal static class DefiniteAssignmentAnalyzer
         // narrow) semantics.
         var pointerAliases = new Dictionary<VariableSymbol, VariableSymbol>();
 
-        // Issue #3316: the no-zero-value locals subject to the GS0521
+        // Issue #3316: the no-zero-value locals subject to the GS0522
         // use-site check. Populated when a declared-without-initializer
         // channel local's BoundVariableDeclaration is simulated.
         // Function-scoped, like pointerAliases: the set only ever grows, and
@@ -123,7 +123,7 @@ internal static class DefiniteAssignmentAnalyzer
             // silently returning (the previous behavior) would let a possibly-
             // unassigned `out` parameter compile with no diagnostic at all.
             // Report it instead of swallowing the failure; GS0239 (ref-read)
-            // and GS0521 (no-zero-value local use) checks are best-effort and
+            // and GS0522 (no-zero-value local use) checks are best-effort and
             // are simply skipped on this rare path.
             foreach (var op in outParams)
             {
@@ -371,7 +371,7 @@ internal static class DefiniteAssignmentAnalyzer
     /// <summary>
     /// Walks a basic block linearly, updating <paramref name="assigned"/>
     /// in place. When <paramref name="diagnostics"/> is non-null, reports
-    /// GS0239/GS0238/GS0521 at every detected violation (including ones
+    /// GS0239/GS0238/GS0522 at every detected violation (including ones
     /// nested inside try/select/scope/fixed bodies). Returns the exit set.
     /// </summary>
     private static HashSet<VariableSymbol> SimulateBlock(
@@ -432,7 +432,7 @@ internal static class DefiniteAssignmentAnalyzer
                 }
 
                 // Issue #3316: a declared-without-initializer local whose type
-                // has no usable zero value joins the GS0521 use-site check.
+                // has no usable zero value joins the GS0522 use-site check.
                 // Only user-declared locals qualify — parameters are assigned
                 // on entry, globals are static fields readable from any
                 // function or REPL cell (they keep the GS0520 declaration-site
@@ -512,7 +512,7 @@ internal static class DefiniteAssignmentAnalyzer
                 // through to the next statement at the CFG level too, and
                 // carry expressions but no conditionally-executed bodies. The
                 // report-only walker visits their expression operands — value
-                // reads of tracked no-zero-value locals (GS0521) — and any
+                // reads of tracked no-zero-value locals (GS0522) — and any
                 // nested function literals, which require their own analysis.
                 if (diagnostics != null)
                 {
@@ -786,7 +786,7 @@ internal static class DefiniteAssignmentAnalyzer
     }
 
     /// <summary>
-    /// Issue #3316: reports GS0521 when a value read of a tracked
+    /// Issue #3316: reports GS0522 when a value read of a tracked
     /// no-zero-value local (a bare <c>chan T</c> local declared without an
     /// initializer) is reachable while the local may still be unassigned.
     /// Reporting happens only in the final diagnostics pass, once every
@@ -993,7 +993,7 @@ internal static class DefiniteAssignmentAnalyzer
     ///     captured local inside the literal is an error unless the local was
     ///     definitely assigned before the literal, or is assigned inside
     ///     it);</item>
-    ///   <item>reports GS0521 for value reads of tracked no-zero-value
+    ///   <item>reports GS0522 for value reads of tracked no-zero-value
     ///     locals (issue #3316);</item>
     ///   <item>skips <c>&amp;v</c> subtrees: an address-of operand is a
     ///     ref/out argument position, not a value read — unassigned
