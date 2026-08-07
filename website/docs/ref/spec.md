@@ -222,7 +222,7 @@ Array and slice element access (`a[i]`, read or write) accepts **any** integer-t
 
 ### Maps
 
-Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly (`lock`, or concurrent CLR collections via interop); a first-class synchronization surface is tracked in [#3209](https://github.com/DavidObando/gsharp/issues/3209).
+Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps are iterable with the range `for`: `for k, v in m` destructures each entry into key and value, and `for kv in m` yields each entry as a `KeyValuePair[K,V]`; iteration order is unspecified (see the `for` statement section). Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly (`lock`, or concurrent CLR collections via interop); a first-class synchronization surface is tracked in [#3209](https://github.com/DavidObando/gsharp/issues/3209).
 
 ```gsharp
 let counts = map[string,int32]{"g": 1, "sharp": 2}
@@ -1166,6 +1166,31 @@ ForStmt = "for" Statement
 The last form deconstructs each element of a `ValueTuple`
 sequence into the parenthesized identifier list, one binding per tuple slot
 (`for (k, v) in pairs { ... }`).
+
+The `for … in` range form iterates arrays, slices, strings (over `char`),
+`sequence[T]` and other CLR/pattern enumerables, and `map[K,V]`. The meaning
+of the identifier list depends on the operand:
+
+- **Indexed and enumerable collections** (arrays, slices, strings, sequences,
+  CLR enumerables): the single-variable form `for v in coll` binds each
+  element; the two-variable form `for i, v in coll` binds the zero-based
+  index and the element.
+- **Maps** (`map[K,V]`, and imported dictionary shapes): the two-variable
+  form `for k, v in m` destructures each entry into its key (`k: K`) and
+  value (`v: V`) — the map analog of the index+value form. The
+  single-variable form `for kv in m` binds the whole entry as a
+  `KeyValuePair[K, V]` (`kv.Key` / `kv.Value`) — C#/Kotlin entry semantics,
+  matching `foreach` over a `Dictionary`; the Go form in which a single
+  variable yields only keys is deliberately **not** adopted (iterate `m.Keys`
+  for that). Map iteration works for concrete instantiations and for open
+  maps whose `K`/`V` are in-scope type parameters, and lowers through the
+  backing `Dictionary`'s enumerator.
+
+**Map iteration order is unspecified.** Programs must not rely on any
+particular entry order, including insertion order. Structurally modifying the
+map's key set while iterating it — inserting a new key — throws the backing
+`Dictionary`'s `System.InvalidOperationException` ("Collection was
+modified"); updating the value of an existing key is permitted.
 
 ```ebnf
 WhileStmt    = "while" Expression Statement .

@@ -110,6 +110,24 @@ for i in 0...10 {
 }
 ```
 
+`for in` also iterates maps. The two-variable form destructures each entry
+into key and value, and the single-variable form yields each entry as a
+`KeyValuePair[K,V]`; iteration order is unspecified.
+
+```gsharp
+for name, count in inventory {
+    Console.WriteLine("$name: $count")
+}
+
+for entry in inventory {
+    Console.WriteLine(entry.Key)
+}
+```
+
+Over arrays and slices the two-variable form binds the zero-based index and
+the element (`for i, v in items`) — maps' key+value form is the direct
+analog.
+
 Captured variables introduced by collection `for-in` and numeric ellipsis
 loops are fresh for each iteration. A variable declared in a three-part loop
 (`for var i = 0; i < n; i++`) is shared by every closure created by that loop.
