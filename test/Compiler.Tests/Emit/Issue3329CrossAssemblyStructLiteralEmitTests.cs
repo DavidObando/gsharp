@@ -217,6 +217,79 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
     }
 
     [Fact]
+    public void NestedStructInStruct_BothDeclaredInLibrary_OuterLiteralZeroInitsInnerMagicField()
+    {
+        // Issue #3329 x #3330 composition: PR #3330 (issue #3319) added
+        // SAME-ASSEMBLY recursion so an outer struct literal's own
+        // zero-value synthesis walks INTO an inner struct-typed field that
+        // itself needs a magic-collection zero value. #3330 postdates this
+        // PR's original design (which explicitly scoped that case OUT, see
+        // the test above), so this pins the case the two fixes need to get
+        // right TOGETHER: `Outer{}` constructed from ANOTHER (consumer)
+        // assembly, where `Outer.I Inner` is left unset and `Inner` itself
+        // has an unset magic-collection field — the composed zero value must
+        // reach all the way through the cross-assembly reconstruction AND
+        // the nested-struct recursion.
+        const string library = """
+            package i3329lib8
+
+            struct Inner {
+                public var Items []int32
+            }
+
+            struct Outer {
+                public var I Inner
+            }
+            """;
+
+        const string source = """
+            package i3329i
+            import i3329lib8
+
+            func Main() {
+                let o = Outer{}
+                System.Console.WriteLine(o.I.Items.Length)
+            }
+            """;
+
+        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib8"));
+    }
+
+    [Fact]
+    public void DataStructNestedInStruct_BothDeclaredInLibrary_OuterLiteralZeroInitsInnerMagicField()
+    {
+        // Same composed shape as above, but the INNER struct is a `data
+        // struct` (routes through ImportedTypeSymbol.BuildSemanticAggregate
+        // on reconstruction, rather than ExpressionBinder.
+        // BindImportedTypeObjectInitializer's plain-struct fallback) —
+        // confirms the composition holds on both cross-assembly
+        // reconstruction paths, not just the plain-struct one.
+        const string library = """
+            package i3329lib9
+
+            data struct Inner {
+                public var Items []int32
+            }
+
+            struct Outer {
+                public var I Inner
+            }
+            """;
+
+        const string source = """
+            package i3329j
+            import i3329lib9
+
+            func Main() {
+                let o = Outer{}
+                System.Console.WriteLine(o.I.Items.Length)
+            }
+            """;
+
+        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib9"));
+    }
+
+    [Fact]
     public void SameAssembly_StructLiteral_SliceField_RegressionPin()
     {
         // Control: a same-compilation struct literal must keep working
