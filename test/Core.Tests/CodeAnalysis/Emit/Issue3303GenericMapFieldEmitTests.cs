@@ -416,12 +416,11 @@ public class Issue3303GenericMapFieldEmitTests
     }
 
     [Fact]
-    public void SliceNilComparison_ParityPin_StillRejectedWithGS0129()
+    public void SliceNilComparison_ParityPin_NowBinds()
     {
-        // Slices deliberately keep their current rejection: widening
-        // slice/channel nil-compare is a separate language-surface decision
-        // (this fix is scoped to maps, which the issue demonstrates can be
-        // genuinely nil). A future change here must be deliberate.
+        // Issue #3310 / ADR-0159: the deliberate slice rejection this pin
+        // used to guard was flipped — nil comparison now binds for every
+        // reference-backed magic type. A live slice value is not nil.
         var result = EmittedOracle.Evaluate("""
             package P3303SlicePin
 
@@ -429,20 +428,25 @@ public class Issue3303GenericMapFieldEmitTests
             s != nil
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(true, result.Value);
     }
 
     [Fact]
-    public void ChannelNilComparison_ParityPin_StillRejectedWithGS0129()
+    public void ChannelNilComparison_ParityPin_NowBinds()
     {
+        // Issue #3310 / ADR-0159: same flip as the slice pin above.
         var result = EmittedOracle.Evaluate("""
             package P3303ChanPin
+
+            import Gsharp.Extensions.Go
 
             var c = make(chan int32, 1)
             c != nil
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(true, result.Value);
     }
 
     [Fact]
