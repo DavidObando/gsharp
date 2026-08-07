@@ -1289,6 +1289,21 @@ public sealed class Lowerer : BoundTreeRewriter
                 openDef = imp.OpenDefinition;
                 typeArguments = imp.TypeArguments;
                 break;
+
+            // Issue #3318: an OPEN `map[K, V]` — K or V is an in-scope type
+            // parameter or a same-compilation user class, so ClrType is null
+            // by construction — iterates through the same symbolic
+            // Dictionary[K, V] view interop member lookup uses (#3311/#3313):
+            // route GetEnumerator through IEnumerable<KeyValuePair<K, V>> so
+            // the loop element re-projects as the symbolic
+            // `KeyValuePair[K, V]` rather than the erased `object` shape.
+            // Concrete maps (loadable ClrType) stay on the reflection fast
+            // path below, which resolves Dictionary's struct enumerator.
+            case MapTypeSymbol openMap when openMap.ClrType == null
+                && MemberLookup.TryGetSymbolicOpenMapReceiverView(openMap, out var mapView):
+                openDef = mapView.OpenDefinition;
+                typeArguments = mapView.TypeArguments;
+                break;
             default:
                 return false;
         }
