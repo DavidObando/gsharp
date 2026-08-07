@@ -394,6 +394,44 @@ public class Issue3311OpenMapMemberLookupEmitTests
         Assert.Equal(42, result.Value);
     }
 
+    [Fact]
+    public void ExplicitDictionary_MixedArity_KeysIteration_Fixed()
+    {
+        // Companion latent bug fixed by the same change (pre-existing on
+        // main, NOT map-specific): iterating `.Keys` of an explicit
+        // `Dictionary[int32, V]` — a MIXED concrete/open instantiation —
+        // recovered `IEnumerator[int32]` through the erased closed shape,
+        // but the loop lowering fell back to the closed `object` Current
+        // (HasSubstitutableTypeArgument is false for [int32]) and the
+        // widening-skip guard required a symbolic type argument, injecting
+        // a spurious `unbox.any int32` (ILVerify StackObjRef, runtime NRE).
+        var result = EmittedOracle.Evaluate("""
+            package P3311DictMixed
+
+            import System.Collections.Generic
+
+            func SumKeys[V any](d Dictionary[int32, V]) int32 {
+                var total = 0
+                for k in d.Keys {
+                    total = total + k
+                }
+                return total
+            }
+
+            func run() int32 {
+                var m = Dictionary[int32, string]()
+                m[40] = "a"
+                m[2] = "b"
+                return SumKeys[string](m)
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(42, result.Value);
+    }
+
     // ---------------------------------------------------------------
     // Regression pins.
     // ---------------------------------------------------------------

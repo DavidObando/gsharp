@@ -1371,10 +1371,28 @@ public sealed class Lowerer : BoundTreeRewriter
                 // re-introduce the bug we fixed in the binder. Use the
                 // enumerator's symbolic type argument instead so the
                 // BoundClrPropertyAccessExpression carries the user's `T`.
+                //
+                // Issue #3311: the synthesised `IEnumerator[ElementSym]` must
+                // take this path even when ElementSym happens to be CONCRETE —
+                // a MIXED instantiation such as `Dictionary[int32, V].Keys`
+                // recovers `IEnumerator[int32]` through the erased closed
+                // shape, and the emitted symbolic MemberRef
+                // (`IEnumerator`1<int32>::get_Current`) already leaves an
+                // int32 on the stack. Falling back to the closed `object`
+                // getter type here injected an `object → int32` conversion
+                // whose `unbox.any` tripped the verifier (StackObjRef) and
+                // crashed at runtime. Gate on the synthesised IEnumerator`1
+                // open definition so real struct enumerators (whose Current is
+                // NOT the first type argument, e.g. Dictionary's
+                // KeyValuePair-returning Enumerator) keep the reflected type.
                 TypeSymbol currentType = null;
                 if (enumeratorType is ImportedTypeSymbol enumImp
-                    && enumImp.HasSubstitutableTypeArgument
-                    && !enumImp.TypeArguments.IsDefaultOrEmpty)
+                    && !enumImp.TypeArguments.IsDefaultOrEmpty
+                    && (enumImp.HasSubstitutableTypeArgument
+                        || string.Equals(
+                            enumImp.OpenDefinition?.FullName,
+                            "System.Collections.Generic.IEnumerator`1",
+                            System.StringComparison.Ordinal)))
                 {
                     currentType = enumImp.TypeArguments[0];
                 }

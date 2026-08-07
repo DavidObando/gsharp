@@ -200,6 +200,11 @@ internal sealed partial class ExpressionBinder
     /// <see cref="ImportedTypeSymbol"/> over the erased array CLR type
     /// (e.g. <c>object[]</c>), reaching parity with a primitive-element array
     /// (which finds the non-generic <c>GetEnumerator()</c>).</item>
+    /// <item>issue #3311: open <c>map[K, V]</c> (null ClrType) → the symbolic
+    /// constructed <c>Dictionary[K, V]</c> view, so the CLR-interop member
+    /// surface (<c>ContainsKey</c>, <c>TryGetValue</c>, <c>GetEnumerator</c>,
+    /// …) resolves exactly as on an explicit <c>Dictionary[K, V]</c>
+    /// receiver.</item>
     /// </list>
     /// The bound call keeps the original receiver expression; the emitter
     /// already normalizes sequence/array receivers
@@ -235,6 +240,26 @@ internal sealed partial class ExpressionBinder
                 if (MemberLookup.TryProjectErasedClrType(receiverType, out var erasedArray))
                 {
                     normalized = ImportedTypeSymbol.Get(erasedArray);
+                    return true;
+                }
+
+                return false;
+            case MapTypeSymbol:
+                // Issue #3311: interop member calls on an open-generic map
+                // receiver (`items.ContainsKey(k)` where `items : map[K, V]`
+                // with type-parameter K/V) dead-ended with GS0159 because the
+                // receiver's ClrType is null by construction. Its runtime
+                // backing is always `Dictionary<K, V>`, so normalize to the
+                // same symbolic constructed shape an explicit
+                // `Dictionary[K, V]` receiver carries (#313/#794/#1107): the
+                // erased closed ClrType drives member lookup, the symbolic
+                // [K, V] arguments drive return/parameter/out-var
+                // re-projection, and the emitter parents the MemberRefs at
+                // the `Dictionary<!K, !V>` TypeSpec
+                // (TryNormalizeToSymbolicContainer's map arm).
+                if (MemberLookup.TryGetSymbolicOpenMapReceiverView(receiverType, out var mapView))
+                {
+                    normalized = mapView;
                     return true;
                 }
 
@@ -2980,7 +3005,12 @@ internal sealed partial class ExpressionBinder
                         // any inline `out var`/`out let`/`out _` placeholders
                         // against the resolved by-ref parameter so the new
                         // local is declared with the inferred pointee type.
-                        arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, receiver?.Type, typeArgSymbols);
+                        // Issue #3311: pass the NORMALIZED receiver type so an
+                        // open map's `out TValue` (e.g. TryGetValue) recovers
+                        // the symbolic V via the Dictionary view's symbolic
+                        // arguments, exactly as an explicit Dictionary[K, V]
+                        // receiver does (#1107).
+                        arguments = RebindInlineOutVarArguments(ce, arguments, resolution.Best, resolution.ParameterMapping, effectiveReceiverType, typeArgSymbols);
 
                         // Issue #1512: for a genuine INSTANCE method the receiver
                         // is `this`, not a formal parameter — `GetParameters()`
@@ -3020,6 +3050,18 @@ internal sealed partial class ExpressionBinder
                         // Issue #1638: shared CLR call-argument-construction
                         // pipeline (interpolation rebind → handler args →
                         // delegate rebind → parameter conversions).
+                        // Issue #3311: the parameter-conversion pass keeps the
+                        // RAW receiver type per #1512/#1320, EXCEPT for an open
+                        // map — its MapTypeSymbol carries no OpenDefinition, so
+                        // TrySubstituteParameterTypeFromReceiver could not
+                        // recover the symbolic `!0` parameter slot and a K
+                        // argument (e.g. ContainsKey(k)) would box to the
+                        // erased `object`, tripping the verifier against the
+                        // symbolic `Dictionary<!K, !V>` MemberRef. Feed it the
+                        // normalized Dictionary view instead.
+                        var instConversionReceiverType = MemberLookup.TryGetSymbolicOpenMapReceiverView(receiver?.Type, out _)
+                            ? effectiveReceiverType
+                            : receiver?.Type;
                         var instConvertedArgs = BuildResolvedClrCallArguments(
                             instExpandedArgs,
                             ce.Arguments,
@@ -3035,7 +3077,7 @@ internal sealed partial class ExpressionBinder
                             symbolicMethodTypeArgs: instTypeArgSymbolsForCall,
                             receiverType: effectiveReceiverType,
                             hasConversionReceiverTypeOverride: true,
-                            conversionReceiverType: receiver?.Type);
+                            conversionReceiverType: instConversionReceiverType);
                         var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);

@@ -1129,6 +1129,20 @@ internal sealed class ImportedMemberRefFactory
                 openDefinition = typeof(System.Nullable<>);
                 typeArguments = ImmutableArray.Create<TypeSymbol>(nullableTp);
                 return true;
+            case MapTypeSymbol map when map.ClrType == null:
+                // Issue #3311: a `map[K, V]` receiver over type-parameter (or
+                // other not-yet-loadable) arguments has no closed CLR
+                // Dictionary here — parent its interop member refs at the
+                // symbolic `Dictionary<!K, !V>` TypeSpec. This is the
+                // general-member counterpart of the dedicated #1481/#3306 map
+                // helpers (GetMapCtorReference / GetMapTryGetValueReference /
+                // …), covering the whole reflected member surface
+                // (ContainsKey, Keys, Count, GetEnumerator, …) that binding
+                // now resolves through the symbolic Dictionary view
+                // (MemberLookup.TryGetSymbolicOpenMapReceiverView).
+                openDefinition = typeof(System.Collections.Generic.Dictionary<,>);
+                typeArguments = ImmutableArray.Create(map.KeyType, map.ValueType);
+                return true;
             default:
                 openDefinition = null;
                 typeArguments = default;
