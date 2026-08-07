@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -16,7 +18,7 @@ public abstract class BoundExpression : BoundNode
     /// Initializes a new instance of the <see cref="BoundExpression"/> class.
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
-    protected BoundExpression(SyntaxNode syntax)
+    protected BoundExpression(SyntaxNode? syntax)
         : base(syntax)
     {
     }

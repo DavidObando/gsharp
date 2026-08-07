@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -20,7 +22,7 @@ public sealed class BoundAwaitExpression : BoundExpression
     /// <param name="expression">The expression being awaited.</param>
     /// <param name="type">The unwrapped type that the await yields.</param>
     /// <param name="awaiterTypeSymbol">The symbolic awaiter type used by lowering/emission.</param>
-    public BoundAwaitExpression(SyntaxNode syntax, BoundExpression expression, TypeSymbol type, TypeSymbol awaiterTypeSymbol = null)
+    public BoundAwaitExpression(SyntaxNode? syntax, BoundExpression expression, TypeSymbol type, TypeSymbol? awaiterTypeSymbol = null)
         : base(syntax)
     {
         Expression = expression;
@@ -38,5 +40,5 @@ public sealed class BoundAwaitExpression : BoundExpression
     public BoundExpression Expression { get; }
 
     /// <summary>Gets the symbolic awaiter type used when the operand was bound through an erased placeholder CLR type.</summary>
-    public TypeSymbol AwaiterTypeSymbol { get; }
+    public TypeSymbol? AwaiterTypeSymbol { get; }
 }

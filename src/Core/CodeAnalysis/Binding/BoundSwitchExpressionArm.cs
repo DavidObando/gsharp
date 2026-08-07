@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -18,7 +20,7 @@ public sealed class BoundSwitchExpressionArm : BoundNode
     /// <param name="pattern">The case pattern, or null for <c>default</c>.</param>
     /// <param name="guard">The optional boolean guard expression (<c>when</c> clause), or null.</param>
     /// <param name="result">The result expression.</param>
-    public BoundSwitchExpressionArm(SyntaxNode syntax, BoundPattern pattern, BoundExpression guard, BoundExpression result)
+    public BoundSwitchExpressionArm(SyntaxNode? syntax, BoundPattern pattern, BoundExpression guard, BoundExpression result)
         : base(syntax)
     {
         Pattern = pattern;

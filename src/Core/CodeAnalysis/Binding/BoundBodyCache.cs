@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -151,7 +154,7 @@ public sealed class BoundBodyCache
     public bool TryReuse(
         FunctionSymbol member,
         SyntaxNode bodySyntax,
-        out BoundBlockStatement loweredBody,
+        [MaybeNullWhen(false)] out BoundBlockStatement loweredBody,
         out ImmutableArray<Diagnostic> diagnostics)
     {
         loweredBody = null;

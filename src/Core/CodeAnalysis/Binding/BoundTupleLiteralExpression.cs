@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -19,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundTupleLiteralExpression : BoundExpression
 {
-    public BoundTupleLiteralExpression(SyntaxNode syntax, TupleTypeSymbol tupleType, ImmutableArray<BoundExpression> elements)
+    public BoundTupleLiteralExpression(SyntaxNode? syntax, TupleTypeSymbol tupleType, ImmutableArray<BoundExpression> elements)
         : base(syntax)
     {
         TupleType = tupleType;

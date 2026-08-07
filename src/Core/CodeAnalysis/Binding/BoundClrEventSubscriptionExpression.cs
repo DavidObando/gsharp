@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Reflection;
@@ -20,14 +22,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 {
     public BoundClrEventSubscriptionExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         EventInfo eventInfo,
         BoundExpression handler,
         bool isAdd,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
-        TypeSymbol eventContainingType = null)
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null,
+        TypeSymbol? eventContainingType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -47,11 +49,11 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 
     public bool IsAdd { get; }
 
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
-    public TypeSymbol EventContainingType { get; }
+    public TypeSymbol? EventContainingType { get; }
 
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 

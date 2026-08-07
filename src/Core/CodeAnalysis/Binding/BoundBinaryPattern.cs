@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -21,7 +23,7 @@ public sealed class BoundBinaryPattern : BoundPattern
     /// <param name="isConjunction"><see langword="true"/> for <c>and</c>; <see langword="false"/> for <c>or</c>.</param>
     /// <param name="left">The left sub-pattern.</param>
     /// <param name="right">The right sub-pattern.</param>
-    public BoundBinaryPattern(SyntaxNode syntax, TypeSymbol type, bool isConjunction, BoundPattern left, BoundPattern right)
+    public BoundBinaryPattern(SyntaxNode? syntax, TypeSymbol type, bool isConjunction, BoundPattern left, BoundPattern right)
         : base(syntax, type)
     {
         IsConjunction = isConjunction;

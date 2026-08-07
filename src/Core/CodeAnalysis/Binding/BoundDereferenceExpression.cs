@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -18,7 +20,7 @@ public sealed class BoundDereferenceExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The pointer expression to dereference.</param>
-    public BoundDereferenceExpression(SyntaxNode syntax, BoundExpression operand)
+    public BoundDereferenceExpression(SyntaxNode? syntax, BoundExpression operand)
         : base(syntax)
     {
         Operand = operand;

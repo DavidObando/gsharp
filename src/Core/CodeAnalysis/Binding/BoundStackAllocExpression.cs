@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -38,7 +40,7 @@ public sealed class BoundStackAllocExpression : BoundExpression
     /// <param name="isPointerForm">Whether the result is the raw <c>T*</c> pointer.</param>
     /// <param name="initializerElements">The initializer element values, or empty when there is no initializer.</param>
     public BoundStackAllocExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         TypeSymbol resultType,
         TypeSymbol elementType,
         BoundExpression count,

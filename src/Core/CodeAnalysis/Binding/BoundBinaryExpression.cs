@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -26,7 +28,7 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// in this context; the default (no `checked` context) is unchecked, matching
     /// the C# project default.
     /// </param>
-    public BoundBinaryExpression(SyntaxNode syntax, BoundExpression left, BoundBinaryOperator op, BoundExpression right, bool isChecked = false)
+    public BoundBinaryExpression(SyntaxNode? syntax, BoundExpression left, BoundBinaryOperator op, BoundExpression right, bool isChecked = false)
         : base(syntax)
     {
         Left = left;

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -20,7 +22,7 @@ public sealed class BoundIndirectAssignmentExpression : BoundExpression
     /// <param name="syntax">The originating syntax (may be null).</param>
     /// <param name="pointer">The pointer expression (type <c>*T</c>).</param>
     /// <param name="value">The value being stored through the pointer (type <c>T</c>).</param>
-    public BoundIndirectAssignmentExpression(SyntaxNode syntax, BoundExpression pointer, BoundExpression value)
+    public BoundIndirectAssignmentExpression(SyntaxNode? syntax, BoundExpression pointer, BoundExpression value)
         : base(syntax)
     {
         Pointer = pointer;

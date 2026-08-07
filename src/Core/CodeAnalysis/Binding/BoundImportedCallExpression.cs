@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -34,7 +36,7 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// <c>Comparer[TResult].Create(...)</c>), used by the emitter to parent the
     /// call at the constructed generic TypeSpec. Default for an ordinary call.
     /// </param>
-    public BoundImportedCallExpression(SyntaxNode syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol> typeArgumentSymbols = default, TypeSymbol staticContainerType = null)
+    public BoundImportedCallExpression(SyntaxNode? syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol> typeArgumentSymbols = default, TypeSymbol? staticContainerType = null)
         : base(syntax)
     {
         Function = function;
@@ -81,5 +83,5 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// TypeSpec instead of the type-erased <c>Comparer&lt;object&gt;</c>.
     /// <c>null</c> for an ordinary imported call.
     /// </summary>
-    public TypeSymbol StaticContainerType { get; }
+    public TypeSymbol? StaticContainerType { get; }
 }

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -16,13 +18,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundEventSubscriptionExpression : BoundExpression
 {
     public BoundEventSubscriptionExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         TypeSymbol structType,
         EventSymbol eventSymbol,
         BoundExpression handler,
         bool isAdd,
-        TypeSymbol eventType = null)
+        TypeSymbol? eventType = null)
         : base(syntax)
     {
         Receiver = receiver;

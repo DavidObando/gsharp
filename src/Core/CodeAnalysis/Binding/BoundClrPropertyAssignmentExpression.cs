@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Reflection;
@@ -21,14 +23,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 {
     public BoundClrPropertyAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         MemberInfo member,
         BoundExpression value,
         TypeSymbol resultType,
         TypeSymbol staticContainerType,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -46,9 +48,9 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 
     public BoundExpression Value { get; }
 
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
     public TypeSymbol StaticContainerType { get; }
 

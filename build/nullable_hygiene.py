@@ -187,14 +187,30 @@ def manifest_globs():
 
 
 def enabled_files():
+    """Expand the manifest. A line beginning with `!` subtracts a pattern.
+
+    Exclusions exist because a slice is a file set, not a directory (ADR-0155
+    amendment A3): `Binding/Bound*.cs` is the right way to say "the Bound node
+    types", and the handful of Bound* files that are logic rather than data are
+    subtracted by name rather than by contorting the glob.
+    """
     import glob as g
-    out = set()
-    for pattern in manifest_globs():
+
+    def expand(pattern):
+        found = set()
         for p in g.glob(os.path.join(ROOT, pattern), recursive=True):
             rel = os.path.relpath(p, ROOT)
             if rel.endswith(".cs") and not any(
                     part in EXCLUDED_DIRS for part in rel.split(os.sep)):
-                out.add(rel)
+                found.add(rel)
+        return found
+
+    out = set()
+    for pattern in manifest_globs():
+        if pattern.startswith("!"):
+            out -= expand(pattern[1:].strip())
+        else:
+            out |= expand(pattern)
     return sorted(out)
 
 

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -20,7 +22,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundBaseClassCallExpression : BoundExpression
 {
-    private readonly TypeSymbol returnTypeOverride;
+    private readonly TypeSymbol? returnTypeOverride;
 
     /// <summary>Initializes a new instance of the <see cref="BoundBaseClassCallExpression"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
@@ -32,13 +34,13 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
     /// <param name="property">Issue #1347: the base auto-property whose synthesized accessor is invoked non-virtually, or <see langword="null"/> for an ordinary method/computed-accessor call.</param>
     /// <param name="isSetterAccessor">Issue #1347: when <paramref name="property"/> is set, whether the setter accessor (rather than the getter) is invoked.</param>
     public BoundBaseClassCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         StructSymbol baseClass,
         FunctionSymbol method,
         ImmutableArray<BoundExpression> arguments,
-        TypeSymbol returnTypeOverride = null,
-        PropertySymbol property = null,
+        TypeSymbol? returnTypeOverride = null,
+        PropertySymbol? property = null,
         bool isSetterAccessor = false)
         : base(syntax)
     {
@@ -55,7 +57,9 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.BaseClassCallExpression;
 
     /// <inheritdoc/>
-    public override TypeSymbol Type => returnTypeOverride ?? Method?.Type;
+    // The constructor requires returnTypeOverride whenever method is null (a
+    // base auto-property accessor, issue #1347), so at least one is present.
+    public override TypeSymbol Type => returnTypeOverride ?? Method!.Type;
 
     /// <summary>Gets the implicit <c>this</c> receiver — a <see cref="BoundVariableExpression"/> reading the enclosing method's first parameter.</summary>
     public BoundExpression Receiver { get; }
@@ -74,7 +78,7 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
     /// property's emitted get_/set_ MethodDef (or, in the interpreter, its
     /// synthesized backing field).
     /// </summary>
-    public PropertySymbol Property { get; }
+    public PropertySymbol? Property { get; }
 
     /// <summary>Gets a value indicating whether <see cref="Property"/>'s setter accessor (rather than its getter) is invoked (issue #1347).</summary>
     public bool IsSetterAccessor { get; }

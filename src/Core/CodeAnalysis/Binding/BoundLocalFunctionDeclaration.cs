@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -23,7 +25,7 @@ public sealed class BoundLocalFunctionDeclaration : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="literal">The bound function literal carrying the generic function's parameters, return type, and body.</param>
-    public BoundLocalFunctionDeclaration(SyntaxNode syntax, BoundFunctionLiteralExpression literal)
+    public BoundLocalFunctionDeclaration(SyntaxNode? syntax, BoundFunctionLiteralExpression literal)
         : base(syntax)
     {
         Literal = literal;

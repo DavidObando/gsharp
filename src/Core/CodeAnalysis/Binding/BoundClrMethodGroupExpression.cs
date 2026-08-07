@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 using System.Reflection;
@@ -39,7 +41,7 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
     /// <param name="declaringType">The CLR type declaring the candidates.</param>
     /// <param name="methodName">The method-group name.</param>
     /// <param name="candidates">All name-matching overloads.</param>
-    public BoundClrMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, Type declaringType, string methodName, ImmutableArray<MethodInfo> candidates)
+    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression receiver, Type declaringType, string methodName, ImmutableArray<MethodInfo> candidates)
         : base(syntax)
     {
         Receiver = receiver;
@@ -57,7 +59,7 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static group.</param>
     /// <param name="resolvedMethod">The selected overload.</param>
     /// <param name="delegateType">The target delegate type symbol.</param>
-    public BoundClrMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, MethodInfo resolvedMethod, TypeSymbol delegateType)
+    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression receiver, MethodInfo resolvedMethod, TypeSymbol delegateType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -70,17 +72,17 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
 
     public BoundExpression Receiver { get; }
 
-    public Type DeclaringType { get; }
+    public Type? DeclaringType { get; }
 
     public string MethodName { get; }
 
     public ImmutableArray<MethodInfo> Candidates { get; }
 
     /// <summary>Gets the overload selected for the target delegate, or <see langword="null"/> while unresolved.</summary>
-    public MethodInfo ResolvedMethod { get; }
+    public MethodInfo? ResolvedMethod { get; }
 
     /// <summary>Gets the target delegate type symbol once resolved, or <see langword="null"/> while unresolved.</summary>
-    public TypeSymbol DelegateType { get; }
+    public TypeSymbol? DelegateType { get; }
 
     public override TypeSymbol Type => DelegateType ?? TypeSymbol.Error;
 

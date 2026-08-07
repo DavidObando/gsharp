@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -19,7 +21,7 @@ public sealed class BoundForInfiniteStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForInfiniteStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundStatement body,
         BoundLabel breakLabel,
         BoundLabel continueLabel)

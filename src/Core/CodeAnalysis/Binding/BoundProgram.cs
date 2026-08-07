@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -193,7 +195,7 @@ public sealed class BoundProgram
     /// Gets the entry-point package name. Back-compat shim equivalent to
     /// <c>EntryPointPackage.Name</c>.
     /// </summary>
-    public string PackageName => EntryPointPackage?.Name;
+    public string? PackageName => EntryPointPackage?.Name;
 
     /// <summary>
     /// Gets the diagnostics.

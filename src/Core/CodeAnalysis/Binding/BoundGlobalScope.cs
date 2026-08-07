@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -314,7 +316,7 @@ public sealed class BoundGlobalScope
     /// freshly-derived scope chain rehydrates prior-submission metadata
     /// lookup when binding member bodies.
     /// </summary>
-    public SubmissionImports SubmissionImports { get; internal set; }
+    public SubmissionImports? SubmissionImports { get; internal set; }
 
     /// <summary>
     /// Gets or sets every anonymous-class type (issue #2224) synthesized

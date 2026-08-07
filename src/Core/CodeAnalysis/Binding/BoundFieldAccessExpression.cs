@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -15,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAccessExpression : BoundExpression
 {
-    public BoundFieldAccessExpression(SyntaxNode syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field)
+    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field)
         : this(syntax, receiver, structType, field, narrowedType: null)
     {
     }
@@ -32,7 +34,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
     /// <param name="field">The interface static field to read.</param>
     /// <param name="interfaceType">The owning interface (definition or constructed).</param>
-    public BoundFieldAccessExpression(SyntaxNode syntax, FieldSymbol field, InterfaceSymbol interfaceType)
+    public BoundFieldAccessExpression(SyntaxNode? syntax, FieldSymbol field, InterfaceSymbol interfaceType)
         : base(syntax)
     {
         Receiver = null;
@@ -55,7 +57,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <param name="structType">The declaring struct/class type.</param>
     /// <param name="field">The field to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="field"/>'s declared type.</param>
-    public BoundFieldAccessExpression(SyntaxNode syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field, TypeSymbol narrowedType)
+    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -64,9 +66,9 @@ public sealed class BoundFieldAccessExpression : BoundExpression
         NarrowedType = narrowedType;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
-    public StructSymbol StructType { get; }
+    public StructSymbol? StructType { get; }
 
     /// <summary>
     /// Gets the owning interface for an interface static field read (ADR-0089 /
@@ -75,7 +77,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// <c>TypeSpec</c>-parented MemberRef; the interpreter keys static storage by
     /// this symbol so each closed construction has independent storage.
     /// </summary>
-    public InterfaceSymbol InterfaceType { get; }
+    public InterfaceSymbol? InterfaceType { get; }
 
     public FieldSymbol Field { get; }
 
@@ -86,7 +88,7 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// the narrowed (non-nullable) view; the emitter always uses
     /// <see cref="Field"/> for the actual field handle.
     /// </summary>
-    public TypeSymbol NarrowedType { get; }
+    public TypeSymbol? NarrowedType { get; }
 
     public override TypeSymbol Type => NarrowedType ?? Field.Type;
 

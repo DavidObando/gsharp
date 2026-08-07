@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -15,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundPropertyAccessExpression : BoundExpression
 {
-    public BoundPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property)
         : this(syntax, receiver, structType, property, narrowedType: null)
     {
     }
@@ -33,7 +35,7 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// <param name="structType">The declaring struct/class type.</param>
     /// <param name="property">The property to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="property"/>'s declared type.</param>
-    public BoundPropertyAccessExpression(SyntaxNode syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property, TypeSymbol narrowedType)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -55,7 +57,7 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// type-compatibility checks see the narrowed view; the emitter always uses
     /// <see cref="Property"/> for the getter call and inserts the narrowing cast.
     /// </summary>
-    public TypeSymbol NarrowedType { get; }
+    public TypeSymbol? NarrowedType { get; }
 
     public override TypeSymbol Type => NarrowedType ?? Property.Type;
 

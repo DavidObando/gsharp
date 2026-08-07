@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -19,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundIndirectCallExpression : BoundExpression
 {
     public BoundIndirectCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression target,
         FunctionTypeSymbol functionType,
         ImmutableArray<BoundExpression> arguments,

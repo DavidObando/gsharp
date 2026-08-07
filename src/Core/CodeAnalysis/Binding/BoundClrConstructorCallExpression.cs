@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -20,7 +22,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrConstructorCallExpression : BoundExpression
 {
-    public BoundClrConstructorCallExpression(SyntaxNode syntax, System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType, ImmutableArray<RefKind> argumentRefKinds = default)
+    public BoundClrConstructorCallExpression(SyntaxNode? syntax, System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType, ImmutableArray<RefKind> argumentRefKinds = default)
         : base(syntax)
     {
         ClrType = clrType;

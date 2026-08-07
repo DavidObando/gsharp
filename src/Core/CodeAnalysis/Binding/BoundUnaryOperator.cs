@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -54,7 +56,7 @@ public sealed record BoundUnaryOperator
     /// <param name="syntaxKind">The syntax kind.</param>
     /// <param name="operandType">The type symbol.</param>
     /// <returns>A bound unary operator.</returns>
-    public static BoundUnaryOperator Bind(SyntaxKind syntaxKind, TypeSymbol operandType)
+    public static BoundUnaryOperator? Bind(SyntaxKind syntaxKind, TypeSymbol operandType)
     {
         // Phase 3.C.3 / ADR-0001: postfix `!!` is dynamically typed by the
         // operand: it returns the underlying type when applied to T?, and is

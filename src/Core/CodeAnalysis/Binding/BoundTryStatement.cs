@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 
@@ -17,7 +19,7 @@ public sealed class BoundTryStatement : BoundStatement
     /// <param name="tryBlock">The protected block.</param>
     /// <param name="catchClauses">The bound catch clauses (possibly empty).</param>
     /// <param name="finallyBlock">The optional finally block.</param>
-    public BoundTryStatement(SyntaxNode syntax, BoundStatement tryBlock, ImmutableArray<BoundCatchClause> catchClauses, BoundStatement finallyBlock)
+    public BoundTryStatement(SyntaxNode? syntax, BoundStatement tryBlock, ImmutableArray<BoundCatchClause> catchClauses, BoundStatement finallyBlock)
         : base(syntax)
     {
         TryBlock = tryBlock;

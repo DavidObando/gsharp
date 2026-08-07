@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -53,15 +55,15 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// instance calls.
     /// </param>
     public BoundImportedInstanceCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         MethodInfo method,
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default,
         ImmutableArray<TypeSymbol> typeArgumentSymbols = default,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null,
         bool isNonVirtualBaseCall = false)
         : base(syntax)
     {
@@ -120,7 +122,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// value-type and reference-type substitutions. <c>null</c> for an ordinary
     /// imported instance call.
     /// </summary>
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
     /// <summary>
     /// Gets the (possibly constructed-generic) interface type that parents the
@@ -128,7 +130,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// is set (issue #943) — e.g. <c>System.IComparable[T]</c>. <c>null</c> for an
     /// ordinary imported instance call.
     /// </summary>
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
     /// <summary>Gets a value indicating whether this call dispatches through a type-parameter interface constraint (issue #943).</summary>
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;

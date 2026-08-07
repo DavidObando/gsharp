@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -15,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundTupleElementAccessExpression : BoundExpression
 {
-    public BoundTupleElementAccessExpression(SyntaxNode syntax, BoundExpression receiver, TupleTypeSymbol tupleType, int index)
+    public BoundTupleElementAccessExpression(SyntaxNode? syntax, BoundExpression receiver, TupleTypeSymbol tupleType, int index)
         : base(syntax)
     {
         Receiver = receiver;

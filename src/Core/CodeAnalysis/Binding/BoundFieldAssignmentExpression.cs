@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -18,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAssignmentExpression : BoundExpression
 {
-    public BoundFieldAssignmentExpression(SyntaxNode syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value, TypeSymbol resultType = null)
+    public BoundFieldAssignmentExpression(SyntaxNode? syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value, TypeSymbol? resultType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -40,7 +42,7 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// <param name="field">The interface static field to write.</param>
     /// <param name="interfaceType">The owning interface (definition or constructed).</param>
     /// <param name="value">The value to assign.</param>
-    public BoundFieldAssignmentExpression(SyntaxNode syntax, FieldSymbol field, InterfaceSymbol interfaceType, BoundExpression value)
+    public BoundFieldAssignmentExpression(SyntaxNode? syntax, FieldSymbol field, InterfaceSymbol interfaceType, BoundExpression value)
         : base(syntax)
     {
         Receiver = null;
@@ -51,12 +53,12 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     }
 
     private BoundFieldAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiverExpression,
         StructSymbol structType,
         FieldSymbol field,
         BoundExpression value,
-        TypeSymbol resultType)
+        TypeSymbol? resultType)
         : base(syntax)
     {
         ReceiverExpression = receiverExpression;
@@ -66,7 +68,7 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
         ResultType = resultType;
     }
 
-    public VariableSymbol Receiver { get; }
+    public VariableSymbol? Receiver { get; }
 
     /// <summary>
     /// Gets the expression-based receiver, or <c>null</c> when the simple
@@ -74,9 +76,9 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// emitter evaluates this expression to produce the instance reference
     /// instead of loading <see cref="Receiver"/>.
     /// </summary>
-    public BoundExpression ReceiverExpression { get; }
+    public BoundExpression? ReceiverExpression { get; }
 
-    public StructSymbol StructType { get; }
+    public StructSymbol? StructType { get; }
 
     /// <summary>
     /// Gets the owning interface for an interface static field write (ADR-0089 /
@@ -85,13 +87,13 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// <c>TypeSpec</c>-parented MemberRef; the interpreter keys static storage by
     /// this symbol so each closed construction has independent storage.
     /// </summary>
-    public InterfaceSymbol InterfaceType { get; }
+    public InterfaceSymbol? InterfaceType { get; }
 
     public FieldSymbol Field { get; }
 
     public BoundExpression Value { get; }
 
-    public TypeSymbol ResultType { get; }
+    public TypeSymbol? ResultType { get; }
 
     public override TypeSymbol Type => ResultType ?? Field.Type;
 
@@ -110,12 +112,12 @@ public sealed class BoundFieldAssignmentExpression : BoundExpression
     /// <param name="resultType">The substituted assignment result type, or null.</param>
     /// <returns>A new <see cref="BoundFieldAssignmentExpression"/> with an expression receiver.</returns>
     public static BoundFieldAssignmentExpression WithExpressionReceiver(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiverExpression,
         StructSymbol structType,
         FieldSymbol field,
         BoundExpression value,
-        TypeSymbol resultType = null)
+        TypeSymbol? resultType = null)
     {
         return new BoundFieldAssignmentExpression(syntax, receiverExpression, structType, field, value, resultType);
     }

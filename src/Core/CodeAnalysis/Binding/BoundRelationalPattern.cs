@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -15,7 +17,7 @@ public sealed class BoundRelationalPattern : BoundPattern
     /// <param name="type">The discriminant type.</param>
     /// <param name="op">The operator.</param>
     /// <param name="value">The right-hand value.</param>
-    public BoundRelationalPattern(SyntaxNode syntax, TypeSymbol type, BoundBinaryOperator op, BoundExpression value)
+    public BoundRelationalPattern(SyntaxNode? syntax, TypeSymbol type, BoundBinaryOperator op, BoundExpression value)
         : base(syntax, type)
     {
         Op = op;

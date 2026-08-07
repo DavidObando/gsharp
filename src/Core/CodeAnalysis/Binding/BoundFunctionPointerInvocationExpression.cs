@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -22,7 +24,7 @@ public sealed class BoundFunctionPointerInvocationExpression : BoundExpression
     /// <param name="arguments">The converted call arguments.</param>
     /// <param name="functionPointerType">The function-pointer type being invoked.</param>
     public BoundFunctionPointerInvocationExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression pointer,
         ImmutableArray<BoundExpression> arguments,
         FunctionPointerTypeSymbol functionPointerType)

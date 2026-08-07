@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -36,36 +38,36 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 public sealed class BoundClrBinaryOperatorExpression : BoundExpression
 {
-    public BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, TypeSymbol resultType)
+    public BoundClrBinaryOperatorExpression(SyntaxNode? syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo method, TypeSymbol resultType)
         : this(syntax, operatorKind, left, right, method, null, null, resultType)
     {
     }
 
-    public BoundClrBinaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, Symbols.FunctionSymbol function, TypeSymbol resultType)
+    public BoundClrBinaryOperatorExpression(SyntaxNode? syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, Symbols.FunctionSymbol function, TypeSymbol resultType)
         : this(syntax, operatorKind, left, right, function, function?.StaticOwnerType as StructSymbol, resultType)
     {
     }
 
     public BoundClrBinaryOperatorExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         SyntaxKind operatorKind,
         BoundExpression left,
         BoundExpression right,
         Symbols.FunctionSymbol function,
-        StructSymbol functionOwnerType,
+        StructSymbol? functionOwnerType,
         TypeSymbol resultType)
         : this(syntax, operatorKind, left, right, null, function, functionOwnerType, resultType)
     {
     }
 
     private BoundClrBinaryOperatorExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         SyntaxKind operatorKind,
         BoundExpression left,
         BoundExpression right,
-        MethodInfo method,
-        Symbols.FunctionSymbol function,
-        StructSymbol functionOwnerType,
+        MethodInfo? method,
+        Symbols.FunctionSymbol? function,
+        StructSymbol? functionOwnerType,
         TypeSymbol resultType)
         : base(syntax)
     {
@@ -85,7 +87,7 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
     public BoundExpression Right { get; }
 
     /// <summary>Gets the resolved imported-CLR-type operator method, or <see langword="null"/> when <see cref="Function"/> is used instead.</summary>
-    public MethodInfo Method { get; }
+    public MethodInfo? Method { get; }
 
     /// <summary>
     /// Gets the resolved same-compilation struct operator function (issue
@@ -93,7 +95,7 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
     /// <see cref="Method"/>. <see langword="null"/> for the ordinary
     /// (imported-CLR-type or non-nullable Stream D) shape.
     /// </summary>
-    public Symbols.FunctionSymbol Function { get; }
+    public Symbols.FunctionSymbol? Function { get; }
 
     /// <summary>
     /// Gets the same-compilation operator's declaring type in the call-site
@@ -101,7 +103,7 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
     /// operators. The emitter uses this to parent calls on a closed generic
     /// TypeSpec rather than the open declaring TypeDef.
     /// </summary>
-    public StructSymbol FunctionOwnerType { get; }
+    public StructSymbol? FunctionOwnerType { get; }
 
     public override TypeSymbol Type { get; }
 

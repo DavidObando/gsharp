@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -45,7 +47,7 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForRangeStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol keyVariable,
         VariableSymbol valueVariable,
         BoundExpression collection,

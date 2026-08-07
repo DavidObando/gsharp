@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.IO;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -21,7 +23,7 @@ public abstract class BoundNode
     /// source counterpart (in which case the emitter will anchor a hidden
     /// <c>0xfeefee</c> sequence point on it).
     /// </param>
-    protected BoundNode(SyntaxNode syntax)
+    protected BoundNode(SyntaxNode? syntax)
     {
         Syntax = syntax;
     }
@@ -35,7 +37,7 @@ public abstract class BoundNode
     /// Gets the originating <see cref="SyntaxNode"/>, or <c>null</c> when this node was
     /// synthesised by a lowering pass and has no direct source counterpart.
     /// </summary>
-    public SyntaxNode Syntax { get; }
+    public SyntaxNode? Syntax { get; }
 
     /// <inheritdoc/>
     public override string ToString()

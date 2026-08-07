@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -24,7 +26,7 @@ public sealed class BoundSpillSequenceExpression : BoundExpression
     /// <param name="sideEffects">Statements that must run before the value is observed.</param>
     /// <param name="value">The final value expression.</param>
     public BoundSpillSequenceExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         ImmutableArray<LocalVariableSymbol> locals,
         ImmutableArray<BoundStatement> sideEffects,
         BoundExpression value)

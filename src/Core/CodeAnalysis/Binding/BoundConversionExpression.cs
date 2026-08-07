@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -25,7 +27,7 @@ public sealed class BoundConversionExpression : BoundExpression
     /// exists so the emitter is ready when the binder begins distinguishing checked vs.
     /// unchecked conversions.
     /// </param>
-    public BoundConversionExpression(SyntaxNode syntax, TypeSymbol type, BoundExpression expression, bool isChecked = false)
+    public BoundConversionExpression(SyntaxNode? syntax, TypeSymbol type, BoundExpression expression, bool isChecked = false)
         : base(syntax)
     {
         Type = type;

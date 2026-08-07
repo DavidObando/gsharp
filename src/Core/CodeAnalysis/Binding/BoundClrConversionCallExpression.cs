@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Reflection;
@@ -20,7 +22,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrConversionCallExpression : BoundExpression
 {
-    public BoundClrConversionCallExpression(SyntaxNode syntax, BoundExpression source, MethodInfo method, TypeSymbol resultType)
+    public BoundClrConversionCallExpression(SyntaxNode? syntax, BoundExpression source, MethodInfo method, TypeSymbol resultType)
         : base(syntax)
     {
         Source = source;

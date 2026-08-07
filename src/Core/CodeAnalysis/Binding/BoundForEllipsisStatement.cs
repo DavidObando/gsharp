@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -23,7 +25,7 @@ public sealed class BoundForEllipsisStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForEllipsisStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol variable,
         BoundExpression lowerBound,
         BoundExpression upperBound,

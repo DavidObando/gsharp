@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -13,7 +15,7 @@ public abstract class BoundPattern : BoundNode
     /// <summary>Initializes a new instance of the <see cref="BoundPattern"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
-    protected BoundPattern(SyntaxNode syntax, TypeSymbol type)
+    protected BoundPattern(SyntaxNode? syntax, TypeSymbol type)
         : base(syntax)
     {
         Type = type;

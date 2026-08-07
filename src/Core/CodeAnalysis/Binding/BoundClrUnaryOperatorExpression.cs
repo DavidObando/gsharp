@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -19,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrUnaryOperatorExpression : BoundExpression
 {
-    public BoundClrUnaryOperatorExpression(SyntaxNode syntax, SyntaxKind operatorKind, BoundExpression operand, MethodInfo method, TypeSymbol resultType)
+    public BoundClrUnaryOperatorExpression(SyntaxNode? syntax, SyntaxKind operatorKind, BoundExpression operand, MethodInfo method, TypeSymbol resultType)
         : base(syntax)
     {
         OperatorKind = operatorKind;

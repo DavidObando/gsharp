@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -25,7 +27,7 @@ public sealed class BoundUnaryExpression : BoundExpression
     /// `checked { }` statement puts its arithmetic in this context; the default (no
     /// `checked` context) is unchecked, matching the C# project default.
     /// </param>
-    public BoundUnaryExpression(SyntaxNode syntax, BoundUnaryOperator op, BoundExpression operand, bool isChecked = false)
+    public BoundUnaryExpression(SyntaxNode? syntax, BoundUnaryOperator op, BoundExpression operand, bool isChecked = false)
         : base(syntax)
     {
         Op = op;

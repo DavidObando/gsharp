@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -17,7 +19,7 @@ public sealed class BoundBlockExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="statements">The synthetic prefix statements.</param>
     /// <param name="expression">The resulting expression.</param>
-    public BoundBlockExpression(SyntaxNode syntax, ImmutableArray<BoundStatement> statements, BoundExpression expression)
+    public BoundBlockExpression(SyntaxNode? syntax, ImmutableArray<BoundStatement> statements, BoundExpression expression)
         : base(syntax)
     {
         Statements = statements;

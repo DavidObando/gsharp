@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -19,7 +21,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
-    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments)
+    public BoundCallExpression(SyntaxNode? syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments)
         : this(syntax, function, arguments, returnType: null)
     {
     }
@@ -29,7 +31,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// <param name="function">The function symbol.</param>
     /// <param name="arguments">The provided arguments.</param>
     /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
-    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType)
+    public BoundCallExpression(SyntaxNode? syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnType)
         : this(syntax, function, arguments, returnType, isConditionalElided: false)
     {
     }
@@ -47,7 +49,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// <param name="arguments">The provided arguments; empty when elided.</param>
     /// <param name="returnType">The (already-substituted) call-site return type, or <c>null</c> to use <c>function.Type</c>.</param>
     /// <param name="isConditionalElided">When <c>true</c>, the call has been elided per <c>[Conditional]</c> rules.</param>
-    public BoundCallExpression(SyntaxNode syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, bool isConditionalElided)
+    public BoundCallExpression(SyntaxNode? syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnType, bool isConditionalElided)
         : base(syntax)
     {
         Function = function;
@@ -70,7 +72,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// static-property paths). <see langword="null"/> for ordinary calls and for
     /// non-generic static receivers (which use the bare accessor <c>MethodDef</c>).
     /// </summary>
-    public StructSymbol StaticGenericOwnerType { get; internal set; }
+    public StructSymbol? StaticGenericOwnerType { get; internal set; }
 
     /// <summary>
     /// Gets, for issue #1433, the constructed generic interface when a static
@@ -81,7 +83,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// interface receivers, and struct/class receivers (which use
     /// <see cref="StaticGenericOwnerType"/> or a bare <c>MethodDef</c>).
     /// </summary>
-    public InterfaceSymbol StaticGenericInterfaceOwnerType { get; internal set; }
+    public InterfaceSymbol? StaticGenericInterfaceOwnerType { get; internal set; }
 
     /// <summary>
     /// Gets the function symbol.
@@ -94,7 +96,7 @@ public sealed class BoundCallExpression : BoundExpression
     public ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>Gets the call-site (post-substitution) return type for generic-function calls, or <c>null</c> for non-generic calls. Phase 4.1 / ADR-0020.</summary>
-    public TypeSymbol ReturnType { get; }
+    public TypeSymbol? ReturnType { get; }
 
     /// <summary>
     /// Gets the call-site (explicit or inferred) method type arguments for a

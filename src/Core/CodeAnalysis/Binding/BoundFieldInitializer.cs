@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 
 #pragma warning disable CS1591
@@ -18,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed record BoundFieldInitializer
 {
-    public BoundFieldInitializer(FieldSymbol field, BoundExpression value, StructSymbol fieldDeclaringType = null)
+    public BoundFieldInitializer(FieldSymbol field, BoundExpression value, StructSymbol? fieldDeclaringType = null)
     {
         Field = field;
         Value = value;
@@ -40,19 +42,22 @@ public sealed record BoundFieldInitializer
     }
 
     /// <summary>Gets the targeted field, or <see langword="null"/> when this initializer targets a property.</summary>
-    public FieldSymbol Field { get; }
+    public FieldSymbol? Field { get; }
 
     /// <summary>Gets the inherited type that declares <see cref="Field"/>, or <see langword="null"/> for a direct field or property.</summary>
-    public StructSymbol FieldDeclaringType { get; }
+    public StructSymbol? FieldDeclaringType { get; }
 
     /// <summary>Gets the targeted property, or <see langword="null"/> when this initializer targets a field.</summary>
-    public PropertySymbol Property { get; }
+    public PropertySymbol? Property { get; }
 
     public BoundExpression Value { get; }
 
     /// <summary>Gets the name of the targeted member (field or property).</summary>
-    public string MemberName => Field != null ? Field.Name : Property.Name;
+    // Field and Property are an either-or pair: every constructor sets exactly
+    // one, so a null Field implies a non-null Property.
+    public string MemberName => Field != null ? Field.Name : Property!.Name;
 
     /// <summary>Gets the declared type of the targeted member (field or property).</summary>
-    public TypeSymbol MemberType => Field != null ? Field.Type : Property.Type;
+    // Either-or, as for MemberName above.
+    public TypeSymbol MemberType => Field != null ? Field.Type : Property!.Type;
 }

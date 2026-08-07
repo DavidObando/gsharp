@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -16,7 +18,7 @@ public sealed class BoundYieldStatement : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression whose value is yielded.</param>
-    public BoundYieldStatement(SyntaxNode syntax, BoundExpression expression)
+    public BoundYieldStatement(SyntaxNode? syntax, BoundExpression expression)
         : base(syntax)
     {
         Expression = expression;

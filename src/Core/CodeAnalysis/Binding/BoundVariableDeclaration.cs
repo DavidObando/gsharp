@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -25,7 +27,7 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// and will instead inline the value at every read site, emitting a
     /// <c>LocalConstant</c> row in the Portable PDB.
     /// </param>
-    public BoundVariableDeclaration(SyntaxNode syntax, VariableSymbol variable, BoundExpression initializer, object constantValue = null)
+    public BoundVariableDeclaration(SyntaxNode? syntax, VariableSymbol variable, BoundExpression initializer, object? constantValue = null)
         : base(syntax)
     {
         Variable = variable;
@@ -54,5 +56,5 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// no IL local slot is allocated and the value is inlined at every read
     /// site, with a <c>LocalConstant</c> row emitted in the Portable PDB.
     /// </summary>
-    public object ConstantValue { get; }
+    public object? ConstantValue { get; }
 }

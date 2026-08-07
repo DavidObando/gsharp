@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
@@ -25,12 +27,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 public sealed class BoundConstructorCallExpression : BoundExpression
 {
-    public BoundConstructorCallExpression(SyntaxNode syntax, StructSymbol structType, ImmutableArray<BoundExpression> arguments)
+    public BoundConstructorCallExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundExpression> arguments)
         : this(syntax, structType, arguments, selectedConstructor: null)
     {
     }
 
-    public BoundConstructorCallExpression(SyntaxNode syntax, StructSymbol structType, ImmutableArray<BoundExpression> arguments, ConstructorSymbol selectedConstructor)
+    public BoundConstructorCallExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundExpression> arguments, ConstructorSymbol? selectedConstructor)
         : base(syntax)
     {
         StructType = structType;
@@ -43,7 +45,7 @@ public sealed class BoundConstructorCallExpression : BoundExpression
     public ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>Gets the chosen explicit <c>init(...)</c> overload, per ADR-0063 §9, or <see langword="null"/> when not applicable.</summary>
-    public ConstructorSymbol SelectedConstructor { get; }
+    public ConstructorSymbol? SelectedConstructor { get; }
 
     public override TypeSymbol Type => StructType;
 

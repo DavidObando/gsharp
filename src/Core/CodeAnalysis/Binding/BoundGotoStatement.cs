@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -16,7 +18,7 @@ public sealed class BoundGotoStatement : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="label">The label.</param>
-    public BoundGotoStatement(SyntaxNode syntax, BoundLabel label)
+    public BoundGotoStatement(SyntaxNode? syntax, BoundLabel label)
         : base(syntax)
     {
         Label = label;

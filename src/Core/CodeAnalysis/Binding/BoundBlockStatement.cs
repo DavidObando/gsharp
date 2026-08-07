@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 
@@ -17,15 +19,15 @@ public sealed class BoundBlockStatement : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="statements">The immutable array of bound statements.</param>
-    public BoundBlockStatement(SyntaxNode syntax, ImmutableArray<BoundStatement> statements)
+    public BoundBlockStatement(SyntaxNode? syntax, ImmutableArray<BoundStatement> statements)
         : this(syntax, statements, preEmitAnalysisBody: null)
     {
     }
 
     internal BoundBlockStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         ImmutableArray<BoundStatement> statements,
-        BoundBlockStatement preEmitAnalysisBody)
+        BoundBlockStatement? preEmitAnalysisBody)
         : base(syntax)
     {
         Statements = statements;
@@ -43,5 +45,5 @@ public sealed class BoundBlockStatement : BoundStatement
     /// <summary>
     /// Gets the pre-emit-rewrite body used by control-flow analyses.
     /// </summary>
-    internal BoundBlockStatement PreEmitAnalysisBody { get; }
+    internal BoundBlockStatement? PreEmitAnalysisBody { get; }
 }

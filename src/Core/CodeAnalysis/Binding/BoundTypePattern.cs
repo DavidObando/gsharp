@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -15,7 +17,7 @@ public sealed class BoundTypePattern : BoundPattern
     /// <param name="type">The discriminant type.</param>
     /// <param name="targetType">The target type.</param>
     /// <param name="variable">The introduced variable.</param>
-    public BoundTypePattern(SyntaxNode syntax, TypeSymbol type, TypeSymbol targetType, LocalVariableSymbol variable)
+    public BoundTypePattern(SyntaxNode? syntax, TypeSymbol type, TypeSymbol targetType, LocalVariableSymbol variable)
         : base(syntax, type)
     {
         TargetType = targetType;

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
 
@@ -16,7 +18,7 @@ public sealed class BoundPatternSwitchStatement : BoundStatement
     /// <param name="arms">The switch arms.</param>
     /// <param name="isExhaustive">Whether closed-type analysis proved that the arms cover every value.</param>
     public BoundPatternSwitchStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression discriminant,
         ImmutableArray<BoundPatternSwitchArm> arms,
         bool isExhaustive)

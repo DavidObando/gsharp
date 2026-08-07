@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -16,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundPropertyAssignmentExpression : BoundExpression
 {
     public BoundPropertyAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         StructSymbol structType,
         PropertySymbol property,

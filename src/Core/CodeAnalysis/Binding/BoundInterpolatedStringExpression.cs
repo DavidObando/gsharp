@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -24,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// current culture), and</item>
 /// <item>the IL emitter lowers it (issue #368) to the C# 10
 /// <c>System.Runtime.CompilerServices.DefaultInterpolatedStringHandler</c>
-/// pattern: construct the handler, call <c>AppendLiteral</c>/
+/// pattern: construct the? handler, call <c>AppendLiteral</c>/
 /// <c>AppendFormatted&lt;T&gt;</c> in order, then <c>ToStringAndClear()</c>.</item>
 /// </list>
 /// Routing lowering late (rather than the legacy eager binder <c>+</c>-chain)
@@ -35,7 +37,7 @@ public sealed class BoundInterpolatedStringExpression : BoundExpression
     /// <summary>Initializes a new instance of the <see cref="BoundInterpolatedStringExpression"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="parts">The ordered literal/hole parts.</param>
-    public BoundInterpolatedStringExpression(SyntaxNode syntax, ImmutableArray<BoundInterpolatedStringPart> parts)
+    public BoundInterpolatedStringExpression(SyntaxNode? syntax, ImmutableArray<BoundInterpolatedStringPart> parts)
         : this(syntax, parts, handler: null)
     {
     }
@@ -48,7 +50,7 @@ public sealed class BoundInterpolatedStringExpression : BoundExpression
     /// interpolation is converted to, or <see langword="null"/> for the default
     /// <c>string</c> result.
     /// </param>
-    public BoundInterpolatedStringExpression(SyntaxNode syntax, ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo handler)
+    public BoundInterpolatedStringExpression(SyntaxNode? syntax, ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo? handler)
         : base(syntax)
     {
         Parts = parts;
@@ -69,12 +71,12 @@ public sealed class BoundInterpolatedStringExpression : BoundExpression
     /// or <see langword="null"/> when this interpolation produces a plain
     /// <c>string</c>.
     /// </summary>
-    public InterpolatedStringHandlerInfo Handler { get; }
+    public InterpolatedStringHandlerInfo? Handler { get; }
 
     /// <summary>Returns a copy of this node with a different handler target and parts.</summary>
     /// <param name="parts">The replacement parts.</param>
     /// <param name="handler">The replacement handler target (may be <see langword="null"/>).</param>
     /// <returns>The updated node.</returns>
-    public BoundInterpolatedStringExpression Update(ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo handler)
+    public BoundInterpolatedStringExpression Update(ImmutableArray<BoundInterpolatedStringPart> parts, InterpolatedStringHandlerInfo? handler)
         => new(Syntax, parts, handler);
 }

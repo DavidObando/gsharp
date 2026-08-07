@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -24,7 +26,7 @@ public sealed class BoundSlicePattern : BoundPattern
     /// for a pure discard slice (<c>..</c>) with no sub-pattern.</param>
     /// <param name="pattern">The optional sub-pattern matched against the middle
     /// slice value (typed <c>[]T</c>), or <c>null</c>.</param>
-    public BoundSlicePattern(SyntaxNode syntax, TypeSymbol type, TypeSymbol elementType, LocalVariableSymbol variable, BoundPattern pattern)
+    public BoundSlicePattern(SyntaxNode? syntax, TypeSymbol type, TypeSymbol elementType, LocalVariableSymbol variable, BoundPattern pattern)
         : base(syntax, type)
     {
         ElementType = elementType;

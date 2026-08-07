@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -19,7 +21,7 @@ public sealed class BoundMakeChannelExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="channelType">The constructed channel type.</param>
     /// <param name="capacity">The optional bounded-channel capacity expression.</param>
-    public BoundMakeChannelExpression(SyntaxNode syntax, ChannelTypeSymbol channelType, BoundExpression capacity)
+    public BoundMakeChannelExpression(SyntaxNode? syntax, ChannelTypeSymbol channelType, BoundExpression capacity)
         : base(syntax)
     {
         ChannelType = channelType;

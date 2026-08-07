@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -21,7 +23,7 @@ public sealed class BoundLabel
     /// the lowering pipeline, async-resume points, etc.). Used by the Portable
     /// PDB emitter to anchor branch-target sequence points per ADR-0027 §7.7a.
     /// </param>
-    public BoundLabel(string name, SyntaxNode declaringSyntax = null)
+    public BoundLabel(string name, SyntaxNode? declaringSyntax = null)
     {
         Name = name;
         DeclaringSyntax = declaringSyntax;
@@ -36,7 +38,7 @@ public sealed class BoundLabel
     /// Gets the originating label-declaration syntax for this label, or
     /// <see langword="null"/> when the label is compiler-synthesised.
     /// </summary>
-    public SyntaxNode DeclaringSyntax { get; }
+    public SyntaxNode? DeclaringSyntax { get; }
 
     /// <inheritdoc/>
     public override string ToString() => Name;

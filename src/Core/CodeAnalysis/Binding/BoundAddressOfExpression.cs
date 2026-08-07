@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -18,7 +20,7 @@ public sealed class BoundAddressOfExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The lvalue operand whose address is being taken.</param>
-    public BoundAddressOfExpression(SyntaxNode syntax, BoundExpression operand)
+    public BoundAddressOfExpression(SyntaxNode? syntax, BoundExpression operand)
         : this(syntax, operand, unmanaged: false)
     {
     }
@@ -35,7 +37,7 @@ public sealed class BoundAddressOfExpression : BoundExpression
     /// <see langword="false"/> (the default) the result is a managed by-ref
     /// pointer (<see cref="ByRefTypeSymbol"/>, <c>T&amp;</c>).
     /// </param>
-    public BoundAddressOfExpression(SyntaxNode syntax, BoundExpression operand, bool unmanaged)
+    public BoundAddressOfExpression(SyntaxNode? syntax, BoundExpression operand, bool unmanaged)
         : base(syntax)
     {
         Operand = operand;

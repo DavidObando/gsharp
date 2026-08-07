@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -16,7 +18,7 @@ public sealed class BoundReturnStatement : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression to return.</param>
-    public BoundReturnStatement(SyntaxNode syntax, BoundExpression expression)
+    public BoundReturnStatement(SyntaxNode? syntax, BoundExpression expression)
         : this(syntax, expression, isRef: false)
     {
     }
@@ -30,7 +32,7 @@ public sealed class BoundReturnStatement : BoundStatement
     /// this is a <see cref="BoundAddressOfExpression"/> wrapping the lvalue being returned by reference.</param>
     /// <param name="isRef">When <c>true</c>, the statement returns the value by managed pointer
     /// (the enclosing function must have <c>ReturnRefKind == Ref</c>).</param>
-    public BoundReturnStatement(SyntaxNode syntax, BoundExpression expression, bool isRef)
+    public BoundReturnStatement(SyntaxNode? syntax, BoundExpression expression, bool isRef)
         : base(syntax)
     {
         Expression = expression;

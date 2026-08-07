@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -19,7 +21,7 @@ public sealed class BoundIfStatement : BoundStatement
     /// <param name="thenStatement">The then statement.</param>
     /// <param name="elseStatement">The else statement.</param>
     public BoundIfStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression condition,
         BoundStatement thenStatement,
         BoundStatement elseStatement)

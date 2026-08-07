@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -43,7 +45,11 @@ public sealed class BoundAttribute : BoundNode
     /// <summary>
     /// Gets the originating annotation syntax.
     /// </summary>
-    public new AnnotationSyntax Syntax => (AnnotationSyntax)base.Syntax;
+    // `base.Syntax` is nullable because a lowering pass can synthesise a bound
+    // node with no source counterpart, but a BoundAttribute is only ever built
+    // by the binder from a real annotation: the constructor's `syntax`
+    // parameter is a non-nullable AnnotationSyntax.
+    public new AnnotationSyntax Syntax => (AnnotationSyntax)base.Syntax!;
 
     /// <summary>
     /// Gets the resolved attribute type.
