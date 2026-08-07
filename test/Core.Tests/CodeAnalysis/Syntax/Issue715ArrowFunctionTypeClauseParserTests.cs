@@ -278,8 +278,12 @@ public class Issue715ArrowFunctionTypeClauseParserTests
         var tree = SyntaxTree.Parse(source);
 
         var warnings = tree.Diagnostics.Where(d => d.Id == "GS0303").ToList();
-        Assert.Single(warnings);
-        Assert.All(warnings, w => Assert.False(w.IsError));
+        var warning = Assert.Single(warnings);
+        Assert.False(warning.IsError);
+        Assert.Equal("func", warning.Location.Text.ToString(warning.Location.Span));
+        Assert.Equal(
+            "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122).",
+            warning.Message);
 
         var clause = FindAll<TypeClauseSyntax>(tree).First(t => t.IsLegacyFuncFunction);
         Assert.True(clause.IsFunction);

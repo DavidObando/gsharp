@@ -139,7 +139,13 @@ release. The parser reports a new warning diagnostic on the leading
 
 | Code     | Severity | Message                                                                                                                                  |
 |----------|----------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `GS0303` | Warning  | `'func(...)' function-type clauses are deprecated; use '(T) -> R' instead (ADR-0075).`                                                   |
+| `GS0303` | Warning  | `'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122).` |
+
+The managed function-pointer form `*func(T) R` is excluded from this
+deprecation. Per ADR-0122 §9, the leading `*` makes the whole form
+function-pointer syntax, so it does not emit GS0303. Rewriting it as
+`*((T) -> R)` changes its meaning to a pointer to a managed delegate,
+which is rejected with GS0398.
 
 Both spellings produce an identical `FunctionTypeSymbol` — the same
 parameter types, the same return type, the same async lowering, the

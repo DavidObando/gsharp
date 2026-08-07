@@ -226,8 +226,11 @@ verification regressions without weakening ilverify globally.
   #1035): a **managed** function pointer is spelled **`*func(T1, T2) R`**
   (consistent with the `*T` pointer prefix and the `func name(params) Ret`
   declaration form), only legal inside an `unsafe` context (GS0404). It is
-  modeled by a managed `FunctionPointerTypeSymbol` (the existing ADR-0095
-  symbol, now carrying an `IsManaged` flag; the unmanaged
+  a distinct construct from the deprecated `func(T) R` type clause in
+  ADR-0075 and does not emit GS0303. Rewriting it as `*((T) -> R)` changes
+  its meaning to a pointer to a managed delegate, which is rejected with
+  GS0398. It is modeled by a managed `FunctionPointerTypeSymbol` (the
+  existing ADR-0095 symbol, now carrying an `IsManaged` flag; the unmanaged
   `unmanaged[CC] (T) -> R` form of ADR-0095 is unchanged). `&StaticMethod`
   yields a function-pointer value via CIL `ldftn`
   (`BoundFunctionPointerFromMethodExpression`), type-checked against the target

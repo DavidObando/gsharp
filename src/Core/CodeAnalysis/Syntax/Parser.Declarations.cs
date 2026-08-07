@@ -919,8 +919,8 @@ public partial class Parser
 
     /// <summary>
     /// Returns true when <paramref name="token"/> can start a TypeClauseSyntax.
-    /// Used by the delegate declaration parser to decide whether the optional
-    /// return type clause is present.
+    /// Shared by parser lookaheads so every type-clause entry point uses the
+    /// same complete head-token set.
     /// </summary>
     private static bool CanStartTypeClause(SyntaxToken token)
     {
