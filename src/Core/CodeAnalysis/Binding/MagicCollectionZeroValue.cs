@@ -20,8 +20,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>newarr</c> element token for open element types) — so generic contexts
 /// are covered by already-verified emit paths. <c>chan T</c> is deliberately
 /// NOT synthesized here: an auto-created channel has no sensible default
-/// (buffer size, ownership), so channel slots require an explicit initializer
-/// (GS0520; see <see cref="RequiresExplicitInitializer"/>).
+/// (buffer size, ownership), so channel slots have no zero value at all (see
+/// <see cref="RequiresExplicitInitializer"/>). Globals and fields must
+/// initialize explicitly (GS0520); locals may declare freely and are instead
+/// flow-checked at use sites by <see cref="DefiniteAssignmentAnalyzer"/>
+/// (GS0521, issue #3316).
 /// </summary>
 internal static class MagicCollectionZeroValue
 {
@@ -78,7 +81,10 @@ internal static class MagicCollectionZeroValue
     /// <summary>
     /// Gets a value indicating whether the declared type is the ADR-0159
     /// channel carve-out: a bare <c>chan T</c> slot has no usable default
-    /// value, so declaring one without an initializer is an error (GS0520).
+    /// value. Declaring a global or field without an initializer is an error
+    /// (GS0520); a declared-without-initializer local is legal and instead
+    /// subject to the definite-assignment use-site check (GS0521,
+    /// issue #3316).
     /// </summary>
     /// <param name="type">The declared slot type.</param>
     /// <returns>True for a bare (non-<c>?</c>) channel type.</returns>

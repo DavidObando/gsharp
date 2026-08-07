@@ -11,17 +11,21 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// Issue #3310 / ADR-0159 channel carve-out: <c>chan T</c> is excluded from
 /// the empty-instance zero values (an auto-created channel has no sensible
 /// default — buffer size and ownership are the decisions <c>make</c>
-/// exists to force), and the language has no definite-assignment analysis
-/// for ordinary locals nor a nullable-channel spelling, so a bare
-/// initializer-less channel declaration is rejected with GS0520 at every
-/// declaration surface. On main these declarations compiled and NRE'd on
-/// first use.
+/// exists to force), so a bare initializer-less channel declaration is
+/// rejected with GS0520 at the global and field declaration surfaces. On
+/// main these declarations compiled and NRE'd on first use. LOCALS were
+/// originally rejected at the declaration too; since issue #3316 they
+/// declare freely and are flow-checked at use sites instead (GS0521 — see
+/// <c>Issue3316LocalDefiniteAssignmentTests</c>).
 /// </summary>
 public class Issue3310ChannelCarveOutEmitTests
 {
     [Fact]
-    public void BareChannelLocal_ReportsGS0520()
+    public void BareChannelLocal_DeclarationAlone_NoLongerReportsGS0520()
     {
+        // Issue #3316: the declaration-site error moved to unassigned USE
+        // sites for locals. A declared-but-never-used bare channel local is
+        // legal (and its slot simply stays null, unobservable).
         var result = EmittedOracle.Evaluate("""
             package P3310ChanLocal
 
@@ -35,7 +39,9 @@ public class Issue3310ChannelCarveOutEmitTests
             run()
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0520");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0520");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(0, result.Value);
     }
 
     [Fact]
