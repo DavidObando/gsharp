@@ -123,6 +123,25 @@ The directory rule existed to guarantee something worth keeping — that no file
 
 The check must parse rather than grep: 129 column-0 `#nullable` lines exist inside verbatim string literals in the cs2gs translation tests, and the `#nullable disable` region at `test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs` is load-bearing — it exists precisely so the C# compiler emits no `NullableAttribute`, giving the G# metadata importer a genuinely oblivious type to import (issue #1354). It is a permanent allowlist entry and no cleanup may remove it.
 
+### A6 — Two kinds of warning, and only one of them is mechanizable
+
+Slices 2–4 were driven almost entirely from the compiler's own output by rules that add `?` where the compiler proved a null flows. That worked because of what those slices' warnings *were*, and attempting the same on `CodeAnalysis/Syntax/`'s parser proved it does not generalise.
+
+**Structural warnings** state a fact about a type in isolation. CS8618 — "a constructor overload leaves this member unset" — is the archetype: the node types are discriminated unions with one constructor per syntactic form, so a member the form omits is null, full stop. No caller can change that, the answer is local to the file, and 118 of the 132 members annotated across slices 2 and 3 already said so in their own doc comments. These are safe to mechanize.
+
+**Flow warnings** state that a value *reached* somewhere. CS8600/CS8602/CS8604 on a local crossing a method boundary is the archetype. Each one has two correct resolutions, and choosing between them is the whole job:
+
+- *Widen the callee* — declare the parameter or property `?`, because null is a real state it must handle.
+- *Tighten the caller* — establish non-nullness at the construction site and leave the declaration alone.
+
+ADR-0155's central rule already picks a default: "If null was only ever an accident of construction, tighten the construction path and keep the non-null declaration." **A rule driven by compiler output can only ever widen**, because widening is what silences the warning. Applied to the parser it produced, among 17 public API changes, four that were plainly wrong: `UnaryExpressionSyntax.Operand` and `LiteralExpressionSyntax.LiteralToken` became nullable though every call site supplies them, and `InterpolatedStringSegment.FromText`/`FromExpression` — factories whose entire purpose is to supply the value — took nullable parameters. Two further attempts widened `ParseExpression()` and `ParseStatement()` themselves, which would have forced a null check on roughly a hundred call sites for a null that never arrives.
+
+Consequences for the plan:
+
+- Node-type slices are cheap and safe to automate, and the payoff is concentrated there. That is now measured: slices 2–4 removed 2,528 of the 8,734 production warnings (29%) while touching 286 files that needed almost no judgment.
+- Every remaining slice is flow-dominated and must be worked per site, with the tighten-vs-widen question asked explicitly. Automation may still *propose*, but a proposal that widens a public signature is a review item, not a result.
+- The reviewable artifact is therefore the **public/internal signature diff**, not the file count. Extract it mechanically (`git diff | grep -E '^\+\s*(public|internal)' | grep '?'`) and require a null-producing call site for every entry. On the parser attempt that list was 17 lines and surfaced all four defects in a few minutes; the 685-line diff around it surfaced none.
+
 ### A4 — Core slices may require edits in `src/Repl`
 
 The claim that "enabling a directory never requires editing files outside the slice" holds only while every consumer is oblivious. `src/Repl` is already nullable-enabled and consumes `Core`, so Core annotations are type-checked against it immediately. Measured blast radius for the whole of Core: **3 warnings**. This is a feature — Repl is the only annotated consumer, so every solution build tests each new Core contract against real annotated calling code for free.
