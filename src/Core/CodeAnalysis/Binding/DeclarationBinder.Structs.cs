@@ -526,11 +526,17 @@ internal sealed partial class DeclarationBinder
             {
                 pendingInstanceInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
             }
-            else if (MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntax, fieldType) != null)
+            else if (MagicCollectionZeroValue.MightNeedZeroValue(fieldType))
             {
-                // Issue #3310 / ADR-0159: sound empty-instance zero value,
-                // synthesized in the deferred pass alongside the explicit
-                // initializers so it flows into every constructor body.
+                // Issue #3310 / ADR-0159 (extended by #3319 for struct-typed
+                // fields): a candidate zero-value field. This probe runs
+                // during the per-struct field-binding pass, before every
+                // sibling struct's OWN fields are necessarily populated, so
+                // it deliberately does NOT recurse (see
+                // MagicCollectionZeroValue.MightNeedZeroValue) — the real
+                // recursive decision (and possible null result) happens in
+                // the deferred pass below, once every struct in the
+                // compilation has its fields set.
                 pendingZeroValueInstanceFields.Add((fieldSymbol, fieldSyntax));
             }
             else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
@@ -2208,11 +2214,14 @@ internal sealed partial class DeclarationBinder
                 {
                     pendingStaticFieldInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
                 }
-                else if (MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntax, fieldType) != null)
+                else if (MagicCollectionZeroValue.MightNeedZeroValue(fieldType))
                 {
-                    // Issue #3310 / ADR-0159: sound empty-instance zero value
-                    // for an initializer-less static collection field,
-                    // synthesized into the `.cctor` in the deferred pass.
+                    // Issue #3310 / ADR-0159 (extended by #3319 for
+                    // struct-typed fields): a candidate zero-value static
+                    // field, synthesized (or resolved to no-op) into the
+                    // `.cctor` in the deferred pass — see the matching probe
+                    // above for instance fields for why this cannot recurse
+                    // here.
                     fieldBinding.PendingZeroValueStaticFields.Add((fieldSymbol, fieldSyntax));
                 }
                 else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
@@ -3483,11 +3492,22 @@ internal sealed partial class DeclarationBinder
                     staticInitBuilder[fieldSym] = convertedInit;
                 }
 
-                // Issue #3310 / ADR-0159: synthesized empty-instance zero
-                // values for initializer-less static collection fields.
+                // Issue #3310 / ADR-0159 (extended by #3319): synthesized
+                // empty-instance zero values for initializer-less static
+                // collection fields, including struct-typed fields whose own
+                // fields (recursively) need one. This pass runs after every
+                // struct in the compilation has its fields bound, so the
+                // recursion in TrySynthesizeEmptyInstance is safe here — a
+                // struct-typed candidate that turns out to need nothing
+                // (null result) is simply skipped, leaving it out of
+                // StaticFieldInitializers exactly as before #3319.
                 foreach (var (fieldSym, fieldSyntaxNode) in zeroValueStaticFields)
                 {
-                    staticInitBuilder[fieldSym] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                    var zeroValue = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                    if (zeroValue != null)
+                    {
+                        staticInitBuilder[fieldSym] = zeroValue;
+                    }
                 }
 
                 structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
@@ -3529,16 +3549,29 @@ internal sealed partial class DeclarationBinder
                 instanceInitBuilder[fieldSym] = convertedInit;
             }
 
-            // Issue #3310 / ADR-0159: synthesized empty-instance zero values
-            // for initializer-less instance collection fields (map/slice/
-            // array/sequence). Injected through the same mechanism as
-            // explicit initializers, so every constructor body (default,
-            // base-chained, user-written) runs them; a value-struct's
-            // `default`-instance hole (initobj bypasses constructors) is the
-            // documented ADR-0159 limitation, mirroring C#'s `default(T)`.
+            // Issue #3310 / ADR-0159 (extended by #3319): synthesized
+            // empty-instance zero values for initializer-less instance
+            // collection fields (map/slice/array/sequence), and — per #3319
+            // — struct-typed fields whose own fields (recursively) need one.
+            // Injected through the same mechanism as explicit initializers,
+            // so every constructor body (default, base-chained, user-written)
+            // runs them; a value-struct's `default`-instance hole (initobj
+            // bypasses constructors) is the documented ADR-0159 limitation,
+            // mirroring C#'s `default(T)`. This pass runs after every struct
+            // in the compilation has its fields bound (see
+            // BindPendingFieldInitializers), so the recursion into a
+            // struct-typed field's own fields is safe here; a candidate that
+            // turns out to need nothing (null result) is simply skipped,
+            // leaving InstanceFieldInitializers exactly as before #3319 for
+            // every struct unaffected by it (preserving #3219's
+            // byte-identical emission for such structs).
             foreach (var (fieldSym, fieldSyntaxNode) in zeroValueInstanceFields)
             {
-                instanceInitBuilder[fieldSym] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                var zeroValue = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                if (zeroValue != null)
+                {
+                    instanceInitBuilder[fieldSym] = zeroValue;
+                }
             }
 
             structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
