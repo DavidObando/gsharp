@@ -522,6 +522,26 @@ public sealed record BoundBinaryOperator
             return true;
         }
 
+        // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
+        // (`System.Collections.Generic.Dictionary<K, V>`), regardless of
+        // whether its `ClrType` is materialized (it is null when K or V
+        // structurally references an in-scope type parameter or a
+        // same-compilation struct). A bare map slot can genuinely hold a CLR
+        // null — a declared-but-unassigned `var items map[K, V]` field is nil
+        // until `init()` runs — so `m == nil` / `m != nil` must bind exactly
+        // like the reference-shaped structural types above (#796). This is
+        // comparison-only, mirroring function types: bare-slot nil ASSIGNMENT
+        // still requires the explicit `map[K, V]?` spelling (ADR-0104), which
+        // binds through the NullableTypeSymbol arm at the top. The emitter's
+        // generic `ldnull; ceq` tail is verifier-clean for the reference-typed
+        // operand, including the open `Dictionary<!0, !1>` shape. Slices and
+        // channels intentionally keep their current GS0129 rejection —
+        // widening those is a separate language-surface decision.
+        if (nullableOrUnderlying is MapTypeSymbol)
+        {
+            return true;
+        }
+
         // Issue #2300: interface-typed operands are always CLR reference
         // types (a G#-declared InterfaceSymbol or an imported interface),
         // so `iface == nil` / `iface != nil` must bind exactly like the
