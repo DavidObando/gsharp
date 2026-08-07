@@ -28,6 +28,8 @@ A `var` declaration may omit its initializer when an explicit type clause is pre
 
 > **Note (ADR-0159, issue #3310):** for the magic collection types the zero value is now a **sound empty instance**, not a null reference — `var m map[K, V]` binds an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-N array, `var q sequence[T]` an empty sequence. `chan T` is carved out: it has no sensible default and a declaration without an initializer reports GS0520. See [ADR-0159](0159-magic-collection-zero-values-and-nil-comparison.md).
 
+> **Note (issue #3324):** this paragraph's `""` for `string` was, until #3324, aspirational for a genuine function-local declaration — the bare-`var` binder fell through to the CLR reference-type default (`null`), NRE-ing on any string-returning use like `len(s)`. Fixed for LOCALS only. This does **not** extend to class/struct fields, auto-property backing fields, a top-level (global) `var`, or the `default(string)` expression: those are a separate, already-settled contract (issue #1714 / PR #2788, pinned by `Issue1714StringZeroValueEmitTests`) that deliberately keeps the CLR storage default (`null`) for uninitialized reference-typed storage, distinct from a local binding's language-level zero value. A top-level `var` binds a `GlobalVariableSymbol` (emitted as a static field) and so falls on the field side of that line, not the local side.
+
 ## Consequences
 
 Positive:
