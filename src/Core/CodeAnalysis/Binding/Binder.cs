@@ -3579,15 +3579,24 @@ public sealed class Binder
         // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
         if (syntax.IsArray)
         {
-            return syntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
+            bound = syntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
         }
-
-        if (!syntax.IsNullable)
+        else if (syntax.IsNullable)
         {
-            return bound;
+            bound = NullableTypeSymbol.Get(bound);
         }
 
-        return NullableTypeSymbol.Get(bound);
+        // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
+        // parenthesized type clause marks the WHOLE inner type nullable —
+        // `(chan int32)?` is a nullable channel, `([]T)?` equals `[]?T`. The
+        // already-nullable guard makes redundant spellings like `(int32?)?`
+        // collapse instead of double-wrapping.
+        if (syntax.IsParenthesizedNullable && bound is not NullableTypeSymbol)
+        {
+            bound = NullableTypeSymbol.Get(bound);
+        }
+
+        return bound;
     }
 
     /// <summary>

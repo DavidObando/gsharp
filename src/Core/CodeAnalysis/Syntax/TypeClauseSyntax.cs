@@ -517,6 +517,24 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this array/slice clause is itself a nullable array reference (<c>[]?T</c>), spelled with a <c>?</c> right after <c>]</c> (issue #1212).</summary>
     public bool IsArrayNullable => ArrayQuestionToken != null;
 
+    /// <summary>
+    /// Gets the <c>?</c> that followed the closing <c>)</c> of a parenthesized
+    /// type clause (issue #3315 / ADR-0159 addendum). Grouping parens are
+    /// otherwise transparent — <c>(T)</c> parses to <c>T</c>'s own clause — but
+    /// their trailing <c>?</c> marks the WHOLE inner type nullable, giving the
+    /// composite types whose own trailing <c>?</c> binds tighter an explicit
+    /// whole-type-nullable spelling: <c>(chan int32)?</c> is a nullable channel
+    /// of <c>int32</c>, whereas <c>chan int32?</c> is a channel of nullable
+    /// elements. Set by the parser via
+    /// <see cref="SetParenthesizedQuestionToken"/> immediately after the inner
+    /// clause is built (the sanctioned parser-time mutation pattern, see
+    /// <see cref="SyntaxNode.InvalidateCachedSpan"/>).
+    /// </summary>
+    public SyntaxToken ParenthesizedQuestionToken { get; private set; }
+
+    /// <summary>Gets a value indicating whether this clause carries a parenthesized whole-type <c>?</c> — <c>(chan T)?</c>, <c>([]T)?</c>, … (issue #3315).</summary>
+    public bool IsParenthesizedNullable => ParenthesizedQuestionToken != null;
+
     /// <summary>Gets the opening <c>(</c> token for tuple types, or <c>null</c>.</summary>
     public SyntaxToken OpenParenToken { get; }
 
@@ -1100,5 +1118,22 @@ public sealed class TypeClauseSyntax : SyntaxNode
             functionParameterTypes,
             closeParenToken,
             returnTypeClause);
+    }
+
+    /// <summary>
+    /// Issue #3315 / ADR-0159 addendum: records the <c>?</c> that followed the
+    /// closing <c>)</c> of a parenthesized type clause, marking the WHOLE inner
+    /// type nullable (<c>(chan int32)?</c>, <c>([]T)?</c>). Called by the
+    /// parser immediately after the inner clause is built and its wrapping
+    /// parens consumed — before the node is read by anyone else — so the
+    /// parser-time mutation pattern (see <see cref="SyntaxNode"/>'s span cache
+    /// notes) applies; the cached span is invalidated so it re-extends over the
+    /// new trailing token.
+    /// </summary>
+    /// <param name="questionToken">The trailing <c>?</c> token.</param>
+    internal void SetParenthesizedQuestionToken(SyntaxToken questionToken)
+    {
+        ParenthesizedQuestionToken = questionToken;
+        InvalidateCachedSpan();
     }
 }

@@ -335,10 +335,22 @@ public partial class Parser
     private TypeClauseSyntax ParseTupleTypeClause()
     {
         // Phase 4.5: tuple type clause `(T1, T2, ...)` with optional trailing `?`.
+        //
+        // Issue #3315 / ADR-0159 addendum: a parenthesized SINGLE type clause
+        // with no comma — `(T)` — is not a 1-tuple (the binder has always
+        // rejected those with "unexpected token") but GROUPING: it parses to
+        // the inner clause itself. Its trailing `?` marks the WHOLE inner type
+        // nullable, which finally gives the composite types whose own trailing
+        // `?` binds tighter (per the suffix family rule: `[]T?` element-
+        // nullable per #1212, `(T) -> R?` return-nullable per ADR-0075) an
+        // explicit whole-type spelling: `(chan int32)?` is a nullable channel
+        // of int32, `([]T)?` equals `[]?T`, mirroring the parenthesized
+        // arrow-function form `((T) -> R)?` (issue #1399 / ADR-0137).
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
 
         var parseNext = true;
+        var sawComma = false;
         while (parseNext &&
                Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
@@ -348,6 +360,7 @@ public partial class Parser
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+                sawComma = true;
             }
             else
             {
@@ -357,6 +370,20 @@ public partial class Parser
 
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+
+        if (!sawComma && nodesAndSeparators.Count == 1 && nodesAndSeparators[0] is TypeClauseSyntax parenthesizedInner)
+        {
+            // Grouping (issue #3315): `(T)` is `T`; `(T)?` is whole-`T`
+            // nullable. The parens themselves are dropped, exactly like the
+            // parenthesized arrow-function form's outer parens (#1399).
+            if (question != null)
+            {
+                parenthesizedInner.SetParenthesizedQuestionToken(question);
+            }
+
+            return parenthesizedInner;
+        }
+
         return new TypeClauseSyntax(
             syntaxTree,
             openParen,
@@ -414,7 +441,17 @@ public partial class Parser
 
     private TypeClauseSyntax ParseChanTypeClause()
     {
-        // Phase 5.4 / ADR-0022: channel type clause `chan T` with optional trailing `?`.
+        // Phase 5.4 / ADR-0022: channel type clause `chan T`.
+        //
+        // Issue #3315 / ADR-0159 addendum: a trailing `?` binds to the ELEMENT
+        // type — `chan int32?` is `chan (int32?)` — because the greedy element
+        // ParseTypeClause consumes it, consistent with the suffix family
+        // (`[]T?` element-nullable per #1212, `(T) -> R?` return-nullable per
+        // ADR-0075). The nullable-CHANNEL spelling is the parenthesized form
+        // `(chan int32)?` (see ParseTupleTypeClause's grouping arm). The
+        // chan-level question below is therefore only reachable for the rare
+        // element shapes that do not themselves consume a trailing `?`
+        // (e.g. a managed function-pointer element).
         var chanKeyword = MatchToken(SyntaxKind.ChanKeyword);
         var elementType = ParseTypeClause();
         var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;

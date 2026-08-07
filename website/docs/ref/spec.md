@@ -1582,6 +1582,8 @@ InterfaceSharedMember ::= 'private'? 'func' identifier TypeParamList? '(' Parame
 
 TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | '[' Number? ']' identifier ('.' identifier)* '?'?
+                    | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
+                                                                                             the WHOLE inner type nullable, e.g. '(chan int32)?',  *)
                     | '(' TypeClause (',' TypeClause)+ ')' '?'?                          (* tuple type *)
                     | '(' FnTypeParamList? ')' '->' TypeClause                            (* arrow function type, ; `?` in TypeClause is return nullability *)
                     | '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?               (* parenthesized arrow function type,  *)
@@ -1589,7 +1591,8 @@ TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | 'async' '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?       (* parenthesized async arrow function type,  *)
                     | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical,  *)
                     | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
-                    | 'chan' TypeClause '?'?
+                    | 'chan' TypeClause                                                   (* a trailing '?' binds to the ELEMENT ('chan int32?' = 'chan (int32?)');
+                                                                                             a nullable CHANNEL is spelled '(chan T)?',  *)
                     | 'sequence' '[' TypeClause ']' '?'?
                     | 'async' 'sequence' '[' TypeClause ']' '?'?
                     | 'func' '(' FnTypeParamList? ')' TypeClause? '?'?                    (* deprecated; GS0303 *)

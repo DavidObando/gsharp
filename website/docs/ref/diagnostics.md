@@ -1802,15 +1802,20 @@ parameterless method is available, preventing a GS9998 reflection exception.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0520 | Error | A `chan T` local, global, or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the ADR-0159 empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`. |
+| GS0520 | Error | A `chan T` local, global, or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the ADR-0159 empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. |
 
 The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
 bind a sound empty instance when declared without an initializer
 ([ADR-0159](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0159-magic-collection-zero-values-and-nil-comparison.md));
 a channel cannot, because bounded-versus-unbounded and capacity are semantic
 decisions `make` exists to force. Declare-then-assign of a bare channel slot
-is rejected until a definite-assignment analysis (or a nullable-channel
-spelling) exists — both recorded as follow-ups in ADR-0159.
+is rejected until a definite-assignment analysis exists (recorded as a
+follow-up in ADR-0159). A genuinely optional channel is spelled with the
+parenthesized nullable form `(chan T)?` (issue #3315): the slot zero value is
+`nil`, nil comparison and `?`-flow narrowing apply, and `make(chan T)` assigns
+into it. A trailing `?` without parens binds to the element type — `chan
+int32?` is a channel of nullable `int32` — consistent with `[]T?` and
+`(T) -> R?`.
 
 ## Pointer generic type arguments (GS0521)
 
