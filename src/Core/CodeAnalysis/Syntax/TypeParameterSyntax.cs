@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public sealed class TypeParameterSyntax : SyntaxNode
 {
-    private TypeClauseSyntax constraintType;
+    private TypeClauseSyntax? constraintType;
 
     /// <summary>Initializes a new instance of the <see cref="TypeParameterSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
@@ -39,9 +39,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
         SyntaxToken varianceModifier,
         SyntaxToken identifier,
         SyntaxToken constraint,
-        SyntaxToken constraintTypeArgumentOpenBracketToken,
-        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArguments,
-        SyntaxToken constraintTypeArgumentCloseBracketToken)
+        SyntaxToken? constraintTypeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
+        SyntaxToken? constraintTypeArgumentCloseBracketToken)
         : this(
             syntaxTree,
             varianceModifier,
@@ -76,14 +76,14 @@ public sealed class TypeParameterSyntax : SyntaxNode
         SyntaxToken varianceModifier,
         SyntaxToken identifier,
         SyntaxToken constraint,
-        SyntaxToken constraintTypeArgumentOpenBracketToken,
-        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArguments,
-        SyntaxToken constraintTypeArgumentCloseBracketToken,
-        SyntaxToken classConstraintKeyword,
-        SyntaxToken structConstraintKeyword,
-        SyntaxToken initConstraintKeyword,
-        SyntaxToken initConstraintOpenParenToken,
-        SyntaxToken initConstraintCloseParenToken)
+        SyntaxToken? constraintTypeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
+        SyntaxToken? constraintTypeArgumentCloseBracketToken,
+        SyntaxToken? classConstraintKeyword,
+        SyntaxToken? structConstraintKeyword,
+        SyntaxToken? initConstraintKeyword,
+        SyntaxToken? initConstraintOpenParenToken,
+        SyntaxToken? initConstraintCloseParenToken)
         : this(
             syntaxTree,
             varianceModifier,
@@ -120,15 +120,15 @@ public sealed class TypeParameterSyntax : SyntaxNode
         SyntaxToken varianceModifier,
         SyntaxToken identifier,
         SyntaxToken constraint,
-        SyntaxToken constraintTypeArgumentOpenBracketToken,
-        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArguments,
-        SyntaxToken constraintTypeArgumentCloseBracketToken,
-        SyntaxToken classConstraintKeyword,
-        SyntaxToken structConstraintKeyword,
-        SyntaxToken initConstraintKeyword,
-        SyntaxToken initConstraintOpenParenToken,
-        SyntaxToken initConstraintCloseParenToken,
-        SyntaxToken unmanagedConstraintKeyword)
+        SyntaxToken? constraintTypeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
+        SyntaxToken? constraintTypeArgumentCloseBracketToken,
+        SyntaxToken? classConstraintKeyword,
+        SyntaxToken? structConstraintKeyword,
+        SyntaxToken? initConstraintKeyword,
+        SyntaxToken? initConstraintOpenParenToken,
+        SyntaxToken? initConstraintCloseParenToken,
+        SyntaxToken? unmanagedConstraintKeyword)
         : base(syntaxTree)
     {
         VarianceModifier = varianceModifier;
@@ -166,7 +166,7 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// rather than reconstructing it from <see cref="Constraint"/> + <see cref="ConstraintTypeArguments"/>.
     /// The parser assigns this after construction, so the setter invalidates any cached span.
     /// </summary>
-    public TypeClauseSyntax ConstraintType
+    public TypeClauseSyntax? ConstraintType
     {
         get => constraintType;
         internal set
@@ -177,31 +177,31 @@ public sealed class TypeParameterSyntax : SyntaxNode
     }
 
     /// <summary>Gets the optional opening <c>[</c> of the constraint's generic type-argument list (ADR-0089).</summary>
-    public SyntaxToken ConstraintTypeArgumentOpenBracketToken { get; }
+    public SyntaxToken? ConstraintTypeArgumentOpenBracketToken { get; }
 
     /// <summary>Gets the optional generic type-argument list applied to the constraint (e.g. <c>[T]</c> in <c>IAdd[T]</c>). Empty/default when the constraint is a bare identifier (ADR-0089).</summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> ConstraintTypeArguments { get; }
+    public SeparatedSyntaxList<TypeClauseSyntax>? ConstraintTypeArguments { get; }
 
     /// <summary>Gets the optional closing <c>]</c> of the constraint's generic type-argument list (ADR-0089).</summary>
-    public SyntaxToken ConstraintTypeArgumentCloseBracketToken { get; }
+    public SyntaxToken? ConstraintTypeArgumentCloseBracketToken { get; }
 
     /// <summary>Gets the optional <c>class</c> keyword token introducing a reference-type constraint (ADR-0097 / issue #775).</summary>
-    public SyntaxToken ClassConstraintKeyword { get; }
+    public SyntaxToken? ClassConstraintKeyword { get; }
 
     /// <summary>Gets the optional <c>struct</c> keyword token introducing a non-nullable value-type constraint (ADR-0097 / issue #775).</summary>
-    public SyntaxToken StructConstraintKeyword { get; }
+    public SyntaxToken? StructConstraintKeyword { get; }
 
     /// <summary>Gets the optional <c>init</c> contextual keyword token of an <c>init()</c> default-constructor constraint (ADR-0097 / issue #775; renamed from <c>new()</c> by issue #997).</summary>
-    public SyntaxToken InitConstraintKeyword { get; }
+    public SyntaxToken? InitConstraintKeyword { get; }
 
     /// <summary>Gets the optional opening <c>(</c> of the <c>init()</c> constraint (issue #997).</summary>
-    public SyntaxToken InitConstraintOpenParenToken { get; }
+    public SyntaxToken? InitConstraintOpenParenToken { get; }
 
     /// <summary>Gets the optional closing <c>)</c> of the <c>init()</c> constraint (issue #997).</summary>
-    public SyntaxToken InitConstraintCloseParenToken { get; }
+    public SyntaxToken? InitConstraintCloseParenToken { get; }
 
     /// <summary>Gets the optional <c>unmanaged</c> contextual keyword token introducing an unmanaged-type constraint (issue #1336).</summary>
-    public SyntaxToken UnmanagedConstraintKeyword { get; }
+    public SyntaxToken? UnmanagedConstraintKeyword { get; }
 
     /// <summary>Gets a value indicating whether this type parameter carries a generic-instance constraint (ADR-0089).</summary>
     public bool HasConstraintTypeArguments => ConstraintTypeArgumentOpenBracketToken != null;

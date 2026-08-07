@@ -39,7 +39,7 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
     public CallExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken identifier,
-        TypeArgumentListSyntax typeArgumentList,
+        TypeArgumentListSyntax? typeArgumentList,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         SyntaxToken closeParenthesisToken)
@@ -59,8 +59,8 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
     public CallExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken identifier,
-        SyntaxToken nullableQuestionToken,
-        TypeArgumentListSyntax typeArgumentList,
+        SyntaxToken? nullableQuestionToken,
+        TypeArgumentListSyntax? typeArgumentList,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         SyntaxToken closeParenthesisToken)
@@ -107,7 +107,7 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
     /// <see langword="null"/> for the ordinary identifier / member-access call forms. When
     /// non-<see langword="null"/> the call target is the value produced by evaluating this
     /// expression, which must have a function (or delegate) type.</summary>
-    public ExpressionSyntax Callee { get; }
+    public ExpressionSyntax? Callee { get; }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.CallExpression;
@@ -120,10 +120,10 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
     /// <summary>Gets the optional <c>?</c> token following the identifier, indicating
     /// this is a nullable-type conversion call (e.g. <c>string?(x)</c>). <c>null</c>
     /// when the call does not use the nullable form (issue #663).</summary>
-    public SyntaxToken NullableQuestionToken { get; }
+    public SyntaxToken? NullableQuestionToken { get; }
 
     /// <summary>Gets the optional explicit type-argument list <c>[T1, T2]</c> attached to this call site (Phase 4.1 / ADR-0020); <c>null</c> when the call has no explicit type arguments.</summary>
-    public TypeArgumentListSyntax TypeArgumentList { get; }
+    public TypeArgumentListSyntax? TypeArgumentList { get; }
 
     /// <summary>
     /// Gets the open parenthesis token.

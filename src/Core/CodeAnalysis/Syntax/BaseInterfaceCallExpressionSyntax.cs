@@ -139,20 +139,22 @@ public sealed class BaseInterfaceCallExpressionSyntax : ExpressionSyntax
     public SyntaxToken MethodIdentifier { get; }
 
     /// <summary>Gets the optional generic method type arguments list (e.g. <c>[int]</c> in <c>base[IFoo].Map[int](...)</c>). Reserved for a future extension; the binder rejects a non-null list in this PR.</summary>
-    public TypeArgumentListSyntax MethodTypeArgumentList { get; }
+    public TypeArgumentListSyntax? MethodTypeArgumentList { get; }
 
-    /// <summary>Gets the opening <c>(</c> token.</summary>
-    public SyntaxToken OpenParenthesisToken { get; }
+    /// <summary>Gets the opening <c>(</c> token, or <c>null</c> for the property-assignment
+    /// form (<c>base[IFace].Member = value</c>), which has no argument list.</summary>
+    public SyntaxToken? OpenParenthesisToken { get; }
 
     /// <summary>Gets the argument list.</summary>
     public SeparatedSyntaxList<ExpressionSyntax> Arguments { get; }
 
-    /// <summary>Gets the closing <c>)</c> token.</summary>
-    public SyntaxToken CloseParenthesisToken { get; }
+    /// <summary>Gets the closing <c>)</c> token, or <c>null</c> for the property-assignment
+    /// form (<c>base[IFace].Member = value</c>), which has no argument list.</summary>
+    public SyntaxToken? CloseParenthesisToken { get; }
 
     /// <summary>Gets the <c>=</c> token for the property WRITE form (<c>base[Base].Prop = value</c>), or <see langword="null"/> for a read or the call form.</summary>
-    public SyntaxToken EqualsToken { get; }
+    public SyntaxToken? EqualsToken { get; }
 
     /// <summary>Gets the assigned value expression for the property WRITE form, or <see langword="null"/> for a read or the call form.</summary>
-    public ExpressionSyntax Value { get; }
+    public ExpressionSyntax? Value { get; }
 }

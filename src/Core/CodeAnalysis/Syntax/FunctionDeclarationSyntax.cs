@@ -13,13 +13,13 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken semicolonBodyToken;
-    private SyntaxToken staticModifier;
-    private SyntaxToken returnRefModifier;
-    private SyntaxToken unsafeModifier;
-    private SyntaxToken explicitInterfaceOpenParenToken;
-    private TypeClauseSyntax explicitInterfaceType;
-    private SyntaxToken explicitInterfaceCloseParenToken;
+    private SyntaxToken? semicolonBodyToken;
+    private SyntaxToken? staticModifier;
+    private SyntaxToken? returnRefModifier;
+    private SyntaxToken? unsafeModifier;
+    private SyntaxToken? explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax? explicitInterfaceType;
+    private SyntaxToken? explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
@@ -59,7 +59,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <param name="body">The function's body.</param>
     public FunctionDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
+        SyntaxToken? accessibilityModifier,
         SyntaxToken functionKeyword,
         SyntaxToken identifier,
         SyntaxToken openParenthesisToken,
@@ -87,9 +87,9 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <param name="body">The function's body.</param>
     public FunctionDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken functionKeyword,
         SyntaxToken identifier,
         SyntaxToken openParenthesisToken,
@@ -118,13 +118,13 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <param name="body">The function's body.</param>
     public FunctionDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken functionKeyword,
-        SyntaxToken receiverOpenParenthesisToken,
-        ParameterSyntax receiver,
-        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken? receiverOpenParenthesisToken,
+        ParameterSyntax? receiver,
+        SyntaxToken? receiverCloseParenthesisToken,
         SyntaxToken identifier,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
@@ -153,15 +153,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <param name="body">The function's body.</param>
     public FunctionDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken functionKeyword,
-        SyntaxToken receiverOpenParenthesisToken,
-        ParameterSyntax receiver,
-        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken? receiverOpenParenthesisToken,
+        ParameterSyntax? receiver,
+        SyntaxToken? receiverCloseParenthesisToken,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
+        TypeParameterListSyntax? typeParameterList,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
@@ -190,16 +190,16 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <param name="body">The function's body.</param>
     public FunctionDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
-        SyntaxToken asyncModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken functionKeyword,
-        SyntaxToken receiverOpenParenthesisToken,
-        ParameterSyntax receiver,
-        SyntaxToken receiverCloseParenthesisToken,
+        SyntaxToken? receiverOpenParenthesisToken,
+        ParameterSyntax? receiver,
+        SyntaxToken? receiverCloseParenthesisToken,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
+        TypeParameterListSyntax? typeParameterList,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
@@ -233,7 +233,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// unmanaged library. Assigned by the parser; <c>null</c> for ordinary
     /// function declarations.
     /// </summary>
-    public SyntaxToken SemicolonBodyToken
+    public SyntaxToken? SemicolonBodyToken
     {
         get => semicolonBodyToken;
         set
@@ -248,13 +248,13 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public bool HasSemicolonBody => SemicolonBodyToken != null;
 
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
-    public SyntaxToken ReceiverOpenParenthesisToken { get; }
+    public SyntaxToken? ReceiverOpenParenthesisToken { get; }
 
     /// <summary>Gets the optional receiver parameter that turns this function into an extension function (Phase 3.B.6, ADR-0019). <c>null</c> for ordinary free functions and class methods.</summary>
-    public ParameterSyntax Receiver { get; }
+    public ParameterSyntax? Receiver { get; }
 
     /// <summary>Gets the optional close parenthesis terminating the receiver clause (Phase 3.B.6).</summary>
-    public SyntaxToken ReceiverCloseParenthesisToken { get; }
+    public SyntaxToken? ReceiverCloseParenthesisToken { get; }
 
     /// <summary>Gets a value indicating whether this declaration carries a Go-style receiver clause (Phase 3.B.6 extension function).</summary>
     public bool IsExtension => Receiver != null;
@@ -266,7 +266,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// single-type qualifier, not a name+type extension receiver. Assigned by the parser;
     /// <see langword="null"/> for an ordinary or extension function.
     /// </summary>
-    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    public SyntaxToken? ExplicitInterfaceOpenParenthesisToken
     {
         get => explicitInterfaceOpenParenToken;
         set
@@ -281,7 +281,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>func (IFoo) M(...)</c>. Assigned by
     /// the parser; <see langword="null"/> when no clause is present.
     /// </summary>
-    public TypeClauseSyntax ExplicitInterfaceType
+    public TypeClauseSyntax? ExplicitInterfaceType
     {
         get => explicitInterfaceType;
         set
@@ -292,7 +292,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
-    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    public SyntaxToken? ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
         set
@@ -311,19 +311,19 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets the optional accessibility modifier token (<c>public</c>/<c>internal</c>/<c>private</c>), or <c>null</c> if none was supplied.
     /// </summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the optional <c>open</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overridable per ADR-0017. Only meaningful on class methods.</summary>
-    public SyntaxToken OpenModifier { get; }
+    public SyntaxToken? OpenModifier { get; }
 
     /// <summary>Gets the optional <c>override</c> modifier (Phase 3.B.3 sub-step 3). Non-null marks the method as overriding a base method per ADR-0017. Only meaningful on class methods.</summary>
-    public SyntaxToken OverrideModifier { get; }
+    public SyntaxToken? OverrideModifier { get; }
 
     /// <summary>Gets the optional <c>async</c> modifier (Phase 5.1 / ADR-0023). When non-null this function is an async function; callers see <c>Task[T]</c> (or <c>Task</c>), and the body may use <c>await</c>.</summary>
-    public SyntaxToken AsyncModifier { get; }
+    public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0089 / issue #755). Non-null when the function was declared inside <c>interface { … }</c> as a static-virtual member; the binder rejects this token on non-interface members.</summary>
-    public SyntaxToken StaticModifier
+    public SyntaxToken? StaticModifier
     {
         get => staticModifier;
         set
@@ -352,7 +352,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// managed pointer to its declared return type and callers receive a <c>T&amp;</c>.
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken ReturnRefModifier
+    public SyntaxToken? ReturnRefModifier
     {
         get => returnRefModifier;
         set
@@ -373,7 +373,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// operations are permitted in its signature and body. Assigned by the
     /// parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken UnsafeModifier
+    public SyntaxToken? UnsafeModifier
     {
         get => unsafeModifier;
         set
@@ -416,7 +416,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional generic type-parameter list (e.g. <c>[T any, U any]</c>); <c>null</c> for non-generic functions. Phase 4.1 / ADR-0020.</summary>
-    public TypeParameterListSyntax TypeParameterList { get; }
+    public TypeParameterListSyntax? TypeParameterList { get; }
 
     /// <summary>Gets a value indicating whether this function declares one or more type parameters (Phase 4.1).</summary>
     public bool IsGeneric => TypeParameterList != null;

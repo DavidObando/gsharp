@@ -17,10 +17,10 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken baseColonToken;
+    private SyntaxToken? baseColonToken;
     private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
     private ImmutableArray<FieldDeclarationSyntax> staticFields = ImmutableArray<FieldDeclarationSyntax>.Empty;
-    private SyntaxToken partialModifier;
+    private SyntaxToken? partialModifier;
 
     /// <summary>Initializes a new instance of the <see cref="InterfaceDeclarationSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
@@ -38,8 +38,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
-        SyntaxToken sealedKeyword,
+        TypeParameterListSyntax? typeParameterList,
+        SyntaxToken? sealedKeyword,
         SyntaxToken interfaceKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<FunctionDeclarationSyntax> methods,
@@ -65,8 +65,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
-        SyntaxToken sealedKeyword,
+        TypeParameterListSyntax? typeParameterList,
+        SyntaxToken? sealedKeyword,
         SyntaxToken interfaceKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<PropertyDeclarationSyntax> properties,
@@ -94,8 +94,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
-        SyntaxToken sealedKeyword,
+        TypeParameterListSyntax? typeParameterList,
+        SyntaxToken? sealedKeyword,
         SyntaxToken interfaceKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<PropertyDeclarationSyntax> properties,
@@ -132,7 +132,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
         SyntaxToken accessibilityModifier,
         SyntaxToken typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken sealedKeyword,
+        SyntaxToken? sealedKeyword,
         SyntaxToken interfaceKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<FunctionDeclarationSyntax> methods,
@@ -176,10 +176,10 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional type-parameter list for generic interfaces (Phase 4.3c / ADR-0020).</summary>
-    public TypeParameterListSyntax TypeParameterList { get; }
+    public TypeParameterListSyntax? TypeParameterList { get; }
 
     /// <summary>Gets the optional <c>sealed</c> contextual keyword (Phase 3.B.5). Non-null marks this as a closed hierarchy whose implementors must live in the same package.</summary>
-    public SyntaxToken SealedKeyword { get; }
+    public SyntaxToken? SealedKeyword { get; }
 
     /// <summary>Gets a value indicating whether this interface was declared <c>sealed</c> (Phase 3.B.5).</summary>
     public bool IsSealed => SealedKeyword != null;
@@ -207,7 +207,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// Non-null when the interface declares one or more base interfaces, e.g.
     /// <c>interface B : A</c>. Mirrors <see cref="StructDeclarationSyntax.BaseColonToken"/>.
     /// </summary>
-    public SyntaxToken BaseColonToken
+    public SyntaxToken? BaseColonToken
     {
         get => baseColonToken;
         set
@@ -242,7 +242,7 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// split across multiple declarations in the same package. Assigned by the
     /// parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken PartialModifier
+    public SyntaxToken? PartialModifier
     {
         get => partialModifier;
         set

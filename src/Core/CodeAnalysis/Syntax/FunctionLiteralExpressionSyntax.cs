@@ -45,7 +45,7 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
     /// <param name="body">The function body.</param>
     public FunctionLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken funcKeyword,
         SyntaxToken openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
@@ -67,7 +67,7 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.FunctionLiteralExpression;
 
     /// <summary>Gets the optional <c>async</c> modifier token.</summary>
-    public SyntaxToken AsyncModifier { get; }
+    public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets a value indicating whether this function literal is async.</summary>
     public bool IsAsync => AsyncModifier != null;

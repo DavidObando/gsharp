@@ -15,10 +15,10 @@ public sealed class ParameterSyntax : SyntaxNode
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken scopedModifier;
-    private SyntaxToken refKindModifier;
-    private SyntaxToken equalsToken;
-    private ExpressionSyntax defaultValue;
+    private SyntaxToken? scopedModifier;
+    private SyntaxToken? refKindModifier;
+    private SyntaxToken? equalsToken;
+    private ExpressionSyntax? defaultValue;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ParameterSyntax"/> class.
@@ -27,7 +27,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <param name="identifier">The parameter identifier.</param>
     /// <param name="ellipsisToken">Optional <c>...</c> token preceding the type clause for variadic parameters (Phase 4.8).</param>
     /// <param name="type">The parameter type.</param>
-    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, SyntaxToken ellipsisToken, TypeClauseSyntax type)
+    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, SyntaxToken? ellipsisToken, TypeClauseSyntax type)
         : base(syntaxTree)
     {
         Identifier = identifier;
@@ -63,7 +63,7 @@ public sealed class ParameterSyntax : SyntaxNode
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional <c>...</c> token marking the parameter as variadic (Phase 4.8).</summary>
-    public SyntaxToken EllipsisToken { get; }
+    public SyntaxToken? EllipsisToken { get; }
 
     /// <summary>
     /// Gets the parameter type.
@@ -79,7 +79,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// the current function body and the value may not be returned.
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken ScopedModifier
+    public SyntaxToken? ScopedModifier
     {
         get => scopedModifier;
         set
@@ -97,7 +97,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// identifier. The modifier carries the CLR ref-kind contract for this parameter; it composes with
     /// <see cref="ScopedModifier"/> (which precedes it). Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken RefKindModifier
+    public SyntaxToken? RefKindModifier
     {
         get => refKindModifier;
         set
@@ -114,7 +114,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// Gets or sets the ADR-0063 <c>=</c> token preceding the default-value expression.
     /// When non-null the parameter declares a default value, making it optional at call sites.
     /// </summary>
-    public SyntaxToken EqualsToken
+    public SyntaxToken? EqualsToken
     {
         get => equalsToken;
         set
@@ -130,7 +130,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// parameter metadata (numeric/bool/char/string/enum constant, or <c>nil</c>
     /// for a nullable/reference type).
     /// </summary>
-    public ExpressionSyntax DefaultValue
+    public ExpressionSyntax? DefaultValue
     {
         get => defaultValue;
         set

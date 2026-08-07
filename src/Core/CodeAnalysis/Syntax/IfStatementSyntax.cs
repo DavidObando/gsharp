@@ -42,8 +42,8 @@ public sealed class IfStatementSyntax : StatementSyntax
     public IfStatementSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken ifKeyword,
-        StatementSyntax initializer,
-        SyntaxToken semicolon,
+        StatementSyntax? initializer,
+        SyntaxToken? semicolon,
         ExpressionSyntax condition,
         StatementSyntax thenStatement,
         ElseClauseSyntax elseClause)
@@ -69,13 +69,13 @@ public sealed class IfStatementSyntax : StatementSyntax
     /// Gets the optional initializer simple statement (the <c>init</c>
     /// in <c>if init; cond</c>). May be <c>null</c>.
     /// </summary>
-    public StatementSyntax Initializer { get; }
+    public StatementSyntax? Initializer { get; }
 
     /// <summary>
     /// Gets the semicolon separating the initializer from the condition,
     /// or <c>null</c> when there is no initializer.
     /// </summary>
-    public SyntaxToken Semicolon { get; }
+    public SyntaxToken? Semicolon { get; }
 
     /// <summary>
     /// Gets the condition expression.

@@ -160,19 +160,19 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     public SyntaxToken OpenBracketToken { get; }
 
     /// <summary>Gets the literal length token, or <c>null</c> for the slice form (<c>[]T{…}</c>) or the runtime-length form (which carries <see cref="LengthExpression"/>).</summary>
-    public SyntaxToken LengthToken { get; }
+    public SyntaxToken? LengthToken { get; }
 
     /// <summary>Gets the runtime length expression for the zero-initialised allocation form <c>[n]T</c> (issue #1272), or <c>null</c> when the length is a literal (see <see cref="LengthToken"/>) or absent (slice form).</summary>
-    public ExpressionSyntax LengthExpression { get; }
+    public ExpressionSyntax? LengthExpression { get; }
 
     /// <summary>Gets the closing bracket token.</summary>
     public SyntaxToken CloseBracketToken { get; }
 
     /// <summary>Gets the element type identifier, or <c>null</c> when the element is a nested type clause (see <see cref="ElementTypeClause"/>).</summary>
-    public SyntaxToken ElementTypeIdentifier { get; }
+    public SyntaxToken? ElementTypeIdentifier { get; }
 
     /// <summary>Gets the nested element type clause for a jagged-array literal (issue #1046), or <c>null</c> when the element is a plain identifier carried via <see cref="ElementTypeIdentifier"/>.</summary>
-    public TypeClauseSyntax ElementTypeClause { get; }
+    public TypeClauseSyntax? ElementTypeClause { get; }
 
     /// <summary>Gets a value indicating whether this literal's element type is a nested type clause rather than a plain identifier (issue #1046).</summary>
     public bool HasNestedElementTypeClause => ElementTypeClause != null;

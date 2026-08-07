@@ -46,7 +46,7 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     /// <param name="body">The lambda body — a single expression, or a brace-delimited block expression.</param>
     public LambdaExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenToken,
@@ -87,7 +87,7 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.LambdaExpression;
 
     /// <summary>Gets the optional <c>async</c> modifier preceding the parameter list (ADR-0076 / issue #716). <c>null</c> when the lambda is synchronous.</summary>
-    public SyntaxToken AsyncModifier { get; }
+    public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets a value indicating whether the lambda carries an <c>async</c> modifier.</summary>
     public bool IsAsync => AsyncModifier != null;

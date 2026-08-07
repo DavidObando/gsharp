@@ -15,7 +15,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private TypeArgumentListSyntax typeArgumentList;
+    private TypeArgumentListSyntax? typeArgumentList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructLiteralExpressionSyntax"/> class.
@@ -73,7 +73,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional type-argument list (Phase 4.3 / ADR-0020), e.g. <c>Result[int, string]{...}</c>. <c>null</c> for non-generic literals or for literals whose type arguments are to be inferred.</summary>
-    public TypeArgumentListSyntax TypeArgumentList
+    public TypeArgumentListSyntax? TypeArgumentList
     {
         get => typeArgumentList;
         set

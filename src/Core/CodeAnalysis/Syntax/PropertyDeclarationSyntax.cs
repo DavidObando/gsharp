@@ -15,10 +15,10 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private SyntaxToken staticModifier;
-    private SyntaxToken explicitInterfaceOpenParenToken;
-    private TypeClauseSyntax explicitInterfaceType;
-    private SyntaxToken explicitInterfaceCloseParenToken;
+    private SyntaxToken? staticModifier;
+    private SyntaxToken? explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax? explicitInterfaceType;
+    private SyntaxToken? explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
@@ -83,7 +83,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>shared { … }</c> block (ADR-0089 / issue #1019), or
     /// <see langword="null"/> for an ordinary instance property.
     /// </summary>
-    public SyntaxToken StaticModifier
+    public SyntaxToken? StaticModifier
     {
         get => staticModifier;
         set
@@ -102,7 +102,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>prop (IFoo) this[...] T</c> (ADR-0149). Assigned by the parser; <see langword="null"/>
     /// for an ordinary property/indexer.
     /// </summary>
-    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    public SyntaxToken? ExplicitInterfaceOpenParenthesisToken
     {
         get => explicitInterfaceOpenParenToken;
         set
@@ -117,7 +117,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>prop (IFoo) P T</c>. Assigned by the
     /// parser; <see langword="null"/> when no clause is present.
     /// </summary>
-    public TypeClauseSyntax ExplicitInterfaceType
+    public TypeClauseSyntax? ExplicitInterfaceType
     {
         get => explicitInterfaceType;
         set
@@ -128,7 +128,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     }
 
     /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
-    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    public SyntaxToken? ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
         set
@@ -151,16 +151,16 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// Gets the <c>this</c> contextual keyword token when this declaration is an
     /// indexer member (ADR-0118), or <see langword="null"/> for an ordinary property.
     /// </summary>
-    public SyntaxToken ThisKeyword { get; private set; }
+    public SyntaxToken? ThisKeyword { get; private set; }
 
     /// <summary>Gets the optional opening bracket token of an indexer parameter list (ADR-0118).</summary>
-    public SyntaxToken OpenBracketToken { get; private set; }
+    public SyntaxToken? OpenBracketToken { get; private set; }
 
     /// <summary>Gets the indexer parameter list (ADR-0118). Empty for an ordinary property.</summary>
     public SeparatedSyntaxList<ParameterSyntax> Parameters { get; private set; }
 
     /// <summary>Gets the optional closing bracket token of an indexer parameter list (ADR-0118).</summary>
-    public SyntaxToken CloseBracketToken { get; private set; }
+    public SyntaxToken? CloseBracketToken { get; private set; }
 
     /// <summary>Gets a value indicating whether this declaration is an indexer member (ADR-0118).</summary>
     public bool IsIndexer => ThisKeyword != null;

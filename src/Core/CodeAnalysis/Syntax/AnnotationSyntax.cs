@@ -50,9 +50,9 @@ public sealed class AnnotationSyntax : SyntaxNode
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         SyntaxToken closeParenthesisToken,
-        SyntaxToken typeArgumentOpenBracketToken = null,
-        SeparatedSyntaxList<TypeClauseSyntax> typeArguments = default,
-        SyntaxToken typeArgumentCloseBracketToken = null)
+        SyntaxToken? typeArgumentOpenBracketToken = null,
+        SeparatedSyntaxList<TypeClauseSyntax>? typeArguments = default,
+        SyntaxToken? typeArgumentCloseBracketToken = null)
         : base(syntaxTree)
     {
         AtToken = atToken;
@@ -92,13 +92,13 @@ public sealed class AnnotationSyntax : SyntaxNode
     public SyntaxToken CloseParenthesisToken { get; }
 
     /// <summary>Gets the opening <c>[</c> of a C#11-style generic attribute's type-argument list (issue #1913), or <c>null</c> when none is present.</summary>
-    public SyntaxToken TypeArgumentOpenBracketToken { get; }
+    public SyntaxToken? TypeArgumentOpenBracketToken { get; }
 
     /// <summary>Gets the generic attribute's type-argument list (issue #1913); the default value when none is present.</summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> TypeArguments { get; }
+    public SeparatedSyntaxList<TypeClauseSyntax>? TypeArguments { get; }
 
     /// <summary>Gets the closing <c>]</c> of the type-argument list (issue #1913), or <c>null</c> when none is present.</summary>
-    public SyntaxToken TypeArgumentCloseBracketToken { get; }
+    public SyntaxToken? TypeArgumentCloseBracketToken { get; }
 
     /// <summary>Gets a value indicating whether this annotation carries a parenthesised argument list.</summary>
     public bool HasArgumentList => OpenParenthesisToken != null;

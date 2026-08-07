@@ -15,9 +15,9 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken scopedModifier;
-    private SyntaxToken refKindModifier;
-    private TypeParameterListSyntax typeParameterList;
+    private SyntaxToken? scopedModifier;
+    private SyntaxToken? refKindModifier;
+    private TypeParameterListSyntax? typeParameterList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="VariableDeclarationSyntax"/> class.
@@ -51,7 +51,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <param name="initializer">The initializer expression.</param>
     public VariableDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
+        SyntaxToken? accessibilityModifier,
         SyntaxToken keyword,
         SyntaxToken identifier,
         TypeClauseSyntax typeClause,
@@ -84,7 +84,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <summary>
     /// Gets the optional accessibility modifier token. Only meaningful for top-level declarations.
     /// </summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the var keyword.
@@ -95,7 +95,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
     /// When non-null, the local's safe-to-escape scope is restricted to the current function body.
     /// </summary>
-    public SyntaxToken ScopedModifier
+    public SyntaxToken? ScopedModifier
     {
         get => scopedModifier;
         set
@@ -113,7 +113,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// When non-null, this declaration is a ref-aliasing local: the slot stores a managed pointer to the
     /// initializer's lvalue and reads/writes through the local indirect through the alias.
     /// </summary>
-    public SyntaxToken RefKindModifier
+    public SyntaxToken? RefKindModifier
     {
         get => refKindModifier;
         set
@@ -137,7 +137,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <c>let First[T] = func (a T, b T) T { ... }</c>. <c>null</c> for non-generic declarations.
     /// Assigned by the parser.
     /// </summary>
-    public TypeParameterListSyntax TypeParameterList
+    public TypeParameterListSyntax? TypeParameterList
     {
         get => typeParameterList;
         set

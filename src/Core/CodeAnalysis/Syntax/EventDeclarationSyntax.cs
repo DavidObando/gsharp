@@ -15,9 +15,9 @@ public sealed class EventDeclarationSyntax : SyntaxNode
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken explicitInterfaceOpenParenToken;
-    private TypeClauseSyntax explicitInterfaceType;
-    private SyntaxToken explicitInterfaceCloseParenToken;
+    private SyntaxToken? explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax? explicitInterfaceType;
+    private SyntaxToken? explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EventDeclarationSyntax"/> class.
@@ -98,7 +98,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// explicit-interface-implementation qualifier clause, e.g. <c>event (IFoo) Changed T</c>
     /// (ADR-0149). Assigned by the parser; <see langword="null"/> for an ordinary event.
     /// </summary>
-    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    public SyntaxToken? ExplicitInterfaceOpenParenthesisToken
     {
         get => explicitInterfaceOpenParenToken;
         set
@@ -112,7 +112,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// Gets or sets the interface type referenced by the explicit-interface qualifier
     /// clause (ADR-0149). Assigned by the parser; <see langword="null"/> when no clause is present.
     /// </summary>
-    public TypeClauseSyntax ExplicitInterfaceType
+    public TypeClauseSyntax? ExplicitInterfaceType
     {
         get => explicitInterfaceType;
         set
@@ -123,7 +123,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     }
 
     /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
-    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    public SyntaxToken? ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
         set
