@@ -1,0 +1,20 @@
+# Nullable-enabled file sets (ADR-0155, issue #1364).
+#
+# One glob per line. Every .cs file matching a glob here must carry a real
+# top-level `#nullable enable` directive and must not contain a
+# `#nullable disable`/`restore` escape. Enforced by
+# `python3 build/nullable_hygiene.py`, which runs in the `nullable-hygiene`
+# CI job.
+#
+# This file exists because `src/Core` is a single project spanning every
+# subsystem, so the migration boundary can only be expressed per file
+# (ADR-0155 amendment A1). It is appended by each slice PR and DELETED by the
+# final flip PR, at which point `<Nullable>enable</Nullable>` in
+# build/gsharp.build.props enforces everything this file does.
+#
+# Only src/Core needs entries. Other projects flip via their csproj property.
+
+# Slice 1 -- leaf utilities (PR #3175)
+src/Core/CodeAnalysis/Text/**/*.cs
+src/Core/CodeAnalysis/Diagnostic/**/*.cs
+src/Core/IO/**/*.cs

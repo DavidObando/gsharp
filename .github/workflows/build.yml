@@ -200,6 +200,25 @@ jobs:
       - name: Run ILVerify gate
         run: ./build/run-ilverify.sh
 
+  nullable-hygiene:
+    # ADR-0155 amendment A3 (issue #1364): the nullable migration's annotation
+    # rules were review conventions, which do not survive a 573-file migration.
+    # This job enforces them mechanically -- directive coverage over
+    # build/nullable-enabled.txt, no #nullable disable escapes, no CS8xxx
+    # suppression via pragma/NoWarn/.editorconfig, no `= null!`, and a
+    # justifying comment beside every added `!`. No build required, ~20s.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run nullable hygiene gate
+        run: |
+          python3 build/nullable_hygiene.py \
+            --base "origin/${{ github.base_ref || 'main' }}"
+
   cs2gs-corpus:
     # ADR-0138: the C#→G# migration quality gate. Runs the full in-repo corpus
     # (L1–L5 + the conformance grid) through translate → compile → ilverify →
