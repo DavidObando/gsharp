@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>Base type for switch case patterns.</summary>

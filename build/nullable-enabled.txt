@@ -18,3 +18,7 @@
 src/Core/CodeAnalysis/Text/**/*.cs
 src/Core/CodeAnalysis/Diagnostic/**/*.cs
 src/Core/IO/**/*.cs
+
+# Slice 2 -- Syntax node types. The parser, lexer and SyntaxNode/Tree/Facts
+# base types are NOT in this set; they follow in slice 5.
+src/Core/CodeAnalysis/Syntax/*Syntax.cs

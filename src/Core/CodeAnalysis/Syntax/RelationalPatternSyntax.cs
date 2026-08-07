@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>Represents a relational pattern such as <c>&gt; 0</c>.</summary>

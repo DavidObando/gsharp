@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>Represents one field in a property pattern.</summary>
