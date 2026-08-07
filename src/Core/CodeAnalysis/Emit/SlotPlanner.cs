@@ -890,6 +890,34 @@ internal sealed class SlotPlanner
                 return;
             }
 
+            // Issue #3323: BoundTreeWalker (matching BoundTreeRewriter) treats a
+            // nested BoundFunctionLiteralExpression as an opaque leaf — its body
+            // is a separate lexical scope, so the walk never sees the literal's
+            // own captured-variable reads directly. That's correct for the
+            // literal's OWN capture analysis (LambdaBinder already resolved
+            // those onto node.CapturedVariables when the literal was bound), but
+            // this walker computes the *go-wrapper's* capture set, not the
+            // literal's. `go func() { c <- 42 }()` binds to an indirect call
+            // whose Function is exactly such a literal; without folding the
+            // literal's own CapturedVariables in here, the go-wrapper display
+            // class gets no field for `c`, and the wrapper's embedded literal-
+            // creation code — itself left unrewritten, since CaptureRewriter is
+            // equally opaque to nested literals — tries to read `c` straight off
+            // the go-wrapper's Invoke method, where it has no local slot,
+            // crashing emit with GS9998 ("no local slot"). Mirror
+            // LambdaBinder.CapturedVariableCollector.RewriteFunctionLiteralExpression,
+            // which solves the identical transitive-capture problem for ordinary
+            // (non-go) nested-lambda captures.
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                foreach (var nestedCapture in literal.CapturedVariables)
+                {
+                    this.CaptureIfFree(nestedCapture);
+                }
+
+                return;
+            }
+
             base.VisitExpression(node);
         }
 
