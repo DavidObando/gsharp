@@ -1602,10 +1602,11 @@ internal sealed partial class ExpressionBinder
         //   * `sequence[T]` is excluded — its nil comparison predates ADR-0159
         //     (#796) and bare sequence values commonly cross interop
         //     boundaries;
-        //   * the ADR-0159 honesty clauses (explicit `= default`, struct
-        //     default-instance holes) can reintroduce nil into a bare slot;
-        //     warning severity (suppressible via /nowarn:GS0523) is the
-        //     accepted trade for those corners.
+        //   * the ADR-0159 explicit `= default` honesty clause can
+        //     reintroduce nil into a bare slot (issue #3319 closed the
+        //     other former corner — a bare struct-typed local's own
+        //     magic-collection fields); warning severity (suppressible via
+        //     /nowarn:GS0523) is the accepted trade for that corner.
         if (boundOperator.Kind is BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals)
         {
             var nilCompareOperand =

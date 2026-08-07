@@ -13,8 +13,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// SOUND EMPTY INSTANCE instead of a null reference — locals, globals,
 /// class/struct instance fields, `shared` static fields, monomorphic and
 /// open-generic shapes. Channels are carved out (see the GS0520 tests).
-/// The honesty clauses (element defaults, value-struct `default` instances,
-/// the explicit `default` spelling) are pinned as documented limitations.
+/// The honesty clauses (element defaults, the explicit `default` spelling)
+/// are pinned as documented limitations. Issue #3319 closed the third
+/// original honesty clause — a bare `var s S` value-struct local/global/field
+/// now recursively synthesizes sound zero values for magic-collection fields
+/// through S's own field closure (see Issue3319StructLocalZeroValueEmitTests)
+/// — so only the explicit `= default` spelling remains a documented hole.
 /// </summary>
 public class Issue3310MagicTypeZeroValueEmitTests
 {
@@ -289,12 +293,18 @@ public class Issue3310MagicTypeZeroValueEmitTests
     }
 
     [Fact]
-    public void ValueStructDefaultInstance_MapFieldStaysNull_DocumentedHole()
+    public void ValueStructDefaultInstance_MapField_IsEmptyNotNil()
     {
-        // ADR-0159 honesty clause: a bare `var s S` value-struct local binds
-        // the all-zero instance (initobj), which bypasses constructors and
-        // therefore the injected initializers — the field IS nil there,
-        // mirroring C#'s `default(T)` struct hole under NRT.
+        // Issue #3319 narrows the ADR-0159 "value-struct default instance"
+        // honesty clause: a bare `var s S` value-struct local now recursively
+        // synthesizes a sound empty-instance zero value for S's OWN
+        // magic-collection fields (mirroring the top-level #2262 case), so
+        // this is NO LONGER a documented null hole — only the explicit
+        // `= default` spelling still bypasses (see
+        // ExplicitDefaultInitializer_StaysClrDefault below). Full struct
+        // recursion coverage (nested structs, class-containing-struct,
+        // #3219 ctor composition) lives in
+        // Issue3319StructLocalZeroValueEmitTests.
         var result = EmittedOracle.Evaluate("""
             package P3310StructDefaultHole
 
@@ -311,7 +321,7 @@ public class Issue3310MagicTypeZeroValueEmitTests
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
-        Assert.Equal(true, result.Value);
+        Assert.Equal(false, result.Value);
     }
 
     [Fact]
