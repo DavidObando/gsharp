@@ -1708,6 +1708,46 @@ internal sealed partial class ExpressionBinder
                 new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol, staticContainerType: null)));
         }
 
+        // Issue #3329 / ADR-0159: a value-type struct's magic-collection
+        // field loses its "sound zero value" instance-field initializer when
+        // the struct doesn't carry the GSharp.TypeSemantics marker (a PLAIN
+        // struct — see EmitGSharpTypeSemantics's data/primary-ctor gate) and
+        // is therefore constructed through this generic imported-CLR-type
+        // literal lowering instead of the StructSymbol aggregate path. The
+        // GSharp.MagicCollectionFields marker is written independently of
+        // that gate (every gsc-compiled value-type struct with a magic-
+        // collection field carries it), so this only ever fires for a
+        // gsc-compiled type — a genuine external (non-gsc) struct literal
+        // (e.g. a BCL type like `JsonWriterOptions`) is completely unaffected.
+        if (clrType.IsValueType
+            && ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
+        {
+            foreach (var (fieldName, kind) in magicFieldKinds)
+            {
+                if (seen.Contains(fieldName))
+                {
+                    continue;
+                }
+
+                var fieldInfo = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
+                var zeroValue = fieldInfo != null
+                    ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(fieldInfo, kind)
+                    : null;
+                if (zeroValue == null
+                    || !TryGetWritableClrMember(fieldInfo, out _, out var fieldTargetSymbol, out var fieldWritable)
+                    || !fieldWritable)
+                {
+                    continue;
+                }
+
+                var convertedZero = conversions.BindConversion(syntax.Location, zeroValue, fieldTargetSymbol);
+                var zeroReceiverExpr = new BoundVariableExpression(syntax, tempVar);
+                statements.Add(new BoundExpressionStatement(
+                    syntax,
+                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, fieldInfo, convertedZero, fieldTargetSymbol, staticContainerType: null)));
+            }
+        }
+
         var resultExpr = new BoundVariableExpression(syntax, tempVar);
         return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
     }

@@ -12,6 +12,7 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -191,6 +192,7 @@ internal sealed class AssemblyAttributeEmitter
         }
 
         this.EmitGSharpTypeSemantics(assemblyHandle);
+        this.EmitGSharpMagicCollectionFieldMarkers(assemblyHandle);
 
         // Issue #1929/#1953: producer-declared friend assemblies. Each
         // `@assembly:InternalsVisibleTo("Foo")` annotation becomes a real
@@ -317,6 +319,55 @@ internal sealed class AssemblyAttributeEmitter
                 "System.Reflection.AssemblyMetadataAttribute",
                 typeof(System.Reflection.AssemblyMetadataAttribute),
                 ImportedAssemblySemantics.TypeSemanticsMetadataKey,
+                payload);
+        }
+    }
+
+    /// <summary>
+    /// Issue #3329: emits the <c>GSharp.MagicCollectionFields</c> marker for
+    /// every VALUE-TYPE struct with at least one ADR-0159 magic-collection
+    /// field (map/slice/fixed array/sequence) — independent of
+    /// <see cref="EmitGSharpTypeSemantics"/>'s <c>data struct</c>/primary-
+    /// constructor gate, so a PLAIN field-only struct is covered too. A
+    /// struct literal for a type referenced from ANOTHER assembly (or, for
+    /// the REPL, an EARLIER submission) cannot see the declaring
+    /// compilation's own <see cref="StructSymbol.InstanceFieldInitializers"/>
+    /// (only that compilation ever binds the struct's own field
+    /// declarations); this marker lets it reconstruct the exact same sound
+    /// zero value instead of silently leaving such a field at its raw CLR
+    /// default (typically a null reference — the class of bug fixed by
+    /// #3329). A class literal needs no marker: constructing it always calls
+    /// its REAL parameterless constructor, which already runs these
+    /// initializers in-type.
+    /// </summary>
+    private void EmitGSharpMagicCollectionFieldMarkers(AssemblyDefinitionHandle assemblyHandle)
+    {
+        foreach (var type in this.emitCtx.Program.Structs)
+        {
+            if (type.IsClass || !this.cache.StructTypeDefs.TryGetValue(type, out var handle))
+            {
+                continue;
+            }
+
+            var entries = type.Fields
+                .Select(f => (Field: f, Kind: MagicCollectionZeroValue.ClassifyForMarker(f.Type)))
+                .Where(e => e.Kind != null)
+                .Select(e => $"{e.Field.Name}:{e.Kind}")
+                .ToArray();
+            if (entries.Length == 0)
+            {
+                continue;
+            }
+
+            var payload = string.Join(
+                "|",
+                MetadataTokens.GetToken(handle).ToString(CultureInfo.InvariantCulture),
+                string.Join(",", entries));
+            this.attrEncoder.EmitStringPairAttribute(
+                assemblyHandle,
+                "System.Reflection.AssemblyMetadataAttribute",
+                typeof(System.Reflection.AssemblyMetadataAttribute),
+                ImportedAssemblySemantics.MagicCollectionFieldsMetadataKey,
                 payload);
         }
     }

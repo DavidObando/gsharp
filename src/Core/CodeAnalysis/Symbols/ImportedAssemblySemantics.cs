@@ -21,6 +21,23 @@ internal static class ImportedAssemblySemantics
 {
     public const string TypeSemanticsMetadataKey = "GSharp.TypeSemantics";
 
+    /// <summary>
+    /// Issue #3329: the metadata key for the per-type magic-collection-field
+    /// marker — recorded for EVERY gsc-compiled value-type struct with at
+    /// least one ADR-0159 magic-collection-typed field (map/slice/fixed
+    /// array/sequence), independent of the <see cref="TypeSemanticsMetadataKey"/>
+    /// gate (which only marks <c>data struct</c>/primary-constructor types).
+    /// A struct literal for a type imported from another assembly (or, for
+    /// the REPL, an EARLIER submission) has no access to the declaring
+    /// compilation's own <see cref="StructSymbol.InstanceFieldInitializers"/>,
+    /// where this zero-value synthesis is normally recorded — this marker
+    /// lets it reconstruct exactly the same sound zero value instead of
+    /// silently leaving the field at its raw (frequently null / NRE-prone)
+    /// CLR default. See <see cref="Binding.MagicCollectionZeroValue.ClassifyForMarker"/>
+    /// / <see cref="Binding.MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker"/>.
+    /// </summary>
+    public const string MagicCollectionFieldsMetadataKey = "GSharp.MagicCollectionFields";
+
     private const string AssemblyMetadataAttributeFullName = "System.Reflection.AssemblyMetadataAttribute";
     private const string InternalsVisibleToAttributeFullName = "System.Runtime.CompilerServices.InternalsVisibleToAttribute";
 
@@ -48,6 +65,34 @@ internal static class ImportedAssemblySemantics
         try
         {
             return Cache.GetValue(type.Assembly, ReadAssemblySemantics).TypesByMetadataToken.TryGetValue(type.MetadataToken, out semantics);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #3329: looks up <paramref name="type"/>'s magic-collection-field
+    /// marker — the field-name-to-shape-tag map recorded by
+    /// <see cref="MagicCollectionFieldsMetadataKey"/> (independent of
+    /// <see cref="TryGetTypeSemantics"/>'s <c>data struct</c>/primary-ctor
+    /// gate, so a PLAIN struct's magic-collection fields are covered too).
+    /// </summary>
+    /// <param name="type">The reflected CLR type to inspect.</param>
+    /// <param name="fieldKinds">The field name to marker-tag map on success.</param>
+    /// <returns><see langword="true"/> when the type carries the marker.</returns>
+    public static bool TryGetMagicCollectionFields(Type type, out ImmutableDictionary<string, string> fieldKinds)
+    {
+        fieldKinds = null;
+        if (type == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return Cache.GetValue(type.Assembly, ReadAssemblySemantics).MagicCollectionFieldsByMetadataToken.TryGetValue(type.MetadataToken, out fieldKinds);
         }
         catch
         {
@@ -307,6 +352,7 @@ internal static class ImportedAssemblySemantics
     private static AssemblySemantics ReadAssemblySemantics(Assembly assembly)
     {
         var typesByToken = new Dictionary<int, ImportedTypeSemantics>();
+        var magicCollectionFieldsByToken = new Dictionary<int, ImmutableDictionary<string, string>>();
         var friends = new HashSet<string>(StringComparer.Ordinal);
 
         IList<CustomAttributeData> attributes;
@@ -318,6 +364,7 @@ internal static class ImportedAssemblySemantics
         {
             return new AssemblySemantics(
                 typesByToken.ToImmutableDictionary(),
+                magicCollectionFieldsByToken.ToImmutableDictionary(),
                 friends.ToImmutableHashSet(StringComparer.Ordinal));
         }
 
@@ -332,15 +379,20 @@ internal static class ImportedAssemblySemantics
                 }
 
                 var key = attribute.ConstructorArguments[0].Value as string;
-                if (!string.Equals(key, TypeSemanticsMetadataKey, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
                 var value = attribute.ConstructorArguments[1].Value as string;
-                if (TryParseTypeSemantics(value, out var semantics))
+                if (string.Equals(key, TypeSemanticsMetadataKey, StringComparison.Ordinal))
                 {
-                    typesByToken[semantics.MetadataToken] = semantics;
+                    if (TryParseTypeSemantics(value, out var semantics))
+                    {
+                        typesByToken[semantics.MetadataToken] = semantics;
+                    }
+                }
+                else if (string.Equals(key, MagicCollectionFieldsMetadataKey, StringComparison.Ordinal))
+                {
+                    if (TryParseMagicCollectionFields(value, out var typeToken, out var fieldKinds))
+                    {
+                        magicCollectionFieldsByToken[typeToken] = fieldKinds;
+                    }
                 }
 
                 continue;
@@ -364,7 +416,42 @@ internal static class ImportedAssemblySemantics
 
         return new AssemblySemantics(
             typesByToken.ToImmutableDictionary(),
+            magicCollectionFieldsByToken.ToImmutableDictionary(),
             friends.ToImmutableHashSet(StringComparer.Ordinal));
+    }
+
+    // Issue #3329: payload shape is "typeToken|field1:kind1,field2:kind2,...";
+    // see AssemblyAttributeEmitter.EmitGSharpMagicCollectionFieldMarkers for
+    // the writer.
+    private static bool TryParseMagicCollectionFields(string value, out int typeToken, out ImmutableDictionary<string, string> fieldKinds)
+    {
+        typeToken = 0;
+        fieldKinds = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var parts = value.Split('|');
+        if (parts.Length != 2 || !int.TryParse(parts[0], out typeToken))
+        {
+            return false;
+        }
+
+        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var entry in parts[1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var colon = entry.IndexOf(':');
+            if (colon < 0)
+            {
+                continue;
+            }
+
+            builder[entry.Substring(0, colon)] = entry.Substring(colon + 1);
+        }
+
+        fieldKinds = builder.ToImmutable();
+        return true;
     }
 
     private static bool TryParseTypeSemantics(string value, out ImportedTypeSemantics semantics)
@@ -442,6 +529,7 @@ internal static class ImportedAssemblySemantics
 
     private sealed record AssemblySemantics(
         ImmutableDictionary<int, ImportedTypeSemantics> TypesByMetadataToken,
+        ImmutableDictionary<int, ImmutableDictionary<string, string>> MagicCollectionFieldsByMetadataToken,
         ImmutableHashSet<string> FriendAssemblies);
 }
 

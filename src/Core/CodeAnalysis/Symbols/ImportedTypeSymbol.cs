@@ -418,6 +418,47 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         aggregate.SetProperties(propertyBuilder.ToImmutable());
         aggregate.SetMethods(BuildMethods(type, aggregate, includeInternal));
         aggregate.SetStaticMethods(BuildStaticMethods(type, aggregate, includeInternal));
+
+        // Issue #3329: a value struct's ADR-0159 magic-collection field zero
+        // value is normally recorded on the DECLARING compilation's own
+        // StructSymbol.InstanceFieldInitializers (DeclarationBinder.Structs.cs)
+        // — unavailable here, since this aggregate is built purely from
+        // reflection over an ALREADY-EMITTED type in another assembly (or,
+        // for the REPL, an earlier submission). Reconstruct it from the
+        // GSharp.MagicCollectionFields marker so a struct literal `S{}` for
+        // this imported type still zero-initializes such a field to its
+        // sound empty instance rather than a raw (often null) CLR default.
+        // A class needs no reconstruction: its literal always calls the
+        // REAL parameterless constructor, which already runs these
+        // initializers in-type.
+        if (semantics.IsValueType
+            && ImportedAssemblySemantics.TryGetMagicCollectionFields(type, out var magicFieldKinds))
+        {
+            var fieldsByName = aggregate.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
+            var instanceInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
+            foreach (var (fieldName, kind) in magicFieldKinds)
+            {
+                if (!fieldsByName.TryGetValue(fieldName, out var fieldSymbol))
+                {
+                    continue;
+                }
+
+                var reflectedField = type.GetField(fieldName, bindingFlags);
+                var zeroValue = reflectedField != null
+                    ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind)
+                    : null;
+                if (zeroValue != null)
+                {
+                    instanceInitBuilder[fieldSymbol] = zeroValue;
+                }
+            }
+
+            if (instanceInitBuilder.Count > 0)
+            {
+                aggregate.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());
+            }
+        }
+
         return aggregate;
     }
 
