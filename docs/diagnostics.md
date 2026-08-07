@@ -558,13 +558,13 @@ See [ADR-0074](adr/0074-arrow-lambda-and-colon-switch-arms.md). The lambda opera
 
 ## Arrow function-type clause diagnostics (GS0303)
 
-See [ADR-0075](adr/0075-arrow-function-type-clause.md). The canonical function-type clause is `(T1, T2, ...) -> R`; the legacy `func(T) R` spelling continues to parse for one release with a warning.
+See [ADR-0075](adr/0075-arrow-function-type-clause.md). The canonical function-type clause is `(T1, T2, ...) -> R`; the legacy `func(T) R` spelling continues to parse for one release with a warning. The managed function-pointer form `*func(T) R` is a distinct ADR-0122 construct and is not deprecated.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0303 | Warning | `'func(...)' function-type clauses are deprecated; use '(T) -> R' instead (ADR-0075).` | `var f func(int32) int32 = …` — rewrite as `var f (int32) -> int32 = …`. Async variant: `async func(T) R` → `async (T) -> R`. |
+| GS0303 | Warning | `'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122).` | `var f func(int32) int32 = …` — rewrite as `var f (int32) -> int32 = …`. Async variant: `async func(T) R` → `async (T) -> R`. |
 
-GS0303 fires once per occurrence of the legacy `func` keyword in a *type-clause* position. It does **not** fire on function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), or `delegate func(...)` named-delegate type declarations — all three keep `func`.
+GS0303 fires once per occurrence of the legacy `func` keyword in a *type-clause* position. It does **not** fire on function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), `delegate func(...)` named-delegate type declarations, or `*func(...) R` managed function-pointer types — all four keep `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398.
 
 ## Lambda binding type-inference diagnostics (GS0304)
 
