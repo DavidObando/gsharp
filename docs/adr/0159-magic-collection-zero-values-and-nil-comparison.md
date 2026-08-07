@@ -156,12 +156,18 @@ clause is the natural future fix.
   `newarr`) nor precedented: this is exactly C# NRT's known array hole
   (`new string[10]` under NRT). Reading such an element and dereferencing it
   is pre-existing behavior, not a regression from this change.
-- **Value-struct default instances.** `var s S` for a value `struct S` with a
-  map field binds the struct's all-zero value (`initobj`), which bypasses
-  constructors and therefore the injected field initializers — the field is
-  null there, mirroring C#'s `default(T)` struct hole (see ADR-0155's struct
-  annotation rule). Literal- and constructor-built instances (`S{}`, `S(…)`)
-  do run the injected initializers.
+- **Value-struct default instances — CLOSED for magic-collection fields by
+  issue #3319.** `var s S` for a value `struct S` binds the struct's all-zero
+  value (`initobj`), which bypasses constructors and therefore the injected
+  field initializers. Originally this meant a magic-collection field of `S`
+  stayed null there too (C#'s `default(T)` struct hole) — see the #3319
+  addendum below for why that specific case is no longer a hole. The
+  underlying mechanism is unchanged for everything else: a NON-magic field's
+  EXPLICIT initializer (e.g. `var Count int32 = 5`) still does not run for a
+  bare declaration, at any nesting depth — only the *sound zero value* for a
+  magic-collection field is synthesized, matching the top-level rule this ADR
+  already established. Literal- and constructor-built instances (`S{}`,
+  `S(…)`) run the injected initializers in full, as before.
 - **The explicit `default` spelling keeps its CLR meaning.** `var m map[K, V]
   = default` (ADR-0100) still materializes the CLR default — null — like
   `default(T)` in C#. The empty-instance rule applies to *omitted*
@@ -261,3 +267,67 @@ right side of a short-circuit operator) are checked against the statement's
 entry state, and the fail-safe catch path that guards the whole analysis
 skips GS0522 like it skips GS0239. The nullable-channel spelling
 (follow-up (b)) remains open.
+
+## Addendum (issue #3319): struct-local zero values recurse into magic-collection fields
+
+The "value-struct default instances" honesty clause above originally covered
+*every* field of a bare `var s S` — including S's own magic-collection
+fields, which is exactly the #2262 NRE class this ADR otherwise closed,
+just one level of struct nesting away from the fields this ADR's original
+scope covered. Issue #3319 (filed while auditing #3314's own fallout)
+closes that specific gap:
+
+- `MagicCollectionZeroValue.TrySynthesizeEmptyInstance` gains a case for a
+  non-class, non-inline `StructSymbol`: it recurses into the struct's own
+  `Fields`, synthesizing a `BoundStructLiteralExpression` that carries a
+  `BoundFieldInitializer` for every field (at any nesting depth of further
+  struct composition) whose type needs a sound zero value. Class-typed
+  fields are NOT recursed into — a bare class-typed slot's CLR-default null
+  is unchanged and correct (classes require explicit construction); only a
+  struct's OWN fields are embedded by value and therefore share the bare
+  declaration's storage.
+- This single extension point is reused by every existing consumer of
+  `TrySynthesizeEmptyInstance` — the bare `var s S` local/global/REPL-cell
+  declaration path, AND the struct/class field-default probe in
+  `DeclarationBinder.Structs.cs` — so it also closes the audited gap for a
+  magic-collection field nested inside a class's own struct-typed field
+  (`class C { var s S }` where `S` has a slice field): before #3319, `S`'s
+  OWN field defaults were never independently applied when `S` itself was
+  used as ANOTHER type's field, only when `S` was the direct declared type
+  of a probe; the class's synthesized default constructor now correctly
+  assigns `C`'s `s` field to `S`'s (recursively) sound zero value.
+- **Composing with #3219.** A non-public field can only be stored into from
+  inside its declaring struct. When a nested struct's non-public field needs
+  a zero value, the recursion omits that field from ITS OWN caller-side
+  literal (an external store would throw `FieldAccessException`) — that
+  struct's OWN independent field-default probe already causes
+  `ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor` to
+  synthesize its parameterless constructor for this exact reason, and the
+  caller-side literal is emitted with an EMPTY initializer list instead,
+  routing construction through `call .ctor()` (which assigns every declared
+  field, public and private, in one in-type pass) rather than the historical
+  inline `initobj` + per-field `stfld` path.
+- **Byte-identical emission is unaffected for every struct #3219 already
+  left untouched.** A struct with no magic-collection field anywhere in its
+  field closure gets a `null` result from the recursion (exactly as
+  before #3319 existed) — no literal, no synthesized constructor, no change
+  in emitted bytes. The recursion only ever produces a non-null result, and
+  therefore only ever adds work, for a struct that genuinely has a
+  magic-collection field to default — the exact set of structs #3314 already
+  started synthesizing zero values for at the direct-field level.
+- **What remains a documented hole.** A NON-magic field's EXPLICIT
+  initializer (private or public) still does not run for a bare
+  declaration, at any nesting depth — `var s S` where `S` has
+  `var Count int32 = 5` still leaves `Count` at `0`, matching this ADR's
+  original "value-struct default instance bypasses ctors" semantics for
+  everything that is not a magic-collection zero value. The explicit
+  `= default` spelling (the honesty clause above) is likewise unchanged: it
+  still keeps its literal CLR meaning, magic-collection fields included.
+- **Self-referential struct shapes.** Nothing in the compiler rejects a
+  value struct that contains itself by value (`struct S { var Self S }`) as
+  a layout cycle — the CLR itself throws `TypeLoadException` at type-load
+  time, pre-existing and unrelated to #3319. The recursive zero-value
+  synthesis guards against this independently (a `visiting` set keyed by
+  the struct's generic definition) purely so the COMPILER does not hang or
+  stack-overflow while walking such a shape; it does not attempt to make
+  the shape itself valid.

@@ -1240,8 +1240,9 @@ of a `?`-declared slot — v1 keys on the declared type, leaving a
 excluded from v1: its nil comparison predates ADR-0159 (#796) and bare
 sequence values commonly cross interop boundaries. Known accepted corners
 (warning severity, suppressible via `/nowarn:GS0523`): an explicit
-`= default` initializer and the ADR-0159 struct default-instance honesty
-clause can reintroduce nil into a bare slot.
+`= default` initializer can reintroduce nil into a bare slot (issue #3319
+closed the other former corner — a bare struct-typed local's own
+magic-collection fields — so it no longer applies).
 
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
