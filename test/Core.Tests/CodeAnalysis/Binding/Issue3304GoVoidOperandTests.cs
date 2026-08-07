@@ -145,6 +145,27 @@ public class Issue3304GoVoidOperandTests
     }
 
     [Fact]
+    public void Go_OnAsyncNoResultFunctionCall_StillBindsViaTaskShape()
+    {
+        // Async interplay pin (unchanged by #3304): a call to an async
+        // no-result function is bound with a Task return type at the call
+        // site (OverloadResolver wraps via WrapAsTask), so it never hits the
+        // void-operand path — the goroutine takes the Func<Task> thunk and
+        // is a properly awaited spawn, before and after this fix.
+        var source = """
+            import System.Threading.Tasks
+
+            async func work() {
+                await Task.Delay(1)
+            }
+
+            go work()
+            """;
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Go_OnNonCallExpression_StillDiagnosesGS0137()
     {
         // Pin: only the void restriction is lifted — a non-call operand is

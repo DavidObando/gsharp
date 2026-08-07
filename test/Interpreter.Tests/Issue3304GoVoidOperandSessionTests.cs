@@ -22,23 +22,22 @@ public sealed class Issue3304GoVoidOperandSessionTests : IDisposable
     [Fact]
     public void GoOnVoidCall_InReplSubmission_RunsAndRendezvouses()
     {
-        // ADR-0082: the Go surface is gated per compilation unit, so each
-        // cell that uses `go`/`chan`/`<-` carries the import.
-        var declare = engine.Evaluate("""
+        // The whole rendezvous lives in one submission: a channel hoisted
+        // into session state is projected back as its CLR type
+        // (System.Threading.Channels.Channel[int32]), not a ChannelTypeSymbol,
+        // so a later cell's `<-done` is rejected — a pre-existing
+        // cross-submission limitation independent of #3304 (it fails
+        // identically for a value-returning goroutine target).
+        var cell = engine.Evaluate("""
             import Gsharp.Extensions.Go
             var done = make(chan int32, 1)
             func poke() {
                 done <- 42
             }
-            """);
-        Assert.False(declare.HasError);
-
-        var launch = engine.Evaluate("""
-            import Gsharp.Extensions.Go
             go poke()
             <-done
             """);
-        Assert.False(launch.HasError);
-        Assert.Equal(42, launch.Value);
+        Assert.False(cell.HasError, string.Join("; ", cell.Diagnostics));
+        Assert.Equal(42, cell.Value);
     }
 }

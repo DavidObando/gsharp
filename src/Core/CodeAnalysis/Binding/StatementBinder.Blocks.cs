@@ -632,7 +632,13 @@ internal sealed partial class StatementBinder
         // the operand's call-shape still surface.
         binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.GoKeyword.Location, "go");
 
-        var expression = bindExpression(syntax.Expression);
+        // Issue #3304: the spawned call's result is discarded (ADR-0022), so
+        // a void-returning operand is the natural goroutine shape — bind with
+        // canBeVoid so GS0124 does not force `return 0` boilerplate onto
+        // goroutine bodies. Non-call operands are still rejected below
+        // (GS0137), and the emit path already wraps a non-Task operand in an
+        // Action-shaped thunk whose body is an expression statement.
+        var expression = bindExpression(syntax.Expression, canBeVoid: true);
 
         if (expression is BoundErrorExpression)
         {
