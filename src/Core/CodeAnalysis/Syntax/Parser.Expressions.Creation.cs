@@ -847,12 +847,70 @@ public partial class Parser
             pos++;
         }
 
+        if (!CanStartTypeClause(Peek(pos)))
+        {
+            return false;
+        }
+
+        // CLR generic arguments cannot be pointer types. Keep `*T` on its
+        // existing rejection path, but scan the distinct `*func(T) R`
+        // production accepted by ParseTypeClauseCore.
+        if (Peek(pos).Kind == SyntaxKind.StarToken)
+        {
+            if (Peek(pos + 1).Kind != SyntaxKind.FuncKeyword)
+            {
+                return false;
+            }
+
+            isComplex = true;
+            pos++;
+        }
+
         // ADR-0075: `async (T) -> R` and `func(T) R` start a function-type clause.
         // Handle the optional leading `async` modifier here so the next token
         // is the actual head of the function-type clause.
+        var hasAsyncModifier = false;
         if (Peek(pos).Kind == SyntaxKind.AsyncKeyword)
         {
+            hasAsyncModifier = true;
+            isComplex = true;
             pos++;
+        }
+
+        if (Peek(pos).Kind == SyntaxKind.SequenceKeyword)
+        {
+            isComplex = true;
+            return TryScanSequenceTypeClause(ref pos);
+        }
+
+        if (hasAsyncModifier
+            && Peek(pos).Kind != SyntaxKind.FuncKeyword
+            && Peek(pos).Kind != SyntaxKind.OpenParenthesisToken)
+        {
+            return false;
+        }
+
+        if (Peek(pos).Kind == SyntaxKind.MapKeyword)
+        {
+            isComplex = true;
+            return TryScanMapTypeClause(ref pos);
+        }
+
+        if (Peek(pos).Kind == SyntaxKind.ChanKeyword)
+        {
+            isComplex = true;
+            pos++;
+            if (!TryScanTypeClause(ref pos))
+            {
+                return false;
+            }
+
+            if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+            {
+                pos++;
+            }
+
+            return true;
         }
 
         // ADR-0075: `(T1, T2, ...) -> R` arrow function-type clause, or a
@@ -946,8 +1004,8 @@ public partial class Parser
             pos++;
 
             // Optional return type for the legacy func form.
-            if (Peek(pos).Kind == SyntaxKind.IdentifierToken
-                || Peek(pos).Kind == SyntaxKind.OpenParenthesisToken)
+            if (CanStartTypeClause(Peek(pos))
+                && Peek(pos).Kind != SyntaxKind.StarToken)
             {
                 if (!TryScanTypeClause(ref pos))
                 {
@@ -1006,6 +1064,78 @@ public partial class Parser
         {
             // A nullable suffix is unambiguously a type shape (Issue #1323).
             isComplex = true;
+            pos++;
+        }
+
+        return true;
+    }
+
+    private bool TryScanSequenceTypeClause(ref int pos)
+    {
+        pos++;
+        if (Peek(pos).Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return false;
+        }
+
+        pos++;
+        if (!TryScanTypeClause(ref pos)
+            || Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)
+        {
+            return false;
+        }
+
+        pos++;
+        if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+        {
+            pos++;
+        }
+
+        return true;
+    }
+
+    private bool TryScanMapTypeClause(ref int pos)
+    {
+        pos++;
+        if (Peek(pos).Kind != SyntaxKind.OpenSquareBracketToken)
+        {
+            return false;
+        }
+
+        pos++;
+        if (!TryScanTypeClause(ref pos))
+        {
+            return false;
+        }
+
+        if (Peek(pos).Kind == SyntaxKind.CommaToken)
+        {
+            pos++;
+            if (!TryScanTypeClause(ref pos)
+                || Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)
+            {
+                return false;
+            }
+
+            pos++;
+        }
+        else if (Peek(pos).Kind == SyntaxKind.CloseSquareBracketToken)
+        {
+            // Preserve legacy `map[K]V` recognition so ParseTypeClause can
+            // report its existing span-accurate GS0366 migration diagnostic.
+            pos++;
+            if (!TryScanTypeClause(ref pos))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        if (Peek(pos).Kind == SyntaxKind.QuestionToken)
+        {
             pos++;
         }
 
@@ -1436,7 +1566,7 @@ public partial class Parser
                Current.Kind != SyntaxKind.CloseSquareBracketToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseTypeClause());
+            nodesAndSeparators.Add(ParseGenericTypeArgument());
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {

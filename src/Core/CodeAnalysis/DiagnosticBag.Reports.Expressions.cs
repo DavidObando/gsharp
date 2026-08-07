@@ -201,6 +201,11 @@ public sealed partial class DiagnosticBag
     public void ReportTypeNotGeneric(TextLocation location, string name)
     => Report(location, DiagnosticDescriptors.TypeNotGeneric, name);
 
+    /// <summary>Reports a pointer or function-pointer type used as a CLR generic type argument.</summary>
+    /// <param name="location">The location of the pointer type clause.</param>
+    public void ReportPointerGenericTypeArgument(TextLocation location)
+    => Report(location, DiagnosticDescriptors.PointerGenericTypeArgument);
+
     /// <summary>Reports a generic call whose type arguments could not be inferred from the value arguments (Phase 4.1 / ADR-0020).</summary>
     /// <param name="location">The text location of the call.</param>
     /// <param name="name">The callee name.</param>

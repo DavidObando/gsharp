@@ -608,7 +608,7 @@ public partial class Parser
                 var keyword = NextToken();
                 var ident = MatchToken(SyntaxKind.IdentifierToken);
                 TypeClauseSyntax declType = null;
-                if (CurrentTokenStartsTypeClause())
+                if (CanStartTypeClause(Current))
                 {
                     declType = ParseTypeClause();
                 }
@@ -621,7 +621,7 @@ public partial class Parser
             {
                 var underscore = NextToken();
                 TypeClauseSyntax declType = null;
-                if (CurrentTokenStartsTypeClause())
+                if (CanStartTypeClause(Current))
                 {
                     declType = ParseTypeClause();
                 }
@@ -1070,28 +1070,6 @@ public partial class Parser
             // Value-producing only when immediately followed by the
             // enclosing block expression's own closing brace (tail position).
             return Peek(m + 1).Kind == SyntaxKind.CloseBraceToken;
-        }
-    }
-
-    // ADR-0060 helper for the optional `out var name T` / `out let name T` /
-    // `out name T` type-clause: returns true when the current token is an
-    // identifier that could start a G# type clause (excluding `,` / `)`).
-    private bool CurrentTokenStartsTypeClause()
-    {
-        switch (Current.Kind)
-        {
-            case SyntaxKind.FuncKeyword:
-            case SyntaxKind.OpenParenthesisToken:
-            case SyntaxKind.MapKeyword:
-            case SyntaxKind.ChanKeyword:
-            case SyntaxKind.SequenceKeyword:
-            case SyntaxKind.AsyncKeyword:
-            case SyntaxKind.StarToken:
-            case SyntaxKind.OpenSquareBracketToken:
-            case SyntaxKind.IdentifierToken:
-                return true;
-            default:
-                return false;
         }
     }
 

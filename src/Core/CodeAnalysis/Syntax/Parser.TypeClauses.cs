@@ -306,7 +306,7 @@ public partial class Parser
         while (Current.Kind != SyntaxKind.CloseSquareBracketToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseTypeClause());
+            nodesAndSeparators.Add(ParseGenericTypeArgument());
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -319,6 +319,17 @@ public partial class Parser
 
         list = new SeparatedSyntaxList<TypeClauseSyntax>(nodesAndSeparators.ToImmutable());
         close = MatchToken(SyntaxKind.CloseSquareBracketToken);
+    }
+
+    private TypeClauseSyntax ParseGenericTypeArgument()
+    {
+        var typeArgument = ParseTypeClause();
+        if (typeArgument.IsPointer || typeArgument.IsFunctionPointer)
+        {
+            Diagnostics.ReportPointerGenericTypeArgument(typeArgument.Location);
+        }
+
+        return typeArgument;
     }
 
     private TypeClauseSyntax ParseTupleTypeClause()
@@ -861,15 +872,7 @@ public partial class Parser
 
     private TypeClauseSyntax ParseOptionalTypeClause()
     {
-        if (Current.Kind != SyntaxKind.IdentifierToken &&
-            Current.Kind != SyntaxKind.OpenSquareBracketToken &&
-            Current.Kind != SyntaxKind.OpenParenthesisToken &&
-            Current.Kind != SyntaxKind.FuncKeyword &&
-            Current.Kind != SyntaxKind.MapKeyword &&
-            Current.Kind != SyntaxKind.ChanKeyword &&
-            Current.Kind != SyntaxKind.SequenceKeyword &&
-            Current.Kind != SyntaxKind.AsyncKeyword &&
-            Current.Kind != SyntaxKind.StarToken)
+        if (!CanStartTypeClause(Current))
         {
             return null;
         }
