@@ -75,10 +75,11 @@ Within a slice, dependencies must point outward only: an enabled directory may r
 
 Executing this ADR past its first slice required measurement it did not have. A sandboxed census — the whole solution built with `-p:Nullable=enable -p:TreatWarningsAsErrors=false -p:OutRoot=<scratch>`, which touches nothing in the tree — produced the first real numbers:
 
-- **8,154 warnings in production C#** (2,402 more in tests, which are out of scope; see A5). **Zero errors** — enabling nullability never breaks compilation anywhere in the repo, so the entire migration is warning resolution.
-- Four diagnostics are 90.8% of the work: **CS8625** (null literal to non-nullable) 3,893, **CS8604** (possible null argument) 1,454, **CS8600** (null-to-non-nullable conversion) 1,155, **CS8603** (possible null return) 906.
-- **CS8602 — dereference of a possibly null reference, the actual latent-NRE signal — is only 177 (2.2%).** The migration is overwhelmingly about *declaring* contracts, not about discovering crashes.
-- **CS8618** (uninitialized non-nullable member) is only 250, confirming that the ~280 constructor-assigns-everything node types cost almost nothing.
+- **8,734 warnings in production C#** (tests add ~2,400 more and are out of scope; see A5). **Zero errors** — enabling nullability never breaks compilation anywhere in the repo, so the entire migration is warning resolution.
+- Four diagnostics are 84.8% of the work: **CS8625** (null literal to non-nullable) 3,893, **CS8604** (possible null argument) 1,454, **CS8600** (null-to-non-nullable conversion) 1,155, **CS8603** (possible null return) 906. **CS8618** (uninitialized non-nullable member) adds 828.
+- **CS8602 — dereference of a possibly null reference, the actual latent-NRE signal — is only 177 (2.0%).** The migration is overwhelmingly about *declaring* contracts, not about discovering crashes.
+
+Counting note: diagnostics must be deduplicated on the full message, not on file/line/column. A constructor that leaves several properties unassigned reports one CS8618 per property, all at the same position; collapsing them undercounts CS8618 by a factor of three.
 
 The amendments below follow from those numbers and from two structural facts.
 
@@ -96,15 +97,19 @@ Measured cost also inverts the LOC-based intuition the fixed order encodes:
 
 | Subsystem | Warnings | LOC | Per 1k LOC |
 |---|---:|---:|---:|
-| `Binding/` | 3,431 | 113,755 | 30.1 |
-| `Lowering/` | 1,088 | 16,601 | **65.5** |
-| `Syntax/` | 731 | 27,272 | 26.8 |
-| `Emit/` | 638 | 46,548 | **13.7** |
-| `Symbols/` | 321 | 19,110 | 16.7 |
+| `Binding/` | 3,465 | 113,755 | 30.4 |
+| `Lowering/` | 1,095 | 16,601 | **65.9** |
+| `Syntax/` | 1,159 | 27,568 | 42.0 |
+| `Emit/` | 670 | 46,548 | **14.3** |
+| `Symbols/` | 381 | 19,110 | 19.9 |
 
-`Emit/` is 2.8× the size of `Lowering/` and carries 40% fewer warnings. Ordering by LOC would have scheduled these backwards.
+`Emit/` is 2.8× the size of `Lowering/` and carries 39% fewer warnings. Ordering by LOC would have scheduled these backwards.
 
-**The replacement order cuts the cycle at its shared vocabulary.** The types the cycle is *made of* — the ~148 `Syntax/*Syntax.cs` and ~132 `Binding/Bound*.cs` node classes — are annotated first, across directory boundaries. They are sealed, assign every readonly auto-property in their constructor, and carry almost no inbound null flow, so they are cheap; and annotating them delivers contract signal to `Symbols`, `Binding`, `Lowering` and `Emit` simultaneously, which is the only way to supply a bottom to a graph that has none.
+**The replacement order cuts the cycle at its shared vocabulary.** The types the cycle is *made of* — the ~148 `Syntax/*Syntax.cs` and ~132 `Binding/Bound*.cs` node classes — are annotated first, across directory boundaries. Annotating them delivers contract signal to `Symbols`, `Binding`, `Lowering` and `Emit` simultaneously, which is the only way to supply a bottom to a graph that has none.
+
+Node types are the right cut because their cost is **order-independent**. Enabling `Syntax/*Syntax.cs` alone produced 533 warnings against the 535 the full-tree census predicts for those files — a two-warning difference, so migrating them early costs no rework and creates no false work. That measurement is the empirical test for any future reordering: compare a directory's isolated warning count against its full-tree count, and prefer the slices where the two agree.
+
+They are not, however, uniformly free. The bulk is CS8618 on node types with several constructor overloads, one per syntactic form, each assigning a different subset of properties — the honest annotation is `?` on the members a given form omits, which is a real contract statement rather than a mechanical fix.
 
 The payoff is concentrated in a single declaration. `BoundNode.Syntax` is declared `public SyntaxNode Syntax { get; }` while its own doc comment states it is *"`null` when the node was synthesised by a lowering pass and has no direct source counterpart"*. **1,790 of the 3,893 CS8625 warnings — 22% of the entire production migration — are `null` passed as that constructor argument** (988 in `Binding/`, 645 in `Lowering/`, 157 in `Emit/`; the cluster alone is 59% of `Lowering/`'s total). Declaring it `SyntaxNode?` is a one-line change that makes the type say what the documentation already says.
 
