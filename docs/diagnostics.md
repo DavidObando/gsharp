@@ -1208,6 +1208,23 @@ int32?` is a channel of nullable `int32` — consistent with `[]T?` and
 |----|----------|-------------|
 | GS0521 | Error | Pointer and function-pointer types cannot be used as generic type arguments because the CLR cannot instantiate generic types with them. |
 
+## Nil comparison against a bare collection type is statically constant (GS0523)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, or `chan T`. With ADR-0159's sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `(chan T)?`) if it is genuinely optional. |
+
+The warning is static-type based and fires for both operand orders. It does
+NOT fire for `?`-typed operands (including interop values surfaced as `T?`,
+which are the comparison's real use case), nor for a smart-cast-narrowed read
+of a `?`-declared slot — v1 keys on the declared type, leaving a
+"redundant re-check" nuance as a possible future refinement. `sequence[T]` is
+excluded from v1: its nil comparison predates ADR-0159 (#796) and bare
+sequence values commonly cross interop boundaries. Known accepted corners
+(warning severity, suppressible via `/nowarn:GS0523`): an explicit
+`= default` initializer and the ADR-0159 struct default-instance honesty
+clause can reintroduce nil into a bare slot.
+
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
 GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage

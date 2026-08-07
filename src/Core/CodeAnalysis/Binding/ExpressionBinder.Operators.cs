@@ -1587,6 +1587,39 @@ internal sealed partial class ExpressionBinder
             boundRight = conversions.BindConversion(syntax.Right.Location, boundRight, boundOperator.Type);
         }
 
+        // Issue #3317 / ADR-0159: with sound empty-instance zero values, a nil
+        // comparison whose non-nil operand's STATIC type is a bare (non-`?`)
+        // magic collection type — `map[K, V]`, `[]T`, `[N]T`, or `chan T`
+        // (which GS0520 forces to be explicitly initialized) — is statically
+        // constant: `== nil` is always false, `!= nil` always true. Warn
+        // (GS0523) so dead checks (typically Go porting artifacts) surface;
+        // `?`-typed slots and interop values surfaced as `T?` are the
+        // comparison's real use case and never match the bare-type test.
+        // v1 scope decisions (documented in docs/diagnostics.md):
+        //   * static-type-based only, keyed on the DECLARED type — an operand
+        //     smart-cast from `T?` to `T` (a narrowed read) does not warn, so
+        //     the redundant-re-check nuance is left as a future refinement;
+        //   * `sequence[T]` is excluded — its nil comparison predates ADR-0159
+        //     (#796) and bare sequence values commonly cross interop
+        //     boundaries;
+        //   * the ADR-0159 honesty clauses (explicit `= default`, struct
+        //     default-instance holes) can reintroduce nil into a bare slot;
+        //     warning severity (suppressible via /nowarn:GS0523) is the
+        //     accepted trade for those corners.
+        if (boundOperator.Kind is BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals)
+        {
+            var nilCompareOperand =
+                boundRight.Type == TypeSymbol.Null && boundLeft.Type != TypeSymbol.Null ? boundLeft :
+                boundLeft.Type == TypeSymbol.Null && boundRight.Type != TypeSymbol.Null ? boundRight : null;
+            if (nilCompareOperand != null && IsBareMagicCollectionNilCompareOperand(nilCompareOperand))
+            {
+                Diagnostics.ReportNilComparisonAlwaysConstant(
+                    syntax.Location,
+                    nilCompareOperand.Type,
+                    boundOperator.Kind == BoundBinaryOperatorKind.Equals ? "false" : "true");
+            }
+        }
+
         // Issue #3217: canonicalize a `nil` literal on the LEFT of `==` / `!=`
         // (`nil != x`) to the nil-on-right form (`x != nil`). The operator
         // table's null-compare arm binds both orders symmetrically, but the
@@ -1614,6 +1647,33 @@ internal sealed partial class ExpressionBinder
         // context trap on overflow; every other operator kind ignores the
         // flag (comparisons, bitwise ops, etc. never overflow-check).
         return new BoundBinaryExpression(null, boundLeft, boundOperator, boundRight, binderCtx.IsCheckedContext);
+    }
+
+    /// <summary>
+    /// Issue #3317 / ADR-0159: true when a nil-comparison operand warrants the
+    /// GS0523 "always false/true" warning — its static type is a bare
+    /// (non-<c>?</c>) magic collection type with a sound non-nil guarantee
+    /// (<c>map[K, V]</c>, <c>[]T</c>, <c>[N]T</c>, <c>chan T</c>) AND it is
+    /// not a smart-cast-narrowed read of a <c>?</c>-declared slot (v1 is
+    /// declared-static-type based; the redundant-re-check nuance is a future
+    /// refinement).
+    /// </summary>
+    /// <param name="operand">The non-nil side of the comparison.</param>
+    /// <returns>Whether GS0523 should be reported.</returns>
+    private static bool IsBareMagicCollectionNilCompareOperand(BoundExpression operand)
+    {
+        if (operand.Type is not (MapTypeSymbol or SliceTypeSymbol or ArrayTypeSymbol or ChannelTypeSymbol))
+        {
+            return false;
+        }
+
+        return operand switch
+        {
+            BoundVariableExpression variable => variable.NarrowedType == null,
+            BoundFieldAccessExpression field => field.NarrowedType == null,
+            BoundPropertyAccessExpression property => property.NarrowedType == null,
+            _ => true,
+        };
     }
 
     private static bool IsExplicitlyNonNullImportedResult(BoundExpression expression)

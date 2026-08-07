@@ -143,8 +143,9 @@ clause is the natural future fix.
 > replaced by `'chan' TypeClause` plus the general
 > `'(' TypeClause ')' '?'?` grouping production, which also gives `([]T)?`
 > (≡ `[]?T`) and `(map[K, V])?` (≡ `map[K, V]?`) for free. The statically-
-> false nil-compare warning follow-up is implemented as GS0521 (issue
-> #3317).
+> false nil-compare warning follow-up is implemented as GS0523 (issue
+> #3317; renumbered from an initially-assigned GS0521 to avoid a collision
+> with the unrelated `PointerGenericTypeArgument` diagnostic).
 
 ### Honesty clauses (explicit limitations)
 
