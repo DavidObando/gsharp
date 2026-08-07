@@ -1434,11 +1434,31 @@ internal sealed partial class MethodBodyEmitter
     // Reflection still needs a closed carrier type to find channel members.
     // Metadata emission separately retains symbolic element types that the
     // carrier cannot represent.
+    //
+    // Issue #3308: a MetadataLoadContext-projected element (e.g. a prior
+    // REPL submission's user struct reverse-projected into `chan T`) cannot
+    // participate in the direct carrier path either — closing a live
+    // `typeof(Channel<>)` over a non-runtime Type yields a hybrid
+    // instantiation whose reflection surface throws NotSupportedException.
+    // Such elements take the same object-carrier + symbolic-member-ref path
+    // that null-ClrType (same-compilation) elements always used.
     internal static Type ResolveChannelElementClrType(TypeSymbol elementType)
-        => NullableTypeSymbol.GetEffectiveClrType(elementType) ?? typeof(object);
+    {
+        var clr = NullableTypeSymbol.GetEffectiveClrType(elementType);
+        return clr != null && IsRuntimeProvidedType(clr) ? clr : typeof(object);
+    }
 
     internal static bool ChannelElementNeedsSymbolicType(TypeSymbol elementType)
-        => elementType?.ClrType == null || TypeSymbol.RequiresSymbolicProjection(elementType);
+        => elementType?.ClrType == null
+            || !IsRuntimeProvidedType(elementType.ClrType)
+            || TypeSymbol.RequiresSymbolicProjection(elementType);
+
+    // Whether `type` is provided by the live runtime's own loader (a
+    // System.RuntimeType), i.e. safe to close open runtime generics over and
+    // reflect on. MetadataLoadContext RoTypes (and any other non-runtime
+    // Type implementation) are not.
+    private static bool IsRuntimeProvidedType(Type type)
+        => type.GetType() == typeof(object).GetType();
 
     private static TypeSymbol ResolveChannelContainerSymbol(
         Type closedCarrier,

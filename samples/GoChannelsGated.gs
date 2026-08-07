@@ -24,12 +24,11 @@ package GSharp.Samples.GoChannelsGated
 import System
 import Gsharp.Extensions.Go
 
-func producer(ch chan int32) int32 {
+func producer(ch chan int32) {
     ch <- 1
     ch <- 2
     ch <- 3
     close(ch)
-    return 0
 }
 
 let ch = make(chan int32, 3)

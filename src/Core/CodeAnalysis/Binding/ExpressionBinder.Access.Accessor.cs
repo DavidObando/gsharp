@@ -2905,14 +2905,19 @@ internal sealed partial class ExpressionBinder
         // the field's address (`ldsflda`) and mutate the stored global in
         // place — never a silently-dropped struct copy — mirroring how a
         // same-cell global (a static field of the current <Program>) behaves.
-        if (result is BoundClrPropertyAccessExpression { Receiver: null, Member: System.Reflection.FieldInfo } fieldRead
+        if (result is BoundClrPropertyAccessExpression { Receiver: null, Member: System.Reflection.FieldInfo globalField } fieldRead
             && submissionImports.TryFindGlobalVariable(scope.References, name, out _, out var declaredGlobal))
         {
+            // Issue #3308: the field read surfaces the global's CLR
+            // projection (e.g. `chan T` as imported `Channel[T]`), which
+            // strips the magic-symbol identity every channel/slice/array
+            // operation type-checks against. Reverse-project it, steered by
+            // the declaring submission's source-side type.
             result = new BoundClrPropertyAccessExpression(
                 fieldRead.Syntax,
                 receiver: null,
                 fieldRead.Member,
-                fieldRead.Type,
+                SubmissionGlobalTypeProjection.ReverseProject(fieldRead.Type, globalField.FieldType, declaredGlobal?.Type, scope.References),
                 fieldRead.StaticContainerType,
                 isAddressableStaticField: true,
                 isReadOnlySubmissionGlobal: declaredGlobal?.IsReadOnly == true);
