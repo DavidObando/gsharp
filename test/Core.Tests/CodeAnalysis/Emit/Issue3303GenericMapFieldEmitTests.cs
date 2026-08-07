@@ -285,38 +285,40 @@ public class Issue3303GenericMapFieldEmitTests
     }
 
     [Fact]
-    public void GenericMapField_UnassignedField_IsNil()
+    public void GenericMapField_UnassignedField_IsEmptyNotNil()
     {
-        // A declared-but-unassigned map field genuinely holds a CLR null:
-        // `items == nil` must bind AND observe it (the issue's silent-nil
-        // state made observable).
+        // Issue #3310 / ADR-0159 flipped this pin's observation: a
+        // declared-but-uninitialized map field no longer holds a CLR null —
+        // it holds the SOUND EMPTY-INSTANCE zero value (synthesized field
+        // initializer, symbolic Dictionary`2 ctor for open K/V), so the
+        // bare non-`?` spelling's non-null promise is true. The comparison
+        // still binds; it now observes non-nil at every point.
         var result = EmittedOracle.Evaluate("""
             package P3303UnassignedNil
+
+            import Gsharp.Extensions.Go
 
             class H[K, V any] {
                 var items map[K, V]
                 init() { }
                 func IsNil() bool { return items == nil }
-                func Fill() { items = map[K, V]{} }
+                func Count() int32 { return len(items) }
             }
 
             func run() int32 {
                 var h = H[string, int32]()
-                var before = h.IsNil()
-                h.Fill()
-                var after = h.IsNil()
-                if before && !after {
-                    return 1
+                if h.IsNil() {
+                    return -1
                 }
 
-                return 0
+                return h.Count()
             }
 
             run()
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
-        Assert.Equal(1, result.Value);
+        Assert.Equal(0, result.Value);
     }
 
     [Theory]
@@ -416,12 +418,11 @@ public class Issue3303GenericMapFieldEmitTests
     }
 
     [Fact]
-    public void SliceNilComparison_ParityPin_StillRejectedWithGS0129()
+    public void SliceNilComparison_ParityPin_NowBinds()
     {
-        // Slices deliberately keep their current rejection: widening
-        // slice/channel nil-compare is a separate language-surface decision
-        // (this fix is scoped to maps, which the issue demonstrates can be
-        // genuinely nil). A future change here must be deliberate.
+        // Issue #3310 / ADR-0159: the deliberate slice rejection this pin
+        // used to guard was flipped — nil comparison now binds for every
+        // reference-backed magic type. A live slice value is not nil.
         var result = EmittedOracle.Evaluate("""
             package P3303SlicePin
 
@@ -429,20 +430,25 @@ public class Issue3303GenericMapFieldEmitTests
             s != nil
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(true, result.Value);
     }
 
     [Fact]
-    public void ChannelNilComparison_ParityPin_StillRejectedWithGS0129()
+    public void ChannelNilComparison_ParityPin_NowBinds()
     {
+        // Issue #3310 / ADR-0159: same flip as the slice pin above.
         var result = EmittedOracle.Evaluate("""
             package P3303ChanPin
+
+            import Gsharp.Extensions.Go
 
             var c = make(chan int32, 1)
             c != nil
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0129");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.Equal(true, result.Value);
     }
 
     [Fact]

@@ -219,7 +219,9 @@ internal sealed partial class DeclarationBinder
         List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> PendingInstanceInitializers,
         List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> PendingConstInitializers,
         List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> PendingStaticFieldInitializers,
-        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> PendingSharedConstInitializers);
+        List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> PendingSharedConstInitializers,
+        List<(FieldSymbol Field, SyntaxNode Syntax)> PendingZeroValueInstanceFields,
+        List<(FieldSymbol Field, SyntaxNode Syntax)> PendingZeroValueStaticFields);
 
     private readonly record struct StructBaseBindingResult(
         StructSymbol BaseClass,
@@ -386,6 +388,13 @@ internal sealed partial class DeclarationBinder
         var pendingStaticFieldInitializers = new List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)>();
         var pendingSharedConstInitializers = new List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)>();
 
+        // Issue #3310 / ADR-0159: initializer-less fields of the magic
+        // collection types get a synthesized empty-instance initializer
+        // (injected through the ordinary #640/#1070 field-initializer
+        // machinery), so a bare `var items map[K, V]` field is never null.
+        var pendingZeroValueInstanceFields = new List<(FieldSymbol Field, SyntaxNode Syntax)>();
+        var pendingZeroValueStaticFields = new List<(FieldSymbol Field, SyntaxNode Syntax)>();
+
         foreach (var fieldSyntax in syntax.Fields)
         {
             var fieldName = fieldSyntax.Identifier.Text;
@@ -517,6 +526,19 @@ internal sealed partial class DeclarationBinder
             {
                 pendingInstanceInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
             }
+            else if (MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntax, fieldType) != null)
+            {
+                // Issue #3310 / ADR-0159: sound empty-instance zero value,
+                // synthesized in the deferred pass alongside the explicit
+                // initializers so it flows into every constructor body.
+                pendingZeroValueInstanceFields.Add((fieldSymbol, fieldSyntax));
+            }
+            else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
+            {
+                // Issue #3310 / ADR-0159 channel carve-out: a bare `chan T`
+                // field has no usable default and no auto-created instance.
+                Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
+            }
 
             fields.Add(fieldSymbol);
         }
@@ -556,7 +578,9 @@ internal sealed partial class DeclarationBinder
             pendingInstanceInitializers,
             pendingConstInitializers,
             pendingStaticFieldInitializers,
-            pendingSharedConstInitializers);
+            pendingSharedConstInitializers,
+            pendingZeroValueInstanceFields,
+            pendingZeroValueStaticFields);
     }
 
     private StructBaseBindingResult BindStructBaseAndInterfaces(
@@ -2184,6 +2208,19 @@ internal sealed partial class DeclarationBinder
                 {
                     pendingStaticFieldInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType));
                 }
+                else if (MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntax, fieldType) != null)
+                {
+                    // Issue #3310 / ADR-0159: sound empty-instance zero value
+                    // for an initializer-less static collection field,
+                    // synthesized into the `.cctor` in the deferred pass.
+                    fieldBinding.PendingZeroValueStaticFields.Add((fieldSymbol, fieldSyntax));
+                }
+                else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
+                {
+                    // Issue #3310 / ADR-0159 channel carve-out: a bare
+                    // `chan T` static field has no usable default.
+                    Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
+                }
 
                 staticFieldsBuilder.Add(fieldSymbol);
             }
@@ -2833,6 +2870,8 @@ internal sealed partial class DeclarationBinder
         var fieldInitSharedConstInitializers = pendingSharedConstInitializers;
         var fieldInitStaticInitializers = pendingStaticFieldInitializers;
         var fieldInitInstanceInitializers = pendingInstanceInitializers;
+        var fieldInitZeroValueInstanceFields = fieldBinding.PendingZeroValueInstanceFields;
+        var fieldInitZeroValueStaticFields = fieldBinding.PendingZeroValueStaticFields;
         var fieldInitFields = fields.ToImmutable();
         var fieldInitPrimaryCtorParameters = primaryCtorParameters;
         var fieldInitPackageName = package?.Name;
@@ -2885,6 +2924,8 @@ internal sealed partial class DeclarationBinder
                         fieldInitSharedConstInitializers,
                         fieldInitStaticInitializers,
                         fieldInitInstanceInitializers,
+                        fieldInitZeroValueInstanceFields,
+                        fieldInitZeroValueStaticFields,
                         fieldInitFields,
                         fieldInitPrimaryCtorParameters);
                 }
@@ -3372,6 +3413,8 @@ internal sealed partial class DeclarationBinder
         List<(FieldSymbol Field, FieldDeclarationSyntax Syntax, TypeSymbol FieldType)> sharedConstInitializers,
         List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> staticFieldInitializers,
         List<(FieldSymbol Field, ExpressionSyntax InitSyntax, TypeSymbol FieldType)> instanceInitializers,
+        List<(FieldSymbol Field, SyntaxNode Syntax)> zeroValueInstanceFields,
+        List<(FieldSymbol Field, SyntaxNode Syntax)> zeroValueStaticFields,
         ImmutableArray<FieldSymbol> fields,
         ImmutableArray<ParameterSymbol> primaryCtorParameters)
     {
@@ -3424,7 +3467,7 @@ internal sealed partial class DeclarationBinder
         }
 
         // Bind `shared` static field initializers.
-        if (staticFieldInitializers.Count > 0)
+        if (staticFieldInitializers.Count > 0 || zeroValueStaticFields.Count > 0)
         {
             var previousFunction = getCurrentFunction();
             var staticInitializerContext = CreateFieldInitializerAccessibilityContext(structSymbol);
@@ -3440,6 +3483,13 @@ internal sealed partial class DeclarationBinder
                     staticInitBuilder[fieldSym] = convertedInit;
                 }
 
+                // Issue #3310 / ADR-0159: synthesized empty-instance zero
+                // values for initializer-less static collection fields.
+                foreach (var (fieldSym, fieldSyntaxNode) in zeroValueStaticFields)
+                {
+                    staticInitBuilder[fieldSym] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
+                }
+
                 structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());
             }
             finally
@@ -3452,7 +3502,7 @@ internal sealed partial class DeclarationBinder
         // body, so they cannot reference `this`, other instance members, or
         // constructor parameters (matching C#); a genuine instance-member
         // reference is reported precisely rather than as a bare GS0125.
-        if (instanceInitializers.Count > 0)
+        if (instanceInitializers.Count > 0 || zeroValueInstanceFields.Count > 0)
         {
             var instanceMemberNames = new HashSet<string>(System.StringComparer.Ordinal) { "this" };
             foreach (var f in fields)
@@ -3477,6 +3527,18 @@ internal sealed partial class DeclarationBinder
                 var boundInit = bindExpression(initSyntax);
                 var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
                 instanceInitBuilder[fieldSym] = convertedInit;
+            }
+
+            // Issue #3310 / ADR-0159: synthesized empty-instance zero values
+            // for initializer-less instance collection fields (map/slice/
+            // array/sequence). Injected through the same mechanism as
+            // explicit initializers, so every constructor body (default,
+            // base-chained, user-written) runs them; a value-struct's
+            // `default`-instance hole (initobj bypasses constructors) is the
+            // documented ADR-0159 limitation, mirroring C#'s `default(T)`.
+            foreach (var (fieldSym, fieldSyntaxNode) in zeroValueInstanceFields)
+            {
+                instanceInitBuilder[fieldSym] = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(fieldSyntaxNode, fieldSym.Type);
             }
 
             structSymbol.SetInstanceFieldInitializers(instanceInitBuilder.ToImmutable());

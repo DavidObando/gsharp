@@ -534,10 +534,21 @@ public sealed record BoundBinaryOperator
         // still requires the explicit `map[K, V]?` spelling (ADR-0104), which
         // binds through the NullableTypeSymbol arm at the top. The emitter's
         // generic `ldnull; ceq` tail is verifier-clean for the reference-typed
-        // operand, including the open `Dictionary<!0, !1>` shape. Slices and
-        // channels intentionally keep their current GS0129 rejection —
-        // widening those is a separate language-surface decision.
-        if (nullableOrUnderlying is MapTypeSymbol)
+        // operand, including the open `Dictionary<!0, !1>` shape.
+        //
+        // Issue #3310 / ADR-0159: slices (`[]T` → `T[]`), fixed arrays
+        // (`[N]T` → `T[]`), and channels (`chan T` → `Channel<T>`) are the
+        // remaining reference-backed magic types; they join the same family
+        // so the rule can finally be stated once — nil comparison is defined
+        // for EVERY reference-backed builtin type. This flips #3309's
+        // deliberate slice/channel rejection pins. Same comparison-only
+        // semantics: with ADR-0159's sound empty-instance zero values a bare
+        // slot is only ever nil across an interop boundary (or a chan/struct
+        // default-instance hole), which is exactly what the comparison is for.
+        if (nullableOrUnderlying is MapTypeSymbol
+            || nullableOrUnderlying is SliceTypeSymbol
+            || nullableOrUnderlying is ArrayTypeSymbol
+            || nullableOrUnderlying is ChannelTypeSymbol)
         {
             return true;
         }

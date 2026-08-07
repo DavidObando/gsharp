@@ -834,6 +834,22 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #3310 / ADR-0159: same-element `[]T → sequence[T]` for the
+        // OPEN (null-ClrType) shapes — e.g. `q = []K{}` inside a generic
+        // class, and the synthesized empty-sequence zero value for a bare
+        // `sequence[K]` slot. Monomorphic slices already convert through the
+        // CLR-backed rules below (T[] implements IEnumerable<T>), which
+        // cannot fire when the element structurally references an in-scope
+        // type parameter or same-compilation struct. At the IL level this is
+        // a no-op reference conversion (array-to-interface); the emitter's
+        // matching arm lives in MethodBodyEmitter.IsReferenceCompatible.
+        if (from is SliceTypeSymbol fromSliceToSeq && to is SequenceTypeSymbol toSeqFromSlice
+            && fromSliceToSeq.ElementType == toSeqFromSlice.ElementType
+            && (from.ClrType == null || to.ClrType == null))
+        {
+            return Conversion.Implicit;
+        }
+
         // Boxing conversion for user value types to System.Object.
         if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType.IsSameAs(typeof(object)) == true)
         {

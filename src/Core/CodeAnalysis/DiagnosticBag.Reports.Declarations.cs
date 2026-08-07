@@ -161,6 +161,20 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.ConstFieldInitializerNotConstant, name);
 
     /// <summary>
+    /// Issue #3310 / ADR-0159: a bare <c>chan T</c> local, global, or field
+    /// declared without an initializer has no usable default value (the
+    /// magic-collection empty-instance zero values deliberately exclude
+    /// channels — buffer size and ownership are semantic decisions
+    /// <c>make</c> exists to force), so the declaration must initialize it
+    /// explicitly.
+    /// </summary>
+    /// <param name="location">The location of the declared identifier.</param>
+    /// <param name="name">The declared local/global/field name.</param>
+    /// <param name="channelTypeName">The channel type name (e.g. <c>chan int32</c>), spliced into the suggested <c>make</c> remedy.</param>
+    public void ReportChannelRequiresInitializer(TextLocation location, string name, string channelTypeName)
+    => Report(location, DiagnosticDescriptors.ChannelRequiresInitializer, name, channelTypeName);
+
+    /// <summary>
     /// Issue #948: an instance field initializer (the <c>= expr</c> on a
     /// <c>let</c>/<c>var</c> field) runs before the constructor body and
     /// therefore cannot reference <c>this</c>, other instance members, or
