@@ -247,7 +247,11 @@ public class Issue1714StringZeroValueEmitTests
         // (matching C#'s own `default(structWithList)` semantics) -- this
         // reflects the CLR/raw-default case, not a G#-observed declaration.
         // Struct-local zero-value initialization (`var s S` where S has a
-        // slice field) is filed as a follow-up: #3319.
+        // slice field, a G#-OBSERVED declaration going through the G# binder
+        // and emitter) was closed by issue #3319 — see
+        // Issue3319StructLocalZeroValueEmitTests. This assertion's own
+        // scenario is unaffected: `Activator.CreateInstance` bypasses G#
+        // initializer logic entirely, as noted above.
         Assert.Empty((Array)classType.GetField("Items")!.GetValue(classValue)!);
         Assert.Null(structType.GetField("Items")!.GetValue(structValue));
 
