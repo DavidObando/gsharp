@@ -1256,8 +1256,12 @@ internal sealed partial class StatementBinder
             // `chan T` slot has no zero value at all — whether that is an
             // error, and where, depends on the declared symbol's kind and is
             // decided after the symbol is created below (issue #3316). All
-            // other types keep the CLR default (0 / false / "" / all-zero
-            // struct / null for reference types) per ADR-0008.
+            // other types keep the CLR default (0 / false / all-zero struct /
+            // null for reference types) here — EXCEPT `string`, which is
+            // patched to `""` below (issue #3324) once we know whether the
+            // symbol is a true local or a global (see that comment for why
+            // this can't be decided in this branch, before the symbol
+            // exists).
             variableType = type ?? TypeSymbol.Error;
             channelSlotWithoutInitializer = MagicCollectionZeroValue.RequiresExplicitInitializer(variableType);
             convertedInitializer = MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, variableType)
@@ -1380,6 +1384,30 @@ internal sealed partial class StatementBinder
         if (channelSlotWithoutInitializer && variable is not LocalVariableSymbol)
         {
             Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.Text, variableType.Name);
+        }
+
+        // Issue #3324 (ADR-0008): a bare `var s string` / `let s string`
+        // LOCAL declared without an initializer zero-inits to `""`, per
+        // ADR-0008's documented Go-style string zero value ("`""` for
+        // string"). This is deliberately narrower than
+        // MagicCollectionZeroValue's dispatch above (which only special-cases
+        // the ADR-0159 magic collection types and otherwise falls back to
+        // BoundDefaultExpression, i.e. the CLR default `null` for `string`):
+        // class/struct FIELDS and the `default(string)` expression are a
+        // separate, already-settled contract (issue #1714, PR #2788) that
+        // deliberately keeps the CLR storage default (`null`) for
+        // uninitialized reference-typed fields — see
+        // Issue1714StringZeroValueEmitTests. A top-level `var` is emitted as
+        // a static field (see the channel comment above), so only a genuine
+        // LocalVariableSymbol gets the `""` treatment here; a
+        // GlobalVariableSymbol falls through to the same CLR-default path
+        // fields already use, keeping globals consistent with fields rather
+        // than with true function locals.
+        if (syntax.Initializer == null
+            && variableType == TypeSymbol.String
+            && variable is LocalVariableSymbol)
+        {
+            convertedInitializer = new BoundLiteralExpression(syntax, string.Empty, TypeSymbol.String);
         }
 
         variable.HasDefinitelyNonNullValue = isReadOnly

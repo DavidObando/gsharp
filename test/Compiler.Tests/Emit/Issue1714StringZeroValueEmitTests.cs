@@ -25,6 +25,14 @@ namespace GSharp.Compiler.Tests.Emit;
 /// retired with the evaluator in ADR-0156 Phase 3c (#3176).
 /// Each source uses unique package/type names because the in-process
 /// <c>FunctionTypeSymbol</c> cache is name-keyed.
+///
+/// Issue #3324 (ADR-0008) added a THIRD zero-value bucket alongside the two
+/// above: a genuine function-local `var s string` / `let s string` declared
+/// without an initializer. ADR-0008 documents that as the language's
+/// Go-style `""` zero value (same as the map-miss case), distinct from the
+/// field/property/`default(string)`/top-level-`var` bucket above, which stays
+/// at the CLR storage default (`null`) by the already-settled #1714/#2788
+/// contract. See the <c>Local*</c>-prefixed facts below.
 /// </summary>
 public class Issue1714StringZeroValueEmitTests
 {
@@ -121,6 +129,100 @@ public class Issue1714StringZeroValueEmitTests
 
         var output = CompileAndRun(source);
         Assert.Equal("False\nTrue\n", output);    }
+
+    [Fact]
+    public void EndToEnd_LocalStringDeclaration_LenIsZero()
+    {
+        // Issue #3324: `len(s)` on a bare `var s string` local used to NRE —
+        // the CLR-default `null` fell straight into `.Length`. Direct
+        // repro from the issue.
+        const string source = """
+            package i3324locallen
+            import System
+            import Gsharp.Extensions.Go
+
+            func Main() {
+                var s string
+                Console.WriteLine(len(s))
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("0\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_LocalStringDeclaration_DefaultsToEmptyString()
+    {
+        // Issue #3324 / ADR-0008: a genuine function-local `var s string`
+        // zero-inits to `""`, matching the language's documented Go-style
+        // string zero value — the opposite pin from
+        // EndToEnd_StructStringField_DefaultsToNull /
+        // EndToEnd_ClassStringField_DefaultsToNull above, which are fields
+        // and stay CLR-null by design (#1714/#2788).
+        const string source = """
+            package i3324locallet
+            import System
+
+            func Main() {
+                let s string = default(string)
+                var t string
+                System.Console.WriteLine(t == "")
+                System.Console.WriteLine(t == nil)
+                System.Console.WriteLine(s == nil)
+            }
+            """;
+
+        var output = CompileAndRun(source);
+
+        // `t` (bare `var t string`) is the ADR-0008 local zero value: `""`,
+        // non-null. `s` (`default(string)`, unchanged by #3324) stays the
+        // CLR-default `null` — same source, two different initializer forms,
+        // two different documented contracts.
+        Assert.Equal("True\nFalse\nTrue\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_LocalStringDeclaration_ComparisonAndConcatenation()
+    {
+        // Issue #3324 witness matrix: comparison against `""` and direct
+        // concatenation/interpolation both observe the sound `""` value
+        // rather than crashing or observing `null`.
+        const string source = """
+            package i3324localops
+            import System
+
+            func Main() {
+                var s string
+                System.Console.WriteLine(s == "")
+                var concatenated = "[" + s + "]"
+                System.Console.WriteLine(concatenated)
+                System.Console.WriteLine("<${s}>")
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("True\n[]\n<>\n", output);
+    }
+
+    [Fact]
+    public void EndToEnd_TopLevelStringDeclaration_StaysNull()
+    {
+        // Issue #3324 scoping pin: a top-level `var g string` binds a
+        // GlobalVariableSymbol, emitted as a static field — the same
+        // #1714/#2788 CLR-null contract as an explicit field, NOT the
+        // function-local `""` contract above. This must NOT change.
+        const string source = """
+            package i3324localglobal
+            import System
+
+            var g string
+            Console.WriteLine(g == nil)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal("True\n", output);
+    }
 
     [Fact]
     public void EndToEnd_NestedStructStringFields_DefaultToNull()
