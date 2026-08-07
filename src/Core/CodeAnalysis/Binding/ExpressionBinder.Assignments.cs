@@ -2519,6 +2519,15 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportCannotAssign(operatorLocation, name);
         }
 
+        // Issue #3308: the writable-member probe reports the field's CLR
+        // projection; reverse-project magic wrapper kinds (chan/slice/fixed
+        // array) so the RHS converts against the same symbolic type the
+        // declaring cell assigned under (e.g. `ch = make(chan int32, 2)`).
+        if (member is System.Reflection.FieldInfo globalField)
+        {
+            targetSymbol = SubmissionGlobalTypeProjection.ReverseProject(targetSymbol, globalField.FieldType, declared.Type, scope.References);
+        }
+
         var value = BindAssignmentRhs(valueSyntax, targetSymbol);
         var converted = conversions.BindConversion(valueSyntax.Location, value, targetSymbol);
         result = new BoundClrPropertyAssignmentExpression(null, receiver: null, member, converted, targetSymbol, staticContainerType: null);
