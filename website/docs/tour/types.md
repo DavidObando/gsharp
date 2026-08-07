@@ -213,7 +213,9 @@ Use `data object { ... }` when you want value-style equality, `ToString`, decons
 
 A composite literal with no fields uses the zero value for each field. A `var` declaration with an explicit type and no initializer also starts at the type's zero value: `0` for numeric types, `False` for `bool`, `nil` for reference types (including `string`), and `nil` for nullable values.
 
-The same zero value can be spelled directly as `default(T)` for any type `T`. The bare `default` literal is accepted wherever the target type is known from context.
+The magic collection types are the exception: their zero value is a **sound empty instance**, not `nil` — `var m map[string, int32]` starts as an empty map you can index and assign into immediately, `var s []int32` as an empty slice you can `append` to, `var a [3]int32` as three zeroed elements, and `var q sequence[int32]` as an empty sequence. Channels are carved out: `var ch chan int32` without an initializer is an error (`GS0520`) — create channels explicitly with `make`.
+
+The CLR default of a type can be spelled directly as `default(T)` for any type `T` (for the collection types above that is still `nil`, not the empty instance). The bare `default` literal is accepted wherever the target type is known from context.
 
 ## A note on `nil` vs `null`
 

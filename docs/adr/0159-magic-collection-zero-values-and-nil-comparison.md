@@ -120,11 +120,13 @@ on main), soundness is enforced at the declaration site instead:
 This is deliberately stricter than Go (declare-then-assign-later of a bare
 channel slot is rejected). Two relaxations are recorded as follow-ups, not
 implemented: (a) a real definite-assignment analysis for locals would allow
-declare-then-assign; (b) a nullable-channel spelling — today `chan int32?`
-parses as `chan (int32?)` and `(chan int32)?` does not parse, so the `?`
-escape hatch that ADR-0104 gives maps is **not currently expressible for
-channels** (nor for slices: `[]int32?` is a slice of nullable elements).
-Parenthesized type clauses are the natural future fix.
+declare-then-assign; (b) a nullable-channel spelling — maps have `map[K, V]?`
+(ADR-0104) and slices have `[]?T`, but `chan int32?` parses with the `?`
+bound to the **element** (`chan (int32?)`) and `(chan int32)?` does not
+parse, so the `?` escape hatch is **not currently expressible for channels**
+(the spec grammar's `'chan' TypeClause '?'?` outer marker is unreachable
+behind the greedy element TypeClause). A `chan?` or parenthesized type
+clause is the natural future fix.
 
 ### Honesty clauses (explicit limitations)
 
