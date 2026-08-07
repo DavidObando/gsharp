@@ -2067,6 +2067,43 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #3311: normalizes a <c>map[K, V]</c> receiver whose
+    /// <see cref="TypeSymbol.ClrType"/> is <see langword="null"/> (K or V is
+    /// an in-scope type parameter — null by construction — or a
+    /// same-compilation user class) to the symbolic constructed
+    /// <see cref="ImportedTypeSymbol"/> view an explicitly-typed
+    /// <c>Dictionary[K, V]</c> receiver already carries (#313/#794/#1107):
+    /// the type-erased closed <c>Dictionary&lt;…&gt;</c> shape drives
+    /// reflection member lookup, while the symbolic <c>[K, V]</c> arguments
+    /// drive return / parameter / out-var re-projection
+    /// (<see cref="MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol})"/>)
+    /// and symbolic MemberRef parenting at emit
+    /// (<c>ImportedMemberRefFactory.TryNormalizeToSymbolicContainer</c>).
+    /// Concrete maps (loadable ClrType) are left on the existing reflection
+    /// fast path. Returns <see langword="false"/> when no normalization
+    /// applies.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="view">The symbolic Dictionary view, on success.</param>
+    /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
+    public static bool TryGetSymbolicOpenMapReceiverView(TypeSymbol receiverType, out ImportedTypeSymbol view)
+    {
+        view = null;
+        if (receiverType is not MapTypeSymbol map
+            || map.ClrType != null
+            || !TryProjectErasedClrType(map, out var erasedMap))
+        {
+            return false;
+        }
+
+        view = ImportedTypeSymbol.GetConstructed(
+            erasedMap,
+            typeof(System.Collections.Generic.Dictionary<,>),
+            ImmutableArray.Create(map.KeyType, map.ValueType));
+        return true;
+    }
+
+    /// <summary>
     /// Probes a user-defined <see cref="StructSymbol"/> for the
     /// duck-typed enumerable shape (<c>GetEnumerator() → MoveNext() / Current</c>).
     /// </summary>

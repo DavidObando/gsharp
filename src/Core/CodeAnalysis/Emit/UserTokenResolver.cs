@@ -2162,8 +2162,18 @@ internal sealed class UserTokenResolver
         substitutedReturn = null;
         if (property == null
             || !ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
-            || typeArguments.IsDefaultOrEmpty
-            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+            || typeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Issue #3311: mirror the symbolic-container MemberRef bail
+        // (ImportedMemberRefFactory line "#774 non-generic base"): a member
+        // declared on a non-generic type is emitted through the PLAIN
+        // MemberRef path (closed semantics), so the erasure-widening must
+        // stay in force for it.
+        var propDecl = property.DeclaringType;
+        if (propDecl != null && !propDecl.IsGenericType && propDecl != openDef)
         {
             return false;
         }
@@ -2175,7 +2185,26 @@ internal sealed class UserTokenResolver
         }
 
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openProp.PropertyType, openDef, typeArguments);
-        return substitutedReturn != null && substitutedReturn != TypeSymbol.Error;
+        if (substitutedReturn == null || substitutedReturn == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        // The symbolic-container MemberRef fires for ANY non-empty argument
+        // vector, so the runtime stack holds the SUBSTITUTED member type
+        // whenever it differs from the closed (possibly erased) CLR shape:
+        // a symbolic argument (in-scope type parameter / same-compilation
+        // user type — the original #774 case), or (issue #3311) a CONCRETE
+        // argument recovered through an erased closed receiver — e.g. the
+        // `IEnumerator[int32]` enumerator of `Dictionary[int32, V].Keys`,
+        // whose closed `Current` reports `object` while the emitted
+        // MemberRef returns `!0` = int32. In both shapes the widening must
+        // be skipped; when the substituted and closed CLR types agree the
+        // widening is a no-op either way, so returning false there keeps
+        // the historical IL byte-identical.
+        return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection)
+            || (substitutedReturn.ClrType is { } substitutedClr
+                && !ClrTypeUtilities.AreSame(substitutedClr, property.PropertyType));
     }
 
     /// <summary>
@@ -2205,8 +2234,17 @@ internal sealed class UserTokenResolver
         substitutedReturn = null;
         if (method == null
             || !ImportedMemberRefFactory.TryNormalizeToSymbolicContainer(receiverType, out var openDef, out var typeArguments)
-            || typeArguments.IsDefaultOrEmpty
-            || !typeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
+            || typeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Issue #3311: mirror the symbolic-container MemberRef bail — a
+        // method declared on a non-generic type goes through the PLAIN
+        // MemberRef path (closed semantics), so the erasure-widening must
+        // stay in force for it. See the property variant above.
+        var methodDecl = method.DeclaringType;
+        if (methodDecl != null && !methodDecl.IsGenericType && methodDecl != openDef)
         {
             return false;
         }
@@ -2224,7 +2262,18 @@ internal sealed class UserTokenResolver
         }
 
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, openDef, typeArguments);
-        return substitutedReturn != null && substitutedReturn != TypeSymbol.Error;
+        if (substitutedReturn == null || substitutedReturn == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        // Issue #3311: also fire for a CONCRETE argument recovered through an
+        // erased closed receiver (mixed instantiations such as
+        // `Dictionary[int32, V]`); see the property variant above for the
+        // rationale.
+        return typeArguments.Any(TypeSymbol.RequiresSymbolicProjection)
+            || (substitutedReturn.ClrType is { } substitutedClr
+                && !ClrTypeUtilities.AreSame(substitutedClr, method.ReturnType));
     }
 
     /// <summary>

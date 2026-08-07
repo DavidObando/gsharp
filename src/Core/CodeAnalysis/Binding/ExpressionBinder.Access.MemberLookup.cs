@@ -601,7 +601,7 @@ internal sealed partial class ExpressionBinder
 
                     return BindExtensionMethodGroupOrError(receiver, ne);
                 }
-                else if (CanBindClrInstanceMember(receiver))
+                else if (TryGetClrInstanceMemberReceiverType(receiver, out var clrInstanceReceiverType))
                 {
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
@@ -609,8 +609,12 @@ internal sealed partial class ExpressionBinder
                     // ImportedClassSymbol; this path covers instances. Permit a
                     // chained CLR member whose oblivious metadata made its
                     // result nullable, while explicit nullable variables still
-                    // require narrowing or `?.`.
-                    var clrReceiverType = receiver.Type.ClrType;
+                    // require narrowing or `?.`. Issue #3311: an open-generic
+                    // `map[K, V]` receiver (null ClrType) is normalized to its
+                    // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
+                    // over the erased closed shape with symbolic [K, V]
+                    // re-projection, exactly as on `Dictionary[K, V]`.
+                    var clrReceiverType = clrInstanceReceiverType.ClrType;
                     var memberName = ne.IdentifierToken.Text;
 
                     // Issue #529: use interface-aware lookup so that members
@@ -645,7 +649,7 @@ internal sealed partial class ExpressionBinder
                         // surfaces as `ICollection[K]` (a generic shape
                         // containing the in-scope `K`) instead of the
                         // type-erased `ICollection<object>`.
-                        var receiverOverride = ResolveInstancePropertyTypeFromReceiver(receiver.Type, prop);
+                        var receiverOverride = ResolveInstancePropertyTypeFromReceiver(clrInstanceReceiverType, prop);
                         var propType = receiverOverride
                             ?? (prop.PropertyType.IsByRef
                                 ? MapClrMemberType(prop.PropertyType)
@@ -747,6 +751,38 @@ internal sealed partial class ExpressionBinder
         return receiver?.Type?.ClrType != null
             && (receiver.Type is not NullableTypeSymbol
                 || receiver is BoundClrPropertyAccessExpression);
+    }
+
+    /// <summary>
+    /// Issue #3311: resolves the effective receiver type used for CLR
+    /// instance-member lookup. A receiver with a loadable
+    /// <see cref="TypeSymbol.ClrType"/> is used as-is
+    /// (<see cref="CanBindClrInstanceMember"/>); an open-generic
+    /// <c>map[K, V]</c> receiver — whose ClrType is null by construction when
+    /// K or V is a type parameter — surfaces the symbolic constructed
+    /// <c>Dictionary[K, V]</c> view instead, so the interop member surface
+    /// (<c>.Keys</c>, <c>.Values</c>, <c>.Count</c>, method groups) resolves
+    /// exactly as on an explicitly-typed <c>Dictionary[K, V]</c> receiver.
+    /// </summary>
+    /// <param name="receiver">The bound receiver expression.</param>
+    /// <param name="effectiveType">The effective lookup type, on success.</param>
+    /// <returns><see langword="true"/> when CLR instance lookup may proceed.</returns>
+    private static bool TryGetClrInstanceMemberReceiverType(BoundExpression receiver, out TypeSymbol effectiveType)
+    {
+        if (CanBindClrInstanceMember(receiver))
+        {
+            effectiveType = receiver.Type;
+            return true;
+        }
+
+        if (MemberLookup.TryGetSymbolicOpenMapReceiverView(receiver?.Type, out var mapView))
+        {
+            effectiveType = mapView;
+            return true;
+        }
+
+        effectiveType = null;
+        return false;
     }
 
     /// <summary>
