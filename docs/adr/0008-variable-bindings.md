@@ -26,6 +26,8 @@ Type annotations work on all four: `let x : int = 7`.
 
 A `var` declaration may omit its initializer when an explicit type clause is present (e.g. `var x int32`), in which case the variable takes that type's default (zero) value — `0` for numerics, `false` for `bool`, `""` for `string`, and the all-zero value for structs and enums. This mirrors Go's zero-value rule. `let` and `const` are immutable and therefore still require an initializer, and `var` without a type clause also still requires one (there is nothing to infer the type from).
 
+> **Note (ADR-0159, issue #3310):** for the magic collection types the zero value is now a **sound empty instance**, not a null reference — `var m map[K, V]` binds an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-N array, `var q sequence[T]` an empty sequence. `chan T` is carved out: it has no sensible default and a declaration without an initializer reports GS0520. See [ADR-0159](0159-magic-collection-zero-values-and-nil-comparison.md).
+
 ## Consequences
 
 Positive:
