@@ -2,8 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -49,6 +52,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// treatment. Inline structs (ADR-0033's fixed synthesized-member layout,
 /// see #3219) are excluded from recursion for the same reason #3219 excludes
 /// them from ctor synthesis.
+///
+/// Issue #3329: the same-assembly recursion above depends on
+/// <see cref="StructSymbol.Fields"/> being reachable and fully bound — true
+/// for a struct declared in THIS compilation, but not for a struct symbol
+/// rebuilt from reflection over an ALREADY-EMITTED type in another assembly
+/// (or, for the REPL, an earlier submission): that reconstruction (see
+/// <c>ImportedTypeSymbol.BuildSemanticAggregate</c>) resolves each field's
+/// type via raw CLR reflection (<c>TypeSymbol.FromClrType</c>), which cannot
+/// by itself distinguish a slice from a same-CLR-shaped fixed array, or
+/// know that a nested struct-typed field needs its own zero-value probe at
+/// all. <see cref="ClassifyForMarker"/> / <see cref="TrySynthesizeEmptyInstanceFromMarker"/>
+/// and the <c>GSharp.MagicCollectionFields</c> assembly-metadata marker (see
+/// <see cref="Symbols.ImportedAssemblySemantics"/>) close that gap: the
+/// DECLARING compilation records, per struct, which fields (magic-collection
+/// OR struct-typed-and-recursively-magic) need synthesis, so an IMPORTING
+/// compilation's struct literal can reconstruct the identical zero value
+/// without ever needing the declaring compilation's own bound tree.
 /// </summary>
 internal static class MagicCollectionZeroValue
 {
@@ -102,6 +122,205 @@ internal static class MagicCollectionZeroValue
     /// <returns>True for a bare (non-<c>?</c>) channel type.</returns>
     public static bool RequiresExplicitInitializer(TypeSymbol type)
         => type is ChannelTypeSymbol;
+
+    /// <summary>
+    /// Issue #3329: classifies a struct field's shape into the compact tag
+    /// recorded by the <c>GSharp.MagicCollectionFields</c> cross-assembly
+    /// metadata marker (see <see cref="Symbols.ImportedAssemblySemantics"/>).
+    /// A struct's own <see cref="StructSymbol.InstanceFieldInitializers"/> —
+    /// where this zero-value synthesis is normally recorded (see
+    /// <c>DeclarationBinder.Structs.cs</c>) — is unavailable once the struct
+    /// is referenced from ANOTHER assembly (or, for the REPL, a LATER
+    /// submission): only the declaring compilation ever binds the struct's
+    /// own declaration syntax. The marker plus
+    /// <see cref="TrySynthesizeEmptyInstanceFromMarker"/> let a struct
+    /// literal reconstruct the same sound zero value from the field's own
+    /// reflected CLR shape. Issue #3330 composition: a struct-typed field is
+    /// tagged <c>"struct"</c> when — and only when — recursing into ITS
+    /// fields (via the same same-assembly <see cref="TrySynthesizeEmptyInstance"/>
+    /// recursion #3330 added) actually finds a magic-collection zero value
+    /// somewhere in its closure; a struct field with no such need is left
+    /// unmarked, exactly like every other unaffected field.
+    /// </summary>
+    /// <param name="type">The field's declared type.</param>
+    /// <returns>The marker tag, or <see langword="null"/> when the type is not a magic-collection or recursively-magic struct shape.</returns>
+    internal static string ClassifyForMarker(TypeSymbol type) => type switch
+    {
+        MapTypeSymbol => "map",
+        SliceTypeSymbol => "slice",
+        ArrayTypeSymbol arr => "arr" + arr.Length.ToString(CultureInfo.InvariantCulture),
+        SequenceTypeSymbol => "seq",
+        StructSymbol { IsClass: false, IsInline: false } structField when TrySynthesizeEmptyInstance(null, structField) != null => "struct",
+        _ => null,
+    };
+
+    /// <summary>
+    /// The inverse of <see cref="ClassifyForMarker"/>: reconstructs the
+    /// magic-collection <see cref="TypeSymbol"/> shape (or, for a nested
+    /// struct field, the recursively-synthesized struct literal) named by
+    /// <paramref name="markerKind"/> from a reflected field's OWN CLR type —
+    /// the marker tag alone disambiguates a slice from a same-CLR-shaped
+    /// fixed-size array (both are plain CLR SZ arrays with no length
+    /// encoded) and records the fixed length — then synthesizes its sound
+    /// zero value (see <see cref="TrySynthesizeEmptyInstance"/>).
+    /// </summary>
+    /// <param name="fieldInfo">The reflected field the marker describes.</param>
+    /// <param name="markerKind">The marker tag produced by <see cref="ClassifyForMarker"/>.</param>
+    /// <returns>The synthesized empty-instance expression, or <see langword="null"/> when the field/tag cannot be reconstructed.</returns>
+    internal static BoundExpression TrySynthesizeEmptyInstanceFromMarker(FieldInfo fieldInfo, string markerKind)
+    {
+        if (fieldInfo == null || string.IsNullOrEmpty(markerKind))
+        {
+            return null;
+        }
+
+        // Issue #3330 composition: a nested struct-typed field. Its own zero
+        // value is reconstructed by recursing into ITS reflected CLR type —
+        // NOT via ClassifyForMarker/this marker (that describes the OUTER
+        // field only) — reusing the exact same cross-assembly reconstruction
+        // this method performs for a leaf magic-collection field, one level
+        // deeper. This mirrors #3330's same-assembly struct-in-struct
+        // recursion, but walks reflected metadata instead of a bound
+        // StructSymbol.
+        if (string.Equals(markerKind, "struct", StringComparison.Ordinal))
+        {
+            return TrySynthesizeEmptyInstanceForImportedStruct(fieldInfo.FieldType);
+        }
+
+        TypeSymbol type;
+        if (string.Equals(markerKind, "map", StringComparison.Ordinal))
+        {
+            var args = fieldInfo.FieldType.GetGenericArguments();
+            if (args.Length != 2)
+            {
+                return null;
+            }
+
+            type = MapTypeSymbol.Get(TypeSymbol.FromClrType(args[0]), TypeSymbol.FromClrType(args[1]));
+        }
+        else if (string.Equals(markerKind, "slice", StringComparison.Ordinal))
+        {
+            var elementClr = fieldInfo.FieldType.GetElementType();
+            if (elementClr == null)
+            {
+                return null;
+            }
+
+            type = SliceTypeSymbol.Get(TypeSymbol.FromClrType(elementClr));
+        }
+        else if (markerKind.StartsWith("arr", StringComparison.Ordinal))
+        {
+            var elementClr = fieldInfo.FieldType.GetElementType();
+            if (elementClr == null || !int.TryParse(markerKind.AsSpan(3), NumberStyles.Integer, CultureInfo.InvariantCulture, out var length))
+            {
+                return null;
+            }
+
+            type = ArrayTypeSymbol.Get(TypeSymbol.FromClrType(elementClr), length);
+        }
+        else if (string.Equals(markerKind, "seq", StringComparison.Ordinal))
+        {
+            var args = fieldInfo.FieldType.GetGenericArguments();
+            if (args.Length != 1)
+            {
+                return null;
+            }
+
+            type = SequenceTypeSymbol.Get(TypeSymbol.FromClrType(args[0]));
+        }
+        else
+        {
+            return null;
+        }
+
+        return TrySynthesizeEmptyInstance(null, type);
+    }
+
+    /// <summary>
+    /// Issue #3329/#3330 composition: reconstructs a
+    /// <see cref="BoundStructLiteralExpression"/> for a NESTED struct-typed
+    /// field's own zero value, purely from its reflected CLR
+    /// <paramref name="clrType"/> and its OWN
+    /// <c>GSharp.MagicCollectionFields</c> marker (every gsc-compiled struct
+    /// with a field needing synthesis carries its own independent marker
+    /// entry — see <c>AssemblyAttributeEmitter.EmitGSharpMagicCollectionFieldMarkers</c>,
+    /// which iterates every struct in the compilation, not just top-level
+    /// ones). This does not require (and does not build) a full imported
+    /// <c>StructSymbol</c> aggregate for <paramref name="clrType"/> — a
+    /// synthetic minimal one is enough to carry the emitted field
+    /// initializers, mirroring exactly what a same-assembly recursive
+    /// <see cref="TrySynthesizeStructFieldDefaults"/> call would have built
+    /// had the struct been declared in this compilation.
+    /// </summary>
+    /// <param name="clrType">The nested struct field's own reflected CLR type.</param>
+    /// <returns>The synthesized nested struct literal, or <see langword="null"/> when it carries no marker or no field of it can be reconstructed.</returns>
+    private static BoundExpression TrySynthesizeEmptyInstanceForImportedStruct(Type clrType)
+    {
+        if (clrType == null || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
+        {
+            return null;
+        }
+
+        var bindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var reflectedFields = new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
+        foreach (var field in ClrTypeUtilities.SafeGetFields(clrType, bindingFlags))
+        {
+            if (field.IsStatic || field.IsSpecialName)
+            {
+                continue;
+            }
+
+            fieldBuilder.Add(new FieldSymbol(
+                field.Name,
+                TypeSymbol.FromClrType(field.FieldType),
+                field.IsPublic ? Accessibility.Public : Accessibility.Private,
+                isReadOnly: field.IsInitOnly));
+            reflectedFields[field.Name] = field;
+        }
+
+        var nestedStruct = new StructSymbol(
+            name: clrType.Name,
+            fields: fieldBuilder.ToImmutable(),
+            accessibility: Accessibility.Public,
+            declaration: null,
+            packageName: clrType.Namespace,
+            isData: false,
+            isInline: false,
+            isClass: false,
+            primaryConstructorParameters: ImmutableArray<ParameterSymbol>.Empty,
+            isOpen: false,
+            baseClass: null,
+            clrType: clrType);
+
+        var fieldsByName = nestedStruct.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
+        ImmutableArray<BoundFieldInitializer>.Builder inits = null;
+        foreach (var (fieldName, kind) in magicFieldKinds)
+        {
+            if (!fieldsByName.TryGetValue(fieldName, out var fieldSymbol)
+                || fieldSymbol.Accessibility != Accessibility.Public
+                || !reflectedFields.TryGetValue(fieldName, out var reflectedField))
+            {
+                continue;
+            }
+
+            var zeroValue = TrySynthesizeEmptyInstanceFromMarker(reflectedField, kind);
+            if (zeroValue == null)
+            {
+                continue;
+            }
+
+            inits ??= ImmutableArray.CreateBuilder<BoundFieldInitializer>();
+            inits.Add(new BoundFieldInitializer(fieldSymbol, zeroValue));
+        }
+
+        if (inits == null)
+        {
+            return null;
+        }
+
+        return new BoundStructLiteralExpression(null, nestedStruct, inits.ToImmutable());
+    }
 
     private static BoundExpression TrySynthesizeEmptyInstanceCore(SyntaxNode syntax, TypeSymbol type, HashSet<StructSymbol> visiting)
     {
