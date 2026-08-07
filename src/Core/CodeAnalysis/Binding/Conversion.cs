@@ -817,6 +817,23 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
+        // (`System.Collections.Generic.Dictionary<K, V>`), but its `ClrType`
+        // is null when the key or value structurally references an in-scope
+        // type parameter (e.g. a `map[K, V]` field of a generic class) or a
+        // same-compilation struct, so the general CLR-backed widening rule
+        // above cannot fire. Widening such a reference to `object` is still a
+        // no-op at the IL level — the emitter's #1481 arm in
+        // MethodBodyEmitter.IsReferenceCompatible already recognizes exactly
+        // this shape. Without this, `Console.WriteLine(items)` and `object`-typed
+        // parameter/return positions reported GS0155/GS0159 for open maps
+        // while the monomorphic equivalent bound fine.
+        if (from is MapTypeSymbol
+            && (to == TypeSymbol.Object || to?.ClrType.IsSameAs(typeof(object)) == true))
+        {
+            return Conversion.Implicit;
+        }
+
         // Boxing conversion for user value types to System.Object.
         if (from is StructSymbol fromStruct && !fromStruct.IsClass && to?.ClrType.IsSameAs(typeof(object)) == true)
         {
