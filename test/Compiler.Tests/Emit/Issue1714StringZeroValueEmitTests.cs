@@ -231,15 +231,35 @@ public class Issue1714StringZeroValueEmitTests
         var structType = assembly.GetTypes().Single(t => t.Name == "StructFields");
         var structValue = Activator.CreateInstance(structType);
 
-        foreach (var name in new[] { "Text", "MaybeText", "Value", "Items", "ChildValue" })
+        foreach (var name in new[] { "Text", "MaybeText", "Value", "ChildValue" })
         {
             Assert.Null(classType.GetField(name)!.GetValue(classValue));
             Assert.Null(structType.GetField(name)!.GetValue(structValue));
         }
 
+        // ADR-0159: bare (non-nullable) slice fields zero-init to an empty
+        // instance, not CLR null, so `[]int32` slots are always safely usable.
+        // Class instance fields go through the emitted instance ctor, which the
+        // synthesized initializer hooks into. StructFields has no explicit
+        // members needing a synthesized ctor (#3219: all-public structs keep
+        // byte-identical emission with no ctor), and `Activator.CreateInstance`
+        // for a value type with no ctor bypasses G# initializer logic entirely
+        // (matching C#'s own `default(structWithList)` semantics) -- this
+        // reflects the CLR/raw-default case, not a G#-observed declaration.
+        // Struct-local zero-value initialization (`var s S` where S has a
+        // slice field) is filed as a follow-up: #3319.
+        Assert.Empty((Array)classType.GetField("Items")!.GetValue(classValue)!);
+        Assert.Null(structType.GetField("Items")!.GetValue(structValue));
+
+        // ClassFields' shared block has no explicit `init()`, so per ADR-0155 it
+        // stays beforefieldinit; reflection-based static field access does not
+        // reliably trigger a beforefieldinit type's initializer, so force it
+        // before observing SharedItems' ADR-0159 zero-value initializer.
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(classType.TypeHandle);
+
         Assert.Null(classType.GetField("SharedText")!.GetValue(null));
         Assert.Null(classType.GetField("SharedValue")!.GetValue(null));
-        Assert.Null(classType.GetField("SharedItems")!.GetValue(null));
+        Assert.Empty((Array)classType.GetField("SharedItems")!.GetValue(null)!);
         Assert.Null(classType.GetField("SharedChild")!.GetValue(null));
         Assert.Equal(string.Empty, classType.GetField("Empty")!.GetValue(classValue));
 
