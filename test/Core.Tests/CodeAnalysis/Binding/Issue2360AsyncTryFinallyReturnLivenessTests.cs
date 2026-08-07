@@ -33,7 +33,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <see cref="GSharp.Core.CodeAnalysis.Binding.RefStructAsyncLivenessAnalyzer"/>'s
 /// <c>ProcessTryBackward</c> then builds a <see cref="GSharp.Core.CodeAnalysis.Binding.ControlFlowGraph"/>
 /// scoped to just the try body's own statements (issue #1642's opaque-compound-
-/// statement pattern, shared with <see cref="GSharp.Core.CodeAnalysis.Binding.RefKindDefiniteAssignmentAnalyzer"/>)
+/// statement pattern, shared with <see cref="GSharp.Core.CodeAnalysis.Binding.DefiniteAssignmentAnalyzer"/>)
 /// — but the synthesized <c>goto</c>'s target label lives outside that scoped
 /// region, so the old, unguarded <c>blockFromLabel[gs.Label]</c> lookup in
 /// <c>ControlFlowGraph.GraphBuilder.Build</c> threw. The fix makes that lookup

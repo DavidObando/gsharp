@@ -25,13 +25,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// analyzer proves before allowing the declaration.
 /// <para>
 /// This is a backward ("may be live") dataflow, dual to the forward "must be
-/// assigned" analysis in <see cref="RefKindDefiniteAssignmentAnalyzer"/>,
+/// assigned" analysis in <see cref="DefiniteAssignmentAnalyzer"/>,
 /// over the same <see cref="ControlFlowGraph"/> infrastructure: loops are
 /// fully expanded into real graph edges (so a per-iteration local's liveness
 /// is checked correctly across back-edges), while <c>try</c>, <c>select</c>,
 /// <c>scope</c>, <c>fixed</c>, and pattern-<c>switch</c> bodies are opaque to
 /// the outer graph and are recursively re-analyzed here, mirroring
-/// <see cref="RefKindDefiniteAssignmentAnalyzer"/>'s
+/// <see cref="DefiniteAssignmentAnalyzer"/>'s
 /// <c>ProcessTryStatement</c>/<c>ProcessSelectStatement</c>/etc. shape.
 /// </para>
 /// <para>
@@ -56,7 +56,7 @@ internal static class RefStructAsyncLivenessAnalyzer
     /// <summary>
     /// Entry point, intended to be called once per bound-and-lowered function
     /// body (mirroring every call site of
-    /// <see cref="RefKindDefiniteAssignmentAnalyzer.Analyze"/>). Runs the
+    /// <see cref="DefiniteAssignmentAnalyzer.Analyze"/>). Runs the
     /// liveness analysis over <paramref name="enclosing"/>'s own body (if it
     /// is async) and, regardless, walks the body looking for nested async
     /// function-literal expressions (lambdas and local functions) so each one
@@ -290,7 +290,7 @@ internal static class RefStructAsyncLivenessAnalyzer
             case BoundGotoStatement:
                 break;
 
-            // Issue #1642 (also relied upon by RefKindDefiniteAssignmentAnalyzer):
+            // Issue #1642 (also relied upon by DefiniteAssignmentAnalyzer):
             // these compound statements are opaque to the outer ControlFlowGraph
             // (a single fall-through statement — see
             // ControlFlowGraph.BasicBlockBuilder), so their nested bodies must be
