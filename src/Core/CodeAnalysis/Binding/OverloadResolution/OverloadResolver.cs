@@ -63,6 +63,26 @@ namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 /// </remarks>
 internal sealed partial class OverloadResolver
 {
+    private bool TryReportByRefLikeTypeArgument(
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitution,
+        TextLocation location)
+    {
+        foreach (var typeParameter in typeParameters)
+        {
+            var typeArgument = substitution[typeParameter];
+            if (!TypeSymbol.IsByRefLike(typeArgument))
+            {
+                continue;
+            }
+
+            Diagnostics.ReportByRefLikeEscape(location, typeArgument, "be used as a generic type argument");
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Custom delegate type for the <c>TryBindClrConstructorCall</c>
     /// callback, required because <see cref="Func{T1, T2, TResult}"/>

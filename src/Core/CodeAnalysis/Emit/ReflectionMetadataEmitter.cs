@@ -5111,6 +5111,17 @@ internal sealed class ReflectionMetadataEmitter
         return false;
     }
 
+    internal static bool ImportedInstanceReceiverRequiresBoxing(TypeSymbol receiverType, MethodInfo method)
+    {
+        if (receiverType is ByRefTypeSymbol byRef)
+        {
+            receiverType = byRef.PointeeType;
+        }
+
+        return IsValueTypeSymbol(receiverType)
+            && method?.DeclaringType is { IsValueType: false };
+    }
+
     // Issue #671 (construction-call follow-up): a generic type-argument
     // position carries a "user-defined" symbol when it is itself a
     // user-declared type (Struct/Class/Interface/Enum/Delegate) — its

@@ -26,6 +26,27 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    private bool TryReportByRefLikeInheritedCall(
+        BoundExpression receiver,
+        MethodInfo method,
+        TextLocation location)
+    {
+        var receiverType = receiver.Type is ByRefTypeSymbol byRef
+            ? byRef.PointeeType
+            : receiver.Type;
+        if (!TypeSymbol.IsByRefLike(receiverType)
+            || !ReflectionMetadataEmitter.ImportedInstanceReceiverRequiresBoxing(receiverType, method))
+        {
+            return false;
+        }
+
+        Diagnostics.ReportByRefLikeEscape(
+            location,
+            receiverType,
+            $"invoke inherited method '{method.Name}' because dispatch requires boxing the receiver");
+        return true;
+    }
+
     /// <summary>
     /// Issue #311: resolves the explicit <c>[T1, T2]</c> type-argument list on a
     /// generic-method call site into CLR types projected onto the reference load
@@ -3039,7 +3060,13 @@ internal sealed partial class ExpressionBinder
                         var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
-                        BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, instUpdatedReceiver ?? receiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
+                        var callReceiver = instUpdatedReceiver ?? receiver;
+                        if (TryReportByRefLikeInheritedCall(callReceiver, resolution.Best, ce.Location))
+                        {
+                            return new BoundErrorExpression(null);
+                        }
+
+                        BoundExpression instCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, callReceiver, resolution.Best, returnType, instArguments, instRefKinds, instTypeArgSymbolsForCall));
                         return WrapWithHandlerPrelude(instCall, instHandlerPrelude, ce);
                     case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
                         Diagnostics.ReportAmbiguousOverload(ce.Location, methodName, resolution.Ambiguous.Length, resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));

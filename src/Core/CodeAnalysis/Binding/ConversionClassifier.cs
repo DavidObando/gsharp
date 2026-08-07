@@ -413,6 +413,24 @@ internal sealed class ConversionClassifier
             return new BoundDefaultExpression(barePlaceholder, type);
         }
 
+        var methodGroupReceiver = expression switch
+        {
+            BoundMethodGroupExpression userGroup => userGroup.Receiver,
+            BoundClrMethodGroupExpression clrGroup => clrGroup.Receiver,
+            _ => null,
+        };
+        var methodGroupReceiverType = methodGroupReceiver?.Type is ByRefTypeSymbol byRefReceiver
+            ? byRefReceiver.PointeeType
+            : methodGroupReceiver?.Type;
+        if (methodGroupReceiverType != null && TypeSymbol.IsByRefLike(methodGroupReceiverType))
+        {
+            Diagnostics.ReportByRefLikeEscape(
+                diagnosticLocation,
+                methodGroupReceiverType,
+                "be captured as a delegate target because that requires boxing the receiver");
+            return new BoundErrorExpression(null);
+        }
+
         // Issue #337: a CLR member method group has no fixed type until the
         // target delegate signature drives overload selection. Resolve it here,
         // where the expected type is known, before classifying conversions.
@@ -660,8 +678,7 @@ internal sealed class ConversionClassifier
         // the same ref struct) already returned above.
         if (TypeSymbol.IsByRefLike(expression.Type)
             && type != TypeSymbol.String
-            && type?.ClrType != null
-            && !type.ClrType.IsValueType
+            && Conversion.IsReferenceLikeTarget(type)
             && expression.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportByRefLikeEscape(diagnosticLocation, expression.Type, $"be boxed or converted to the reference type '{type}'");
