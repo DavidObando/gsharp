@@ -18,14 +18,13 @@ import System
 import System.Threading
 import Gsharp.Extensions.Go
 
-func scan(port int32, results chan int32) int32 {
+func scan(port int32, results chan int32) {
     Thread.Sleep(5)
     if port % 2 == 0 {
         results <- port
     } else {
         results <- 0
     }
-    return 0
 }
 
 let results = make(chan int32, 4)

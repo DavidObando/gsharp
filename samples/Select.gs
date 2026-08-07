@@ -9,10 +9,9 @@ import System
 import System.Threading
 import Gsharp.Extensions.Go
 
-func delayedSend(ch chan int32) int32 {
+func delayedSend(ch chan int32) {
     Thread.Sleep(10)
     ch <- 40
-    return 0
 }
 
 let ready = make(chan int32, 1)
