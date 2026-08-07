@@ -1262,7 +1262,7 @@ DeferStmt = "defer" Expression .
 
 ### Go, scope, channel send and receive, and select
 
-`go expr` starts a concurrent call; binding requires the operand to be a call. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
+`go expr` starts a concurrent call; binding requires the operand to be a call (`GS0137` otherwise). The operand may return `void` — the natural goroutine shape, matching Go — and any result a value-returning operand produces is discarded. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
 
 The `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` forms are the **Go-flavored concurrency surface** and are gated behind a per-file `import Gsharp.Extensions.Go`. The binder reports `GS0316` at each offending keyword/operator (`go`, `chan`, `<-`, `select`, `close`) when the import is absent in the same compilation unit. `scope` itself is **not** gated. The gate is always opt-in and is independent of `/noimplicitimports`.
 
