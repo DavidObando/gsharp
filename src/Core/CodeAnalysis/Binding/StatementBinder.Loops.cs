@@ -379,6 +379,27 @@ internal sealed partial class StatementBinder
                 keyType = TypeSymbol.Int32;
                 valueType = seq.ElementType;
                 break;
+
+            // Issue #3318: `map[K, V]` is backed by Dictionary<K, V>
+            // (ADR-0104) — route it through the same Dictionary iteration
+            // strategy an explicitly-typed `Dictionary[K, V]` receiver uses.
+            // The two-variable form `for k, v in m` destructures entries into
+            // `k: K`, `v: V` — the map analog of the slice/array index+value
+            // form — and the single-variable form `for kv in m` binds the
+            // whole `KeyValuePair[K, V]` element (#1328 semantics, C#/Kotlin
+            // entry parity; see the single-identifier branch below). This
+            // covers concrete maps (loadable ClrType) and OPEN maps whose K
+            // or V is an in-scope type parameter or same-compilation user
+            // class (ClrType null by construction) alike: the symbolic K/V
+            // are carried on the MapTypeSymbol itself, and the lowerer's
+            // symbolic Dictionary-view enumerator path (#3313) recovers the
+            // element as `KeyValuePair[K, V]`. Iteration order is
+            // unspecified.
+            case MapTypeSymbol map:
+                iterationKind = ForRangeKind.Dictionary;
+                keyType = map.KeyType;
+                valueType = map.ValueType;
+                break;
             default:
                 // Issue #537: `string` is iterable over `char` via its indexer
                 // and Length property — same fast-path C# uses for
