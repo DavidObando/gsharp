@@ -458,10 +458,20 @@ public class Issue3114ReadOnlySpanDriverTests
                 driver == Driver.ReplEmitToMemory ? string.Empty : "Failed.\n",
                 driver == Driver.ReplEmitToMemory ? result.StandardOutput : result.StandardError);
 
+            var boundDiagnostic = Assert.Single(
+                GSharp.Tests.EmittedOracle.Evaluate(Source).Diagnostics,
+                item => item.Id == "GS0519");
+            var location = boundDiagnostic.Location;
+            Assert.Equal(
+                (Span: "(9,33,9,38)", Text: "token"),
+                (
+                    Span: $"({location.StartLine + 1},{location.StartCharacter + 1},{location.EndLine + 1},{location.EndCharacter + 1})",
+                    Text: location.Text.ToString(location.Span)));
+
             var diagnostic = Assert.Single(
                 diagnosticStream.Split('\n', StringSplitOptions.RemoveEmptyEntries),
                 line => line.Contains("error GS0519:", StringComparison.Ordinal));
-            Assert.StartsWith($"{sourcePath}(9,23,9,40): error GS0519:", diagnostic, StringComparison.Ordinal);
+            Assert.StartsWith($"{sourcePath}(9,33,9,38): error GS0519:", diagnostic, StringComparison.Ordinal);
             AssertByRefLikeInterpolationDiagnostic(diagnostic, sourcePath, 9, "Token");
         }
         finally

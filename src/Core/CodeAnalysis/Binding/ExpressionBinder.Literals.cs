@@ -481,7 +481,7 @@ internal sealed partial class ExpressionBinder
                     }
                 }
 
-                parts.Add(BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format));
+                parts.Add(BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format, segment.Expression));
             }
             else
             {
