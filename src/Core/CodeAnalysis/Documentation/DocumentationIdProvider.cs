@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Globalization;
 using System.Linq;
@@ -32,7 +34,7 @@ public static class DocumentationIdProvider
     /// </summary>
     /// <param name="member">The reflected member.</param>
     /// <returns>The DocID, or <see langword="null"/> when the member kind is unsupported.</returns>
-    public static string GetDocumentationId(MemberInfo member)
+    public static string? GetDocumentationId(MemberInfo member)
     {
         return member switch
         {
@@ -118,7 +120,7 @@ public static class DocumentationIdProvider
     /// <summary>Computes the <c>E:</c> DocID for a reflected event.</summary>
     /// <param name="event">The reflected event.</param>
     /// <returns>The event DocID.</returns>
-    public static string GetDocumentationId(EventInfo @event)
+    public static string? GetDocumentationId(EventInfo @event)
     {
         @event = NormalizeToOpenGenericDeclaringType(@event) ?? @event;
 
@@ -132,7 +134,7 @@ public static class DocumentationIdProvider
     // (List<>) so the declaration-name path produces arity-backticked output (`List`1`)
     // that matches XML doc keys. Non-generic and already-open generic types pass through
     // unchanged. Null in → null out (callers handle the null DeclaringType case).
-    private static Type NormalizeToGenericDefinition(Type type)
+    private static Type? NormalizeToGenericDefinition(Type type)
     {
         if (type is { IsGenericType: true, IsGenericTypeDefinition: false })
         {
@@ -149,7 +151,7 @@ public static class DocumentationIdProvider
     // the bound `(System.Int32)`. Matching by metadata token within the same module is
     // the standard reflection trick for going from constructed → open form.
     // Returns null when the member is already open or normalization isn't possible.
-    private static T NormalizeToOpenGenericDeclaringType<T>(T member)
+    private static T? NormalizeToOpenGenericDeclaringType<T>(T member)
         where T : MemberInfo
     {
         var declaring = member.DeclaringType;
@@ -219,7 +221,7 @@ public static class DocumentationIdProvider
     // The declaration name is the dotted, arity-backticked path with no prefix and no
     // brace-substituted type arguments — used for `T:` ids and as the container path of
     // member ids (e.g. "System.Collections.Generic.List`1").
-    private static void AppendTypeDeclarationName(StringBuilder builder, Type type)
+    private static void AppendTypeDeclarationName(StringBuilder builder, Type? type)
     {
         var chain = NestingChain(type);
         var outermost = chain[0];
@@ -248,8 +250,13 @@ public static class DocumentationIdProvider
     // A type reference as it appears in a parameter/return position: generic parameters
     // become `n (type) / ``n (method); constructed generics use brace-substituted args;
     // by-ref/array/pointer carry their suffixes.
-    private static void AppendTypeReference(StringBuilder builder, Type type)
+    private static void AppendTypeReference(StringBuilder builder, Type? type)
     {
+        if (type == null)
+        {
+            return;
+        }
+
         if (type.IsByRef)
         {
             AppendTypeReference(builder, type.GetElementType());
@@ -342,7 +349,7 @@ public static class DocumentationIdProvider
             .Append(']');
     }
 
-    private static System.Collections.Generic.List<Type> NestingChain(Type type)
+    private static System.Collections.Generic.List<Type> NestingChain(Type? type)
     {
         var chain = new System.Collections.Generic.List<Type>();
         for (var current = type; current != null; current = current.DeclaringType)

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -175,7 +177,7 @@ public static class DocumentationValidator
             var parameterNames = new HashSet<string>(function.Parameters.Select(p => p.Name), System.StringComparer.Ordinal);
             foreach (var parameter in documentation.Parameters)
             {
-                if (!parameterNames.Contains(parameter.Name))
+                if (parameter.Name != null && !parameterNames.Contains(parameter.Name))
                 {
                     diagnostics.ReportDocParamMismatch(function.Declaration.Location, parameter.Name, function.Name);
                 }
@@ -184,7 +186,7 @@ public static class DocumentationValidator
             var typeParameterNames = new HashSet<string>(function.TypeParameters.Select(tp => tp.Name), System.StringComparer.Ordinal);
             foreach (var typeParameter in documentation.TypeParameters)
             {
-                if (!typeParameterNames.Contains(typeParameter.Name))
+                if (typeParameter.Name != null && !typeParameterNames.Contains(typeParameter.Name))
                 {
                     diagnostics.ReportDocParamMismatch(function.Declaration.Location, typeParameter.Name, function.Name);
                 }

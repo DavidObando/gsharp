@@ -46,3 +46,7 @@ src/Core/CodeAnalysis/Syntax/**/*.cs
 src/Core/CodeAnalysis/Symbols/Display/**/*.cs
 src/Core/CodeAnalysis/Execution/**/*.cs
 src/Core/CodeAnalysis/Compilation/**/*.cs
+
+# Slice 7 -- documentation emit and the CodeAnalysis root (DiagnosticBag et al).
+src/Core/CodeAnalysis/Documentation/**/*.cs
+src/Core/CodeAnalysis/*.cs

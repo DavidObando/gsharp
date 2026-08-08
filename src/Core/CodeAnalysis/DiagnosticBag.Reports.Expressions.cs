@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -364,7 +366,7 @@ public sealed partial class DiagnosticBag
     /// (typically by adding an explicit type argument or casting). Pass
     /// <see langword="null"/> when the call site only knows the count.
     /// </param>
-    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string> candidateSignatures = null)
+    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string>? candidateSignatures = null)
     {
         var candidates = candidateSignatures?
             .Where(s => !string.IsNullOrEmpty(s))

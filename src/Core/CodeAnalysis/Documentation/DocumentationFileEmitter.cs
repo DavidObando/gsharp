@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Documentation;
 
 internal static class DocumentationFileEmitter
 {
-    public static void Emit(Stream xmlStream, string assemblyName, IEnumerable<StructSymbol> types, IEnumerable<FunctionSymbol> topLevelFunctions)
+    public static void Emit(Stream xmlStream, string? assemblyName, IEnumerable<StructSymbol> types, IEnumerable<FunctionSymbol> topLevelFunctions)
     {
         ArgumentNullException.ThrowIfNull(xmlStream);
 

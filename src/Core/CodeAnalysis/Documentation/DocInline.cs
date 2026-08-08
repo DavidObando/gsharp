@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Documentation;
@@ -27,7 +29,7 @@ public abstract record DocInline
     /// <summary>A fenced/preformatted code block (XML <c>&lt;code&gt;</c>).</summary>
     /// <param name="Language">The optional language tag, or null.</param>
     /// <param name="Value">The code text.</param>
-    public sealed record CodeBlock(string Language, string Value) : DocInline;
+    public sealed record CodeBlock(string? Language, string Value) : DocInline;
 
     /// <summary>A paragraph (XML <c>&lt;para&gt;</c>).</summary>
     /// <param name="Content">The ordered inline content of the paragraph.</param>
@@ -36,7 +38,7 @@ public abstract record DocInline
     /// <summary>A list (XML <c>&lt;list&gt;</c>).</summary>
     /// <param name="ListType">The list type (<c>bullet</c>, <c>number</c>, <c>table</c>), or null.</param>
     /// <param name="Items">The list items.</param>
-    public sealed record List(string ListType, ImmutableArray<DocListItem> Items) : DocInline;
+    public sealed record List(string? ListType, ImmutableArray<DocListItem> Items) : DocInline;
 
     /// <summary>A reference to a documented symbol (XML <c>&lt;see cref&gt;</c>).</summary>
     /// <param name="DocId">The target documentation id (cref).</param>
@@ -46,7 +48,7 @@ public abstract record DocInline
     /// <summary>An external hyperlink (Markdown link with an <c>http(s)</c> target).</summary>
     /// <param name="Href">The link target.</param>
     /// <param name="Inner">The link display content.</param>
-    public sealed record Link(string Href, ImmutableArray<DocInline> Inner) : DocInline;
+    public sealed record Link(string? Href, ImmutableArray<DocInline> Inner) : DocInline;
 
     /// <summary>A reference to a parameter (XML <c>&lt;paramref name&gt;</c>).</summary>
     /// <param name="Name">The referenced parameter name.</param>
@@ -54,7 +56,7 @@ public abstract record DocInline
 
     /// <summary>An <c>&lt;inheritdoc/&gt;</c> marker, resolved lazily at hover time.</summary>
     /// <param name="Cref">The optional cref target, or null for "inherit from base".</param>
-    public sealed record InheritDoc(string Cref) : DocInline;
+    public sealed record InheritDoc(string? Cref) : DocInline;
 
     /// <summary>
     /// A verbatim, well-formed XML fragment with no first-class model case. Backs

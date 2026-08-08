@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 
 namespace GSharp.Core.CodeAnalysis.Documentation;
@@ -50,14 +52,14 @@ public sealed record DocumentationComment(
 /// </summary>
 /// <param name="Name">The parameter or type-parameter name.</param>
 /// <param name="Content">The documentation content.</param>
-public sealed record DocParam(string Name, ImmutableArray<DocInline> Content);
+public sealed record DocParam(string? Name, ImmutableArray<DocInline> Content);
 
 /// <summary>
 /// A documented exception — an <c>&lt;exception cref&gt;</c>.
 /// </summary>
 /// <param name="Cref">The exception type's documentation id (cref).</param>
 /// <param name="Content">The documentation content.</param>
-public sealed record DocException(string Cref, ImmutableArray<DocInline> Content);
+public sealed record DocException(string? Cref, ImmutableArray<DocInline> Content);
 
 /// <summary>
 /// A <c>&lt;seealso&gt;</c> reference, to either a symbol (cref) or an external link (href).
@@ -65,4 +67,4 @@ public sealed record DocException(string Cref, ImmutableArray<DocInline> Content
 /// <param name="Cref">The target documentation id, or null when this is a link.</param>
 /// <param name="Href">The external link target, or null when this is a cref.</param>
 /// <param name="Content">The optional display content.</param>
-public sealed record DocReference(string Cref, string Href, ImmutableArray<DocInline> Content);
+public sealed record DocReference(string? Cref, string? Href, ImmutableArray<DocInline> Content);

@@ -2,8 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -43,11 +46,11 @@ public sealed class AssemblyDocumentationProvider
     /// <summary>The largest documentation xml we will read; larger files are treated as unavailable.</summary>
     private const long MaxXmlBytes = 96L * 1024 * 1024;
 
-    private static readonly ConditionalWeakTable<Assembly, AssemblyDocumentationProvider> Cache = new();
+    private static readonly ConditionalWeakTable<Assembly, AssemblyDocumentationProvider?> Cache = new();
 
     private readonly Lazy<Dictionary<string, DocumentationComment>> index;
 
-    private AssemblyDocumentationProvider(string xmlPath)
+    private AssemblyDocumentationProvider(string? xmlPath)
     {
         this.index = new Lazy<Dictionary<string, DocumentationComment>>(
             () => LoadIndex(xmlPath),
@@ -61,7 +64,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="assembly">The assembly whose documentation to provide.</param>
     /// <returns>The provider, or <see langword="null"/> when none can be associated.</returns>
-    public static AssemblyDocumentationProvider ForAssembly(Assembly assembly)
+    public static AssemblyDocumentationProvider? ForAssembly(Assembly? assembly)
     {
         if (assembly is null)
         {
@@ -77,7 +80,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="type">The reflected type.</param>
     /// <returns>The documentation, or <see langword="null"/>.</returns>
-    public static DocumentationComment Resolve(Type type)
+    public static DocumentationComment? Resolve(Type type)
     {
         if (type is null)
         {
@@ -91,7 +94,7 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var id = DocumentationIdProvider.GetDocumentationId(type);
-        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+        return id != null && provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
     }
 
     /// <summary>
@@ -101,7 +104,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="method">The reflected method.</param>
     /// <returns>The documentation, or <see langword="null"/>.</returns>
-    public static DocumentationComment Resolve(MethodInfo method)
+    public static DocumentationComment? Resolve(MethodInfo method)
     {
         if (method is null)
         {
@@ -120,7 +123,7 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var id = DocumentationIdProvider.GetDocumentationId(method);
-        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+        return id != null && provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
     }
 
     /// <summary>
@@ -129,7 +132,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="property">The reflected property.</param>
     /// <returns>The documentation, or <see langword="null"/>.</returns>
-    public static DocumentationComment Resolve(PropertyInfo property)
+    public static DocumentationComment? Resolve(PropertyInfo property)
     {
         if (property is null)
         {
@@ -143,7 +146,7 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var id = DocumentationIdProvider.GetDocumentationId(property);
-        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+        return id != null && provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
     }
 
     /// <summary>
@@ -152,7 +155,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="field">The reflected field.</param>
     /// <returns>The documentation, or <see langword="null"/>.</returns>
-    public static DocumentationComment Resolve(FieldInfo field)
+    public static DocumentationComment? Resolve(FieldInfo field)
     {
         if (field is null)
         {
@@ -166,7 +169,7 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var id = DocumentationIdProvider.GetDocumentationId(field);
-        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+        return id != null && provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
     }
 
     /// <summary>
@@ -175,7 +178,7 @@ public sealed class AssemblyDocumentationProvider
     /// </summary>
     /// <param name="event">The reflected event.</param>
     /// <returns>The documentation, or <see langword="null"/>.</returns>
-    public static DocumentationComment Resolve(EventInfo @event)
+    public static DocumentationComment? Resolve(EventInfo @event)
     {
         if (@event is null)
         {
@@ -189,7 +192,7 @@ public sealed class AssemblyDocumentationProvider
         }
 
         var id = DocumentationIdProvider.GetDocumentationId(@event);
-        return provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
+        return id != null && provider.TryGetDocumentation(id, out var documentation) ? documentation : null;
     }
 
     /// <summary>
@@ -198,7 +201,7 @@ public sealed class AssemblyDocumentationProvider
     /// <param name="documentationId">The member's DocID (e.g. <c>T:System.Console</c>).</param>
     /// <param name="documentation">The parsed documentation, when found.</param>
     /// <returns><see langword="true"/> when documentation was found; otherwise <see langword="false"/>.</returns>
-    public bool TryGetDocumentation(string documentationId, out DocumentationComment documentation)
+    public bool TryGetDocumentation(string documentationId, [NotNullWhen(true)] out DocumentationComment? documentation)
     {
         documentation = null;
         if (string.IsNullOrEmpty(documentationId))
@@ -210,12 +213,12 @@ public sealed class AssemblyDocumentationProvider
         return map.TryGetValue(documentationId, out documentation);
     }
 
-    private static AssemblyDocumentationProvider Create(Assembly assembly)
+    private static AssemblyDocumentationProvider? Create(Assembly assembly)
     {
         return new AssemblyDocumentationProvider(DiscoverXmlPath(assembly));
     }
 
-    private static Assembly SafeAssembly(Type type)
+    private static Assembly? SafeAssembly(Type? type)
     {
         try
         {
@@ -233,7 +236,7 @@ public sealed class AssemblyDocumentationProvider
     // at design time (e.g. the language server uses runtime-loaded types for hover), the
     // sibling xml won't exist — fall back to probing the ref pack where .NET ships the
     // XML documentation alongside the reference assemblies.
-    private static string DiscoverXmlPath(Assembly assembly)
+    private static string? DiscoverXmlPath(Assembly assembly)
     {
         if (!GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.TryGetAssemblyPath(assembly, out var location))
         {
@@ -255,7 +258,7 @@ public sealed class AssemblyDocumentationProvider
     //   {dotnet_root}/packs/Microsoft.NETCore.App.Ref/{version}/ref/{tfm}/{assembly}.xml
     // Special case: System.Private.CoreLib hosts many BCL types but its docs ship in
     // System.Runtime.xml in the ref pack.
-    private static string ProbeRefPackXml(string assemblyLocation)
+    private static string? ProbeRefPackXml(string assemblyLocation)
     {
         try
         {
@@ -332,7 +335,7 @@ public sealed class AssemblyDocumentationProvider
         return null;
     }
 
-    private static Dictionary<string, DocumentationComment> LoadIndex(string path)
+    private static Dictionary<string, DocumentationComment> LoadIndex(string? path)
     {
         var result = new Dictionary<string, DocumentationComment>(StringComparer.Ordinal);
         if (string.IsNullOrEmpty(path))
@@ -368,7 +371,7 @@ public sealed class AssemblyDocumentationProvider
 
             foreach (var member in membersElement.Elements("member"))
             {
-                var name = (string)member.Attribute("name");
+                var name = (string?)member.Attribute("name");
                 if (string.IsNullOrEmpty(name) || result.ContainsKey(name))
                 {
                     continue;

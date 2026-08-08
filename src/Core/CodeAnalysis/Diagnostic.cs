@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis;
