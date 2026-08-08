@@ -123,6 +123,18 @@ The directory rule existed to guarantee something worth keeping — that no file
 
 The check must parse rather than grep: 129 column-0 `#nullable` lines exist inside verbatim string literals in the cs2gs translation tests, and the `#nullable disable` region at `test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs` is load-bearing — it exists precisely so the C# compiler emits no `NullableAttribute`, giving the G# metadata importer a genuinely oblivious type to import (issue #1354). It is a permanent allowlist entry and no cleanup may remove it.
 
+### A7 — `Invariant.Required` for non-local invariants
+
+The `!`-needs-a-comment rule holds, and for a local invariant it works well: the parser slice added 24 `!`, every one naming an enclosing guard or a constructor. It works badly where the invariant is real but non-local — a reflection result narrowed three frames up, a value established by a sibling constructor — because an honest comment there is long, and a short one is the laundering the rule exists to prevent.
+
+`Invariant.Required(value, because)` (`src/Core/CodeAnalysis/Invariant.cs`) makes the invariant an artifact rather than a comment. It returns the value when the invariant holds and otherwise throws `InvalidOperationException` naming both the reason and — via `[CallerArgumentExpression]` — the offending expression, which the driver surfaces as GS9998 like every other broken invariant in Core. That is strictly more diagnosable than `!`, which converts a violated invariant into a bare `NullReferenceException` some frames later.
+
+The rule for authors:
+
+- **Local and crisply stateable** — "the enclosing `if` tested this", "the constructor assigns it" — keep using `!` with the comment. It is lighter and reads fine.
+- **Non-local, or awkward to state in one line** — use `Invariant.Required`, and put the sentence you would have written as a comment into `because`.
+- Neither is a licence to skip the thinking. If you cannot name what establishes the invariant, you do not have one; that is a latent bug, and A6's triage applies.
+
 ### A6 — Two kinds of warning, and only one of them is mechanizable
 
 Slices 2–4 were driven almost entirely from the compiler's own output by rules that add `?` where the compiler proved a null flows. That worked because of what those slices' warnings *were*, and attempting the same on `CodeAnalysis/Syntax/`'s parser proved it does not generalise.
