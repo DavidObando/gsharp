@@ -1160,12 +1160,20 @@ public static class SpillSequenceSpiller
             }
 
             var spilled = SpillExpression(assign.Value);
-            var value = new BoundFieldAssignmentExpression(
-                null,
-                assign.Receiver,
-                assign.StructType,
-                assign.Field,
-                spilled.Value);
+
+            // Issue #3333 / #1644: an interface static field write has a null
+            // Receiver and StructType, and carries the owning interface in
+            // InterfaceType. Rebuilding it through the variable-receiver
+            // constructor drops that, and the emitter parents the field at the
+            // open-generic TypeDef instead of a TypeSpec.
+            var value = assign.InterfaceType != null
+                ? new BoundFieldAssignmentExpression(null, assign.Field, assign.InterfaceType, spilled.Value)
+                : new BoundFieldAssignmentExpression(
+                    null,
+                    assign.Receiver,
+                    assign.StructType,
+                    assign.Field,
+                    spilled.Value);
             return new BoundSpillSequenceExpression(
                 null,
                 spilled.Locals,

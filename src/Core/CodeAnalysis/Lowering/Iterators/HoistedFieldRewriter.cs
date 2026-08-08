@@ -105,6 +105,17 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
         }
         else if (!ReferenceEquals(value, node.Value))
         {
+            // Issue #3333 / #1644: an interface static field write has a null
+            // Receiver and StructType, and carries the owning interface in
+            // InterfaceType. Rebuilding it through the variable-receiver
+            // constructor drops that, and the emitter parents the field at the
+            // open-generic TypeDef instead of a TypeSpec. This override must
+            // carry the same guard the base BoundTreeRewriter does.
+            if (node.InterfaceType != null)
+            {
+                return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value);
+            }
+
             return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
         }
 
