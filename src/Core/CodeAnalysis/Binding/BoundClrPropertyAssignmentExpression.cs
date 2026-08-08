@@ -24,11 +24,11 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 {
     public BoundClrPropertyAssignmentExpression(
         SyntaxNode? syntax,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         MemberInfo member,
         BoundExpression value,
         TypeSymbol resultType,
-        TypeSymbol staticContainerType,
+        TypeSymbol? staticContainerType,
         TypeParameterSymbol? constrainedReceiverTypeParameter = null,
         TypeSymbol? constrainedInterfaceType = null)
         : base(syntax)
@@ -42,7 +42,9 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         StaticContainerType = staticContainerType;
     }
 
-    public BoundExpression Receiver { get; }
+    /// <summary>Gets the receiver, or <c>null</c> when the member is
+    /// static -- see the remarks on this type.</summary>
+    public BoundExpression? Receiver { get; }
 
     public MemberInfo Member { get; }
 
@@ -52,7 +54,10 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 
     public TypeSymbol? ConstrainedInterfaceType { get; }
 
-    public TypeSymbol StaticContainerType { get; }
+    /// <summary>Gets the declaring type used to parent a static member
+    /// reference, or <c>null</c> when the binder had none to record (which
+    /// includes every instance write).</summary>
+    public TypeSymbol? StaticContainerType { get; }
 
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 

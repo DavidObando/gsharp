@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // Elements should appear in the correct order
 
 using System.Collections.Generic;
@@ -257,7 +259,7 @@ internal sealed class IteratorTryDispatchPlan
     /// </summary>
     /// <param name="state">The yield suspension state number.</param>
     /// <returns>The entry-label target, or null.</returns>
-    public BoundLabel GetOuterDispatchTarget(int state)
+    public BoundLabel? GetOuterDispatchTarget(int state)
     {
         return outerDispatchTargets.TryGetValue(state, out var lbl) ? lbl : null;
     }
@@ -269,7 +271,7 @@ internal sealed class IteratorTryDispatchPlan
     /// </summary>
     /// <param name="tryStmt">The user try statement (pre-rewrite identity).</param>
     /// <returns>The synthesized entry label, or null.</returns>
-    public BoundLabel GetEntryLabel(BoundTryStatement tryStmt)
+    public BoundLabel? GetEntryLabel(BoundTryStatement tryStmt)
     {
         return entryLabels.TryGetValue(tryStmt, out var lbl) ? lbl : null;
     }
@@ -297,7 +299,7 @@ internal sealed class IteratorTryDispatchPlan
     /// <summary>Gets the canonical resume label for the given yield state.</summary>
     /// <param name="state">The yield state.</param>
     /// <returns>The resume label, or null if no yield with that state was recorded.</returns>
-    public BoundLabel GetResumeLabel(int state)
+    public BoundLabel? GetResumeLabel(int state)
     {
         return resumeLabels.TryGetValue(state, out var lbl) ? lbl : null;
     }

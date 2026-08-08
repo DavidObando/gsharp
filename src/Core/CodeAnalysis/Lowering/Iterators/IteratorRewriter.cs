@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1611 // Element parameters should be documented
@@ -9,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -53,7 +56,7 @@ public static class IteratorRewriter
     internal static bool TryBuildPlan(
         FunctionSymbol function,
         BoundBlockStatement body,
-        out IteratorStateMachinePlan plan)
+        [NotNullWhen(true)] out IteratorStateMachinePlan? plan)
     {
         var elementType = GetIteratorElementType(function.Type);
         if (!IteratorDetection.ContainsYield(body)
@@ -79,7 +82,7 @@ public static class IteratorRewriter
         }
     }
 
-    private static TypeSymbol GetIteratorElementType(TypeSymbol type)
+    private static TypeSymbol? GetIteratorElementType(TypeSymbol type)
     {
         if (type is SequenceTypeSymbol seq)
         {

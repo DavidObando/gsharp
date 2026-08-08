@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Linq;
 using System.Reflection;
@@ -80,9 +82,10 @@ public sealed class AwaitableShape
     /// Resolves the awaitable shape for the given CLR type, or returns
     /// <see langword="null"/> if the type is not awaitable.
     /// </summary>
-    /// <param name="awaitableType">The static type of the awaited expression.</param>
+    /// <param name="awaitableType">The static type of the awaited expression,
+    /// or <c>null</c> when it has no CLR projection -- which is not awaitable.</param>
     /// <returns>The resolved shape, or <see langword="null"/>.</returns>
-    public static AwaitableShape Resolve(Type awaitableType)
+    public static AwaitableShape? Resolve(Type? awaitableType)
     {
         if (awaitableType == null)
         {

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -40,7 +42,7 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
 
     private readonly List<FieldSymbol> fields = new List<FieldSymbol>();
     private readonly Dictionary<string, FieldSymbol> awaiterPoolFields = new Dictionary<string, FieldSymbol>(StringComparer.Ordinal);
-    private StructSymbol materializedStruct;
+    private StructSymbol? materializedStruct;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SynthesizedStateMachineType"/> class.
@@ -77,21 +79,27 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
 
     /// <summary>
     /// Gets or sets the symbolic async result type declared on the kickoff
-    /// method before it was widened to <c>Task&lt;T&gt;</c>.
+    /// method before it was widened to <c>Task&lt;T&gt;</c>. <c>null</c> until
+    /// <see cref="AsyncStateMachineTypeBuilder"/> assigns it, immediately after
+    /// construction.
     /// </summary>
-    public TypeSymbol ResultTypeSymbol { get; set; }
+    public TypeSymbol? ResultTypeSymbol { get; set; }
 
-    /// <summary>Gets or sets the <c>&lt;&gt;1__state</c> field. Always
-    /// present; populated by the state-machine rewriter.</summary>
-    public FieldSymbol StateField { get; set; }
+    /// <summary>Gets or sets the <c>&lt;&gt;1__state</c> field. Every state
+    /// machine has one, but it is <c>null</c> until the state-machine rewriter
+    /// populates it.</summary>
+    public FieldSymbol? StateField { get; set; }
 
-    /// <summary>Gets or sets the <c>&lt;&gt;t__builder</c> field. Always
-    /// present; typed as <see cref="AsyncMethodBuilderInfo.BuilderType"/>.</summary>
-    public FieldSymbol BuilderField { get; set; }
+    /// <summary>Gets or sets the <c>&lt;&gt;t__builder</c> field, typed as
+    /// <see cref="AsyncMethodBuilderInfo.BuilderType"/>. Every state machine has
+    /// one, but it is <c>null</c> until the state-machine rewriter populates
+    /// it.</summary>
+    public FieldSymbol? BuilderField { get; set; }
 
     /// <summary>Gets or sets the <c>&lt;&gt;4__this</c> field, present only
-    /// when the kickoff method is an instance method that captures <c>this</c>.</summary>
-    public FieldSymbol ThisField { get; set; }
+    /// when the kickoff method is an instance method that captures <c>this</c>;
+    /// <c>null</c> otherwise.</summary>
+    public FieldSymbol? ThisField { get; set; }
 
     /// <summary>Gets the read-only sequence of all synthesized fields on
     /// the state machine, in declaration order. Includes the control
@@ -136,7 +144,7 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
     /// <param name="awaiterClrType">The CLR awaiter type.</param>
     /// <param name="awaiterTypeSymbol">The symbolic awaiter type retained for emission.</param>
     /// <returns>The awaiter pool field, or <see langword="null"/> if not registered.</returns>
-    public FieldSymbol GetAwaiterPoolField(Type awaiterClrType, TypeSymbol awaiterTypeSymbol)
+    public FieldSymbol? GetAwaiterPoolField(Type awaiterClrType, TypeSymbol awaiterTypeSymbol)
     {
         if (awaiterClrType == null)
         {

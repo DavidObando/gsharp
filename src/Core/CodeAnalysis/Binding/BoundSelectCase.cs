@@ -22,9 +22,9 @@ public sealed record BoundSelectCase
     /// <param name="body">Bound case body.</param>
     public BoundSelectCase(
         SelectCaseKind caseKind,
-        BoundExpression channel,
-        BoundExpression value,
-        VariableSymbol variable,
+        BoundExpression? channel,
+        BoundExpression? value,
+        VariableSymbol? variable,
         BoundStatement body)
     {
         CaseKind = caseKind;
@@ -38,13 +38,13 @@ public sealed record BoundSelectCase
     public SelectCaseKind CaseKind { get; }
 
     /// <summary>Gets the channel expression for send/receive arms; null for default.</summary>
-    public BoundExpression Channel { get; }
+    public BoundExpression? Channel { get; }
 
     /// <summary>Gets the value expression for send arms; null otherwise.</summary>
-    public BoundExpression Value { get; }
+    public BoundExpression? Value { get; }
 
     /// <summary>Gets the declared variable for receive-bind arms; null otherwise.</summary>
-    public VariableSymbol Variable { get; }
+    public VariableSymbol? Variable { get; }
 
     /// <summary>Gets the bound case body.</summary>
     public BoundStatement Body { get; }

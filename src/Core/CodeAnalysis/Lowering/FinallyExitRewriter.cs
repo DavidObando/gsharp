@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -259,12 +261,16 @@ internal static class FinallyExitRewriter
         private static BoundStatement BuildExceptionDispatchThrow(BoundExpression exception)
         {
             var ediType = typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo);
-            var captureMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
-                new[] { typeof(Exception) });
-            var throwMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
-                Type.EmptyTypes);
+            var captureMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
+                    new[] { typeof(Exception) }),
+                "ExceptionDispatchInfo.Capture(Exception) is looked up on the host runtime's own type, not on the target framework's references");
+            var throwMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
+                    Type.EmptyTypes),
+                "ExceptionDispatchInfo.Throw() is looked up on the host runtime's own type, not on the target framework's references");
             var ediClass = new ImportedClassSymbol(ediType, declaration: null);
             var captureFunction = new ImportedFunctionSymbol(
                 captureMethod.Name,

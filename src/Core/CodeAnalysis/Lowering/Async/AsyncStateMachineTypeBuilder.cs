@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -65,7 +67,9 @@ public static class AsyncStateMachineTypeBuilder
     /// into the returned type's <c>MoveNext</c>.</param>
     /// <param name="loweredBody">The kickoff method's lowered body — input to
     /// the capture walker. Must be the post-<see cref="Lowerer"/> form.</param>
-    /// <param name="references">The compilation's reference resolver, used to
+    /// <param name="references">The compilation's reference resolver, or
+    /// <see langword="null"/> when none is available, in which case the builder
+    /// cannot be resolved and this returns <see langword="null"/>. Used to
     /// look up <c>System.Threading.Tasks.Task[`1]</c> on the target TFM and to
     /// resolve the builder type's members.</param>
     /// <param name="ordinal">Per-kickoff disambiguator for the synthesized
@@ -75,10 +79,10 @@ public static class AsyncStateMachineTypeBuilder
     /// <returns>The populated state-machine type, or <see langword="null"/>
     /// when the builder cannot be resolved (see remarks on
     /// <see cref="AsyncStateMachineTypeBuilder"/>).</returns>
-    public static SynthesizedStateMachineType Build(
+    public static SynthesizedStateMachineType? Build(
         FunctionSymbol kickoff,
         BoundStatement loweredBody,
-        ReferenceResolver references,
+        ReferenceResolver? references,
         int ordinal = 0)
     {
         if (kickoff == null)
@@ -97,8 +101,11 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
+        // Resolve returns null when no builder type could be chosen at all --
+        // a distinct outcome from resolving one whose members did not bind,
+        // which is what IsValid reports. Both mean "no state machine".
         var builderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, references);
-        if (!builderInfo.IsValid)
+        if (builderInfo == null || !builderInfo.IsValid)
         {
             return null;
         }
@@ -203,7 +210,7 @@ public static class AsyncStateMachineTypeBuilder
         return result;
     }
 
-    private static Type ResolveAsyncReturnClrType(FunctionSymbol kickoff, ReferenceResolver references)
+    private static Type? ResolveAsyncReturnClrType(FunctionSymbol kickoff, ReferenceResolver? references)
     {
         if (references == null)
         {
@@ -225,7 +232,7 @@ public static class AsyncStateMachineTypeBuilder
         // argument must be `Nullable<T>` (not bare `T`) so the async state
         // machine's builder type (`Task<Nullable<int>>`) matches the kickoff's
         // return type produced by WrapAsTask.
-        Type inner;
+        Type? inner;
         if (kickoff.Type is NullableTypeSymbol nullable
             && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
         {

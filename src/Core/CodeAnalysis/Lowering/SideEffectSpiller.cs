@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reflection;
@@ -95,13 +97,8 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             changed |= newBody != pair.Value;
         }
 
-        var statement = program.Statement;
-        if (statement != null)
-        {
-            var newStatement = (BoundBlockStatement)spiller.RewriteStatement(statement);
-            changed |= newStatement != statement;
-            statement = newStatement;
-        }
+        var statement = (BoundBlockStatement)spiller.RewriteStatement(program.Statement);
+        changed |= statement != program.Statement;
 
         if (!changed)
         {
@@ -146,12 +143,23 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         var index = this.MaybeSpill(rewritten.Index, spillIndex, "idx", statements);
         var value = this.MaybeSpill(rewritten.Value, spillValue, "val", statements);
 
-        var assignment = new BoundIndexAssignmentExpression(
-            rewritten.Syntax,
-            rewritten.Target,
-            index,
-            value,
-            rewritten.Type);
+        // Rebuild through the form the node actually has: the expression-target
+        // form (#2488, a narrowed target) carries no Target, and reconstructing it
+        // through the variable-target constructor would drop TargetExpression --
+        // the #3333 failure shape.
+        var assignment = rewritten.TargetExpression != null
+            ? BoundIndexAssignmentExpression.WithExpressionTarget(
+                rewritten.Syntax,
+                rewritten.TargetExpression,
+                index,
+                value,
+                rewritten.Type)
+            : new BoundIndexAssignmentExpression(
+                rewritten.Syntax,
+                BoundNodeForm.VariableTarget(rewritten),
+                index,
+                value,
+                rewritten.Type);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
@@ -188,13 +196,26 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 
         var value = this.MaybeSpill(rewritten.Value, spillValue, "val", statements);
 
-        var assignment = new BoundClrIndexAssignmentExpression(
-            rewritten.Syntax,
-            rewritten.Target,
-            rewritten.Indexer,
-            argsBuilder.ToImmutable(),
-            value,
-            rewritten.Type);
+        // Same form preservation as the slice/array path above.
+        var assignment = rewritten.TargetExpression != null
+            ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                rewritten.Syntax,
+                rewritten.TargetExpression,
+                rewritten.Indexer,
+                argsBuilder.ToImmutable(),
+                value,
+                rewritten.Type,
+                rewritten.ConstrainedReceiverTypeParameter,
+                rewritten.ConstrainedInterfaceType)
+            : new BoundClrIndexAssignmentExpression(
+                rewritten.Syntax,
+                BoundNodeForm.VariableTarget(rewritten),
+                rewritten.Indexer,
+                argsBuilder.ToImmutable(),
+                value,
+                rewritten.Type,
+                rewritten.ConstrainedReceiverTypeParameter,
+                rewritten.ConstrainedInterfaceType);
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
@@ -275,30 +296,34 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         // an addressable submission-global receiver chain must not be spilled.
         // Issue #3292: an addressable array/slice element chain likewise —
         // only its side-effecting collection/index parts are hoisted.
-        var spillReceiver = rewritten.Receiver != null
-            && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
-            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver)
-            && !IsInPlaceElementWriteReceiver(rewritten.Receiver);
+        // A static member write has no receiver at all (see the remarks on
+        // BoundClrPropertyAssignmentExpression), so both spill decisions are
+        // nested under one null test rather than repeating it.
+        var original = rewritten.Receiver;
+        var spillReceiver = original != null
+            && SideEffectAnalyzer.HasObservableSideEffect(original)
+            && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(original)
+            && !IsInPlaceElementWriteReceiver(original);
         var value = rewritten.Value;
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
-        var receiver = rewritten.Receiver;
-        if (spillReceiver)
+        var receiver = original;
+        if (original != null && spillReceiver)
         {
-            receiver = this.MaybeSpill(rewritten.Receiver, true, "recv", statements);
+            receiver = this.MaybeSpill(original, true, "recv", statements);
 
             // Issue #1688: same double-eval hazard as the user-property
             // path above, for CLR properties (`obj.ClrProp += x`).
-            value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+            value = ReceiverSubstitutionRewriter.Replace(value, original, receiver);
         }
-        else if (receiver != null && IsInPlaceElementWriteReceiver(receiver))
+        else if (original != null && IsInPlaceElementWriteReceiver(original))
         {
             // Issue #3292: once-only evaluation for the element chain (see
             // RewritePropertyAssignmentExpression).
-            receiver = this.SpillElementChainParts(rewritten.Receiver, statements);
-            if (!ReferenceEquals(receiver, rewritten.Receiver))
+            receiver = this.SpillElementChainParts(original, statements);
+            if (!ReferenceEquals(receiver, original))
             {
-                value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+                value = ReceiverSubstitutionRewriter.Replace(value, original, receiver);
             }
         }
 
@@ -354,7 +379,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(
             rewritten.Syntax,
             receiver,
-            rewritten.StructType,
+            BoundNodeForm.DeclaringType(rewritten),
             rewritten.Field,
             value,
             rewritten.ResultType);
@@ -448,7 +473,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
                 return new BoundFieldAccessExpression(
                     fieldLink.Syntax,
                     inner,
-                    fieldLink.StructType,
+                    BoundNodeForm.DeclaringType(fieldLink),
                     fieldLink.Field,
                     fieldLink.NarrowedType);
             }

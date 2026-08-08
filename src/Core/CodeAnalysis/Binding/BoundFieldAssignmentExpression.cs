@@ -20,7 +20,17 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAssignmentExpression : BoundExpression
 {
-    public BoundFieldAssignmentExpression(SyntaxNode? syntax, VariableSymbol receiver, StructSymbol structType, FieldSymbol field, BoundExpression value, TypeSymbol? resultType = null)
+    /// <summary>Initializes a new instance of the <see cref="BoundFieldAssignmentExpression"/>
+    /// class for a field write through a variable receiver, or through no
+    /// receiver at all when the field is static (issue #263 lowers a static
+    /// auto-property assignment to this form with a null receiver).</summary>
+    /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
+    /// <param name="receiver">The receiver variable, or <c>null</c> for a static field.</param>
+    /// <param name="structType">The declaring struct/class type.</param>
+    /// <param name="field">The field to write.</param>
+    /// <param name="value">The value to assign.</param>
+    /// <param name="resultType">The substituted assignment result type, or null.</param>
+    public BoundFieldAssignmentExpression(SyntaxNode? syntax, VariableSymbol? receiver, StructSymbol structType, FieldSymbol field, BoundExpression value, TypeSymbol? resultType = null)
         : base(syntax)
     {
         Receiver = receiver;

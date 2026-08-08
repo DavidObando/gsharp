@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1612 // Element parameter documentation should match
@@ -77,7 +79,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
         {
             var rewrittenReceiver = this.FieldRead(proxyField);
-            return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
+            return new BoundFieldAccessExpression(null, rewrittenReceiver, BoundNodeForm.DeclaringType(node), node.Field);
         }
 
         return base.RewriteFieldAccessExpression(node);
@@ -92,7 +94,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
         if (node.Receiver != null && this.fieldMap.TryGetValue(node.Receiver, out var proxyField))
         {
             var receiverExpr = this.FieldRead(proxyField);
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value);
         }
 
         if (node.ReceiverExpression != null)
@@ -100,7 +102,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             var receiverExpr = this.RewriteExpression(node.ReceiverExpression);
             if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
             {
-                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value);
             }
         }
         else if (!ReferenceEquals(value, node.Value))
@@ -116,7 +118,12 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
                 return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value);
             }
 
-            return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+            return new BoundFieldAssignmentExpression(
+                null,
+                node.Receiver,
+                BoundNodeForm.DeclaringType(node),
+                node.Field,
+                value);
         }
 
         return node;

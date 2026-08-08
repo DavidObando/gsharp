@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -44,11 +46,6 @@ public static class RefInitializationHoister
     /// <returns>The rewritten body with no ref local declarations or usages.</returns>
     public static BoundBlockStatement Rewrite(BoundBlockStatement body)
     {
-        if (body == null)
-        {
-            return body;
-        }
-
         // First pass: collect ref local declarations (we still need to know
         // which locals are ref so the rewriter can recognize their uses). The
         // operand template is computed in the second pass at the declaration
@@ -229,8 +226,18 @@ public static class RefInitializationHoister
 
                 case BoundFieldAccessExpression field:
                     {
+                        if (field.Receiver == null)
+                        {
+                            // A static or interface static-field read (ADR-0089 /
+                            // #1030) has no receiver expression to hoist, and
+                            // rebuilding it through the receiver constructor would
+                            // drop InterfaceType -- the #3333 failure shape. The
+                            // base BoundTreeRewriter bails the same way.
+                            return field;
+                        }
+
                         var receiver = HoistIfNeeded(field.Receiver, prelude);
-                        return new BoundFieldAccessExpression(field.Syntax, receiver, field.StructType, field.Field, field.NarrowedType);
+                        return new BoundFieldAccessExpression(field.Syntax, receiver, BoundNodeForm.DeclaringType(field), field.Field, field.NarrowedType);
                     }
 
                 case BoundClrIndexExpression clrIdx:

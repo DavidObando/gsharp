@@ -19,12 +19,13 @@ public sealed class BoundIfStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="condition">The bound if statement condition.</param>
     /// <param name="thenStatement">The then statement.</param>
-    /// <param name="elseStatement">The else statement.</param>
+    /// <param name="elseStatement">The else statement, or <c>null</c> for an
+    /// <c>if</c> with no <c>else</c> clause.</param>
     public BoundIfStatement(
         SyntaxNode? syntax,
         BoundExpression condition,
         BoundStatement thenStatement,
-        BoundStatement elseStatement)
+        BoundStatement? elseStatement)
         : base(syntax)
     {
         Condition = condition;
@@ -46,7 +47,9 @@ public sealed class BoundIfStatement : BoundStatement
     public BoundStatement ThenStatement { get; }
 
     /// <summary>
-    /// Gets the else statement.
+    /// Gets the else statement, or <c>null</c> for an <c>if</c> with no
+    /// <c>else</c> clause. Every rewriter and walker over this node already
+    /// tests it before recursing.
     /// </summary>
-    public BoundStatement ElseStatement { get; }
+    public BoundStatement? ElseStatement { get; }
 }

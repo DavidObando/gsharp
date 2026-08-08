@@ -4,6 +4,7 @@
 
 #nullable enable
 
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -25,9 +26,11 @@ public readonly struct BoundInterpolatedStringPart
     }
 
     /// <summary>Gets a value indicating whether this part is a hole (an embedded expression).</summary>
+    [MemberNotNullWhen(true, nameof(Value))]
     public bool IsHole => Value != null;
 
     /// <summary>Gets a value indicating whether this part is literal text.</summary>
+    [MemberNotNullWhen(false, nameof(Value))]
     public bool IsLiteral => Value == null;
 
     /// <summary>Gets the literal text, or <c>null</c> when this part is a hole.</summary>

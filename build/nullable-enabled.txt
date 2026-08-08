@@ -50,3 +50,9 @@ src/Core/CodeAnalysis/Compilation/**/*.cs
 # Slice 7 -- documentation emit and the CodeAnalysis root (DiagnosticBag et al).
 src/Core/CodeAnalysis/Documentation/**/*.cs
 src/Core/CodeAnalysis/*.cs
+
+# Slice 8 -- the lowering passes, including Iterators/ and Async/. Taken ahead
+# of Symbols/ because it is nearly self-contained: 1.5 intra-subsystem type
+# references per file against Symbols/'s 35, which is what made Symbols/
+# oscillate instead of converge.
+src/Core/CodeAnalysis/Lowering/**/*.cs

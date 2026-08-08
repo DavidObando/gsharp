@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable CS1591
 #pragma warning disable SA1028
 #pragma warning disable SA1116
@@ -254,7 +256,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var call = new BoundImportedInstanceCallExpression(
                 null,
                 promiseAddr,
-                setExceptionMethod,
+                Invariant.Required(
+                    setExceptionMethod,
+                    "an async-iterator MoveNext body is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, and the iterator rewriter binds SetException itself"),
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, exLocal)));
             stmts.Add(new BoundIfStatement(
@@ -276,7 +280,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
             return new BoundImportedInstanceCallExpression(
                 null,
                 promiseAddr,
-                setResultMethod,
+                Invariant.Required(
+                    setResultMethod,
+                    "an async-iterator MoveNext body is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, and the iterator rewriter binds SetResult itself"),
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, value)));
         }
@@ -342,7 +348,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var yieldState = ctx.plan.YieldStates.Values.OrderBy(v => v).Reverse().ElementAt(yieldIndex - 1);
 
                 // Find the matching BoundYieldStatement in the plan.
-                BoundYieldStatement matchedYield = null;
+                BoundYieldStatement? matchedYield = null;
                 foreach (var kvp in ctx.plan.YieldStates)
                 {
                     if (kvp.Value == yieldState && ReferenceEquals(kvp.Key, node))
@@ -391,7 +397,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var disposeException = new BoundClrConstructorCallExpression(
                     null,
                     typeof(Exception),
+                    Invariant.Required(
                     typeof(Exception).GetConstructor(Type.EmptyTypes),
+                    "System.Exception declares a public parameterless constructor"),
                     ImmutableArray<BoundExpression>.Empty,
                     TypeSymbol.FromClrType(typeof(Exception)));
                 var throwDispose = new BoundBlockStatement(
@@ -501,8 +509,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return new BoundGotoStatement(null, ctx.endOfBodyLabel);
             }
 
-            private BoundStatement GuardFinally(
-                BoundStatement finallyBlock,
+            private BoundStatement? GuardFinally(
+                BoundStatement? finallyBlock,
                 ImmutableArray<TryDispatchEntry> awaitEntries,
                 ImmutableArray<IteratorTryDispatchEntry> yieldEntries)
             {
@@ -511,7 +519,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     return null;
                 }
 
-                BoundExpression suspended = null;
+                BoundExpression? suspended = null;
                 foreach (var entry in awaitEntries)
                 {
                     suspended = AddSuspendedState(suspended, entry.State);
@@ -529,7 +537,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 var notSuspended = new BoundUnaryExpression(
                     null,
-                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    Invariant.Required(
+                        BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                        "the built-in operator table always binds `!` on bool"),
                     suspended);
                 return new BoundBlockStatement(
                     null,
@@ -537,7 +547,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                         new BoundIfStatement(null, notSuspended, finallyBlock, elseStatement: null)));
             }
 
-            private BoundExpression AddSuspendedState(BoundExpression condition, int state)
+            private BoundExpression AddSuspendedState(BoundExpression? condition, int state)
             {
                 var equalsState = new BoundBinaryExpression(
                     null,
@@ -569,7 +579,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true);
             }
 
-            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol resultTarget)
+            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol? resultTarget)
             {
                 if (!ctx.plan.AwaitStates.TryGetValue(awaitExpr, out var awaitState))
                 {
@@ -641,7 +651,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var isCompletedCall = new BoundImportedInstanceCallExpression(
                     null,
                     isCompletedReceiver,
-                    isCompletedGetter,
+                    Invariant.Required(
+                        isCompletedGetter,
+                        "AwaitableShape.Resolve only returns a shape when the awaiter declares a readable IsCompleted"),
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
                 stmts.Add(new BoundConditionalGotoStatement(null, resumeAfterLabel, isCompletedCall, jumpIfTrue: true));

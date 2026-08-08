@@ -29,7 +29,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement)
         : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, ImmutableArray<StructSymbol>.Empty)
     {
@@ -51,7 +51,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement,
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces)
@@ -76,7 +76,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement,
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
@@ -103,7 +103,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement,
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
@@ -132,7 +132,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement,
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
@@ -168,7 +168,7 @@ public sealed class BoundProgram
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement> functions,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         BoundBlockStatement statement,
         ImmutableArray<StructSymbol> structs)
         : this(entryPointPackage, packages, diagnostics, functions, entryPoint, statement, structs, ImmutableArray<InterfaceSymbol>.Empty)
@@ -212,7 +212,7 @@ public sealed class BoundProgram
     /// or null when the compilation produces a library. The body of the entry
     /// point is available via <see cref="Functions"/> using this key.
     /// </summary>
-    public FunctionSymbol EntryPoint { get; }
+    public FunctionSymbol? EntryPoint { get; }
 
     /// <summary>
     /// Gets the statements.

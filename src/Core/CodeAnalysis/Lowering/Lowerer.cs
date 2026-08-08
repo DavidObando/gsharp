@@ -2,8 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -21,7 +24,7 @@ public sealed class Lowerer : BoundTreeRewriter
     // is inside the type and has access to its private fields). When null (e.g.
     // top-level statements), auto-property access remains as property access so
     // the emitter generates callvirt get_/set_ — avoiding FieldAccessException.
-    private readonly StructSymbol declaringType;
+    private readonly StructSymbol? declaringType;
 
     private int labelCount;
 
@@ -35,11 +38,11 @@ public sealed class Lowerer : BoundTreeRewriter
     // CIL `leave` opcode, so this rewrite is enough to keep the generated IL
     // verifiable.
     private int tryNestingDepth;
-    private LocalVariableSymbol returnValueLocal;
-    private BoundLabel methodExitLabel;
+    private LocalVariableSymbol? returnValueLocal;
+    private BoundLabel? methodExitLabel;
     private bool hasRewrittenReturnsInProtectedRegions;
 
-    private Lowerer(StructSymbol declaringType = null)
+    private Lowerer(StructSymbol? declaringType = null)
     {
         this.declaringType = declaringType;
     }
@@ -129,7 +132,7 @@ public sealed class Lowerer : BoundTreeRewriter
             return base.RewritePatternSwitchStatement(node);
         }
 
-        BoundPatternSwitchArm defaultArm = null;
+        BoundPatternSwitchArm? defaultArm = null;
         foreach (var arm in node.Arms)
         {
             if (arm.IsDefault)
@@ -147,9 +150,9 @@ public sealed class Lowerer : BoundTreeRewriter
             }
 
             var matches = literal.Type == TypeSymbol.Float32
-                ? (float)literal.Value == (float)patternLiteral.Value
+                ? literal.Value is float leftF32 && patternLiteral.Value is float rightF32 && leftF32 == rightF32
                 : literal.Type == TypeSymbol.Float64
-                    ? (double)literal.Value == (double)patternLiteral.Value
+                    ? literal.Value is double leftF64 && patternLiteral.Value is double rightF64 && leftF64 == rightF64
                     : Equals(literal.Value, patternLiteral.Value);
             if (matches)
             {
@@ -636,7 +639,7 @@ public sealed class Lowerer : BoundTreeRewriter
             return new BoundExpressionStatement(null, new BoundErrorExpression(null));
         }
 
-        System.Type asyncEnumerableInterface = null;
+        System.Type? asyncEnumerableInterface = null;
         if (streamClr.IsGenericType &&
             !streamClr.IsGenericTypeDefinition &&
             streamClr.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
@@ -663,9 +666,9 @@ public sealed class Lowerer : BoundTreeRewriter
         // calls, causing ArgumentException ("Type must be a type provided by the
         // MetadataLoadContext").  Instead, derive everything from the interface and
         // method signatures that are already in the correct context.
-        System.Reflection.MethodInfo getAsyncEnumerator;
-        System.Reflection.MethodInfo moveNextAsync;
-        System.Reflection.MemberInfo currentMember;
+        System.Reflection.MethodInfo? getAsyncEnumerator;
+        System.Reflection.MethodInfo? moveNextAsync;
+        System.Reflection.MemberInfo? currentMember;
         if (asyncEnumerableInterface != null)
         {
             // Fast path: GetAsyncEnumerator is the sole method on IAsyncEnumerable<T>.
@@ -707,7 +710,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // shape is present the loop performs no disposal at all (rather than
         // failing to bind), so `disposeAsync` is allowed to stay null here.
         var enumeratorClr = getAsyncEnumerator.ReturnType;
-        System.Reflection.MethodInfo disposeAsync = null;
+        System.Reflection.MethodInfo? disposeAsync = null;
         foreach (var iface in enumeratorClr.GetInterfaces())
         {
             if (iface.FullName == "System.IAsyncDisposable")
@@ -987,7 +990,7 @@ public sealed class Lowerer : BoundTreeRewriter
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(enumeratorDecl);
 
-        LocalVariableSymbol indexSymbol = null;
+        LocalVariableSymbol? indexSymbol = null;
         if (!isDictionary && node.KeyVariable != null)
         {
             indexSymbol = new LocalVariableSymbol("$i", isReadOnly: false, type: TypeSymbol.Int32);
@@ -1022,8 +1025,12 @@ public sealed class Lowerer : BoundTreeRewriter
                 // synthesised key/value declarations carry the user's `K`/`V`.
                 var kvpType = currentAccess.Type;
                 var kvpClr = kvpType.ClrType;
-                var keyProp = kvpClr.GetProperty("Key");
-                var valueProp = kvpClr.GetProperty("Value");
+                var keyProp = Invariant.Required(
+                    kvpClr.GetProperty("Key"),
+                    "KeyValuePair<K, V> declares a public Key property");
+                var valueProp = Invariant.Required(
+                    kvpClr.GetProperty("Value"),
+                    "KeyValuePair<K, V> declares a public Value property");
 
                 TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
                 TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
@@ -1052,7 +1059,7 @@ public sealed class Lowerer : BoundTreeRewriter
         }
         else
         {
-            if (node.KeyVariable != null)
+            if (node.KeyVariable != null && indexSymbol != null)
             {
                 statements.Add(new BoundVariableDeclaration(node.Syntax, node.KeyVariable, new BoundVariableExpression(node.Syntax, indexSymbol)));
             }
@@ -1136,7 +1143,7 @@ public sealed class Lowerer : BoundTreeRewriter
             : current;
     }
 
-    private static BoundExpression TryBuildEnumeratorDisposeCall(LocalVariableSymbol enumeratorSymbol)
+    private static BoundExpression? TryBuildEnumeratorDisposeCall(LocalVariableSymbol enumeratorSymbol)
     {
         var clrType = enumeratorSymbol.Type?.ClrType;
         if (clrType == null)
@@ -1144,7 +1151,7 @@ public sealed class Lowerer : BoundTreeRewriter
             return null;
         }
 
-        System.Reflection.MethodInfo disposeMethod = null;
+        System.Reflection.MethodInfo? disposeMethod = null;
 
         // Pattern-based dispose for struct enumerators: prefer the type's
         // own public parameterless Dispose() so we get a direct `call` on
@@ -1204,8 +1211,8 @@ public sealed class Lowerer : BoundTreeRewriter
 
     private static bool TryBuildGetEnumeratorCall(
         BoundExpression collection,
-        out BoundExpression getEnumeratorCall,
-        out TypeSymbol enumeratorType)
+        [NotNullWhen(true)] out BoundExpression? getEnumeratorCall,
+        [NotNullWhen(true)] out TypeSymbol? enumeratorType)
     {
         // Issue #774: when the receiver is an open generic shape carrying an
         // in-scope type parameter (e.g. `IEnumerable[T]`, `sequence[T]`,
@@ -1269,8 +1276,8 @@ public sealed class Lowerer : BoundTreeRewriter
     /// </summary>
     private static bool TryBuildSymbolicOpenGetEnumeratorCall(
         BoundExpression collection,
-        out BoundExpression getEnumeratorCall,
-        out TypeSymbol enumeratorType)
+        [NotNullWhen(true)] out BoundExpression? getEnumeratorCall,
+        [NotNullWhen(true)] out TypeSymbol? enumeratorType)
     {
         getEnumeratorCall = null;
         enumeratorType = null;
@@ -1363,8 +1370,8 @@ public sealed class Lowerer : BoundTreeRewriter
 
     private static bool TryBuildMoveNextAndCurrent(
         TypeSymbol enumeratorType,
-        out System.Func<BoundExpression, BoundExpression> moveNextCallFactory,
-        out System.Func<BoundExpression, BoundExpression> currentAccessFactory)
+        [NotNullWhen(true)] out System.Func<BoundExpression, BoundExpression>? moveNextCallFactory,
+        [NotNullWhen(true)] out System.Func<BoundExpression, BoundExpression>? currentAccessFactory)
     {
         var enumeratorClr = enumeratorType.ClrType;
         if (enumeratorClr != null)
@@ -1372,9 +1379,9 @@ public sealed class Lowerer : BoundTreeRewriter
             var moveNext = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
                     enumeratorClr, "MoveNext", System.Type.EmptyTypes)
                 ?? typeof(System.Collections.IEnumerator).GetMethod("MoveNext", System.Type.EmptyTypes);
-            var currentMember = (System.Reflection.MemberInfo)MemberLookup.SafeGetPropertyIncludingSelfAndInterfaces(
+            var currentMember = (System.Reflection.MemberInfo?)MemberLookup.SafeGetPropertyIncludingSelfAndInterfaces(
                     enumeratorClr, "Current")
-                ?? (System.Reflection.MemberInfo)enumeratorClr.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                ?? (System.Reflection.MemberInfo?)enumeratorClr.GetField("Current", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
                 ?? typeof(System.Collections.IEnumerator).GetProperty("Current");
             if (moveNext != null && currentMember != null)
             {
@@ -1400,7 +1407,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 // open definition so real struct enumerators (whose Current is
                 // NOT the first type argument, e.g. Dictionary's
                 // KeyValuePair-returning Enumerator) keep the reflected type.
-                TypeSymbol currentType = null;
+                TypeSymbol? currentType = null;
                 if (enumeratorType is ImportedTypeSymbol enumImp
                     && !enumImp.TypeArguments.IsDefaultOrEmpty
                     && (enumImp.HasSubstitutableTypeArgument
@@ -1466,7 +1473,9 @@ public sealed class Lowerer : BoundTreeRewriter
         if (this.returnValueLocal != null)
         {
             var exceptionType = typeof(System.InvalidOperationException);
-            var constructor = exceptionType.GetConstructor(new[] { typeof(string) });
+            var constructor = Invariant.Required(
+                exceptionType.GetConstructor(new[] { typeof(string) }),
+                "System.InvalidOperationException declares the single-string-argument constructor");
             var statements = ImmutableArray.CreateBuilder<BoundStatement>(flattened.Statements.Length + 1);
             foreach (var current in flattened.Statements)
             {
@@ -1653,9 +1662,13 @@ public sealed class Lowerer : BoundTreeRewriter
         }
 
         stmts.Add(body);
-        stmts.Add(new BoundLabelStatement(null, this.methodExitLabel));
+        stmts.Add(new BoundLabelStatement(
+            null,
+            Invariant.Required(
+                this.methodExitLabel,
+                "hasRewrittenReturnsInProtectedRegions is set only by RewriteReturnStatement, which creates the exit label in the same block")));
 
-        BoundExpression retExpr = this.returnValueLocal == null
+        BoundExpression? retExpr = this.returnValueLocal == null
             ? null
             : new BoundVariableExpression(null, this.returnValueLocal);
         stmts.Add(new BoundReturnStatement(null, retExpr));

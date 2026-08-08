@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1612 // Element parameter documentation should match
@@ -219,21 +221,23 @@ public static class IteratorMoveNextBodyBuilder
                 }
 
                 // Build OR-chain: savedState == s1 || savedState == s2 || ...
-                BoundExpression condition = null;
-                foreach (var s in insideStates)
+                // Seeded from the first state rather than from null, so the
+                // chain is non-null by construction -- insideStates is known
+                // non-empty from the guard above.
+                BoundExpression SavedStateIs(int state) => new BoundBinaryExpression(
+                    null,
+                    new BoundVariableExpression(null, savedStateLocal),
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    new BoundLiteralExpression(null, state));
+
+                var condition = SavedStateIs(insideStates[0]);
+                for (var i = 1; i < insideStates.Length; i++)
                 {
-                    var eq = new BoundBinaryExpression(
+                    condition = new BoundBinaryExpression(
                         null,
-                        new BoundVariableExpression(null, savedStateLocal),
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
-                        new BoundLiteralExpression(null, s));
-                    condition = condition == null
-                        ? eq
-                        : new BoundBinaryExpression(
-                            null,
-                            condition,
-                            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
-                            eq);
+                        condition,
+                        BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                        SavedStateIs(insideStates[i]));
                 }
 
                 // Rewrite the user's finally body so any references to
@@ -379,26 +383,29 @@ public static class IteratorMoveNextBodyBuilder
                 // rewriter is a safe pass-through here).
                 var rewrittenFinally = this.RewriteStatement(node.FinallyBlock);
 
-                BoundExpression suspendedAtOwnYield = null;
-                foreach (var s in statesInside)
+                // Seeded from the first state, as above: statesInside is known
+                // non-empty from the guard at the top of this method.
+                BoundExpression StateIs(int state) => new BoundBinaryExpression(
+                    null,
+                    this.FieldRead(this.stateField),
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    new BoundLiteralExpression(null, state));
+
+                var suspendedAtOwnYield = StateIs(statesInside[0]);
+                for (var i = 1; i < statesInside.Length; i++)
                 {
-                    var eq = new BoundBinaryExpression(
+                    suspendedAtOwnYield = new BoundBinaryExpression(
                         null,
-                        this.FieldRead(this.stateField),
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
-                        new BoundLiteralExpression(null, s));
-                    suspendedAtOwnYield = suspendedAtOwnYield == null
-                        ? eq
-                        : new BoundBinaryExpression(
-                            null,
-                            suspendedAtOwnYield,
-                            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
-                            eq);
+                        suspendedAtOwnYield,
+                        BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                        StateIs(statesInside[i]));
                 }
 
                 var notSuspended = new BoundUnaryExpression(
                     null,
-                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    Invariant.Required(
+                        BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                        "the built-in operator table always binds `!` on bool"),
                     suspendedAtOwnYield);
 
                 var guardedFinally = new BoundIfStatement(null, notSuspended, AsBlock(rewrittenFinally), elseStatement: null);

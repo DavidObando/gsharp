@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -190,7 +192,7 @@ internal sealed class TryDispatchPlan
     /// </summary>
     /// <param name="state">The await suspension state number.</param>
     /// <returns>The entry-label target, or null.</returns>
-    public BoundLabel GetOuterDispatchTarget(int state)
+    public BoundLabel? GetOuterDispatchTarget(int state)
     {
         return outerDispatchTargets.TryGetValue(state, out var lbl) ? lbl : null;
     }
@@ -202,7 +204,7 @@ internal sealed class TryDispatchPlan
     /// </summary>
     /// <param name="tryStmt">The user try statement (pre-rewrite identity).</param>
     /// <returns>The synthesized entry label, or null.</returns>
-    public BoundLabel GetEntryLabel(BoundTryStatement tryStmt)
+    public BoundLabel? GetEntryLabel(BoundTryStatement tryStmt)
     {
         return entryLabels.TryGetValue(tryStmt, out var lbl) ? lbl : null;
     }

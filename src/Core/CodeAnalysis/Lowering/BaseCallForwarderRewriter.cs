@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -41,11 +43,6 @@ public static class BaseCallForwarderRewriter
     /// <returns>The updated program, or the original when no base call required forwarding.</returns>
     public static BoundProgram Rewrite(BoundProgram program)
     {
-        if (program == null)
-        {
-            return null;
-        }
-
         // Forwarders shared across the whole program, keyed by (containing class
         // definition, base method) so repeated base calls reuse one forwarder.
         var forwarders = new Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol>();
