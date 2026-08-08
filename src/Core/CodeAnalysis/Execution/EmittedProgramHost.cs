@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -85,7 +87,7 @@ public static class EmittedProgramHost
     /// <exception cref="OperationCanceledException">The token was cancelled before the program was invoked.</exception>
     public static EmittedProgramResult Run(
         Compilation.Compilation compilation,
-        IReadOnlyList<string> referencePaths = null,
+        IReadOnlyList<string>? referencePaths = null,
         CancellationToken cancellationToken = default)
     {
         if (compilation is null)
@@ -115,9 +117,9 @@ public static class EmittedProgramHost
             || trimmed.StartsWith("at System.RuntimeMethodHandle.InvokeMethod(", StringComparison.Ordinal);
     }
 
-    private static (int ExitCode, Exception UnhandledException, WeakReference LoadContext) LoadAndInvoke(
+    private static (int ExitCode, Exception? UnhandledException, WeakReference LoadContext) LoadAndInvoke(
         MemoryStream peStream,
-        IReadOnlyList<string> referencePaths)
+        IReadOnlyList<string>? referencePaths)
     {
         var loadContext = new AssemblyLoadContext($"gsharp-emitted-{Guid.NewGuid():N}", isCollectible: true);
         var weakReference = new WeakReference(loadContext);
@@ -154,7 +156,7 @@ public static class EmittedProgramHost
                 ? null
                 : new object[] { Array.Empty<string>() };
 
-            object returnValue;
+            object? returnValue;
             try
             {
                 returnValue = entryPoint.Invoke(null, arguments);
@@ -187,10 +189,10 @@ public static class EmittedProgramHost
         }
     }
 
-    private static Assembly ResolveDependency(
+    private static Assembly? ResolveDependency(
         AssemblyLoadContext context,
         AssemblyName assemblyName,
-        IReadOnlyList<string> referencePaths)
+        IReadOnlyList<string>? referencePaths)
     {
         // User-supplied references win over any same-named host assembly so
         // the program binds against exactly what it was compiled against.

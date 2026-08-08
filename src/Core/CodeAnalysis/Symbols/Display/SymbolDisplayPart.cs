@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Symbols.Display;
 
 /// <summary>
@@ -15,4 +17,4 @@ namespace GSharp.Core.CodeAnalysis.Symbols.Display;
 public readonly record struct SymbolDisplayPart(
     SymbolDisplayPartKind Kind,
     string Text,
-    Symbol Symbol = null);
+    Symbol? Symbol = null);

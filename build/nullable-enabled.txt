@@ -41,3 +41,8 @@ src/Core/CodeAnalysis/PEWriter/**/*.cs
 # Slice 5 -- completes CodeAnalysis/Syntax/: lexer, parser partials and the
 # SyntaxNode/SyntaxTree/SyntaxFacts/SyntaxKind base types.
 src/Core/CodeAnalysis/Syntax/**/*.cs
+
+# Slice 6 -- small leaf-ish subsystems inside the Symbols/Binding cycle.
+src/Core/CodeAnalysis/Symbols/Display/**/*.cs
+src/Core/CodeAnalysis/Execution/**/*.cs
+src/Core/CodeAnalysis/Compilation/**/*.cs

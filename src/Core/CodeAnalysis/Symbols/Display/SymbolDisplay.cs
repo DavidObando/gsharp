@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -35,7 +38,7 @@ public static class SymbolDisplay
     /// <param name="format">The display options.</param>
     /// <param name="compilation">An optional compilation used to recover a variable's exact declaring keyword.</param>
     /// <returns>The rendered display string.</returns>
-    public static string ToDisplayString(Symbol symbol, SymbolDisplayFormat format, Compilation.Compilation compilation = null)
+    public static string ToDisplayString(Symbol symbol, SymbolDisplayFormat format, Compilation.Compilation? compilation = null)
     {
         return PartsToString(ToDisplayParts(symbol, format, compilation));
     }
@@ -89,7 +92,7 @@ public static class SymbolDisplay
     /// <param name="format">The display options.</param>
     /// <param name="compilation">An optional compilation used to recover a variable's exact declaring keyword.</param>
     /// <returns>The classified display parts.</returns>
-    public static ImmutableArray<SymbolDisplayPart> ToDisplayParts(Symbol symbol, SymbolDisplayFormat format, Compilation.Compilation compilation = null)
+    public static ImmutableArray<SymbolDisplayPart> ToDisplayParts(Symbol symbol, SymbolDisplayFormat format, Compilation.Compilation? compilation = null)
     {
         if (symbol == null)
         {
@@ -233,7 +236,7 @@ public static class SymbolDisplay
         builder.Type(FormatType(type));
     }
 
-    private static void AppendGlobalVariable(PartBuilder builder, SymbolDisplayFormat format, VariableSymbol variable, Compilation.Compilation compilation)
+    private static void AppendGlobalVariable(PartBuilder builder, SymbolDisplayFormat format, VariableSymbol variable, Compilation.Compilation? compilation)
     {
         builder.Keyword(ResolveVariableKeyword(variable, compilation));
         builder.Space();
@@ -577,7 +580,7 @@ public static class SymbolDisplay
                 builder.Space();
             }
 
-            builder.Add(SymbolDisplayPartKind.ParameterName, parameters[i].Name);
+            builder.Add(SymbolDisplayPartKind.ParameterName, parameters[i].Name ?? string.Empty);
             builder.Space();
             builder.Type(FormatClrTypeName(parameters[i].ParameterType, format.QualifyNames));
         }
@@ -621,7 +624,7 @@ public static class SymbolDisplay
     /// returned unchanged. FullName matching keeps this correct under a
     /// <c>MetadataLoadContext</c>.
     /// </summary>
-    private static Type UnwrapTaskReturnType(Type returnType)
+    private static Type? UnwrapTaskReturnType(Type returnType)
     {
         if (returnType == null)
         {
@@ -652,10 +655,10 @@ public static class SymbolDisplay
         // qualifying with it is noise, so it is treated as unqualified.
         return format.QualifyNames && !string.IsNullOrEmpty(packageName) && packageName != "Default"
             ? $"{packageName}.{name}"
-            : name;
+            : name ?? string.Empty;
     }
 
-    private static string FormatType(TypeSymbol type)
+    private static string FormatType(TypeSymbol? type)
     {
         if (type == null || IsVoid(type))
         {
@@ -776,7 +779,7 @@ public static class SymbolDisplay
 
     private static string FormatSourceType(
         string name,
-        TypeSymbol containingType,
+        TypeSymbol? containingType,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
         ImmutableArray<TypeSymbol> typeArguments)
     {
@@ -792,7 +795,7 @@ public static class SymbolDisplay
     }
 
     private static string FormatContainingSourceType(
-        TypeSymbol containingType,
+        TypeSymbol? containingType,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
     {
         if (containingType is StructSymbol aggregate)
@@ -923,14 +926,14 @@ public static class SymbolDisplay
         return name.Replace('+', '.');
     }
 
-    private static string FormatClrMemberName(Type declaringType, string name, SymbolDisplayFormat format)
+    private static string FormatClrMemberName(Type? declaringType, string? name, SymbolDisplayFormat format)
     {
         return format.QualifyNames && declaringType != null
             ? $"{FormatClrTypeName(declaringType, qualifyNames: true)}.{name}"
-            : name;
+            : name ?? string.Empty;
     }
 
-    private static string FormatClrTypeName(Type clrType, bool qualifyNames)
+    private static string FormatClrTypeName(Type? clrType, bool qualifyNames)
     {
         if (clrType == null)
         {
@@ -979,8 +982,13 @@ public static class SymbolDisplay
             qualifyNames);
     }
 
-    private static string FormatClrGenericTypeName(Type definition, Type[] typeArguments, bool qualifyNames)
+    private static string FormatClrGenericTypeName(Type? definition, Type[] typeArguments, bool qualifyNames)
     {
+        if (definition == null)
+        {
+            return string.Empty;
+        }
+
         var declaringArgumentCount = definition.DeclaringType?.GetGenericArguments().Length ?? 0;
         var ownArguments = typeArguments.Skip(declaringArgumentCount).ToArray();
         var name = StripGenericArity(definition.Name);
@@ -1010,8 +1018,9 @@ public static class SymbolDisplay
 
         if (definition.IsNested)
         {
+            // A nested type always has a declaring type.
             name = $"{FormatImportedGenericTypeName(
-                definition.DeclaringType,
+                definition.DeclaringType!,
                 typeArguments.Take(declaringArgumentCount).ToImmutableArray())}.{name}";
         }
         else if (!string.IsNullOrEmpty(definition.Namespace))
@@ -1027,7 +1036,7 @@ public static class SymbolDisplay
     private static string FormatGenericTypeArgument(TypeSymbol type)
         => type == null ? "?" : FormatType(type);
 
-    private static bool TryGetGSharpPrimitiveName(Type clrType, out string name)
+    private static bool TryGetGSharpPrimitiveName(Type clrType, [NotNullWhen(true)] out string? name)
     {
         if (clrType.IsSameAs(typeof(bool)))
         {
@@ -1170,7 +1179,7 @@ public static class SymbolDisplay
         return type == null || ReferenceEquals(type, TypeSymbol.Void);
     }
 
-    private static string ResolveVariableKeyword(VariableSymbol variable, Compilation.Compilation compilation)
+    private static string ResolveVariableKeyword(VariableSymbol variable, Compilation.Compilation? compilation)
     {
         if (compilation != null && variable.DeclaringSyntax is SyntaxToken identifier)
         {
@@ -1221,7 +1230,7 @@ public static class SymbolDisplay
     {
         private readonly ImmutableArray<SymbolDisplayPart>.Builder parts = ImmutableArray.CreateBuilder<SymbolDisplayPart>();
 
-        public void Add(SymbolDisplayPartKind kind, string text, Symbol symbol = null) => this.parts.Add(new SymbolDisplayPart(kind, text, symbol));
+        public void Add(SymbolDisplayPartKind kind, string text, Symbol? symbol = null) => this.parts.Add(new SymbolDisplayPart(kind, text, symbol));
 
         public void Keyword(string text) => this.Add(SymbolDisplayPartKind.Keyword, text);
 

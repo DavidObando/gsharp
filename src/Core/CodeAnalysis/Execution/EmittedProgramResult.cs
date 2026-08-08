@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 
@@ -21,8 +23,8 @@ public sealed class EmittedProgramResult
         bool success,
         ImmutableArray<Diagnostic> diagnostics,
         int exitCode,
-        Exception unhandledException,
-        WeakReference loadContext)
+        Exception? unhandledException,
+        WeakReference? loadContext)
     {
         Success = success;
         Diagnostics = diagnostics;
@@ -62,14 +64,14 @@ public sealed class EmittedProgramResult
     /// error and exit with <see cref="EmittedProgramHost.UnhandledExceptionExitCode"/>,
     /// mirroring the CLR host's crash protocol.
     /// </summary>
-    public Exception UnhandledException { get; }
+    public Exception? UnhandledException { get; }
 
     /// <summary>
     /// Gets a weak reference to the collectible <see cref="System.Runtime.Loader.AssemblyLoadContext"/>
     /// the program ran in, already unloaded by the time the result is
     /// returned. Test-only seam for asserting the context is reclaimable.
     /// </summary>
-    internal WeakReference LoadContext { get; }
+    internal WeakReference? LoadContext { get; }
 
     /// <summary>
     /// Creates a result for a compilation whose emit failed; the program never ran.
@@ -90,7 +92,7 @@ public sealed class EmittedProgramResult
     internal static EmittedProgramResult FromExecution(
         ImmutableArray<Diagnostic> diagnostics,
         int exitCode,
-        Exception unhandledException,
-        WeakReference loadContext)
+        Exception? unhandledException,
+        WeakReference? loadContext)
         => new(success: true, diagnostics, exitCode, unhandledException, loadContext);
 }

@@ -339,7 +339,8 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
         // 3c note "a package-declaring cell succeeds silently with no echo").
         var emittedPackageName = compilation.GlobalScope.Package?.Name ?? packageName;
 
-        var runResult = host.RunSubmission(peImage, assemblyName);
+        // assemblyName is assigned for every submission before emit.
+        var runResult = host.RunSubmission(peImage, assemblyName!);
         if (runResult.UnhandledException is not null)
         {
             // Runtime failure: the submission's declarations are discarded
