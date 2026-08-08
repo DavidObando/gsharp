@@ -31,8 +31,8 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
         SyntaxToken awaitKeyword,
         SyntaxToken forKeyword,
         SyntaxToken identifier,
-        SyntaxToken colonEqualsToken,
-        SyntaxToken rangeKeyword,
+        SyntaxToken? colonEqualsToken,
+        SyntaxToken? rangeKeyword,
         SyntaxToken inToken,
         ExpressionSyntax stream,
         StatementSyntax body)
@@ -61,10 +61,10 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the <c>:=</c> token.</summary>
-    public SyntaxToken ColonEqualsToken { get; }
+    public SyntaxToken? ColonEqualsToken { get; }
 
     /// <summary>Gets the <c>range</c> keyword.</summary>
-    public SyntaxToken RangeKeyword { get; }
+    public SyntaxToken? RangeKeyword { get; }
 
     /// <summary>Gets the contextual <c>in</c> token.</summary>
     public SyntaxToken InToken { get; }

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -254,7 +256,7 @@ public partial class Parser
         return builder.ToImmutable();
     }
 
-    private PackageSyntax ParsePackage()
+    private PackageSyntax? ParsePackage()
     {
         if (Current.Kind == SyntaxKind.PackageKeyword)
         {
@@ -282,8 +284,8 @@ public partial class Parser
 
             // Detect the alias form: `import <ident> = <ident>(.<ident>)*`.
             // Lookahead: if the next two tokens are IDENT '=', consume them as alias + equals.
-            SyntaxToken aliasIdentifier = null;
-            SyntaxToken equalsToken = null;
+            SyntaxToken? aliasIdentifier = null;
+            SyntaxToken? equalsToken = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.EqualsToken)
             {
                 aliasIdentifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -369,7 +371,7 @@ public partial class Parser
         // attach the list to whichever member node ParseMember produces.
         var annotations = ParseAnnotations();
 
-        SyntaxToken accessibilityModifier = null;
+        SyntaxToken? accessibilityModifier = null;
         if (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
             Current.Kind == SyntaxKind.PrivateKeyword ||
@@ -384,7 +386,7 @@ public partial class Parser
         // (`*T`) and raw-pointer operations are legal. The `unsafe` class/struct
         // modifier (issue #1202) is handled inside ParseAggregateDeclaration so
         // it composes with `open`/`sealed`/etc. in any order.
-        SyntaxToken unsafeModifier = null;
+        SyntaxToken? unsafeModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
             && (Peek(1).Kind == SyntaxKind.FuncKeyword
                 || Peek(1).Kind == SyntaxKind.AsyncKeyword))
@@ -394,7 +396,7 @@ public partial class Parser
 
         // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
         // `func` (with or without an accessibility modifier).
-        SyntaxToken asyncModifier = null;
+        SyntaxToken? asyncModifier = null;
         if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
             asyncModifier = NextToken();
@@ -537,7 +539,7 @@ public partial class Parser
         // matches a canonical kind, so reserved keywords like `type` and
         // `return` work even though the lexer never demotes them to
         // identifiers — they are contextual only here.
-        AnnotationTargetSyntax target = null;
+        AnnotationTargetSyntax? target = null;
         if (Peek(1).Kind == SyntaxKind.ColonToken &&
             (Current.Kind == SyntaxKind.IdentifierToken ||
              IsValidAnnotationTargetKind(Current.Text)))
@@ -592,9 +594,9 @@ public partial class Parser
         // Optional argument list. The opening `(` must appear with no
         // intervening tokens (we use it to disambiguate "annotation with no
         // args" from "annotation followed by something that opens a `(`").
-        SyntaxToken openParen = null;
+        SyntaxToken? openParen = null;
         SeparatedSyntaxList<ExpressionSyntax> arguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
-        SyntaxToken closeParen = null;
+        SyntaxToken? closeParen = null;
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             openParen = MatchToken(SyntaxKind.OpenParenthesisToken);

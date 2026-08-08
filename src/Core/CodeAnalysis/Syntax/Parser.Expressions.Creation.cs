@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -97,7 +99,7 @@ public partial class Parser
         //   [open] [override] func Name(...)  (method)
         //   event Name Type                   (event)
         // `init`/`deinit` members are rejected with GS0485.
-        SyntaxToken dataKeyword = null;
+        SyntaxToken? dataKeyword = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "data")
         {
             dataKeyword = NextToken();
@@ -107,11 +109,11 @@ public partial class Parser
 
         // Optional base/interface clause `: Base[(args)] [, IFace, ...]`,
         // parsed exactly like a class declaration's base clause.
-        SyntaxToken baseColon = null;
-        TypeClauseSyntax baseTypeClause = null;
-        SyntaxToken baseCtorOpenParen = null;
+        SyntaxToken? baseColon = null;
+        TypeClauseSyntax? baseTypeClause = null;
+        SyntaxToken? baseCtorOpenParen = null;
         var baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
-        SyntaxToken baseCtorCloseParen = null;
+        SyntaxToken? baseCtorCloseParen = null;
         var additionalBaseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         if (Current.Kind == SyntaxKind.ColonToken)
         {
@@ -173,8 +175,8 @@ public partial class Parser
             var startToken = Current;
 
             // Optional `open`/`override` modifiers preceding a method.
-            SyntaxToken memberOpenModifier = null;
-            SyntaxToken memberOverrideModifier = null;
+            SyntaxToken? memberOpenModifier = null;
+            SyntaxToken? memberOverrideModifier = null;
             while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
             {
                 if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
@@ -228,7 +230,9 @@ public partial class Parser
             {
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
-                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    // The enclosing `if` tests these same modifiers for non-null,
+                    // so the coalesce always yields one of them.
+                    var loc = (memberOpenModifier ?? memberOverrideModifier)!.Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
                 }
 
@@ -257,7 +261,7 @@ public partial class Parser
         var letOrVarKeyword = NextToken();
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
-        TypeClauseSyntax typeClause = null;
+        TypeClauseSyntax? typeClause = null;
         if (Current.Kind != SyntaxKind.EqualsToken)
         {
             typeClause = ParseTypeClause();
@@ -278,8 +282,8 @@ public partial class Parser
         // count-inferred slice form (`[]T{…}`, empty brackets) are unchanged.
         // Any other (runtime) length expression — issue #1272 — is captured as a
         // full `LengthExpression`.
-        SyntaxToken lengthToken = null;
-        ExpressionSyntax lengthExpression = null;
+        SyntaxToken? lengthToken = null;
+        ExpressionSyntax? lengthExpression = null;
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
             if (Current.Kind == SyntaxKind.NumberToken && Peek(1).Kind == SyntaxKind.CloseSquareBracketToken)
@@ -322,10 +326,12 @@ public partial class Parser
             // length yields the runtime/zero-initialised allocation `[n][]T`.
             if (!nestedHasElements && (lengthExpression != null || lengthToken != null))
             {
+                // The enclosing `if` requires one of lengthExpression/lengthToken, and
+                // the coalesce only reaches lengthToken when lengthExpression is null.
                 return new ArrayCreationExpressionSyntax(
                     syntaxTree,
                     openBracket,
-                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken!),
                     closeBracket,
                     nestedElementType,
                     nestedOpenBrace,
@@ -333,6 +339,8 @@ public partial class Parser
                     nestedCloseBrace);
             }
 
+            // The enclosing `if` requires one of lengthExpression/lengthToken, and
+            // the coalesce only reaches lengthToken when lengthExpression is null.
             return new ArrayCreationExpressionSyntax(
                 syntaxTree,
                 openBracket,
@@ -360,10 +368,12 @@ public partial class Parser
 
             if (!nElemHasElements && (lengthExpression != null || lengthToken != null))
             {
+                // The enclosing `if` requires one of lengthExpression/lengthToken, and
+                // the coalesce only reaches lengthToken when lengthExpression is null.
                 return new ArrayCreationExpressionSyntax(
                     syntaxTree,
                     openBracket,
-                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                    lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken!),
                     closeBracket,
                     elementClause,
                     nElemOpenBrace,
@@ -371,6 +381,8 @@ public partial class Parser
                     nElemCloseBrace);
             }
 
+            // The enclosing `if` requires one of lengthExpression/lengthToken, and
+            // the coalesce only reaches lengthToken when lengthExpression is null.
             return new ArrayCreationExpressionSyntax(
                 syntaxTree,
                 openBracket,
@@ -391,10 +403,12 @@ public partial class Parser
         // `[5]T{}`) is likewise a (constant-length) zero-initialised allocation.
         if (!hasElements && (lengthExpression != null || lengthToken != null))
         {
+            // The enclosing `if` requires one of lengthExpression/lengthToken, and
+            // the coalesce only reaches lengthToken when lengthExpression is null.
             return new ArrayCreationExpressionSyntax(
                 syntaxTree,
                 openBracket,
-                lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken),
+                lengthExpression ?? new LiteralExpressionSyntax(syntaxTree, lengthToken!),
                 closeBracket,
                 elementType,
                 openBrace,
@@ -417,7 +431,7 @@ public partial class Parser
     // when no `{` is present (the issue #1272 no-initializer form), and reports
     // whether any element expressions were supplied (an empty `{}` counts as the
     // zero-initialised allocation form, not a literal).
-    private (SyntaxToken OpenBrace, SeparatedSyntaxList<ExpressionSyntax> Elements, SyntaxToken CloseBrace, bool HasElements) ParseOptionalArrayInitializer(bool allowSpread)
+    private (SyntaxToken? OpenBrace, SeparatedSyntaxList<ExpressionSyntax>? Elements, SyntaxToken? CloseBrace, bool HasElements) ParseOptionalArrayInitializer(bool allowSpread)
     {
         if (Current.Kind != SyntaxKind.OpenBraceToken)
         {
@@ -436,7 +450,7 @@ public partial class Parser
     // length was parsed via the general expression path). Non-literal lengths
     // combined with a non-empty initializer are not a valid shape; the binder
     // reports the mismatch.
-    private static SyntaxToken ToLengthLiteralToken(ExpressionSyntax lengthExpression)
+    private static SyntaxToken? ToLengthLiteralToken(ExpressionSyntax lengthExpression)
         => lengthExpression is LiteralExpressionSyntax { LiteralToken: { Kind: SyntaxKind.NumberToken } token } ? token : null;
 
     // ADR-0124 / issues #1024, #1057, #1041: parses a stack-allocation
@@ -456,7 +470,7 @@ public partial class Parser
 
         // The count is optional: the `stackalloc []T{ … }` shape infers it from
         // the initializer length, so an immediate `]` leaves CountExpression null.
-        ExpressionSyntax count = null;
+        ExpressionSyntax? count = null;
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
             count = ParseExpression();
@@ -468,9 +482,9 @@ public partial class Parser
         // The brace-delimited initializer is optional for the count-only form
         // (`stackalloc [n]T`) and required for the count-inferred form
         // (`stackalloc []T{ … }`); the binder enforces that requirement.
-        SyntaxToken openBrace = null;
-        SeparatedSyntaxList<ExpressionSyntax> elements = null;
-        SyntaxToken closeBrace = null;
+        SyntaxToken? openBrace = null;
+        SeparatedSyntaxList<ExpressionSyntax>? elements = null;
+        SyntaxToken? closeBrace = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -1364,7 +1378,7 @@ public partial class Parser
 
     // Issue #479 / ADR-0117: parses the `{ elements }` collection initializer
     // applied to an already-parsed constructor-call target.
-    private ExpressionSyntax ParseCollectionInitializerExpression(ExpressionSyntax target)
+    private ExpressionSyntax ParseCollectionInitializerExpression(ExpressionSyntax? target)
     {
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
         var elements = ParseCollectionElements();
@@ -1513,7 +1527,7 @@ public partial class Parser
         var dot = MatchToken(SyntaxKind.DotToken);
         var methodIdentifier = MatchToken(SyntaxKind.IdentifierToken);
 
-        TypeArgumentListSyntax methodTypeArgumentList = null;
+        TypeArgumentListSyntax? methodTypeArgumentList = null;
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(0))
         {
             methodTypeArgumentList = ParseTypeArgumentList();

@@ -24,7 +24,7 @@ public sealed class IfStatementSyntax : StatementSyntax
         SyntaxToken ifKeyword,
         ExpressionSyntax condition,
         StatementSyntax thenStatement,
-        ElseClauseSyntax elseClause)
+        ElseClauseSyntax? elseClause)
         : this(syntaxTree, ifKeyword, initializer: null, semicolon: null, condition, thenStatement, elseClause)
     {
     }
@@ -46,7 +46,7 @@ public sealed class IfStatementSyntax : StatementSyntax
         SyntaxToken? semicolon,
         ExpressionSyntax condition,
         StatementSyntax thenStatement,
-        ElseClauseSyntax elseClause)
+        ElseClauseSyntax? elseClause)
         : base(syntaxTree)
     {
         IfKeyword = ifKeyword;
@@ -90,5 +90,5 @@ public sealed class IfStatementSyntax : StatementSyntax
     /// <summary>
     /// Gets the else clause.
     /// </summary>
-    public ElseClauseSyntax ElseClause { get; }
+    public ElseClauseSyntax? ElseClause { get; }
 }

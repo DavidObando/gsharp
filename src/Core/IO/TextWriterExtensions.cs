@@ -27,7 +27,7 @@ public static class TextWriterExtensions
     /// <param name="kind">The keyworkd kind.</param>
     public static void WriteKeyword(this TextWriter writer, SyntaxKind kind)
     {
-        writer.WriteKeyword(SyntaxFacts.GetText(kind));
+        writer.WriteKeyword(SyntaxFacts.GetTextOrEmpty(kind));
     }
 
     /// <summary>
@@ -94,7 +94,7 @@ public static class TextWriterExtensions
     /// <param name="kind">The syntax kind.</param>
     public static void WritePunctuation(this TextWriter writer, SyntaxKind kind)
     {
-        writer.WritePunctuation(SyntaxFacts.GetText(kind));
+        writer.WritePunctuation(SyntaxFacts.GetTextOrEmpty(kind));
     }
 
     /// <summary>

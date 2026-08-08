@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -46,7 +48,7 @@ public class SeparatedSyntaxList<T> : SeparatedSyntaxList, IEnumerable<T>
     /// </summary>
     /// <param name="index">The index of the separator.</param>
     /// <returns>The syntax token representing the separator.</returns>
-    public SyntaxToken GetSeparator(int index)
+    public SyntaxToken? GetSeparator(int index)
     {
         if (index == Count - 1)
         {

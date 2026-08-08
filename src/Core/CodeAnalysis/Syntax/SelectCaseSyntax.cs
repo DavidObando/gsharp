@@ -42,9 +42,9 @@ public sealed class SelectCaseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
         SelectCaseKind caseKind,
-        SyntaxToken identifier,
-        ExpressionSyntax channel,
-        ExpressionSyntax value,
+        SyntaxToken? identifier,
+        ExpressionSyntax? channel,
+        ExpressionSyntax? value,
         BlockStatementSyntax body)
         : base(syntaxTree)
     {
@@ -66,13 +66,13 @@ public sealed class SelectCaseSyntax : SyntaxNode
     public SelectCaseKind CaseKind { get; }
 
     /// <summary>Gets the identifier declared by <c>case v := &lt;-ch</c>; null otherwise.</summary>
-    public SyntaxToken Identifier { get; }
+    public SyntaxToken? Identifier { get; }
 
     /// <summary>Gets the channel expression for send/receive arms; null for <c>default</c>.</summary>
-    public ExpressionSyntax Channel { get; }
+    public ExpressionSyntax? Channel { get; }
 
     /// <summary>Gets the value expression for send arms; null otherwise.</summary>
-    public ExpressionSyntax Value { get; }
+    public ExpressionSyntax? Value { get; }
 
     /// <summary>Gets the case body block.</summary>
     public BlockStatementSyntax Body { get; }

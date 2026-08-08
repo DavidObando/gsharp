@@ -25,8 +25,8 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// <param name="initializer">The optional initializer expression.</param>
     public FieldDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken varOrLetKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? varOrLetKeyword,
         SyntaxToken identifier,
         TypeClauseSyntax type,
         SyntaxToken? equalsToken = null,
@@ -57,7 +57,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the required <c>var</c> or <c>let</c> binding keyword (ADR-0067).
@@ -66,7 +66,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// parser is recovering from a missing keyword and has already reported a
     /// diagnostic at the field's position.
     /// </summary>
-    public SyntaxToken VarOrLetKeyword { get; }
+    public SyntaxToken? VarOrLetKeyword { get; }
 
     /// <summary>
     /// Gets a value indicating whether this field was declared with the

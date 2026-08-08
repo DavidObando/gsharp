@@ -33,12 +33,12 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     public ArrayCreationExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
+        SyntaxToken? lengthToken,
         SyntaxToken closeBracketToken,
         SyntaxToken elementTypeIdentifier,
-        SyntaxToken openBraceToken,
-        SeparatedSyntaxList<ExpressionSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -66,12 +66,12 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     public ArrayCreationExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
+        SyntaxToken? lengthToken,
         SyntaxToken closeBracketToken,
         TypeClauseSyntax elementTypeClause,
-        SyntaxToken openBraceToken,
-        SeparatedSyntaxList<ExpressionSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -104,9 +104,9 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
         ExpressionSyntax lengthExpression,
         SyntaxToken closeBracketToken,
         SyntaxToken elementTypeIdentifier,
-        SyntaxToken openBraceToken,
-        SeparatedSyntaxList<ExpressionSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -139,9 +139,9 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
         ExpressionSyntax lengthExpression,
         SyntaxToken closeBracketToken,
         TypeClauseSyntax elementTypeClause,
-        SyntaxToken openBraceToken,
-        SeparatedSyntaxList<ExpressionSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -178,13 +178,13 @@ public sealed class ArrayCreationExpressionSyntax : ExpressionSyntax
     public bool HasNestedElementTypeClause => ElementTypeClause != null;
 
     /// <summary>Gets the opening brace token.</summary>
-    public SyntaxToken OpenBraceToken { get; }
+    public SyntaxToken? OpenBraceToken { get; }
 
     /// <summary>Gets the element initialisers.</summary>
-    public SeparatedSyntaxList<ExpressionSyntax> Elements { get; }
+    public SeparatedSyntaxList<ExpressionSyntax>? Elements { get; }
 
     /// <summary>Gets the closing brace token.</summary>
-    public SyntaxToken CloseBraceToken { get; }
+    public SyntaxToken? CloseBraceToken { get; }
 
     /// <summary>Gets a value indicating whether an explicit brace-delimited initializer is present.</summary>
     public bool HasInitializer => OpenBraceToken != null;

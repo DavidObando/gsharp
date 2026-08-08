@@ -35,15 +35,15 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <param name="closeBraceToken">The optional closing brace.</param>
     public PropertyDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken propKeyword,
         SyntaxToken identifier,
-        TypeClauseSyntax type,
-        SyntaxToken openBraceToken,
+        TypeClauseSyntax? type,
+        SyntaxToken? openBraceToken,
         ImmutableArray<PropertyAccessorSyntax> accessors,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
@@ -69,13 +69,13 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the optional <c>open</c> contextual keyword.</summary>
-    public SyntaxToken OpenModifier { get; }
+    public SyntaxToken? OpenModifier { get; }
 
     /// <summary>Gets the optional <c>override</c> contextual keyword.</summary>
-    public SyntaxToken OverrideModifier { get; }
+    public SyntaxToken? OverrideModifier { get; }
 
     /// <summary>
     /// Gets or sets the <c>shared</c> contextual keyword token when this property
@@ -166,16 +166,16 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     public bool IsIndexer => ThisKeyword != null;
 
     /// <summary>Gets the property type.</summary>
-    public TypeClauseSyntax Type { get; }
+    public TypeClauseSyntax? Type { get; }
 
     /// <summary>Gets the optional opening brace token.</summary>
-    public SyntaxToken OpenBraceToken { get; }
+    public SyntaxToken? OpenBraceToken { get; }
 
     /// <summary>Gets the get/set accessor list.</summary>
     public ImmutableArray<PropertyAccessorSyntax> Accessors { get; }
 
     /// <summary>Gets the optional closing brace token.</summary>
-    public SyntaxToken CloseBraceToken { get; }
+    public SyntaxToken? CloseBraceToken { get; }
 
     /// <summary>Attaches the given annotation list to this property declaration and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
@@ -196,7 +196,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <param name="type">The interface type clause, or <see langword="null"/> when no clause is present.</param>
     /// <param name="closeParen">The close parenthesis token, or <see langword="null"/> when no clause is present.</param>
     /// <returns>This same <see cref="PropertyDeclarationSyntax"/>.</returns>
-    internal PropertyDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken openParen, TypeClauseSyntax type, SyntaxToken closeParen)
+    internal PropertyDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken? openParen, TypeClauseSyntax? type, SyntaxToken? closeParen)
     {
         if (type == null)
         {

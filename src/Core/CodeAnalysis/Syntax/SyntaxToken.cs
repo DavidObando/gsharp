@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Syntax;
@@ -19,12 +21,12 @@ public class SyntaxToken : SyntaxNode
     /// <param name="position">The position of the syntax token.</param>
     /// <param name="text">The text of the syntax token.</param>
     /// <param name="value">The value of the syntax token.</param>
-    public SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object value)
+    public SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object? value)
         : this(syntaxTree, kind, position, text, value, isMissing: false)
     {
     }
 
-    private SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object value, bool isMissing)
+    private SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object? value, bool isMissing)
         : base(syntaxTree)
     {
         Kind = kind;
@@ -52,7 +54,7 @@ public class SyntaxToken : SyntaxNode
     /// <summary>
     /// Gets the value of this syntax token, if any.
     /// </summary>
-    public object Value { get; }
+    public object? Value { get; }
 
     /// <summary>
     /// Gets the text span associated to the token.

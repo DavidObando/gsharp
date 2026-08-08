@@ -33,17 +33,17 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     /// <param name="body">The constructor body block.</param>
     public ConstructorDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken convenienceModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? convenienceModifier,
         SyntaxToken initKeyword,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        SyntaxToken baseColonToken,
-        SyntaxToken baseKeyword,
-        SyntaxToken baseOpenParenthesisToken,
+        SyntaxToken? baseColonToken,
+        SyntaxToken? baseKeyword,
+        SyntaxToken? baseOpenParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> baseArguments,
-        SyntaxToken baseCloseParenthesisToken,
+        SyntaxToken? baseCloseParenthesisToken,
         BlockStatementSyntax body)
         : base(syntaxTree)
     {
@@ -65,10 +65,10 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.ConstructorDeclaration;
 
     /// <summary>Gets the optional accessibility modifier.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the optional ADR-0065 §2 <c>convenience</c> modifier, or <c>null</c>.</summary>
-    public SyntaxToken ConvenienceModifier { get; }
+    public SyntaxToken? ConvenienceModifier { get; }
 
     /// <summary>Gets a value indicating whether this constructor is declared with the <c>convenience</c> modifier (ADR-0065 §2).</summary>
     public bool IsConvenience => ConvenienceModifier != null;
@@ -86,19 +86,19 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseParenthesisToken { get; }
 
     /// <summary>Gets the optional <c>:</c> introducing the base initializer.</summary>
-    public SyntaxToken BaseColonToken { get; }
+    public SyntaxToken? BaseColonToken { get; }
 
     /// <summary>Gets the optional contextual <c>base</c> keyword.</summary>
-    public SyntaxToken BaseKeyword { get; }
+    public SyntaxToken? BaseKeyword { get; }
 
     /// <summary>Gets the optional opening paren of the base argument list.</summary>
-    public SyntaxToken BaseOpenParenthesisToken { get; }
+    public SyntaxToken? BaseOpenParenthesisToken { get; }
 
     /// <summary>Gets the base-constructor argument expressions (empty when no base initializer).</summary>
     public SeparatedSyntaxList<ExpressionSyntax> BaseArguments { get; }
 
     /// <summary>Gets the optional closing paren of the base argument list.</summary>
-    public SyntaxToken BaseCloseParenthesisToken { get; }
+    public SyntaxToken? BaseCloseParenthesisToken { get; }
 
     /// <summary>Gets the constructor body block.</summary>
     public BlockStatementSyntax Body { get; }

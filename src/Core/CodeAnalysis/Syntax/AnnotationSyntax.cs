@@ -44,12 +44,12 @@ public sealed class AnnotationSyntax : SyntaxNode
     public AnnotationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken atToken,
-        AnnotationTargetSyntax target,
+        AnnotationTargetSyntax? target,
         ImmutableArray<SyntaxToken> nameSegments,
         ImmutableArray<SyntaxToken> dotTokens,
-        SyntaxToken openParenthesisToken,
+        SyntaxToken? openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
-        SyntaxToken closeParenthesisToken,
+        SyntaxToken? closeParenthesisToken,
         SyntaxToken? typeArgumentOpenBracketToken = null,
         SeparatedSyntaxList<TypeClauseSyntax>? typeArguments = default,
         SyntaxToken? typeArgumentCloseBracketToken = null)
@@ -73,8 +73,8 @@ public sealed class AnnotationSyntax : SyntaxNode
     /// <summary>Gets the leading <c>@</c> token.</summary>
     public SyntaxToken AtToken { get; }
 
-    /// <summary>Gets the optional use-site target qualifier; <c>null</c> when none is supplied (annotation uses the default target).</summary>
-    public AnnotationTargetSyntax Target { get; }
+    /// <summary>Gets the optional use-site target qualifier; <c>null</c> when none is supplied (annotation uses the default? target).</summary>
+    public AnnotationTargetSyntax? Target { get; }
 
     /// <summary>Gets the dotted attribute-name segments (the leftmost identifier is at index 0).</summary>
     public ImmutableArray<SyntaxToken> NameSegments { get; }
@@ -83,13 +83,13 @@ public sealed class AnnotationSyntax : SyntaxNode
     public ImmutableArray<SyntaxToken> DotTokens { get; }
 
     /// <summary>Gets the optional opening <c>(</c> of the argument list; <c>null</c> when no parenthesised argument list was supplied.</summary>
-    public SyntaxToken OpenParenthesisToken { get; }
+    public SyntaxToken? OpenParenthesisToken { get; }
 
     /// <summary>Gets the (possibly empty) annotation argument list.</summary>
     public SeparatedSyntaxList<ExpressionSyntax> Arguments { get; }
 
     /// <summary>Gets the optional closing <c>)</c> of the argument list; <c>null</c> when no parenthesised argument list was supplied.</summary>
-    public SyntaxToken CloseParenthesisToken { get; }
+    public SyntaxToken? CloseParenthesisToken { get; }
 
     /// <summary>Gets the opening <c>[</c> of a C#11-style generic attribute's type-argument list (issue #1913), or <c>null</c> when none is present.</summary>
     public SyntaxToken? TypeArgumentOpenBracketToken { get; }

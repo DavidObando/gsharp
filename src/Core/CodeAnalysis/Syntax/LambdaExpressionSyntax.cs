@@ -47,9 +47,9 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     public LambdaExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken? asyncModifier,
-        SyntaxToken openParenToken,
+        SyntaxToken? openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
-        SyntaxToken closeParenToken,
+        SyntaxToken? closeParenToken,
         SyntaxToken arrowToken,
         ExpressionSyntax body)
         : base(syntaxTree)
@@ -74,9 +74,9 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     /// <param name="body">The lambda body — a single expression, or a brace-delimited block expression.</param>
     public LambdaExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openParenToken,
+        SyntaxToken? openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
-        SyntaxToken closeParenToken,
+        SyntaxToken? closeParenToken,
         SyntaxToken arrowToken,
         ExpressionSyntax body)
         : this(syntaxTree, asyncModifier: null, openParenToken, parameters, closeParenToken, arrowToken, body)
@@ -93,13 +93,13 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     public bool IsAsync => AsyncModifier != null;
 
     /// <summary>Gets the opening <c>(</c> token of the parameter list.</summary>
-    public SyntaxToken OpenParenToken { get; }
+    public SyntaxToken? OpenParenToken { get; }
 
     /// <summary>Gets the parenthesised parameter list (possibly empty).</summary>
     public SeparatedSyntaxList<ParameterSyntax> Parameters { get; }
 
     /// <summary>Gets the closing <c>)</c> token of the parameter list.</summary>
-    public SyntaxToken CloseParenToken { get; }
+    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the <c>-&gt;</c> arrow token.</summary>
     public SyntaxToken ArrowToken { get; }

@@ -28,7 +28,7 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
         SyntaxToken openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
+        TypeClauseSyntax? returnTypeClause,
         BlockStatementSyntax body)
         : this(syntaxTree, asyncModifier: null, funcKeyword, openParenToken, parameters, closeParenToken, returnTypeClause, body)
     {
@@ -50,7 +50,7 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
         SyntaxToken openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
+        TypeClauseSyntax? returnTypeClause,
         BlockStatementSyntax body)
         : base(syntaxTree)
     {
@@ -85,7 +85,7 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
     public SyntaxToken CloseParenToken { get; }
 
     /// <summary>Gets the optional return-type clause.</summary>
-    public TypeClauseSyntax ReturnTypeClause { get; }
+    public TypeClauseSyntax? ReturnTypeClause { get; }
 
     /// <summary>Gets the function body.</summary>
     public BlockStatementSyntax Body { get; }

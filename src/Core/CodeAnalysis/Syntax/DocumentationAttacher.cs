@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Text;
@@ -110,7 +112,7 @@ internal static class DocumentationAttacher
 
             currentLastLine = tokenLine;
             currentEndPosition = token.Span.End;
-            currentLines.Add((string)token.Value ?? string.Empty);
+            currentLines.Add((string?)token.Value ?? string.Empty);
         }
 
         if (currentLines.Count > 0)

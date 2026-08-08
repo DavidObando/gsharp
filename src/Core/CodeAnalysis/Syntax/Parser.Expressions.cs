@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Text;
@@ -254,7 +257,7 @@ public partial class Parser
             return ParseNullCoalescingExpression();
         }
 
-        ExpressionSyntax lower = null;
+        ExpressionSyntax? lower = null;
         if (Current.Kind != SyntaxKind.DotDotToken)
         {
             lower = ParseNullCoalescingExpression();
@@ -264,12 +267,12 @@ public partial class Parser
         {
             // No `..` follows — an ordinary expression (`lower` is non-null here
             // because the open-lower `..` form is handled by the branch above).
-            return lower;
+            return lower!;
         }
 
         var dotDotToken = NextToken();
 
-        ExpressionSyntax upper = null;
+        ExpressionSyntax? upper = null;
         if (RangeUpperBoundFollows(dotDotToken))
         {
             upper = ParseRangeUpperBound();
@@ -904,7 +907,7 @@ public partial class Parser
     // unambiguous everywhere else).
     private ExpressionSyntax ParseIndexArgument()
     {
-        ExpressionSyntax lower = null;
+        ExpressionSyntax? lower = null;
         if (Current.Kind != SyntaxKind.DotDotToken
             && Current.Kind != SyntaxKind.CloseSquareBracketToken)
         {
@@ -920,7 +923,7 @@ public partial class Parser
 
         var dotDotToken = NextToken();
 
-        ExpressionSyntax upper = null;
+        ExpressionSyntax? upper = null;
         if (Current.Kind != SyntaxKind.CloseSquareBracketToken
             && Current.Kind != SyntaxKind.DotDotToken)
         {
@@ -978,7 +981,7 @@ public partial class Parser
     // (BindMemberIndexAssignmentExpression) splits the receiver chain at the
     // leftmost `?.` and emits a null-conditional write that no-ops when the
     // captured intermediate is `nil`.
-    private bool TryLiftTrailingIndexer(ExpressionSyntax expression, out IndexExpressionSyntax canonical)
+    private bool TryLiftTrailingIndexer(ExpressionSyntax expression, [NotNullWhen(true)] out IndexExpressionSyntax? canonical)
     {
         if (expression is IndexExpressionSyntax direct)
         {
@@ -1021,9 +1024,9 @@ public partial class Parser
     /// </remarks>
     private bool TryLiftTrailingMemberAccess(
         ExpressionSyntax expression,
-        out ExpressionSyntax receiver,
-        out SyntaxToken dotToken,
-        out SyntaxToken fieldIdentifier)
+        [MaybeNullWhen(false)] out ExpressionSyntax receiver,
+        [MaybeNullWhen(false)] out SyntaxToken dotToken,
+        [MaybeNullWhen(false)] out SyntaxToken fieldIdentifier)
     {
         if (expression is AccessorExpressionSyntax accessor)
         {

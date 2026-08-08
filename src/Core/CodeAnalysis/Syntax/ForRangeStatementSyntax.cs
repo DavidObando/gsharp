@@ -32,10 +32,10 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
         SyntaxToken firstIdentifier,
-        SyntaxToken commaToken,
-        SyntaxToken secondIdentifier,
-        SyntaxToken colonEqualsToken,
-        SyntaxToken rangeKeyword,
+        SyntaxToken? commaToken,
+        SyntaxToken? secondIdentifier,
+        SyntaxToken? colonEqualsToken,
+        SyntaxToken? rangeKeyword,
         SyntaxToken inToken,
         ExpressionSyntax collection,
         StatementSyntax body)
@@ -62,16 +62,16 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
     public SyntaxToken FirstIdentifier { get; }
 
     /// <summary>Gets the optional comma separating the two identifiers.</summary>
-    public SyntaxToken CommaToken { get; }
+    public SyntaxToken? CommaToken { get; }
 
     /// <summary>Gets the optional second identifier (the value).</summary>
-    public SyntaxToken SecondIdentifier { get; }
+    public SyntaxToken? SecondIdentifier { get; }
 
     /// <summary>Gets the <c>:=</c> token.</summary>
-    public SyntaxToken ColonEqualsToken { get; }
+    public SyntaxToken? ColonEqualsToken { get; }
 
     /// <summary>Gets the <c>range</c> keyword.</summary>
-    public SyntaxToken RangeKeyword { get; }
+    public SyntaxToken? RangeKeyword { get; }
 
     /// <summary>Gets the contextual <c>in</c> token.</summary>
     public SyntaxToken InToken { get; }

@@ -35,8 +35,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public InterfaceDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         TypeParameterListSyntax? typeParameterList,
         SyntaxToken? sealedKeyword,
@@ -62,8 +62,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public InterfaceDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         TypeParameterListSyntax? typeParameterList,
         SyntaxToken? sealedKeyword,
@@ -91,8 +91,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public InterfaceDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         TypeParameterListSyntax? typeParameterList,
         SyntaxToken? sealedKeyword,
@@ -129,8 +129,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public InterfaceDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken? sealedKeyword,
         SyntaxToken interfaceKeyword,
@@ -152,8 +152,8 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public InterfaceDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken interfaceKeyword,
         SyntaxToken openBraceToken,
@@ -167,10 +167,10 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.InterfaceDeclaration;
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the <c>type</c> keyword.</summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>Gets the interface identifier.</summary>
     public SyntaxToken Identifier { get; }

@@ -24,13 +24,13 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
     /// <param name="semicolonToken">The optional semicolon (for shorthand <c>get;</c> / <c>set;</c>).</param>
     public PropertyAccessorSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
+        SyntaxToken? accessibilityModifier,
         SyntaxToken accessorKeyword,
-        SyntaxToken openParenToken,
-        SyntaxToken parameterIdentifier,
-        SyntaxToken closeParenToken,
-        BlockStatementSyntax body,
-        SyntaxToken semicolonToken)
+        SyntaxToken? openParenToken,
+        SyntaxToken? parameterIdentifier,
+        SyntaxToken? closeParenToken,
+        BlockStatementSyntax? body,
+        SyntaxToken? semicolonToken)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -43,7 +43,7 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
     }
 
     /// <summary>Gets the optional accessor accessibility modifier.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.PropertyAccessor;
@@ -52,19 +52,19 @@ public sealed class PropertyAccessorSyntax : SyntaxNode
     public SyntaxToken AccessorKeyword { get; }
 
     /// <summary>Gets the optional open parenthesis token (only for <c>set(value)</c>).</summary>
-    public SyntaxToken OpenParenToken { get; }
+    public SyntaxToken? OpenParenToken { get; }
 
     /// <summary>Gets the optional parameter identifier (only for <c>set(value)</c>).</summary>
-    public SyntaxToken ParameterIdentifier { get; }
+    public SyntaxToken? ParameterIdentifier { get; }
 
     /// <summary>Gets the optional close parenthesis token (only for <c>set(value)</c>).</summary>
-    public SyntaxToken CloseParenToken { get; }
+    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the optional block body. Null for bare <c>get;</c> or bodyless accessors.</summary>
-    public BlockStatementSyntax Body { get; }
+    public BlockStatementSyntax? Body { get; }
 
     /// <summary>Gets the optional semicolon token (present for <c>get;</c> / <c>set;</c> shorthand).</summary>
-    public SyntaxToken SemicolonToken { get; }
+    public SyntaxToken? SemicolonToken { get; }
 
     /// <summary>Gets a value indicating whether this accessor is a getter.</summary>
     public bool IsGetter => AccessorKeyword?.Text == "get";

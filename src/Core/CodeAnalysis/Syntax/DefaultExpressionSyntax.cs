@@ -32,9 +32,9 @@ public sealed class DefaultExpressionSyntax : ExpressionSyntax
     public DefaultExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken defaultKeyword,
-        SyntaxToken openParenthesis,
-        TypeClauseSyntax typeClause,
-        SyntaxToken closeParenthesis)
+        SyntaxToken? openParenthesis,
+        TypeClauseSyntax? typeClause,
+        SyntaxToken? closeParenthesis)
         : base(syntaxTree)
     {
         DefaultKeyword = defaultKeyword;
@@ -50,13 +50,13 @@ public sealed class DefaultExpressionSyntax : ExpressionSyntax
     public SyntaxToken DefaultKeyword { get; }
 
     /// <summary>Gets the opening <c>(</c> token, or <see langword="null"/> for the bare form.</summary>
-    public SyntaxToken OpenParenthesis { get; }
+    public SyntaxToken? OpenParenthesis { get; }
 
     /// <summary>Gets the type clause argument, or <see langword="null"/> for the bare form.</summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the closing <c>)</c> token, or <see langword="null"/> for the bare form.</summary>
-    public SyntaxToken CloseParenthesis { get; }
+    public SyntaxToken? CloseParenthesis { get; }
 
     /// <summary>
     /// Gets a value indicating whether this is the parenthesized

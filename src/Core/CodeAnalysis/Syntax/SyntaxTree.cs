@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -14,20 +16,25 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public class SyntaxTree
 {
-    private Dictionary<SyntaxNode, string> documentationTable;
+    private Dictionary<SyntaxNode, string>? documentationTable;
 
     private SyntaxTree(SourceText text, ParseHandler handler)
     {
         Text = text;
         handler(this, out var root, out var diagnostics, out var docTokens);
-        Root = root;
+
+        // Every ParseHandler assigns a root before returning. The token-only
+        // handler does so at the EndOfFileToken the lexer always produces, but
+        // that loop's `while (true)` defeats definite-assignment analysis, so
+        // its out parameter has to start null.
+        Root = root!;
         Diagnostics = diagnostics;
         DocumentationTokens = docTokens;
     }
 
     private delegate void ParseHandler(
         SyntaxTree syntaxTree,
-        out CompilationUnitSyntax root,
+        out CompilationUnitSyntax? root,
         out ImmutableArray<Diagnostic> diagnostics,
         out ImmutableArray<SyntaxToken> documentationTokens);
 
@@ -82,7 +89,7 @@ public class SyntaxTree
     /// <returns>A parsed syntax tree.</returns>
     public static SyntaxTree Parse(SourceText text)
     {
-        static void Parse(SyntaxTree syntaxTree, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> diagnostics, out ImmutableArray<SyntaxToken> docTokens)
+        static void Parse(SyntaxTree syntaxTree, out CompilationUnitSyntax? root, out ImmutableArray<Diagnostic> diagnostics, out ImmutableArray<SyntaxToken> docTokens)
         {
             var parser = new Parser(syntaxTree);
             root = parser.ParseCompilationUnit();
@@ -136,7 +143,7 @@ public class SyntaxTree
     {
         var tokens = new List<SyntaxToken>();
 
-        void ParseTokens(SyntaxTree st, out CompilationUnitSyntax root, out ImmutableArray<Diagnostic> d, out ImmutableArray<SyntaxToken> docTokens)
+        void ParseTokens(SyntaxTree st, out CompilationUnitSyntax? root, out ImmutableArray<Diagnostic> d, out ImmutableArray<SyntaxToken> docTokens)
         {
             root = null;
             docTokens = ImmutableArray<SyntaxToken>.Empty;
@@ -167,7 +174,7 @@ public class SyntaxTree
     /// </summary>
     /// <param name="node">The declaration syntax node.</param>
     /// <returns>The joined documentation block text, or <see langword="null"/>.</returns>
-    internal string GetDocumentation(SyntaxNode node)
+    internal string? GetDocumentation(SyntaxNode node)
     {
         if (documentationTable == null)
         {

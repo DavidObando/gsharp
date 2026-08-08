@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -318,11 +320,11 @@ public partial class Parser
         var baseOpKind = op.Kind == SyntaxKind.PlusPlusToken ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
 
         var leftName = new NameExpressionSyntax(syntaxTree, identifier);
-        var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, op.Position, SyntaxFacts.GetText(baseOpKind), null);
+        var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, op.Position, SyntaxFacts.GetTextOrEmpty(baseOpKind), null);
         var oneToken = new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, op.Position, "1", 1);
         var oneLiteral = new LiteralExpressionSyntax(syntaxTree, oneToken, 1);
         var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, oneLiteral);
-        var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+        var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetTextOrEmpty(SyntaxKind.EqualsToken), null);
         var assignment = new AssignmentExpressionSyntax(syntaxTree, identifier, equalsToken, binary);
         return new ExpressionStatementSyntax(syntaxTree, assignment);
     }
@@ -370,14 +372,14 @@ public partial class Parser
         {
             // Array element / indexer: route through the single-evaluating
             // compound-index assignment so the receiver chain is computed once.
-            var compoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetText(compoundOpKind), null);
+            var compoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetTextOrEmpty(compoundOpKind), null);
             write = new CompoundIndexAssignmentExpressionSyntax(syntaxTree, indexed, compoundToken, OneLiteral());
         }
         else
         {
-            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, pos, SyntaxFacts.GetText(baseOpKind), null);
+            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, pos, SyntaxFacts.GetTextOrEmpty(baseOpKind), null);
             var newValue = new BinaryExpressionSyntax(syntaxTree, operand, baseOpToken, OneLiteral());
-            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, pos, SyntaxFacts.GetText(SyntaxKind.EqualsToken), null);
+            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, pos, SyntaxFacts.GetTextOrEmpty(SyntaxKind.EqualsToken), null);
 
             if (operand is NameExpressionSyntax name)
             {
@@ -405,7 +407,7 @@ public partial class Parser
                 }
                 else
                 {
-                    var memberCompoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetText(compoundOpKind), null);
+                    var memberCompoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetTextOrEmpty(compoundOpKind), null);
                     write = new EventSubscriptionExpressionSyntax(syntaxTree, operand, memberCompoundToken, OneLiteral());
                 }
             }
@@ -422,7 +424,7 @@ public partial class Parser
         }
 
         // Postfix yields the value before mutation: (write) ∓ 1.
-        var inverseOpToken = new SyntaxToken(syntaxTree, inverseOpKind, pos, SyntaxFacts.GetText(inverseOpKind), null);
+        var inverseOpToken = new SyntaxToken(syntaxTree, inverseOpKind, pos, SyntaxFacts.GetTextOrEmpty(inverseOpKind), null);
         return new BinaryExpressionSyntax(syntaxTree, write, inverseOpToken, OneLiteral());
     }
 
@@ -545,7 +547,7 @@ public partial class Parser
         return ParseVariableDeclaration(accessibilityModifier: null);
     }
 
-    private StatementSyntax ParseVariableDeclaration(SyntaxToken accessibilityModifier)
+    private StatementSyntax ParseVariableDeclaration(SyntaxToken? accessibilityModifier)
     {
         SyntaxKind expected;
         switch (Current.Kind)
@@ -598,7 +600,7 @@ public partial class Parser
         // ADR-0058 / issue #376: optional `scoped` contextual modifier between the
         // keyword and the identifier. Disambiguate: `scoped` is only a modifier when
         // followed by another identifier (the variable name).
-        SyntaxToken scopedModifier = null;
+        SyntaxToken? scopedModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
@@ -611,7 +613,7 @@ public partial class Parser
         // only a modifier when followed by another identifier (the variable
         // name). If `ref` IS the variable name (no following identifier), treat
         // it as the identifier itself. Rejected on `const` after binding.
-        SyntaxToken refKindModifier = null;
+        SyntaxToken? refKindModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref"
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
@@ -690,8 +692,8 @@ public partial class Parser
     {
         var keyword = MatchToken(SyntaxKind.IfKeyword);
 
-        StatementSyntax initializer = null;
-        SyntaxToken semicolon = null;
+        StatementSyntax? initializer = null;
+        SyntaxToken? semicolon = null;
         if (HasIfInitClause())
         {
             initializer = ParseSimpleStatement();
@@ -740,7 +742,7 @@ public partial class Parser
         return false;
     }
 
-    private ElseClauseSyntax ParseElseClause()
+    private ElseClauseSyntax? ParseElseClause()
     {
         if (Current.Kind != SyntaxKind.ElseKeyword)
         {
@@ -1046,7 +1048,7 @@ public partial class Parser
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
 
-        StatementSyntax initializer = null;
+        StatementSyntax? initializer = null;
         if (Current.Kind != SyntaxKind.SemicolonToken)
         {
             initializer = ParseSimpleStatement();
@@ -1054,7 +1056,7 @@ public partial class Parser
 
         var firstSemicolon = MatchToken(SyntaxKind.SemicolonToken);
 
-        ExpressionSyntax condition = null;
+        ExpressionSyntax? condition = null;
         if (Current.Kind != SyntaxKind.SemicolonToken)
         {
             condition = ParseExpressionInBodyHeader();
@@ -1062,7 +1064,7 @@ public partial class Parser
 
         var secondSemicolon = MatchToken(SyntaxKind.SemicolonToken);
 
-        StatementSyntax post = null;
+        StatementSyntax? post = null;
         if (Current.Kind != SyntaxKind.OpenBraceToken)
         {
             // Issue #1023: the post statement sits immediately before the body
@@ -1123,17 +1125,17 @@ public partial class Parser
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var firstIdentifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken commaToken = null;
-        SyntaxToken secondIdentifier = null;
+        SyntaxToken? commaToken = null;
+        SyntaxToken? secondIdentifier = null;
         if (Current.Kind == SyntaxKind.CommaToken)
         {
             commaToken = MatchToken(SyntaxKind.CommaToken);
             secondIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         }
 
-        SyntaxToken colonEqualsToken = null;
-        SyntaxToken rangeKeyword = null;
-        SyntaxToken inToken = null;
+        SyntaxToken? colonEqualsToken = null;
+        SyntaxToken? rangeKeyword = null;
+        SyntaxToken? inToken = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
         {
             inToken = NextToken();
@@ -1165,8 +1167,8 @@ public partial class Parser
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken colonEqualsToken;
-        SyntaxToken inToken = null;
+        SyntaxToken? colonEqualsToken;
+        SyntaxToken? inToken = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
         {
             // ADR-0077 / issue #717: `for i in lo ... hi` is the canonical
@@ -1215,7 +1217,7 @@ public partial class Parser
         return new GotoStatementSyntax(syntaxTree, keyword, label);
     }
 
-    private SyntaxToken TryParseLoopTargetLabel(SyntaxToken keyword)
+    private SyntaxToken? TryParseLoopTargetLabel(SyntaxToken keyword)
     {
         // ADR-0070: an optional bare identifier on the same source line names
         // a labeled enclosing loop. Restricting the label to the same line
@@ -1283,8 +1285,8 @@ public partial class Parser
         var hasExpression = Current.Kind != SyntaxKind.EndOfFileToken
             && Current.Kind != SyntaxKind.CloseBraceToken
             && keywordLine == currentLine;
-        SyntaxToken refKeyword = null;
-        ExpressionSyntax expression = null;
+        SyntaxToken? refKeyword = null;
+        ExpressionSyntax? expression = null;
         if (hasExpression)
         {
             // Issue #490 (ADR-0060 follow-up): optional `ref` contextual modifier directly

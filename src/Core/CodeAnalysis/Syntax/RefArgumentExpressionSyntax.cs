@@ -23,7 +23,7 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="refKindModifier">The literal <c>ref</c>/<c>out</c>/<c>in</c> token.</param>
     /// <param name="expression">The lvalue expression being passed by reference.</param>
-    public RefArgumentExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken refKindModifier, ExpressionSyntax expression)
+    public RefArgumentExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken refKindModifier, ExpressionSyntax? expression)
         : base(syntaxTree)
     {
         RefKindModifier = refKindModifier;
@@ -47,10 +47,10 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     public RefArgumentExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken refKindModifier,
-        SyntaxToken declarationKeyword,
-        SyntaxToken declarationIdentifier,
-        SyntaxToken discardToken,
-        TypeClauseSyntax declaredType)
+        SyntaxToken? declarationKeyword,
+        SyntaxToken? declarationIdentifier,
+        SyntaxToken? discardToken,
+        TypeClauseSyntax? declaredType)
         : base(syntaxTree)
     {
         RefKindModifier = refKindModifier;

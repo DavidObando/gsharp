@@ -33,10 +33,10 @@ public sealed class ConditionalRefArgumentExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         ExpressionSyntax condition,
         SyntaxToken questionToken,
-        SyntaxToken whenTrueRefKindModifier,
+        SyntaxToken? whenTrueRefKindModifier,
         ExpressionSyntax whenTrue,
         SyntaxToken colonToken,
-        SyntaxToken whenFalseRefKindModifier,
+        SyntaxToken? whenFalseRefKindModifier,
         ExpressionSyntax whenFalse)
         : base(syntaxTree)
     {
@@ -59,7 +59,7 @@ public sealed class ConditionalRefArgumentExpressionSyntax : ExpressionSyntax
     public SyntaxToken QuestionToken { get; }
 
     /// <summary>Gets the optional inner ref-kind modifier on the true branch (<see langword="null"/> when absent).</summary>
-    public SyntaxToken WhenTrueRefKindModifier { get; }
+    public SyntaxToken? WhenTrueRefKindModifier { get; }
 
     /// <summary>Gets the lvalue expression for the true branch.</summary>
     public ExpressionSyntax WhenTrue { get; }
@@ -68,7 +68,7 @@ public sealed class ConditionalRefArgumentExpressionSyntax : ExpressionSyntax
     public SyntaxToken ColonToken { get; }
 
     /// <summary>Gets the optional inner ref-kind modifier on the false branch (<see langword="null"/> when absent).</summary>
-    public SyntaxToken WhenFalseRefKindModifier { get; }
+    public SyntaxToken? WhenFalseRefKindModifier { get; }
 
     /// <summary>Gets the lvalue expression for the false branch.</summary>
     public ExpressionSyntax WhenFalse { get; }

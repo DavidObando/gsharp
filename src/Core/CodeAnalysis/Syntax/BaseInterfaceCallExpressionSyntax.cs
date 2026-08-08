@@ -40,7 +40,7 @@ public sealed class BaseInterfaceCallExpressionSyntax : ExpressionSyntax
         SyntaxToken closeBracketToken,
         SyntaxToken dotToken,
         SyntaxToken methodIdentifier,
-        TypeArgumentListSyntax methodTypeArgumentList,
+        TypeArgumentListSyntax? methodTypeArgumentList,
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> arguments,
         SyntaxToken closeParenthesisToken)
@@ -85,8 +85,8 @@ public sealed class BaseInterfaceCallExpressionSyntax : ExpressionSyntax
         SyntaxToken closeBracketToken,
         SyntaxToken dotToken,
         SyntaxToken memberIdentifier,
-        SyntaxToken equalsToken,
-        ExpressionSyntax value)
+        SyntaxToken? equalsToken,
+        ExpressionSyntax? value)
         : base(syntaxTree)
     {
         BaseKeyword = baseKeyword;

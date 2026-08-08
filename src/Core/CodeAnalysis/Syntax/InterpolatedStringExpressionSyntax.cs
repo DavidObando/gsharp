@@ -59,5 +59,7 @@ public sealed class InterpolatedStringExpressionSyntax : ExpressionSyntax
     /// treat a hole as the real, correctly-positioned sub-tree it is.
     /// </summary>
     public IEnumerable<SyntaxNode> HoleExpressions =>
-        Segments.Where(s => s.IsExpression).Select(s => (SyntaxNode)s.Expression);
+
+        // IsExpression is `Expression != null`, so the filter establishes it.
+        Segments.Where(s => s.IsExpression).Select(s => (SyntaxNode)s.Expression!);
 }

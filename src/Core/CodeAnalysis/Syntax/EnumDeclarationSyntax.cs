@@ -28,8 +28,8 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public EnumDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken enumKeyword,
         SyntaxToken openBraceToken,
@@ -50,10 +50,10 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.EnumDeclaration;
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the <c>type</c> keyword.</summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>Gets the enum type identifier.</summary>
     public SyntaxToken Identifier { get; }

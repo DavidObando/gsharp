@@ -21,8 +21,8 @@ public sealed class EventAccessorSyntax : SyntaxNode
     public EventAccessorSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken accessorKeyword,
-        BlockStatementSyntax body,
-        SyntaxToken semicolonToken)
+        BlockStatementSyntax? body,
+        SyntaxToken? semicolonToken)
         : base(syntaxTree)
     {
         AccessorKeyword = accessorKeyword;
@@ -37,10 +37,10 @@ public sealed class EventAccessorSyntax : SyntaxNode
     public SyntaxToken AccessorKeyword { get; }
 
     /// <summary>Gets the optional block body. Null for bare <c>add;</c> / <c>remove;</c> accessors.</summary>
-    public BlockStatementSyntax Body { get; }
+    public BlockStatementSyntax? Body { get; }
 
     /// <summary>Gets the optional semicolon token (present for <c>add;</c> / <c>remove;</c> shorthand).</summary>
-    public SyntaxToken SemicolonToken { get; }
+    public SyntaxToken? SemicolonToken { get; }
 
     /// <summary>Gets a value indicating whether this accessor is an <c>add</c> accessor.</summary>
     public bool IsAdd => AccessorKeyword?.Text == "add";

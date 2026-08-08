@@ -21,7 +21,7 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <param name="varianceModifier">Optional <c>in</c>/<c>out</c> variance contextual keyword (ADR-0021); only valid on interface type parameters.</param>
     /// <param name="identifier">The type-parameter identifier token (e.g. <c>T</c>).</param>
     /// <param name="constraint">Optional constraint identifier (e.g. <c>any</c>); when <c>null</c>, the parameter is unconstrained (treated as <c>any</c>).</param>
-    public TypeParameterSyntax(SyntaxTree syntaxTree, SyntaxToken varianceModifier, SyntaxToken identifier, SyntaxToken constraint)
+    public TypeParameterSyntax(SyntaxTree syntaxTree, SyntaxToken? varianceModifier, SyntaxToken identifier, SyntaxToken? constraint)
         : this(syntaxTree, varianceModifier, identifier, constraint, constraintTypeArgumentOpenBracketToken: null, constraintTypeArguments: default, constraintTypeArgumentCloseBracketToken: null)
     {
     }
@@ -36,9 +36,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <param name="constraintTypeArgumentCloseBracketToken">Optional closing <c>]</c> of the constraint's type-argument list.</param>
     public TypeParameterSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken varianceModifier,
+        SyntaxToken? varianceModifier,
         SyntaxToken identifier,
-        SyntaxToken constraint,
+        SyntaxToken? constraint,
         SyntaxToken? constraintTypeArgumentOpenBracketToken,
         SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
         SyntaxToken? constraintTypeArgumentCloseBracketToken)
@@ -73,9 +73,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <param name="initConstraintCloseParenToken">Optional <c>)</c> token of the <c>init()</c> constraint (issue #997).</param>
     public TypeParameterSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken varianceModifier,
+        SyntaxToken? varianceModifier,
         SyntaxToken identifier,
-        SyntaxToken constraint,
+        SyntaxToken? constraint,
         SyntaxToken? constraintTypeArgumentOpenBracketToken,
         SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
         SyntaxToken? constraintTypeArgumentCloseBracketToken,
@@ -117,9 +117,9 @@ public sealed class TypeParameterSyntax : SyntaxNode
     /// <param name="unmanagedConstraintKeyword">Optional <c>unmanaged</c> contextual keyword token (issue #1336).</param>
     public TypeParameterSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken varianceModifier,
+        SyntaxToken? varianceModifier,
         SyntaxToken identifier,
-        SyntaxToken constraint,
+        SyntaxToken? constraint,
         SyntaxToken? constraintTypeArgumentOpenBracketToken,
         SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArguments,
         SyntaxToken? constraintTypeArgumentCloseBracketToken,
@@ -149,13 +149,13 @@ public sealed class TypeParameterSyntax : SyntaxNode
     public override SyntaxKind Kind => SyntaxKind.TypeParameter;
 
     /// <summary>Gets the optional variance modifier token (<c>in</c> / <c>out</c>); Phase 4.3 / ADR-0021.</summary>
-    public SyntaxToken VarianceModifier { get; }
+    public SyntaxToken? VarianceModifier { get; }
 
     /// <summary>Gets the type-parameter identifier token.</summary>
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional constraint identifier token (e.g. <c>any</c>, <c>comparable</c>, or a sealed-interface name).</summary>
-    public SyntaxToken Constraint { get; }
+    public SyntaxToken? Constraint { get; }
 
     /// <summary>
     /// Gets the optional fully-parsed constraint type clause used when the constraint names a

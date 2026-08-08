@@ -39,8 +39,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : this(syntaxTree, accessibilityModifier: null, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
     {
     }
@@ -65,8 +65,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : this(syntaxTree, accessibilityModifier, openModifier: null, overrideModifier: null, functionKeyword, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
     {
     }
@@ -95,8 +95,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParenthesisToken: null, receiver: null, receiverCloseParenthesisToken: null, identifier, openParenthesisToken, parameters, closeParenthesisToken, type, body)
     {
     }
@@ -129,8 +129,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, functionKeyword, receiverOpenParenthesisToken, receiver, receiverCloseParenthesisToken, identifier, typeParameterList: null, openParenthesisToken, parameters, closeParenthesisToken, type, body)
     {
     }
@@ -165,8 +165,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : this(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier: null, functionKeyword, receiverOpenParenthesisToken, receiver, receiverCloseParenthesisToken, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body)
     {
     }
@@ -203,8 +203,8 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
         SyntaxToken openParenthesisToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenthesisToken,
-        TypeClauseSyntax type,
-        BlockStatementSyntax body)
+        TypeClauseSyntax? type,
+        BlockStatementSyntax? body)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -439,10 +439,10 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets the function's type.
     /// </summary>
-    public TypeClauseSyntax Type { get; }
+    public TypeClauseSyntax? Type { get; }
 
     /// <summary>
     /// Gets the function's body.
     /// </summary>
-    public BlockStatementSyntax Body { get; }
+    public BlockStatementSyntax? Body { get; }
 }

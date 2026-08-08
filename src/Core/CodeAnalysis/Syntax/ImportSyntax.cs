@@ -25,8 +25,8 @@ public sealed class ImportSyntax : MemberSyntax
     public ImportSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken importKeyword,
-        SyntaxToken aliasIdentifier,
-        SyntaxToken equalsToken,
+        SyntaxToken? aliasIdentifier,
+        SyntaxToken? equalsToken,
         ImmutableArray<SyntaxToken> identifiers)
         : base(syntaxTree)
     {
@@ -48,12 +48,12 @@ public sealed class ImportSyntax : MemberSyntax
     /// <summary>
     /// Gets the alias identifier when the import uses the <c>import alias = path</c> form, or <c>null</c>.
     /// </summary>
-    public SyntaxToken AliasIdentifier { get; }
+    public SyntaxToken? AliasIdentifier { get; }
 
     /// <summary>
     /// Gets the equals token paired with <see cref="AliasIdentifier"/>, or <c>null</c>.
     /// </summary>
-    public SyntaxToken EqualsToken { get; }
+    public SyntaxToken? EqualsToken { get; }
 
     /// <summary>
     /// Gets the import statement identifiers, excluding dots.

@@ -27,7 +27,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <param name="identifier">The parameter identifier.</param>
     /// <param name="ellipsisToken">Optional <c>...</c> token preceding the type clause for variadic parameters (Phase 4.8).</param>
     /// <param name="type">The parameter type.</param>
-    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, SyntaxToken? ellipsisToken, TypeClauseSyntax type)
+    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, SyntaxToken? ellipsisToken, TypeClauseSyntax? type)
         : base(syntaxTree)
     {
         Identifier = identifier;
@@ -42,7 +42,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="identifier">The parameter identifier.</param>
     /// <param name="type">The parameter type.</param>
-    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, TypeClauseSyntax type)
+    public ParameterSyntax(SyntaxTree syntaxTree, SyntaxToken identifier, TypeClauseSyntax? type)
         : this(syntaxTree, identifier, ellipsisToken: null, type)
     {
     }
@@ -68,7 +68,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// <summary>
     /// Gets the parameter type.
     /// </summary>
-    public TypeClauseSyntax Type { get; }
+    public TypeClauseSyntax? Type { get; }
 
     /// <summary>Gets a value indicating whether this is a variadic parameter (Phase 4.8).</summary>
     public bool IsVariadic => EllipsisToken != null;
@@ -128,7 +128,7 @@ public sealed class ParameterSyntax : SyntaxNode
     /// Gets or sets the ADR-0063 default-value expression for an optional parameter.
     /// Restricted by the binder to a compile-time constant representable in CLR
     /// parameter metadata (numeric/bool/char/string/enum constant, or <c>nil</c>
-    /// for a nullable/reference type).
+    /// for a nullable/reference? type).
     /// </summary>
     public ExpressionSyntax? DefaultValue
     {

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -59,7 +61,7 @@ public partial class Parser
     // contextually as an identifier whose text is "when"; this keeps existing
     // identifiers named `when` usable everywhere else. Returns (null, null) when
     // no guard is present.
-    private (SyntaxToken WhenKeyword, ExpressionSyntax Guard) ParseOptionalWhenGuard()
+    private (SyntaxToken? WhenKeyword, ExpressionSyntax? Guard) ParseOptionalWhenGuard()
     {
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "when")
         {
@@ -252,8 +254,8 @@ public partial class Parser
     private PatternSyntax ParseSlicePattern()
     {
         var dotDot = MatchToken(SyntaxKind.DotDotToken);
-        SyntaxToken captureIdentifier = null;
-        PatternSyntax pattern = null;
+        SyntaxToken? captureIdentifier = null;
+        PatternSyntax? pattern = null;
 
         var isBareIdentifier = Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind != SyntaxKind.IsKeyword
@@ -299,7 +301,7 @@ public partial class Parser
             catchClauses.Add(ParseCatchClause());
         }
 
-        FinallyClauseSyntax finallyClause = null;
+        FinallyClauseSyntax? finallyClause = null;
         if (Current.Kind == SyntaxKind.FinallyKeyword)
         {
             var finallyKeyword = NextToken();
@@ -417,9 +419,9 @@ public partial class Parser
         var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
         var forKeyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken colonEquals = null;
-        SyntaxToken rangeKeyword = null;
-        SyntaxToken inToken = null;
+        SyntaxToken? colonEquals = null;
+        SyntaxToken? rangeKeyword = null;
+        SyntaxToken? inToken = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
         {
             inToken = NextToken();

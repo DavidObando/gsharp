@@ -26,7 +26,7 @@ public sealed class TryStatementSyntax : StatementSyntax
         SyntaxToken tryKeyword,
         BlockStatementSyntax tryBlock,
         ImmutableArray<CatchClauseSyntax> catchClauses,
-        FinallyClauseSyntax finallyClause)
+        FinallyClauseSyntax? finallyClause)
         : base(syntaxTree)
     {
         TryKeyword = tryKeyword;
@@ -48,5 +48,5 @@ public sealed class TryStatementSyntax : StatementSyntax
     public ImmutableArray<CatchClauseSyntax> CatchClauses { get; }
 
     /// <summary>Gets the optional finally clause.</summary>
-    public FinallyClauseSyntax FinallyClause { get; }
+    public FinallyClauseSyntax? FinallyClause { get; }
 }

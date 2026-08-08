@@ -37,3 +37,7 @@ src/Core/CodeAnalysis/Binding/Bound*.cs
 src/Core/Resx/**/*.cs
 src/Core/CodeAnalysis/CodeGen/**/*.cs
 src/Core/CodeAnalysis/PEWriter/**/*.cs
+
+# Slice 5 -- completes CodeAnalysis/Syntax/: lexer, parser partials and the
+# SyntaxNode/SyntaxTree/SyntaxFacts/SyntaxKind base types.
+src/Core/CodeAnalysis/Syntax/**/*.cs

@@ -30,11 +30,11 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <param name="initializer">The initializer expression.</param>
     public VariableDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken keyword,
+        SyntaxToken? keyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
-        SyntaxToken equalsToken,
-        ExpressionSyntax initializer)
+        TypeClauseSyntax? typeClause,
+        SyntaxToken? equalsToken,
+        ExpressionSyntax? initializer)
         : this(syntaxTree, accessibilityModifier: null, keyword, identifier, typeClause, equalsToken, initializer)
     {
     }
@@ -52,11 +52,11 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     public VariableDeclarationSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken? accessibilityModifier,
-        SyntaxToken keyword,
+        SyntaxToken? keyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
-        SyntaxToken equalsToken,
-        ExpressionSyntax initializer)
+        TypeClauseSyntax? typeClause,
+        SyntaxToken? equalsToken,
+        ExpressionSyntax? initializer)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -89,7 +89,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <summary>
     /// Gets the var keyword.
     /// </summary>
-    public SyntaxToken Keyword { get; }
+    public SyntaxToken? Keyword { get; }
 
     /// <summary>
     /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
@@ -153,17 +153,17 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <summary>
     /// GEts the optional type clause.
     /// </summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>
     /// Gets the equals token.
     /// </summary>
-    public SyntaxToken EqualsToken { get; }
+    public SyntaxToken? EqualsToken { get; }
 
     /// <summary>
     /// Gets the initializer expression.
     /// </summary>
-    public ExpressionSyntax Initializer { get; }
+    public ExpressionSyntax? Initializer { get; }
 
     /// <summary>Attaches the given annotation list to this variable declaration and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
