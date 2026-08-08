@@ -778,7 +778,7 @@ public static class SemanticLookup
         foreach (var typeAliasSyntax in bucketsByTree.Values.SelectMany(b => b.TypeAliasDeclarations))
         {
             var aliasId = typeAliasSyntax.Identifier;
-            if (aliasId != null && aliasId.Text != null
+            if (aliasId != null && !aliasId.IsMissing
                 && compilation.GlobalScope.TypeAliases.TryGetValue(aliasId.Text, out var aliasedType))
             {
                 declarations[aliasId] = aliasedType;
@@ -805,7 +805,7 @@ public static class SemanticLookup
 
         foreach (var identifier in identifiers)
         {
-            if (identifier != null && identifier.Text != null && byName.TryGetValue(identifier.Text, out var symbol))
+            if (identifier != null && !identifier.IsMissing && byName.TryGetValue(identifier.Text, out var symbol))
             {
                 declarations[identifier] = symbol;
             }
@@ -1516,7 +1516,7 @@ public static class SemanticLookup
                 return bySpan;
             }
 
-            if (token.Text == null)
+            if (token.IsMissing)
             {
                 return null;
             }

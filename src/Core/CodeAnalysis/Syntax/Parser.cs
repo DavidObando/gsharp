@@ -732,6 +732,6 @@ public partial class Parser
         }
 
         Diagnostics.ReportUnexpectedToken(new TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind);
-        return new SyntaxToken(syntaxTree, kind, Current.Position, null, null);
+        return SyntaxToken.Missing(syntaxTree, kind, Current.Position);
     }
 }

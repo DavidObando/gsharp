@@ -1310,14 +1310,14 @@ public partial class Parser
             {
                 var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
                 nodesAndSeparators.Add(expression);
-                var syntheticOpen = new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, keyword.Position, null, null);
+                var syntheticOpen = SyntaxToken.Missing(syntaxTree, SyntaxKind.OpenParenthesisToken, keyword.Position);
                 while (Current.Kind == SyntaxKind.CommaToken)
                 {
                     nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
                     nodesAndSeparators.Add(ParseExpression());
                 }
 
-                var syntheticClose = new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, Current.Position, null, null);
+                var syntheticClose = SyntaxToken.Missing(syntaxTree, SyntaxKind.CloseParenthesisToken, Current.Position);
                 var elements = new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
                 expression = new TupleLiteralExpressionSyntax(syntaxTree, syntheticOpen, elements, syntheticClose);
             }

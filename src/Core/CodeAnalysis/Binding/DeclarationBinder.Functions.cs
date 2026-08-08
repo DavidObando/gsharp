@@ -408,7 +408,7 @@ internal sealed partial class DeclarationBinder
                 candidate.ExtensionReceiverType = Binder.SubstituteType(
                     receiverType,
                     BuildTypeParameterSubstitution(function.TypeParameters, candidate.TypeParameters));
-                if (candidate.Declaration.Identifier.Text != null && !scope.TryDeclareExtensionFunction(candidate))
+                if (!candidate.Declaration.Identifier.IsMissing && !scope.TryDeclareExtensionFunction(candidate))
                 {
                     Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, candidate.Name, Binder.FormatOverloadSignature(candidate));
                 }
@@ -419,7 +419,7 @@ internal sealed partial class DeclarationBinder
 
         foreach (var candidate in functions)
         {
-            if (candidate.Declaration.Identifier.Text == null || scope.TryDeclareFunction(candidate))
+            if (candidate.Declaration.Identifier.IsMissing || scope.TryDeclareFunction(candidate))
             {
                 continue;
             }

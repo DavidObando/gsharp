@@ -371,12 +371,7 @@ public partial class Parser
         builder.AddRange(existing);
         if (existing.Length > 0 && existing[existing.Length - 1] is not SyntaxToken)
         {
-            var syntheticComma = new SyntaxToken(
-                syntaxTree,
-                SyntaxKind.CommaToken,
-                lambda.Span.Start,
-                null,
-                null);
+            var syntheticComma = SyntaxToken.Missing(syntaxTree, SyntaxKind.CommaToken, lambda.Span.Start);
             builder.Add(syntheticComma);
         }
 
