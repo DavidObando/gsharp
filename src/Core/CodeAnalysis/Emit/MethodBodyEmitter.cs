@@ -1512,5 +1512,10 @@ internal sealed partial class MethodBodyEmitter
     private EntityHandle GetChannelGenericMethodEntityHandle(MethodInfo method, TypeSymbol elementType)
         => this.outer.memberRefs.GetMethodEntityHandle(
             method,
-            ResolveChannelMethodTypeArguments(elementType));
+            ToNullableTypeArguments(ResolveChannelMethodTypeArguments(elementType)));
+
+    private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        => typeArguments.IsDefault
+            ? default
+            : typeArguments.Select(static typeArgument => (TypeSymbol?)typeArgument).ToImmutableArray();
 }

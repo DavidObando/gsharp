@@ -987,7 +987,7 @@ internal sealed class MemberLookup
         Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
         MethodInfo? openMethodDefinition = null,
-        ImmutableArray<TypeSymbol> methodTypeArguments = default)
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
     {
         var parameterType = openClr?.IsByRef == true ? openClr.GetElementType() : openClr;
         return MapOpenClrTypeToSymbolic(
@@ -1020,7 +1020,7 @@ internal sealed class MemberLookup
         Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
         MethodInfo? openMethodDefinition,
-        ImmutableArray<TypeSymbol> methodTypeArguments)
+        ImmutableArray<TypeSymbol?> methodTypeArguments)
     {
         if (openClr == null)
         {
@@ -1328,7 +1328,7 @@ internal sealed class MemberLookup
     /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
     public static TypeSymbol? ResolveCallReturnTypeFromSymbolicTypeArgs(
         MethodInfo? closed,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs,
         TypeSymbol? receiverType)
     {
         if (closed == null || !closed.IsGenericMethod)
@@ -1432,7 +1432,7 @@ internal sealed class MemberLookup
     /// <param name="isExpanded">Whether params-array inference should unify trailing scalar arguments with the array element type.</param>
     /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
     public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
-        MethodInfo closed,
+        MethodInfo? closed,
         ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         ImmutableArray<TypeSymbol> symbolicArgTypes,
         bool isExpanded = false)
@@ -1496,7 +1496,7 @@ internal sealed class MemberLookup
     /// <param name="receiverType">The receiver's symbolic type (for instance/extension calls); may be <see langword="null"/> for static calls.</param>
     /// <param name="argumentTypes">The bound arguments' symbolic types.</param>
     /// <returns>An immutable array with receiver-first ordering when present.</returns>
-    public static ImmutableArray<TypeSymbol> BuildSymbolicArgTypeVector(TypeSymbol receiverType, ImmutableArray<TypeSymbol> argumentTypes)
+    public static ImmutableArray<TypeSymbol> BuildSymbolicArgTypeVector(TypeSymbol? receiverType, ImmutableArray<TypeSymbol> argumentTypes)
     {
         var argCount = argumentTypes.IsDefault ? 0 : argumentTypes.Length;
         var count = (receiverType != null ? 1 : 0) + argCount;

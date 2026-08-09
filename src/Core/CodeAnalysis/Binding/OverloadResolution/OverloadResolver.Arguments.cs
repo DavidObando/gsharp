@@ -46,7 +46,7 @@ internal sealed partial class OverloadResolver
         CallExpressionSyntax callSyntax,
         int receiverArgCount = 0,
         ImmutableArray<int> parameterMapping = default,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
     {
         var paramsIndex = parameters.Length - 1;
         var paramArrayType = parameters[paramsIndex].ParameterType;

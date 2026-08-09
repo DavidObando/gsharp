@@ -826,12 +826,12 @@ internal sealed class ImportedMemberRefFactory
     // constructed generic methods in a MethodSpecification per ECMA-335 II.23.2.15.
     internal EntityHandle GetMethodEntityHandle(MethodInfo method)
     {
-        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>));
+        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol?>));
     }
 
     internal EntityHandle GetMethodEntityHandle(MethodInfo method, TypeSymbol? containingTypeSymbol)
     {
-        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>), containingTypeSymbol);
+        return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol?>), containingTypeSymbol);
     }
 
     // Issue #320: callable EntityHandle for a constructed generic method whose
@@ -841,12 +841,12 @@ internal sealed class ImportedMemberRefFactory
     // the method specification here (as their own TypeDef tokens) instead of the
     // placeholder. When typeArgSymbols is default the placeholder CLR arguments are
     // encoded, preserving the BCL-only behavior.
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols)
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol?> typeArgSymbols)
     {
         return this.GetMethodEntityHandle(method, typeArgSymbols, null);
     }
 
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols, TypeSymbol? containingTypeSymbol)
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol?> typeArgSymbols, TypeSymbol? containingTypeSymbol)
     {
         if (TryCreateMemberReferenceForConstructedSymbolicContainer(method, containingTypeSymbol, out var symbolicRef))
         {
@@ -862,9 +862,10 @@ internal sealed class ImportedMemberRefFactory
             {
                 if (!typeArgSymbols.IsDefaultOrEmpty
                     && i < typeArgSymbols.Length
-                    && TypeSymbol.RequiresSymbolicProjection(typeArgSymbols[i]))
+                    && typeArgSymbols[i] is { } symbolicTypeArgument
+                    && TypeSymbol.RequiresSymbolicProjection(symbolicTypeArgument))
                 {
-                    this.signatures.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), typeArgSymbols[i]);
+                    this.signatures.EncodeTypeSymbol(symbolicArgsEncoder.AddArgument(), symbolicTypeArgument);
                 }
                 else
                 {
@@ -887,7 +888,7 @@ internal sealed class ImportedMemberRefFactory
         // the same generic method was referenced multiple times with the same
         // user-type generic args.
         var hasSymbolArgs = !typeArgSymbols.IsDefaultOrEmpty
-            && typeArgSymbols.Any(TypeSymbol.RequiresSymbolicProjection);
+            && typeArgSymbols.Any(static symbol => symbol is { } && TypeSymbol.RequiresSymbolicProjection(symbol));
         if (!hasSymbolArgs)
         {
             if (this.cache.MethodSpecs.TryGetValue(method, out var existing))
@@ -922,9 +923,10 @@ internal sealed class ImportedMemberRefFactory
             // collapsing to System.Object at the placeholder.
             if (!typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && TypeSymbol.RequiresSymbolicProjection(typeArgSymbols[i]))
+                && typeArgSymbols[i] is { } symbolicTypeArgument
+                && TypeSymbol.RequiresSymbolicProjection(symbolicTypeArgument))
             {
-                this.signatures.EncodeTypeSymbol(argsEncoder.AddArgument(), typeArgSymbols[i]);
+                this.signatures.EncodeTypeSymbol(argsEncoder.AddArgument(), symbolicTypeArgument);
             }
             else
             {

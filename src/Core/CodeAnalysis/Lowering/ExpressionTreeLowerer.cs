@@ -824,7 +824,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(call.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
-                BuildTypeArray(GetTypeSymbols(call.TypeArgumentSymbols)),
+                BuildTypeArray(GetNullableTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Method.GetParameters(), parameterMap))));
     }
 
@@ -840,7 +840,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 CreateTypeOf(TypeSymbol.FromClrType(
                     Invariant.Required(call.Function.Method.DeclaringType, "a CLR method has a declaring type"))),
                 new BoundLiteralExpression(null, call.Function.Method.Name, TypeSymbol.String),
-                BuildTypeArray(GetTypeSymbols(call.TypeArgumentSymbols)),
+                BuildTypeArray(GetNullableTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Function.Method.GetParameters(), parameterMap))));
     }
 
@@ -1324,8 +1324,24 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return builder.MoveToImmutable();
     }
 
+    private static ImmutableArray<TypeSymbol> GetNullableTypeSymbols(ImmutableArray<TypeSymbol?> types)
+    {
+        if (types.IsDefault)
+        {
+            return ImmutableArray<TypeSymbol>.Empty;
+        }
+
+        var result = ImmutableArray.CreateBuilder<TypeSymbol>(types.Length);
+        foreach (var type in types)
+        {
+            result.Add(type ?? TypeSymbol.Error);
+        }
+
+        return result.MoveToImmutable();
+    }
+
     private static ImmutableArray<TypeSymbol> GetTypeSymbols(ImmutableArray<TypeSymbol> types)
-        => types.IsDefault ? ImmutableArray<TypeSymbol>.Empty : types;
+        => types.IsDefault ? default : types;
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol function)
     {

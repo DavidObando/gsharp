@@ -178,3 +178,4 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.cs
 # Slice 25 -- expression binder access helpers.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.cs
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Arguments.cs

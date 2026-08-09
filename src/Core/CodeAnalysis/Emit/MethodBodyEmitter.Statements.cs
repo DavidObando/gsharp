@@ -229,7 +229,7 @@ internal sealed partial class MethodBodyEmitter
         var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
             closedAsPointer,
-            ImmutableArray.Create(pointeeType)));
+            ImmutableArray.Create<TypeSymbol?>(pointeeType)));
     }
 
     private void EmitTryStatement(BoundTryStatement node)

@@ -1229,7 +1229,7 @@ internal sealed partial class MethodBodyEmitter
         var closed = openCreateInstance.MakeGenericMethod(typeof(object));
         var handle = this.outer.memberRefs.GetMethodEntityHandle(
             closed,
-            ImmutableArray.Create<TypeSymbol>(node.TypeParameter));
+            ImmutableArray.Create<TypeSymbol?>(node.TypeParameter));
 
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(handle);

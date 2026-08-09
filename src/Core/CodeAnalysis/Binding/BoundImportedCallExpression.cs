@@ -36,7 +36,7 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// <c>Comparer[TResult].Create(...)</c>), used by the emitter to parent the
     /// call at the constructed generic TypeSpec. Default for an ordinary call.
     /// </param>
-    public BoundImportedCallExpression(SyntaxNode? syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol> typeArgumentSymbols = default, TypeSymbol? staticContainerType = null)
+    public BoundImportedCallExpression(SyntaxNode? syntax, ImportedFunctionSymbol function, ImmutableArray<BoundExpression> arguments, ImmutableArray<RefKind> argumentRefKinds = default, ImmutableArray<TypeSymbol?> typeArgumentSymbols = default, TypeSymbol? staticContainerType = null)
         : base(syntax)
     {
         Function = function;
@@ -72,7 +72,7 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// call site supplied a <c>[T1, T2]</c> list closing an imported generic
     /// method (issue #320). Default when there are no explicit type arguments.
     /// </summary>
-    public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
+    public ImmutableArray<TypeSymbol?> TypeArgumentSymbols { get; }
 
     /// <summary>
     /// Gets the symbolic constructed container (#1330) for a static call on a

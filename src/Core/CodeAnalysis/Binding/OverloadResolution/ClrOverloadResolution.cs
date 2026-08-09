@@ -685,7 +685,7 @@ internal static class ClrOverloadResolution
     /// therefore must not contribute erased evidence to generic inference.
     /// Their original CLR types still participate in applicability and ranking.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
@@ -2321,7 +2321,7 @@ internal static class ClrOverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null)
         where T : MethodBase
     {
         {
@@ -2716,7 +2716,7 @@ internal static class ClrOverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -2733,7 +2733,7 @@ internal static class ClrOverloadResolution
                 && gmi.GetGenericArguments().Length == explicitTypeArgs.Count)
             {
                 MethodInfo? closed;
-                var recoveredSymbols = default(ImmutableArray<TypeSymbol>);
+                var recoveredSymbols = default(ImmutableArray<TypeSymbol?>);
                 try
                 {
                     closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
@@ -2789,7 +2789,7 @@ internal static class ClrOverloadResolution
             }
 
             MethodInfo? closed;
-            var recoveredSymbols = default(ImmutableArray<TypeSymbol>);
+            var recoveredSymbols = default(ImmutableArray<TypeSymbol?>);
             try
             {
                 closed = mi.MakeGenericMethod(typeArgs);
@@ -3964,7 +3964,7 @@ internal static class ClrOverloadResolution
 
     private static bool TryRecoverErasedTypeArguments(
         MethodInfo openMethod,
-        ImmutableArray<TypeSymbol> recoveredSymbols,
+        ImmutableArray<TypeSymbol?> recoveredSymbols,
         Func<Type, Type>? projectTypeArgument,
         [NotNullWhen(true)] out Type[]? typeArgs)
     {
@@ -3981,6 +3981,11 @@ internal static class ClrOverloadResolution
         for (var i = 0; i < result.Length; i++)
         {
             var symbol = recoveredSymbols[i];
+            if (symbol == null)
+            {
+                return false;
+            }
+
             if (!MemberLookup.TryProjectErasedClrType(symbol, out var clrType))
             {
                 return false;
@@ -4016,7 +4021,7 @@ internal static class ClrOverloadResolution
     /// same-compilation user value types.
     /// </param>
     /// <returns><see langword="true"/> when every constraint is satisfied.</returns>
-    private static bool SatisfiesGenericConstraints(MethodInfo openMethod, Type[] typeArgs, ImmutableArray<TypeSymbol> typeArgSymbols = default)
+    private static bool SatisfiesGenericConstraints(MethodInfo openMethod, Type[] typeArgs, ImmutableArray<TypeSymbol?> typeArgSymbols = default)
     {
         if (openMethod is null || typeArgs is null)
         {
@@ -4072,7 +4077,8 @@ internal static class ClrOverloadResolution
             // the same way and must classify as a value type here too.
             var argIsUserValueType = !typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
-                && IsValueTypeErasedSymbol(typeArgSymbols[i]);
+                && typeArgSymbols[i] is { } valueTypeSymbol
+                && IsValueTypeErasedSymbol(valueTypeSymbol);
             var argIsUserReferenceType = !typeArgSymbols.IsDefaultOrEmpty
                 && i < typeArgSymbols.Length
                 && typeArgSymbols[i] is StructSymbol { IsClass: true, ClrType: null };
@@ -4107,9 +4113,9 @@ internal static class ClrOverloadResolution
                 // reference types require an actual ctor.
                 if (!arg.IsValueType && !argIsUserValueType)
                 {
-                    if (argIsUserReferenceType)
+                    if (argIsUserReferenceType
+                        && typeArgSymbols[i] is StructSymbol userClass)
                     {
-                        var userClass = (StructSymbol)typeArgSymbols[i];
                         if (userClass.IsAbstract
                             || userClass.HasPrimaryConstructor
                             || (!userClass.EffectiveExplicitConstructors.IsDefaultOrEmpty
@@ -4172,9 +4178,10 @@ internal static class ClrOverloadResolution
                 if (constraint.IsInterface
                     && !typeArgSymbols.IsDefaultOrEmpty
                     && i < typeArgSymbols.Length
-                    && typeArgSymbols[i]?.ClrType == null)
+                    && typeArgSymbols[i] is { } interfaceSymbol
+                    && interfaceSymbol.ClrType == null)
                 {
-                    if (ErasedSymbolSatisfiesInterfaceConstraint(typeArgSymbols[i], constraint))
+                    if (ErasedSymbolSatisfiesInterfaceConstraint(interfaceSymbol, constraint))
                     {
                         continue;
                     }
@@ -4203,7 +4210,8 @@ internal static class ClrOverloadResolution
                 // carries that same base bound.
                 if (argIsUserValueType && !constraint.IsInterface)
                 {
-                    if (ValueTypeErasedSymbolSatisfiesBaseConstraint(typeArgSymbols[i], constraint))
+                    if (typeArgSymbols[i] is { } constrainedValueTypeSymbol
+                        && ValueTypeErasedSymbolSatisfiesBaseConstraint(constrainedValueTypeSymbol, constraint))
                     {
                         continue;
                     }
@@ -4216,9 +4224,10 @@ internal static class ClrOverloadResolution
                 // its symbolic base chain for concrete class constraints.
                 if (argIsUserReferenceType && !constraint.IsInterface)
                 {
-                    if (UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(
-                        (StructSymbol)typeArgSymbols[i],
-                        constraint))
+                    if (typeArgSymbols[i] is StructSymbol userReferenceType
+                        && UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(
+                            userReferenceType,
+                            constraint))
                     {
                         continue;
                     }
@@ -4443,7 +4452,7 @@ internal static class ClrOverloadResolution
     private static bool TryCloseOverUserReferenceTypePlaceholders(
         MethodInfo openDef,
         Type[] typeArgs,
-        ImmutableArray<TypeSymbol> recoveredSymbols,
+        ImmutableArray<TypeSymbol?> recoveredSymbols,
         [NotNullWhen(true)] out MethodInfo? closed)
     {
         closed = null;
@@ -4555,7 +4564,7 @@ internal static class ClrOverloadResolution
     private static bool TryCloseOverUserValueTypePlaceholders(
         MethodInfo openDef,
         Type[] typeArgs,
-        ImmutableArray<TypeSymbol> recoveredSymbols,
+        ImmutableArray<TypeSymbol?> recoveredSymbols,
         [NotNullWhen(true)] out MethodInfo? closed)
     {
         closed = null;
@@ -4570,7 +4579,8 @@ internal static class ClrOverloadResolution
         {
             if (substituted[i] != null
                 && !substituted[i].IsValueType
-                && IsValueTypeErasedSymbol(recoveredSymbols[i]))
+                && recoveredSymbols[i] is { } valueTypeSymbol
+                && IsValueTypeErasedSymbol(valueTypeSymbol))
             {
                 substituted[i] = typeof(UserValueTypeConstraintPlaceholder);
                 anyUserValueType = true;

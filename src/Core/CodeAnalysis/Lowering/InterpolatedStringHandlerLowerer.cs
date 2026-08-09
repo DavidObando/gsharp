@@ -234,7 +234,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 TypeSymbol.Void,
                 arguments.ToImmutable(),
                 argumentRefKinds: default,
-                typeArgumentSymbols: typeArguments);
+                typeArgumentSymbols: ToNullableTypeArguments(typeArguments));
             statements.Add(new BoundExpressionStatement(node.Syntax, appendFormatted));
         }
 
@@ -549,7 +549,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                     TypeSymbol.FromClrType(method.ReturnType),
                     arguments.ToImmutable(),
                     argumentRefKinds: default,
-                    typeArgumentSymbols: typeArguments);
+                    typeArgumentSymbols: ToNullableTypeArguments(typeArguments));
 
                 statements.Add(this.MakeAppendStatement(node.Syntax, appendCall, continueLocal, holeLeading));
                 continue;
@@ -757,4 +757,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         return HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .First(m => m.Name == "AppendFormatted" && m.IsGenericMethodDefinition);
     }
+
+    private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        => typeArguments.IsDefault
+            ? default
+            : typeArguments.Select(static typeArgument => (TypeSymbol?)typeArgument).ToImmutableArray();
 }

@@ -35,7 +35,7 @@ public sealed class ImportedFunctionSymbol : Symbol
         ImportedClassSymbol importedClass,
         MethodInfo method,
         ExpressionSyntax? declaration,
-        TypeSymbol returnTypeOverride = null)
+        TypeSymbol? returnTypeOverride = null)
         : base(name)
     {
         ImportedClass = importedClass;

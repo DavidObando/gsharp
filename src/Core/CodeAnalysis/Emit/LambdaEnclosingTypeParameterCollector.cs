@@ -69,10 +69,10 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
                 this.CheckTypeArguments(userInstanceCall.MethodTypeArguments);
                 break;
             case BoundImportedCallExpression importedCall:
-                this.CheckTypeArguments(importedCall.TypeArgumentSymbols);
+                this.CheckNullableTypeArguments(importedCall.TypeArgumentSymbols);
                 break;
             case BoundImportedInstanceCallExpression importedInstanceCall:
-                this.CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
+                this.CheckNullableTypeArguments(importedInstanceCall.TypeArgumentSymbols);
                 if (importedInstanceCall.ConstrainedReceiverTypeParameter is { } receiverTypeParameter)
                 {
                     TypeSymbol.CollectReferencedTypeParameters(receiverTypeParameter, this.sink);
@@ -121,6 +121,19 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
     {
         TypeSymbol.CollectReferencedTypeParameters(node.Variable.Type, this.sink);
         base.VisitVariableDeclaration(node);
+    }
+
+    private void CheckNullableTypeArguments(System.Collections.Immutable.ImmutableArray<TypeSymbol?> typeArguments)
+    {
+        if (typeArguments.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var typeArgument in typeArguments)
+        {
+            TypeSymbol.CollectReferencedTypeParameters(typeArgument, this.sink);
+        }
     }
 
     private void CheckTypeArguments(System.Collections.Immutable.ImmutableArray<TypeSymbol> typeArguments)

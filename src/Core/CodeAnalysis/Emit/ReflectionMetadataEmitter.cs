@@ -5163,8 +5163,13 @@ internal sealed class ReflectionMetadataEmitter
     // reflection-resolved (and, for a same-compilation argument, object-
     // erased) CLR type — instead of re-deriving an equivalent but separately
     // maintained predicate.
-    internal static bool ArgIsSymbolicUserDefined(TypeSymbol arg)
+    internal static bool ArgIsSymbolicUserDefined(TypeSymbol? arg)
     {
+        if (arg is null)
+        {
+            return false;
+        }
+
         // Issue #2876: an IMPORTED data type's semantic aggregate is also a
         // StructSymbol (see ImportedTypeSymbol.BuildSemanticAggregate, which
         // passes `clrType: type`), yet it is fully reflection-resolvable and

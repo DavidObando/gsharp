@@ -62,7 +62,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default,
-        ImmutableArray<TypeSymbol> typeArgumentSymbols = default,
+        ImmutableArray<TypeSymbol?> typeArgumentSymbols = default,
         TypeParameterSymbol? constrainedReceiverTypeParameter = null,
         TypeSymbol? constrainedInterfaceType = null,
         bool isNonVirtualBaseCall = false)
@@ -110,7 +110,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// call site supplied a <c>[T1, T2]</c> list closing an imported generic
     /// method (issue #320). Default when there are no explicit type arguments.
     /// </summary>
-    public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
+    public ImmutableArray<TypeSymbol?> TypeArgumentSymbols { get; }
 
     /// <summary>
     /// Gets the type parameter the call is constrained through, when the

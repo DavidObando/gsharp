@@ -2315,7 +2315,7 @@ internal sealed class UserTokenResolver
     /// must be skipped.</returns>
     internal bool TryGetSymbolicSubstitutedImportedCallReturn(
         MethodInfo method,
-        ImmutableArray<TypeSymbol> typeArgSymbols,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
         [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
