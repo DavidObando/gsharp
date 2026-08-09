@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: each public entry point is followed by its own private helpers — instance-property group, static-property group, instance-event group, static-event group, interface group)
 
 using System;
@@ -1501,7 +1503,7 @@ internal sealed class MemberDefEmitter
         // `(object, T)` parameters instead of falling through to a zero-parameter
         // shape.
         int paramCount = 0;
-        FunctionTypeSymbol raiseShape = null;
+        FunctionTypeSymbol? raiseShape = null;
         if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(ev.Type, out var resolvedShape))
         {
             raiseShape = resolvedShape;
@@ -1897,7 +1899,7 @@ internal sealed class MemberDefEmitter
                 // (`EventHandler`/`EventHandler<T>`) expose their real parameters
                 // instead of a zero-parameter shape.
                 int raiseParamCount = 0;
-                FunctionTypeSymbol raiseShape = null;
+                FunctionTypeSymbol? raiseShape = null;
                 if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(ev.Type, out var resolvedShape))
                 {
                     raiseShape = resolvedShape;

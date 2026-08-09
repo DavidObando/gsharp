@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: TypeDef-shape group is followed by its private helpers; constructor group is followed by its private helpers)
 
 using System;
@@ -109,7 +111,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
-    private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
+    private readonly Func<StructSymbol, ConstructorSymbol?, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
     private readonly Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes;
 
     public TypeDefEmitter(
@@ -137,7 +139,7 @@ internal sealed class TypeDefEmitter
         Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
-        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
+        Func<StructSymbol, ConstructorSymbol?, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
         Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -1694,7 +1696,7 @@ internal sealed class TypeDefEmitter
     /// <param name="classSym">The aggregate whose explicit constructor is being emitted.</param>
     /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the aggregate is used.</param>
     /// <returns>The emitted constructor's MethodDef handle.</returns>
-    public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol ctor = null)
+    public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol? ctor = null)
     {
         ctor ??= classSym.ExplicitConstructor;
         var function = ctor.Function;
@@ -1893,7 +1895,7 @@ internal sealed class TypeDefEmitter
     private EntityHandle GetImportedBaseDefaultCtorReference(TypeSymbol importedBaseType)
     {
         var importedBaseClr = importedBaseType.ClrType;
-        ConstructorInfo parameterless = null;
+        ConstructorInfo? parameterless = null;
         foreach (var ctor in importedBaseClr.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
@@ -1964,13 +1966,14 @@ internal sealed class TypeDefEmitter
         }
 
         if (init.Arguments.Length > 0
+            && gsharpBase != null
             && gsharpBase.HasPrimaryConstructor
             && this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
         {
             return primaryHandle;
         }
 
-        if (this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
+        if (gsharpBase != null && this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
         {
             return defaultHandle;
         }

@@ -80,3 +80,19 @@ src/Core/CodeAnalysis/Emit/RemapScope.cs
 src/Core/CodeAnalysis/Emit/SignatureEncoder.cs
 src/Core/CodeAnalysis/Emit/TypeIdentityComparer.cs
 src/Core/CodeAnalysis/Emit/WellKnownReferences.cs
+
+# Slice 9b -- the definition emitters: everything that writes a TypeDef,
+# MethodDef, Field or Param row, plus the token/member-ref factories they call.
+src/Core/CodeAnalysis/Emit/AssemblyAttributeEmitter.cs
+src/Core/CodeAnalysis/Emit/ClosureEmitter.cs
+src/Core/CodeAnalysis/Emit/ConstructorBodyEmitter.cs
+src/Core/CodeAnalysis/Emit/ConversionEmitter.cs
+src/Core/CodeAnalysis/Emit/DataStructSynthesizer.cs
+src/Core/CodeAnalysis/Emit/FunctionEmitter.cs
+src/Core/CodeAnalysis/Emit/ImportedMemberRefFactory.cs
+src/Core/CodeAnalysis/Emit/InterfaceImplEmitter.cs
+src/Core/CodeAnalysis/Emit/MemberDefEmitter.cs
+src/Core/CodeAnalysis/Emit/ParameterMetadataEmitter.cs
+src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs
+src/Core/CodeAnalysis/Emit/TypeDefEmitter.cs
+src/Core/CodeAnalysis/Emit/UserTokenResolver.cs

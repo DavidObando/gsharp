@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the open-slot resolvers sit next to the emitters that consume them, preserving band order)
 #pragma warning disable SA1515 // single-line comment preceded by blank line (inherited from the ReflectionMetadataEmitter band; bodies are verbatim moves)
@@ -10,6 +12,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -687,8 +690,8 @@ internal sealed class InterfaceImplEmitter
         StructSymbol type,
         InterfaceSymbol iface,
         EventSymbol slot,
-        out EventSymbol implementation,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out EventSymbol? implementation,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -715,8 +718,8 @@ internal sealed class InterfaceImplEmitter
         StructSymbol type,
         string name,
         TypeSymbol slotType,
-        out EventSymbol implementation,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out EventSymbol? implementation,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -922,7 +925,7 @@ internal sealed class InterfaceImplEmitter
                 // `StaticVirtualSignatureEquals` scan below, mirroring
                 // `EmitExplicitInterfaceMethodImpls`'s instance-method
                 // precedent.
-                FunctionSymbol implMatch = null;
+                FunctionSymbol? implMatch = null;
                 if (!structSymbol.StaticMethods.IsDefaultOrEmpty)
                 {
                     foreach (var explicitCandidate in structSymbol.StaticMethods)
@@ -1098,7 +1101,7 @@ internal sealed class InterfaceImplEmitter
                 // `Properties` table — see `VerifyStaticVirtualInterfaceProperty
                 // Implementations`'s `staticPropDefIface` fix) — prefer that
                 // link over the name-based scan below.
-                PropertySymbol implProp = null;
+                PropertySymbol? implProp = null;
                 foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
                     if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)

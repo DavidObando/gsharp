@@ -38,13 +38,21 @@ internal static class MethodInfoHelpers
     /// virtual method attributes because it participates in CLR vtable dispatch.
     /// </summary>
     /// <param name="function">The function being inspected.</param>
-    /// <param name="receiverStruct">The struct that declares <paramref name="function"/>.</param>
+    /// <param name="receiverStruct">The struct that declares <paramref name="function"/>,
+    /// or <c>null</c> when the function has no declaring struct.</param>
     /// <returns>True if the method must be emitted as <c>virtual</c>.</returns>
-    public static bool RequiresVirtualOnValueType(FunctionSymbol function, StructSymbol receiverStruct)
+    public static bool RequiresVirtualOnValueType(FunctionSymbol function, StructSymbol? receiverStruct)
     {
         if (function.IsOverride || function.OverriddenMethod != null)
         {
             return true;
+        }
+
+        if (receiverStruct is null)
+        {
+            // No declaring struct means no property accessor to check, and a
+            // function that is not a value-type member cannot need this at all.
+            return false;
         }
 
         foreach (var property in receiverStruct.Properties)

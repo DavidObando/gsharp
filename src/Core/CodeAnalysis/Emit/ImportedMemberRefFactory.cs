@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // elements should appear in the correct order (the delegate-shape caches keep their original ReflectionMetadataEmitter band position, interleaved with the factories that consume them)
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the open-definition / TypeBuilder-safe resolvers sit next to the member-ref factories that consume them, preserving band order)
@@ -13,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -569,8 +572,14 @@ internal sealed class ImportedMemberRefFactory
     /// the declaring type's generic parameters as <c>GenericTypeParameter</c>,
     /// which <see cref="SignatureEncoder.EncodeClrType"/> emits as <c>!N</c>.
     /// </summary>
-    private static MethodInfo GetOpenMethod(MethodInfo method)
+    [return: NotNullIfNotNull(nameof(method))]
+    private static MethodInfo? GetOpenMethod(MethodInfo? method)
     {
+        if (method is null)
+        {
+            return null;
+        }
+
         var declaring = method.DeclaringType;
         if (declaring is null || !declaring.IsConstructedGenericType)
         {
@@ -602,8 +611,14 @@ internal sealed class ImportedMemberRefFactory
         return method;
     }
 
-    private static ConstructorInfo GetOpenCtor(ConstructorInfo ctor)
+    [return: NotNullIfNotNull(nameof(ctor))]
+    private static ConstructorInfo? GetOpenCtor(ConstructorInfo? ctor)
     {
+        if (ctor is null)
+        {
+            return null;
+        }
+
         var declaring = ctor.DeclaringType;
         if (declaring is null || !declaring.IsConstructedGenericType)
         {
@@ -647,7 +662,7 @@ internal sealed class ImportedMemberRefFactory
         }
     }
 
-    private static bool ContainsTypeBuilderGenericArgument(Type type)
+    private static bool ContainsTypeBuilderGenericArgument(Type? type)
     {
         if (type == null)
         {
@@ -679,7 +694,8 @@ internal sealed class ImportedMemberRefFactory
         }
     }
 
-    private static MethodInfo ResolveTypeBuilderConstructedGenericMethod(MethodInfo method)
+    [return: NotNullIfNotNull(nameof(method))]
+    private static MethodInfo? ResolveTypeBuilderConstructedGenericMethod(MethodInfo? method)
     {
         var declaring = method?.DeclaringType;
         if (declaring == null || !declaring.IsConstructedGenericType || !ContainsTypeBuilderGenericArgument(declaring))
@@ -693,7 +709,8 @@ internal sealed class ImportedMemberRefFactory
             : method;
     }
 
-    private static ConstructorInfo ResolveTypeBuilderConstructedGenericCtor(ConstructorInfo ctor)
+    [return: NotNullIfNotNull(nameof(ctor))]
+    private static ConstructorInfo? ResolveTypeBuilderConstructedGenericCtor(ConstructorInfo? ctor)
     {
         var declaring = ctor?.DeclaringType;
         if (declaring == null || !declaring.IsConstructedGenericType || !ContainsTypeBuilderGenericArgument(declaring))
@@ -707,9 +724,15 @@ internal sealed class ImportedMemberRefFactory
             : ctor;
     }
 
-    private static FieldInfo ResolveTypeBuilderConstructedGenericField(FieldInfo field)
+    [return: NotNullIfNotNull(nameof(field))]
+    private static FieldInfo? ResolveTypeBuilderConstructedGenericField(FieldInfo? field)
     {
-        var declaring = field?.DeclaringType;
+        if (field is null)
+        {
+            return null;
+        }
+
+        var declaring = field.DeclaringType;
         if (!ContainsTypeBuilderGenericArgument(declaring) || declaring == null || !declaring.IsConstructedGenericType)
         {
             return field;
@@ -722,7 +745,7 @@ internal sealed class ImportedMemberRefFactory
         return openField != null ? TypeBuilder.GetField(declaring, openField) : field;
     }
 
-    internal static MethodInfo GetTypeBuilderSafePropertyAccessor(PropertyInfo property, bool wantSetter, bool nonPublic = false)
+    internal static MethodInfo? GetTypeBuilderSafePropertyAccessor(PropertyInfo? property, bool wantSetter, bool nonPublic = false)
     {
         var declaring = property?.DeclaringType;
         if (!ContainsTypeBuilderGenericArgument(declaring) || declaring == null || !declaring.IsConstructedGenericType)
@@ -806,7 +829,7 @@ internal sealed class ImportedMemberRefFactory
         return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>));
     }
 
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, TypeSymbol containingTypeSymbol)
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, TypeSymbol? containingTypeSymbol)
     {
         return this.GetMethodEntityHandle(method, default(ImmutableArray<TypeSymbol>), containingTypeSymbol);
     }
@@ -823,7 +846,7 @@ internal sealed class ImportedMemberRefFactory
         return this.GetMethodEntityHandle(method, typeArgSymbols, null);
     }
 
-    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols, TypeSymbol containingTypeSymbol)
+    internal EntityHandle GetMethodEntityHandle(MethodInfo method, ImmutableArray<TypeSymbol> typeArgSymbols, TypeSymbol? containingTypeSymbol)
     {
         if (TryCreateMemberReferenceForConstructedSymbolicContainer(method, containingTypeSymbol, out var symbolicRef))
         {
@@ -928,7 +951,7 @@ internal sealed class ImportedMemberRefFactory
 
     private bool TryCreateMemberReferenceForConstructedSymbolicContainer(
         MethodInfo method,
-        TypeSymbol containingTypeSymbol,
+        TypeSymbol? containingTypeSymbol,
         out MemberReferenceHandle handle)
     {
         handle = default;
@@ -989,15 +1012,20 @@ internal sealed class ImportedMemberRefFactory
         // receiver was an ImportedTypeSymbol, a SequenceTypeSymbol with
         // null ClrType (issue #774), or an AsyncSequenceTypeSymbol with
         // null ClrType.
+        var openContainer = Invariant.Required(
+            openDefinition,
+            "TryNormalizeToSymbolicContainer only reports success with an open definition, and the interface re-targeting above keeps one");
         var symbolicView = ImportedTypeSymbol.GetConstructed(
-            openDefinition.MakeGenericType(this.GetErasedObjectArgs(openDefinition)),
+            openContainer.MakeGenericType(this.GetErasedObjectArgs(openContainer)),
             openDefinition,
             typeArguments);
 
         var parentBlob = new BlobBuilder();
         this.signatures.EncodeTypeSymbol(new BlobEncoder(parentBlob).TypeSpecificationSignature(), symbolicView);
         var parent = this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(parentBlob));
-        var openMethod = ResolveMethodOnOpenDefinition(openDefinition, method);
+        var openMethod = Invariant.Required(
+            ResolveMethodOnOpenDefinition(openContainer, method),
+            "the symbolic container was normalized from this method's own declaring type, so its open definition declares the method");
         var openForMethodGenerics = openMethod.IsGenericMethod
             ? openMethod.GetGenericMethodDefinition()
             : openMethod;
@@ -1040,7 +1068,7 @@ internal sealed class ImportedMemberRefFactory
     /// <paramref name="openDefinition"/>'s generic parameters so they can be
     /// substituted via <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol})"/>.
     /// </summary>
-    private static bool TryFindImplementedInterfaceInstantiation(Type openDefinition, Type targetOpenInterface, out Type instantiation)
+    private static bool TryFindImplementedInterfaceInstantiation(Type openDefinition, Type targetOpenInterface, [NotNullWhen(true)] out Type? instantiation)
     {
         foreach (var iface in openDefinition.GetInterfaces())
         {
@@ -1102,8 +1130,8 @@ internal sealed class ImportedMemberRefFactory
     /// fire uniformly for all three shapes.
     /// </summary>
     internal static bool TryNormalizeToSymbolicContainer(
-        TypeSymbol containingTypeSymbol,
-        out Type openDefinition,
+        TypeSymbol? containingTypeSymbol,
+        [NotNullWhen(true)] out Type? openDefinition,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
         switch (containingTypeSymbol)
@@ -1210,7 +1238,7 @@ internal sealed class ImportedMemberRefFactory
         return this.emitCtx.CoreObjectType;
     }
 
-    internal static MethodInfo ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)
+    internal static MethodInfo? ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)
     {
         if (openDefinition == null)
         {
@@ -1239,8 +1267,13 @@ internal sealed class ImportedMemberRefFactory
         return fallback ?? method;
     }
 
-    internal static PropertyInfo ResolvePropertyOnOpenDefinition(Type openDefinition, PropertyInfo property)
+    internal static PropertyInfo? ResolvePropertyOnOpenDefinition(Type openDefinition, PropertyInfo? property)
     {
+        if (property is null)
+        {
+            return null;
+        }
+
         if (openDefinition == null)
         {
             return property;
@@ -1285,7 +1318,7 @@ internal sealed class ImportedMemberRefFactory
     /// <param name="ctor">The (possibly type-erased) constructor selected by overload resolution.</param>
     /// <param name="containingTypeSymbol">The bound result type of the construction expression. May be <see langword="null"/>.</param>
     /// <returns>A MemberRef handle for the constructor on the correctly-typed parent.</returns>
-    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor, TypeSymbol containingTypeSymbol)
+    internal MemberReferenceHandle GetCtorReference(ConstructorInfo ctor, TypeSymbol? containingTypeSymbol)
     {
         ctor = ResolveTypeBuilderConstructedGenericCtor(ctor);
         // Issue #671: when the containing type carries symbolic user-type
@@ -1353,7 +1386,7 @@ internal sealed class ImportedMemberRefFactory
     /// <returns>Whether a symbolic-container MemberRef was produced.</returns>
     private bool TryCreateCtorMemberReferenceForConstructedSymbolicContainer(
         ConstructorInfo ctor,
-        TypeSymbol containingTypeSymbol,
+        TypeSymbol? containingTypeSymbol,
         out MemberReferenceHandle handle)
     {
         handle = default;
@@ -1792,7 +1825,7 @@ internal sealed class ImportedMemberRefFactory
     internal MemberReferenceHandle GetCtorReferenceOnConstructedGeneric(Type closedGenericType, int paramCount)
     {
         var openType = closedGenericType.GetGenericTypeDefinition();
-        ConstructorInfo openCtor = null;
+        ConstructorInfo? openCtor = null;
         foreach (var c in openType.GetConstructors())
         {
             if (c.GetParameters().Length == paramCount)
@@ -1949,7 +1982,7 @@ internal sealed class ImportedMemberRefFactory
         var physicalArity = count <= 7 ? count : 8;
         var openType = TupleTypeSymbol.GetOpenClrType(physicalArity);
 
-        ConstructorInfo openCtor = null;
+        ConstructorInfo? openCtor = null;
         foreach (var c in openType.GetConstructors())
         {
             if (c.GetParameters().Length == physicalArity)
@@ -2316,7 +2349,7 @@ internal sealed class ImportedMemberRefFactory
     // otherwise return null so the caller keeps the reflection path.
     internal EntityHandle? TryGetSymbolicAsyncDelegateCtorRef(FunctionTypeSymbol fnType, FunctionSymbol function)
     {
-        AsyncStateMachinePlan plan = null;
+        AsyncStateMachinePlan? plan = null;
         foreach (var p in this.outer.stateMachines.AsyncStateMachinePlans)
         {
             if (p.KickoffMethod == function)

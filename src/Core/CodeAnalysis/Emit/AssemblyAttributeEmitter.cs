@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private per-attribute helpers they orchestrate)
 #pragma warning disable SA1611 // parameter documentation missing — the public API surface is mechanically lifted from ReflectionMetadataEmitter; existing call-site comments document them
 #pragma warning disable SA1615 // return-value documentation missing — same as SA1611
@@ -382,7 +384,9 @@ internal sealed class AssemblyAttributeEmitter
             ? resolved
             : typeof(System.Diagnostics.DebuggableAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
-        var modesType = attrType.GetNestedType("DebuggingModes");
+        var modesType = Invariant.Required(
+            attrType.GetNestedType("DebuggingModes"),
+            "System.Diagnostics.DebuggableAttribute declares the nested DebuggingModes enum");
         var modesTypeRef = this.getTypeReference(modesType);
 
         var ctorSig = new BlobBuilder();

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // elements should appear in the correct order (the user-token memoization caches keep their original ReflectionMetadataEmitter band position, interleaved with the resolvers that consume them)
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the structural-unification / open-signature helpers sit next to the resolvers that consume them, preserving band order)
@@ -13,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -380,7 +383,7 @@ internal sealed class UserTokenResolver
         return expr;
     }
 
-    private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, out TypeSymbol inferred)
+    private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, [NotNullWhen(true)] out TypeSymbol? inferred)
     {
         // Issue #1570: a `ref`/`out`/`in` parameter whose declared type mentions
         // the method (or containing) type parameter arrives here with a byref
@@ -468,7 +471,7 @@ internal sealed class UserTokenResolver
             if (actual?.ClrType is { } actualClrSeq)
             {
                 var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
-                System.Type matched = null;
+                System.Type? matched = null;
                 if (actualClrSeq.IsArray)
                 {
                     var elt = actualClrSeq.GetElementType();
@@ -517,7 +520,7 @@ internal sealed class UserTokenResolver
         if (formal is AsyncSequenceTypeSymbol faseqAny && actual?.ClrType is { } actualClrAseq)
         {
             var openIAsync = typeof(System.Collections.Generic.IAsyncEnumerable<>);
-            System.Type matched = null;
+            System.Type? matched = null;
             if (actualClrAseq.IsGenericType
                 && actualClrAseq.GetGenericTypeDefinition() == openIAsync)
             {
@@ -617,7 +620,7 @@ internal sealed class UserTokenResolver
             && (actual is SliceTypeSymbol || actual is ArrayTypeSymbol)
             && actual?.ClrType is { IsArray: true } actualClrArray)
         {
-            Type matched = null;
+            Type? matched = null;
             foreach (var iface in actualClrArray.GetInterfaces())
             {
                 if (iface.IsGenericType
@@ -696,7 +699,7 @@ internal sealed class UserTokenResolver
         return false;
     }
 
-    private static bool TryGetFunctionShapeSlots(TypeSymbol type, out ImmutableArray<TypeSymbol> slots)
+    private static bool TryGetFunctionShapeSlots(TypeSymbol? type, out ImmutableArray<TypeSymbol> slots)
     {
         // Issue #1431: normalise a function shape into a flat slot list of
         // [parameter types..., return type?] so a native `FunctionTypeSymbol`
@@ -752,7 +755,7 @@ internal sealed class UserTokenResolver
             || name.StartsWith("Action`", StringComparison.Ordinal);
     }
 
-    private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol type)
+    private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol? type)
     {
         var args = type switch
         {
@@ -1244,7 +1247,7 @@ internal sealed class UserTokenResolver
     internal EntityHandle GetUserStructFieldRef(StructSymbol containingType, FieldSymbol fieldOnContaining)
     {
         var def = containingType.Definition ?? containingType;
-        FieldSymbol defField = null;
+        FieldSymbol? defField = null;
         foreach (var candidate in def.Fields)
         {
             if (candidate.Name == fieldOnContaining.Name)
@@ -2157,7 +2160,7 @@ internal sealed class UserTokenResolver
     internal bool TryGetSymbolicSubstitutedPropertyReturn(
         TypeSymbol receiverType,
         PropertyInfo property,
-        out TypeSymbol substitutedReturn)
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (property == null
@@ -2229,7 +2232,7 @@ internal sealed class UserTokenResolver
     internal bool TryGetSymbolicSubstitutedInstanceMethodReturn(
         TypeSymbol receiverType,
         MethodInfo method,
-        out TypeSymbol substitutedReturn)
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (method == null
@@ -2311,7 +2314,7 @@ internal sealed class UserTokenResolver
     internal bool TryGetSymbolicSubstitutedImportedCallReturn(
         MethodInfo method,
         ImmutableArray<TypeSymbol> typeArgSymbols,
-        out TypeSymbol substitutedReturn)
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (method == null

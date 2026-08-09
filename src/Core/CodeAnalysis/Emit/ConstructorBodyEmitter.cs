@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the field-initializer statement builders sit next to the emitters that consume them, preserving band order)
 #pragma warning disable SA1515 // single-line comment preceded by blank line (inherited from the ReflectionMetadataEmitter band; bodies are verbatim moves)
@@ -431,7 +433,7 @@ internal sealed class ConstructorBodyEmitter
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.
     /// </summary>
-    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol thisParam = null)
+    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
@@ -479,7 +481,7 @@ internal sealed class ConstructorBodyEmitter
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
-        BoundBlockStatement fieldInitBody = null;
+        BoundBlockStatement? fieldInitBody = null;
         if (NeedsInstanceFieldInitializerStatements(classSym))
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, thisParam));
@@ -586,7 +588,7 @@ internal sealed class ConstructorBodyEmitter
         // ADR-0065 §2: convenience inits skip field-init emission (the
         // chained-to designated init handles them), so don't reserve scratch
         // slots for those expressions either.
-        BoundBlockStatement fieldInitBody = null;
+        BoundBlockStatement? fieldInitBody = null;
         if (!ctor.IsConvenience && NeedsInstanceFieldInitializerStatements(classSym))
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
@@ -742,7 +744,10 @@ internal sealed class ConstructorBodyEmitter
         il.OpCode(ILOpCode.Endfinally);
         il.MarkLabel(finallyEnd);
 
-        il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        Invariant.Required(
+            il.ControlFlowBuilder,
+            "the encoder for a constructor body with a protected region is created with a control-flow builder")
+            .AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
         return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }

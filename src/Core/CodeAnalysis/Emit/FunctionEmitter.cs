@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the nullable-context / P/Invoke-import helpers sit next to the emitters that consume them, preserving band order)
 #pragma warning disable SA1515 // single-line comment preceded by blank line (inherited from the ReflectionMetadataEmitter band; bodies are verbatim moves)
@@ -130,9 +132,9 @@ internal sealed class FunctionEmitter
     internal StateMachineEmitter.MoveNextBodyResult BuildMoveNextBodyBytes(AsyncStateMachinePlan plan)
     {
         int bodyOffset = -1;
-        IReadOnlyList<SequencePoint> capturedSequencePoints = null;
-        IReadOnlyList<LocalInfo> capturedLocals = null;
-        IReadOnlyList<LocalConstantInfo> capturedConstants = null;
+        IReadOnlyList<SequencePoint>? capturedSequencePoints = null;
+        IReadOnlyList<LocalInfo>? capturedLocals = null;
+        IReadOnlyList<LocalConstantInfo>? capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
         if (!this.emitCtx.MetadataOnly)
@@ -235,7 +237,7 @@ internal sealed class FunctionEmitter
         return handle;
     }
 
-    private (BoundBlockStatement Body, AsyncStateMachinePlan AsyncPlan) SelectFunctionBody(
+    private (BoundBlockStatement Body, AsyncStateMachinePlan? AsyncPlan) SelectFunctionBody(
         FunctionSymbol function,
         BoundBlockStatement body)
     {
@@ -246,7 +248,7 @@ internal sealed class FunctionEmitter
 
         // Async kickoff body: replace the user body with the kickoff stub
         // that creates the state machine, initializes it, and calls Start.
-        AsyncStateMachinePlan asyncPlan = null;
+        AsyncStateMachinePlan? asyncPlan = null;
         if (function.IsAsync && function.StateMachineType != null)
         {
             foreach (var plan in this.outer.stateMachines.AsyncStateMachinePlans)
@@ -265,7 +267,7 @@ internal sealed class FunctionEmitter
     private FunctionBodyEmissionResult EmitFunctionBody(
         FunctionSymbol function,
         BoundBlockStatement body,
-        AsyncStateMachinePlan asyncPlan,
+        AsyncStateMachinePlan? asyncPlan,
         bool isEntryPoint)
     {
         // Phase 4 emit parity (F1): generic functions are emitted with a
@@ -276,9 +278,9 @@ internal sealed class FunctionEmitter
         // generics as the long-term goal; F2 will widen to GenericParam +
         // MVAR/VAR encoding and add a MethodSpec at call sites.
         int bodyOffset = -1;
-        IReadOnlyList<SequencePoint> capturedSequencePoints = null;
-        IReadOnlyList<LocalInfo> capturedLocals = null;
-        IReadOnlyList<LocalConstantInfo> capturedConstants = null;
+        IReadOnlyList<SequencePoint>? capturedSequencePoints = null;
+        IReadOnlyList<LocalInfo>? capturedLocals = null;
+        IReadOnlyList<LocalConstantInfo>? capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
 
@@ -334,7 +336,7 @@ internal sealed class FunctionEmitter
                 var localsSignature = session.BuildLocalsSignature();
 
                 // Detect iterator MoveNext and thread emit context.
-                StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null;
+                StateMachineEmitter.IteratorEmitContext? iteratorEmitCtx = null;
                 if (function.Name == "MoveNext" && function.ReceiverType is StructSymbol owningSmClass)
                 {
                     this.outer.stateMachines.IteratorEmitContexts.TryGetValue(owningSmClass, out iteratorEmitCtx);
@@ -343,7 +345,7 @@ internal sealed class FunctionEmitter
                 // For struct instance methods, pass structThisParameter so the
                 // BodyEmitter knows arg0 is already a managed pointer (ref T) and
                 // emits ldarg.0 instead of ldarga.0 when accessing fields via this.
-                ParameterSymbol structThis = null;
+                ParameterSymbol? structThis = null;
                 if (function.IsInstanceMethod
                     && function.ReceiverType is StructSymbol recvStruct
                     && !recvStruct.IsClass)
@@ -392,7 +394,7 @@ internal sealed class FunctionEmitter
 
     private BlobBuilder EncodeFunctionSignature(
         FunctionSymbol function,
-        AsyncStateMachinePlan asyncPlan,
+        AsyncStateMachinePlan? asyncPlan,
         bool isEntryPoint)
     {
         var sigBlob = new BlobBuilder();
@@ -613,7 +615,7 @@ internal sealed class FunctionEmitter
 
     private FunctionParameterMetadata EmitParameterMetadata(
         FunctionSymbol function,
-        AsyncStateMachinePlan asyncPlan)
+        AsyncStateMachinePlan? asyncPlan)
     {
         // Issue #170 / ADR-0047 §3: emit a Parameter row per source parameter
         // so we can attach a CustomAttribute to each one. The first emitted
@@ -1497,7 +1499,10 @@ internal sealed class FunctionEmitter
 
         if (stringParamIndices.Count > 0)
         {
-            il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+            Invariant.Required(
+                il.ControlFlowBuilder,
+                "the encoder for a method body with a protected region is created with a control-flow builder")
+                .AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
         }
 
         if (hasResult)
@@ -1527,9 +1532,9 @@ internal sealed class FunctionEmitter
 
     private readonly record struct FunctionBodyEmissionResult(
         int BodyOffset,
-        IReadOnlyList<SequencePoint> SequencePoints,
-        IReadOnlyList<LocalInfo> Locals,
-        IReadOnlyList<LocalConstantInfo> Constants,
+        IReadOnlyList<SequencePoint>? SequencePoints,
+        IReadOnlyList<LocalInfo>? Locals,
+        IReadOnlyList<LocalConstantInfo>? Constants,
         int CodeSize,
         StandaloneSignatureHandle LocalsSignature);
 
