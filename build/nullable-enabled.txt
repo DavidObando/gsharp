@@ -196,3 +196,5 @@ src/Core/CodeAnalysis/Binding/DeclarationBinder.Constructors.cs
 src/Core/CodeAnalysis/Binding/StructLayoutBinder.cs
 # Slice 31 -- P/Invoke and marshal metadata binding.
 src/Core/CodeAnalysis/Binding/PInvokeBinder.cs
+# Slice 32 -- magic collection zero-value synthesis.
+src/Core/CodeAnalysis/Binding/MagicCollectionZeroValue.cs
