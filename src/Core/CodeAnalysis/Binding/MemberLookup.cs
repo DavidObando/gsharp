@@ -2351,7 +2351,7 @@ internal sealed class MemberLookup
             typeof(EventHandler<>),
             ImmutableArray.Create(eventArgsType));
 
-        static bool IsEventArgsType(TypeSymbol type, Type clrType)
+        static bool IsEventArgsType(TypeSymbol type, Type? clrType)
         {
             if (clrType != null)
             {
@@ -3337,7 +3337,7 @@ internal sealed class MemberLookup
     /// <param name="underlying">The value-type underlying type.</param>
     /// <param name="constructed">The constructed nullable CLR type, on success.</param>
     /// <returns><see langword="true"/> when construction succeeded.</returns>
-    public bool TryGetNullableConstructedType(Type underlying, out Type? constructed)
+    public bool TryGetNullableConstructedType(Type underlying, [NotNullWhen(true)] out Type? constructed)
         => NullableLifting.TryConstructNullable(this.binderCtx.References, underlying, out constructed);
 
     /// <summary>

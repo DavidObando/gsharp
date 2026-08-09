@@ -204,3 +204,5 @@ src/Core/CodeAnalysis/Binding/BinderContext.cs
 src/Core/CodeAnalysis/Binding/SubmissionGlobalTypeProjection.cs
 # Slice 35 -- conversion classification and binding helpers.
 src/Core/CodeAnalysis/Binding/ConversionClassifier.cs
+# Slice 36 -- nullable lifting and CLR Nullable<T> conversion helpers.
+src/Core/CodeAnalysis/Symbols/NullableLifting.cs

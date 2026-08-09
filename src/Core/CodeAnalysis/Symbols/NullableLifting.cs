@@ -2,7 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -26,7 +29,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="typeSymbol">The type symbol to resolve.</param>
     /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
-    public static Type GetEffectiveClrType(TypeSymbol typeSymbol)
+    public static Type? GetEffectiveClrType(TypeSymbol? typeSymbol)
     {
         if (typeSymbol is NullableTypeSymbol nullable
             && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt)
@@ -39,16 +42,20 @@ public static class NullableLifting
 
     /// <summary>
     /// Constructs <c>Nullable&lt;TUnderlying&gt;</c> projected onto
-    /// <paramref name="references"/>. Returns <see langword="false"/> when the
-    /// open <c>Nullable&lt;&gt;</c> is not reachable from the given reference
-    /// set, or when projecting <paramref name="underlying"/> through the
-    /// reference set fails.
+    /// <paramref name="references"/>. Returns <see langword="false"/> when
+    /// <paramref name="underlying"/> is <see langword="null"/>, when the open
+    /// <c>Nullable&lt;&gt;</c> is not reachable from the given reference set,
+    /// or when projecting <paramref name="underlying"/> through the reference
+    /// set fails.
     /// </summary>
     /// <param name="references">The reference resolver used to discover the open <c>Nullable&lt;&gt;</c> definition and to project <paramref name="underlying"/> onto.</param>
     /// <param name="underlying">The value-type underlying type.</param>
     /// <param name="constructed">The constructed nullable CLR type, on success.</param>
     /// <returns><see langword="true"/> when construction succeeded.</returns>
-    public static bool TryConstructNullable(ReferenceResolver references, Type underlying, out Type constructed)
+    public static bool TryConstructNullable(
+        ReferenceResolver references,
+        Type? underlying,
+        [NotNullWhen(true)] out Type? constructed)
     {
         constructed = null;
         if (underlying == null)
@@ -90,7 +97,7 @@ public static class NullableLifting
     /// The CLR type projected onto the reference load context, or <c>null</c>
     /// when the symbol has no CLR type.
     /// </returns>
-    public static Type ResolveClrTypeForGenericArg(ReferenceResolver references, TypeSymbol typeSymbol)
+    public static Type? ResolveClrTypeForGenericArg(ReferenceResolver references, TypeSymbol? typeSymbol)
     {
         if (typeSymbol is NullableTypeSymbol nullable
             && nullable.UnderlyingType?.ClrType is { IsValueType: true } innerVt
@@ -117,7 +124,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="nullable">The wrapper to test.</param>
     /// <returns><see langword="true"/> when the underlying type has a CLR value-type representation.</returns>
-    internal static bool IsValueTypeNullable(NullableTypeSymbol nullable)
+    internal static bool IsValueTypeNullable(NullableTypeSymbol? nullable)
     {
         if (nullable?.UnderlyingType is TupleTypeSymbol)
         {
@@ -159,7 +166,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="nullable">The wrapper to test.</param>
     /// <returns><see langword="true"/> for a user value-type <c>Nullable&lt;T&gt;</c>.</returns>
-    internal static bool IsUserValueTypeNullable(NullableTypeSymbol nullable)
+    internal static bool IsUserValueTypeNullable(NullableTypeSymbol? nullable)
     {
         return nullable?.UnderlyingType is EnumSymbol
             || (nullable?.UnderlyingType is StructSymbol s && !s.IsClass);
@@ -193,7 +200,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="nullable">The wrapper to test.</param>
     /// <returns><see langword="true"/> when the symbolic <c>get_Value</c> path is required.</returns>
-    internal static bool RequiresSymbolicNullableGetValue(NullableTypeSymbol nullable)
+    internal static bool RequiresSymbolicNullableGetValue(NullableTypeSymbol? nullable)
     {
         return IsUserValueTypeNullable(nullable)
             || nullable?.UnderlyingType is TupleTypeSymbol { ClrType: null }
@@ -213,7 +220,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="nullable">The wrapper to test.</param>
     /// <returns><see langword="true"/> for any value-type <c>Nullable&lt;T&gt;</c>, BCL or user-declared.</returns>
-    internal static bool IsAnyValueTypeNullable(NullableTypeSymbol nullable)
+    internal static bool IsAnyValueTypeNullable(NullableTypeSymbol? nullable)
     {
         return IsValueTypeNullable(nullable) || IsUserValueTypeNullable(nullable);
     }
@@ -226,7 +233,7 @@ public static class NullableLifting
     /// </summary>
     /// <param name="type">The CLR <see cref="Type"/> to probe.</param>
     /// <returns><see langword="true"/> for a constructed <c>Nullable&lt;T&gt;</c>.</returns>
-    internal static bool IsValueTypeNullableClr(Type type)
+    internal static bool IsValueTypeNullableClr(Type? type)
     {
         return type != null
             && type.IsGenericType
