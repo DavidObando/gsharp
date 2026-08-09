@@ -175,3 +175,5 @@ src/Core/CodeAnalysis/Binding/InterpolatedStringHandlerInfo.cs
 src/Core/CodeAnalysis/Binding/MemberLookup.cs
 # Slice 24 -- expression binder member and index access binding.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.cs
+# Slice 25 -- expression binder access helpers.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.cs

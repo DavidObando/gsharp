@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -11,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -52,7 +55,7 @@ internal sealed partial class ExpressionBinder
         return accessor;
     }
 
-    private BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression receiver, ImmutableArray<FunctionSymbol> methods)
+    private BoundMethodGroupExpression BuildInstanceMethodGroup(BoundExpression? receiver, ImmutableArray<FunctionSymbol> methods)
     {
         if (methods.Length == 1 && !methods[0].IsGeneric)
         {
@@ -116,10 +119,10 @@ internal sealed partial class ExpressionBinder
     /// usable candidate remains.
     /// </summary>
     private bool TryBuildUserMethodGroup(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         ImmutableArray<FunctionSymbol> methods,
-        out BoundExpression methodGroup,
-        StructSymbol staticOwnerType = null)
+        [NotNullWhen(true)] out BoundExpression? methodGroup,
+        StructSymbol? staticOwnerType = null)
     {
         methodGroup = null;
 
@@ -175,7 +178,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The accessor expression to bind.</param>
     /// <param name="result">The bound constructor call on success.</param>
     /// <returns>Whether the accessor was a fully-qualified constructor call that bound successfully.</returns>
-    private bool TryBindQualifiedClrConstructorCall(AccessorExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindQualifiedClrConstructorCall(
+        AccessorExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -190,8 +195,8 @@ internal sealed partial class ExpressionBinder
         // initializer) is not a qualified constructor.
         var segments = new List<string>();
         ExpressionSyntax current = syntax;
-        CallExpressionSyntax terminalCall = null;
-        ObjectCreationExpressionSyntax terminalObjectCreation = null;
+        CallExpressionSyntax? terminalCall = null;
+        ObjectCreationExpressionSyntax? terminalObjectCreation = null;
         while (true)
         {
             if (current is AccessorExpressionSyntax accessor)
@@ -269,7 +274,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The accessor expression to bind.</param>
     /// <param name="result">The bound struct-literal expression on success.</param>
     /// <returns>Whether the accessor was a fully-qualified struct literal that bound successfully.</returns>
-    private bool TryBindQualifiedClrStructLiteral(AccessorExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindQualifiedClrStructLiteral(
+        AccessorExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -284,7 +291,7 @@ internal sealed partial class ExpressionBinder
         // literal.
         var segments = new List<string>();
         ExpressionSyntax current = syntax;
-        StructLiteralExpressionSyntax terminalLiteral = null;
+        StructLiteralExpressionSyntax? terminalLiteral = null;
         while (true)
         {
             if (current is AccessorExpressionSyntax accessor)
@@ -352,7 +359,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The accessor chain forming the qualified name.</param>
     /// <param name="result">The bound terminal construction on success.</param>
     /// <returns>Whether the qualified name bound to a source-type construction.</returns>
-    private bool TryBindQualifiedSourceTypeConstruction(AccessorExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindQualifiedSourceTypeConstruction(
+        AccessorExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -500,9 +509,9 @@ internal sealed partial class ExpressionBinder
     private bool TryResolveQualifiedClrType(
         string namespacePrefix,
         string typeSimpleName,
-        TypeArgumentListSyntax typeArgumentList,
-        out System.Type clrType,
-        out System.Type openGenericDefinition,
+        TypeArgumentListSyntax? typeArgumentList,
+        [NotNullWhen(true)] out System.Type? clrType,
+        out System.Type? openGenericDefinition,
         out ImmutableArray<TypeSymbol> symbolicTypeArgs)
     {
         clrType = null;
@@ -557,6 +566,11 @@ internal sealed partial class ExpressionBinder
 
             if (arity > 0)
             {
+                if (typeArgumentList is null)
+                {
+                    return false;
+                }
+
                 var mangled = prefix + "." + typeSimpleName + "`" + arity;
                 if (scope.References.TryResolveType(mangled, out var openType))
                 {
@@ -648,7 +662,12 @@ internal sealed partial class ExpressionBinder
     /// find the outer type, then remaining segments and the terminal name are
     /// walked as nested types via <see cref="ReferenceResolver.TryResolveNestedType"/>.
     /// </summary>
-    private bool TryResolveAsNestedTypeChain(string namespacePrefix, string typeSimpleName, int arity, TypeArgumentListSyntax typeArgumentList, out System.Type clrType)
+    private bool TryResolveAsNestedTypeChain(
+        string namespacePrefix,
+        string typeSimpleName,
+        int arity,
+        TypeArgumentListSyntax? typeArgumentList,
+        [NotNullWhen(true)] out System.Type? clrType)
     {
         clrType = null;
         if (string.IsNullOrEmpty(namespacePrefix))
@@ -664,7 +683,7 @@ internal sealed partial class ExpressionBinder
         for (var outerLen = prefixSegments.Length; outerLen >= 1; outerLen--)
         {
             var outerName = string.Join(".", prefixSegments, 0, outerLen);
-            System.Type outerType = null;
+            System.Type? outerType = null;
 
             // Try resolving the outer name directly.
             if (!scope.References.TryResolveType(outerName, out outerType))
@@ -705,9 +724,14 @@ internal sealed partial class ExpressionBinder
             }
 
             // Now resolve the terminal name as a nested type of `current`.
-            System.Type nestedType = null;
+            System.Type? nestedType = null;
             if (arity > 0)
             {
+                if (typeArgumentList is null)
+                {
+                    return false;
+                }
+
                 scope.References.TryResolveNestedType(current, typeSimpleName + "`" + arity, out nestedType);
             }
 
@@ -724,18 +748,23 @@ internal sealed partial class ExpressionBinder
             // Close the generic if type arguments are supplied.
             if (arity > 0 && nestedType.IsGenericTypeDefinition)
             {
+                if (typeArgumentList is not TypeArgumentListSyntax typeArguments)
+                {
+                    return false;
+                }
+
                 var clrArgs = new System.Type[arity];
                 var argsResolved = true;
                 for (var i = 0; i < arity; i++)
                 {
-                    var ta = bindTypeClause(typeArgumentList.Arguments[i]);
-                    if (ta?.ClrType == null)
+                    var ta = bindTypeClause(typeArguments.Arguments[i]);
+                    if (ta?.ClrType is not System.Type taClrType)
                     {
                         argsResolved = false;
                         break;
                     }
 
-                    clrArgs[i] = scope.References.MapClrTypeToReferences(ta.ClrType);
+                    clrArgs[i] = scope.References.MapClrTypeToReferences(taClrType);
                 }
 
                 if (!argsResolved)
