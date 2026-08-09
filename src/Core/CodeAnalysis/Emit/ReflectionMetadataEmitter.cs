@@ -964,31 +964,14 @@ internal sealed class ReflectionMetadataEmitter
 
     private void ResolveCoreTypesAndWireEmitters()
     {
-        // 1. Seed Object reference. Resolve from the supplied references so the type-ref
-        //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
-        //    target framework rather than the gsc host's System.Private.CoreLib.
-        this.emitCtx.CoreObjectType = this.ResolveCoreType("System.Object", typeof(object));
-        this.emitCtx.CoreStringType = this.ResolveCoreType("System.String", typeof(string));
-        this.emitCtx.CoreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
-        this.emitCtx.CoreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
-        this.emitCtx.CoreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
-        this.emitCtx.CoreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
-        this.emitCtx.CoreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
-        this.emitCtx.CoreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
-
         // Issue #2373: needed to materialise a runtime MethodInfo for a CLR
         // operator method (op_Equality, op_Addition, ...) passed as an
         // Expression factory argument (Expression.Equal(l, r, liftToNull,
         // method), Expression.Add(l, r, method), ...) — see
         // WellKnownReferences.GetMethodFromHandleReference /
         // GetMethodFromHandleWithDeclaringTypeReference.
-        this.emitCtx.CoreRuntimeMethodHandleType = this.ResolveCoreType("System.RuntimeMethodHandle", typeof(System.RuntimeMethodHandle));
-        this.emitCtx.CoreMethodBaseType = this.ResolveCoreType("System.Reflection.MethodBase", typeof(System.Reflection.MethodBase));
-        this.emitCtx.CoreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
         // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
         // type for user-declared named delegate emission.
-        this.emitCtx.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
-        this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(nint));
 
         // PR-E-3: WellKnownReferences depends on EmitContext.Core* and on the
         // dedup-cached GetTypeReference / GetMethodReference resolvers that

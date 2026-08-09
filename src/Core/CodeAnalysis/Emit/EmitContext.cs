@@ -68,6 +68,26 @@ internal sealed class EmitContext
         this.MethodBodyStream = new MethodBodyStreamEncoder(this.IlStream);
         this.DebugInformation = new DebugInformationOptions();
         this.PendingGenericParameters = new System.Collections.Generic.List<PendingGenericParameter>();
+
+        // Resolved here rather than part-way through emit so the context never
+        // exists in a half-initialized state (ADR-0155: tighten the
+        // construction path instead of widening the declaration). Resolution
+        // needs nothing but References, and falls back to the host's own type
+        // when the target framework does not carry one, so every Core*Type is
+        // non-null for the whole lifetime of the context.
+        this.CoreObjectType = this.ResolveCoreType("System.Object", typeof(object));
+        this.CoreStringType = this.ResolveCoreType("System.String", typeof(string));
+        this.CoreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
+        this.CoreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
+        this.CoreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
+        this.CoreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
+        this.CoreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
+        this.CoreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
+        this.CoreRuntimeMethodHandleType = this.ResolveCoreType("System.RuntimeMethodHandle", typeof(System.RuntimeMethodHandle));
+        this.CoreMethodBaseType = this.ResolveCoreType("System.Reflection.MethodBase", typeof(System.Reflection.MethodBase));
+        this.CoreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
+        this.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
+        this.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(nint));
     }
 
     /// <summary>
@@ -167,91 +187,95 @@ internal sealed class EmitContext
     public PortablePdbEmitter Pdb { get; set; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="object"/> <see cref="Type"/> resolved
-    /// from the target framework's <see cref="References"/>. Set by
-    /// <c>EmitCore</c> before any TypeRef rows are needed.
-    /// </summary>
-    public Type CoreObjectType { get; set; }
-
-    /// <summary>
-    /// Gets or sets the BCL <see cref="string"/> <see cref="Type"/> resolved
+    /// Gets the BCL <see cref="object"/> <see cref="Type"/> resolved
     /// from the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreStringType { get; set; }
+    /// <remarks>
+    /// Every <c>Core*Type</c> is resolved by the constructor and is non-null for
+    /// the lifetime of the context: resolution falls back to the host's own type
+    /// when the target framework's references do not carry it.
+    /// </remarks>
+    public Type CoreObjectType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="int"/>
+    /// Gets the BCL <see cref="string"/> <see cref="Type"/> resolved
+    /// from the target framework's <see cref="References"/>.
+    /// </summary>
+    public Type CoreStringType { get; }
+
+    /// <summary>
+    /// Gets the BCL <see cref="int"/>
     /// <see cref="Type"/> resolved from the target framework's
     /// <see cref="References"/>.
     /// </summary>
-    public Type CoreInt32Type { get; set; }
+    public Type CoreInt32Type { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="bool"/> <see cref="Type"/> resolved
+    /// Gets the BCL <see cref="bool"/> <see cref="Type"/> resolved
     /// from the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreBooleanType { get; set; }
+    public Type CoreBooleanType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="Array"/> <see cref="Type"/> resolved
+    /// Gets the BCL <see cref="Array"/> <see cref="Type"/> resolved
     /// from the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreArrayType { get; set; }
+    public Type CoreArrayType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="ValueType"/> <see cref="Type"/> resolved
+    /// Gets the BCL <see cref="ValueType"/> <see cref="Type"/> resolved
     /// from the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreValueType { get; set; }
+    public Type CoreValueType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="System.Type"/> reflection-info type
+    /// Gets the BCL <see cref="System.Type"/> reflection-info type
     /// resolved from the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreSystemType { get; set; }
+    public Type CoreSystemType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="RuntimeTypeHandle"/> type resolved from
+    /// Gets the BCL <see cref="RuntimeTypeHandle"/> type resolved from
     /// the target framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreRuntimeTypeHandleType { get; set; }
+    public Type CoreRuntimeTypeHandleType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="System.RuntimeMethodHandle"/> type
+    /// Gets the BCL <see cref="System.RuntimeMethodHandle"/> type
     /// resolved from the target framework's <see cref="References"/>.
     /// Issue #2373: backs emission of a <see cref="System.Reflection.MethodInfo"/>
     /// runtime constant (<c>ldtoken method ; call
     /// MethodBase.GetMethodFromHandle</c>) for expression-tree lowering's CLR
     /// operator-method arguments.
     /// </summary>
-    public Type CoreRuntimeMethodHandleType { get; set; }
+    public Type CoreRuntimeMethodHandleType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="System.Reflection.MethodBase"/> type
+    /// Gets the BCL <see cref="System.Reflection.MethodBase"/> type
     /// resolved from the target framework's <see cref="References"/>. See
     /// <see cref="CoreRuntimeMethodHandleType"/>.
     /// </summary>
-    public Type CoreMethodBaseType { get; set; }
+    public Type CoreMethodBaseType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="Enum"/> type resolved from the target
+    /// Gets the BCL <see cref="Enum"/> type resolved from the target
     /// framework's <see cref="References"/>.
     /// </summary>
-    public Type CoreEnumType { get; set; }
+    public Type CoreEnumType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="MulticastDelegate"/> type resolved from
+    /// Gets the BCL <see cref="MulticastDelegate"/> type resolved from
     /// the target framework's <see cref="References"/>. Used as the base type
     /// for user-declared named delegate emission (ADR-0059 / issue #255).
     /// </summary>
-    public Type CoreMulticastDelegateType { get; set; }
+    public Type CoreMulticastDelegateType { get; }
 
     /// <summary>
-    /// Gets or sets the BCL <see cref="IntPtr"/> type resolved from the
+    /// Gets the BCL <see cref="IntPtr"/> type resolved from the
     /// target framework's <see cref="References"/>. Used as the second
     /// parameter type on synthesized delegate constructors.
     /// </summary>
-    public Type CoreIntPtrType { get; set; }
+    public Type CoreIntPtrType { get; }
 
     /// <summary>
     /// Gets or sets the declaring type whose synthesized static constructor
@@ -267,4 +291,16 @@ internal sealed class EmitContext
     /// <c>ConstructorBodyEmitter</c> (PR-E-15).
     /// </summary>
     public Symbol CurrentStaticConstructorOwner { get; set; }
+
+    /// <summary>
+    /// Resolves a BCL type from the target framework's references, falling back
+    /// to the host's own type when the references do not carry it.
+    /// </summary>
+    /// <param name="fullName">The metadata full name to resolve.</param>
+    /// <param name="fallback">The host type to use when resolution fails.</param>
+    /// <returns>The resolved type; never <see langword="null"/>.</returns>
+    private Type ResolveCoreType(string fullName, Type fallback)
+        => this.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : fallback;
 }

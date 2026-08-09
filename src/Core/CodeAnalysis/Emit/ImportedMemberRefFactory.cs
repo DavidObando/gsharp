@@ -1207,7 +1207,7 @@ internal sealed class ImportedMemberRefFactory
             return hostObject;
         }
 
-        return this.emitCtx.CoreObjectType ?? hostObject;
+        return this.emitCtx.CoreObjectType;
     }
 
     internal static MethodInfo ResolveMethodOnOpenDefinition(Type openDefinition, MethodInfo method)
