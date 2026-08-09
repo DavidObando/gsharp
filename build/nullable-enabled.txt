@@ -198,3 +198,5 @@ src/Core/CodeAnalysis/Binding/StructLayoutBinder.cs
 src/Core/CodeAnalysis/Binding/PInvokeBinder.cs
 # Slice 32 -- magic collection zero-value synthesis.
 src/Core/CodeAnalysis/Binding/MagicCollectionZeroValue.cs
+# Slice 33 -- binder cross-cutting context state.
+src/Core/CodeAnalysis/Binding/BinderContext.cs
