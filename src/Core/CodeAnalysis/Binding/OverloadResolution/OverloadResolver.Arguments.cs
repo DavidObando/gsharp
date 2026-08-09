@@ -7,6 +7,8 @@
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1202 // Elements should be ordered by access
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -216,7 +218,7 @@ internal sealed partial class OverloadResolver
         // follow the type-erased model where the emitter boxes as needed.
         if (argType == null || argType == TypeSymbol.Error || elementType is TypeParameterSymbol)
         {
-            return argument;
+            return Invariant.Required(argument, "a finalized call argument remains bound");
         }
 
         if (argType == elementType)
@@ -242,7 +244,7 @@ internal sealed partial class OverloadResolver
 
         diagnostics.ReportWrongArgumentType(location, parameterName, elementType, argType);
         hasErrors = true;
-        return argument;
+        return Invariant.Required(argument, "a finalized call argument remains bound");
     }
 
     /// <summary>
@@ -332,7 +334,7 @@ internal sealed partial class OverloadResolver
     /// applies; otherwise <see langword="false"/> so genuine type-mismatch
     /// diagnostics still fire on the regular path.
     /// </summary>
-    private bool TryBindConstantNarrowingArgument(BoundExpression argument, TypeSymbol parameterType, TextLocation location, out BoundExpression converted)
+    private bool TryBindConstantNarrowingArgument(BoundExpression argument, TypeSymbol parameterType, TextLocation location, out BoundExpression? converted)
     {
         converted = null;
         if (!ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameterType))
@@ -356,7 +358,7 @@ internal sealed partial class OverloadResolver
     /// arguments or non-void delegate targets, so genuine type-mismatch
     /// diagnostics still fire on the regular path.
     /// </summary>
-    private bool TryConvertLiteralArgumentToVoidDelegate(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression result)
+    private bool TryConvertLiteralArgumentToVoidDelegate(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression? result)
     {
         result = null;
         if (expectedType == null
@@ -381,7 +383,7 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
-    private bool TryConvertLiteralArgumentToExpressionTree(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression result)
+    private bool TryConvertLiteralArgumentToExpressionTree(BoundExpression argument, TypeSymbol expectedType, TextLocation location, out BoundExpression? result)
     {
         result = null;
         if (expectedType == null
@@ -503,7 +505,7 @@ internal sealed partial class OverloadResolver
     /// <param name="argumentSyntax">The original argument syntax, when known.</param>
     /// <param name="expectedType">The resolved parameter target type.</param>
     /// <returns>The finalized argument.</returns>
-    private BoundExpression FinalizeBranchyArgument(BoundExpression argument, ExpressionSyntax argumentSyntax, TypeSymbol expectedType)
+    private BoundExpression FinalizeBranchyArgument(BoundExpression argument, ExpressionSyntax? argumentSyntax, TypeSymbol expectedType)
     {
         var targetUsable = expectedType != null
             && expectedType != TypeSymbol.Error
@@ -513,7 +515,7 @@ internal sealed partial class OverloadResolver
         if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out var branchySyntax))
         {
             return targetUsable
-                ? bindExpressionWithTargetType(branchySyntax, expectedType)
+                ? bindExpressionWithTargetType(Invariant.Required(branchySyntax, "a deferred branchy argument has source syntax"), Invariant.Required(expectedType, "a usable branchy argument target type is non-null"))
                 : bindExpression(branchySyntax);
         }
 
@@ -528,7 +530,7 @@ internal sealed partial class OverloadResolver
             && argument.Type != null
             && argument.Type != TypeSymbol.Error
             && argument.Type != expectedType
-            && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
+            && !Conversion.Classify(argument.Type, Invariant.Required(expectedType, "a usable branchy argument target type is non-null")).IsImplicit)
         {
             var inner = argumentSyntax;
             while (inner is ParenthesizedExpressionSyntax parenthesized)
@@ -538,11 +540,11 @@ internal sealed partial class OverloadResolver
 
             if (inner != null && ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(inner))
             {
-                return bindExpressionWithTargetType(inner, expectedType);
+                return bindExpressionWithTargetType(inner, Invariant.Required(expectedType, "a usable branchy argument target type is non-null"));
             }
         }
 
-        return argument;
+        return Invariant.Required(argument, "a finalized call argument remains bound");
     }
 
     /// <summary>
@@ -569,8 +571,8 @@ internal sealed partial class OverloadResolver
         }
 
         var ok = true;
-        HashSet<string> seenNames = null;
-        string[] names = null;
+        HashSet<string>? seenNames = null;
+        string[]? names = null;
 
         for (var i = 0; i < arguments.Count; i++)
         {
@@ -786,7 +788,7 @@ internal sealed partial class OverloadResolver
         int parameterCount,
         System.Func<int, string> parameterNameAt,
         string calleeName,
-        out ExpressionSyntax[] permutedSyntax,
+        out ExpressionSyntax?[] permutedSyntax,
         out ImmutableArray<BoundExpression> permutedBound)
         => TryReorderUserCallArguments(
             sourceArguments,
@@ -809,12 +811,12 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression> sourceBound,
         int parameterCount,
         System.Func<int, string> parameterNameAt,
-        System.Func<int, bool> isOptionalAt,
+        System.Func<int, bool>? isOptionalAt,
         string calleeName,
-        out ExpressionSyntax[] permutedSyntax,
+        out ExpressionSyntax?[] permutedSyntax,
         out ImmutableArray<BoundExpression> permutedBound)
     {
-        permutedSyntax = null;
+        permutedSyntax = new ExpressionSyntax?[parameterCount];
         permutedBound = default;
 
         if (!TryAnalyzeCallArgumentLayout(sourceArguments, out var positionalCount, out var argumentNames))
@@ -853,7 +855,7 @@ internal sealed partial class OverloadResolver
             return true;
         }
 
-        var slotSyntax = new ExpressionSyntax[parameterCount];
+        var slotSyntax = new ExpressionSyntax?[parameterCount];
         var slotBound = new BoundExpression[parameterCount];
 
         var leadingPositional = positionalCount < parameterCount ? positionalCount : parameterCount;
@@ -1033,7 +1035,7 @@ internal sealed partial class OverloadResolver
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames)
     {
-        HashSet<string> knownNames = null;
+        HashSet<string>? knownNames = null;
         for (var i = 0; i < argumentNames.Length; i++)
         {
             var name = argumentNames[i];
@@ -1071,7 +1073,7 @@ internal sealed partial class OverloadResolver
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames)
     {
-        HashSet<string> knownNames = null;
+        HashSet<string>? knownNames = null;
         for (var i = 0; i < argumentNames.Length; i++)
         {
             var name = argumentNames[i];

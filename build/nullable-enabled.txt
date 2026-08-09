@@ -129,3 +129,4 @@ src/Core/CodeAnalysis/Binding/BoundTreeWalker.cs
 src/Core/CodeAnalysis/Binding/BoundNodePrinter.cs
 src/Core/CodeAnalysis/Binding/BoundTreeRewriter.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.cs
+src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Arguments.cs
