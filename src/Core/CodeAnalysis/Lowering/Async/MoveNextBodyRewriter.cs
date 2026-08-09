@@ -362,7 +362,7 @@ public static class MoveNextBodyRewriter
 
                 if (rewrittenInit != node.Initializer)
                 {
-                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit);
+                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit, node.ConstantValue);
                 }
 
                 return node;
@@ -473,12 +473,24 @@ public static class MoveNextBodyRewriter
                         return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, rewrittenValue);
                     }
 
+                    if (node.ReceiverExpression != null)
+                    {
+                        return BoundFieldAssignmentExpression.WithExpressionReceiver(
+                            null,
+                            node.ReceiverExpression,
+                            BoundNodeForm.DeclaringType(node),
+                            node.Field,
+                            rewrittenValue,
+                            node.ResultType);
+                    }
+
                     return new BoundFieldAssignmentExpression(
                         null,
                         node.Receiver,
                         BoundNodeForm.DeclaringType(node),
                         node.Field,
-                        rewrittenValue);
+                        rewrittenValue,
+                        node.ResultType);
                 }
 
                 return node;

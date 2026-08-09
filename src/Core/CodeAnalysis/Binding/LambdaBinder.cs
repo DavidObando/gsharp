@@ -2290,6 +2290,10 @@ internal sealed class LambdaBinder
         }
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild is reached only after `fieldAssignment.Receiver == null`
+        // returns, so this is the variable-receiver form: InterfaceType and
+        // ReceiverExpression are null on this path and cannot be dropped.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
         {
             var rewritten = base.RewriteFieldAssignmentExpression(node);
@@ -2308,8 +2312,13 @@ internal sealed class LambdaBinder
                 fieldAssignment.Value,
                 fieldAssignment.ResultType);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild is reached only after `indexAssignment.Target == null`
+        // returns, so this is the variable-target form and TargetExpression is
+        // null on this path.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
         {
             var rewritten = base.RewriteIndexAssignmentExpression(node);
@@ -2327,6 +2336,7 @@ internal sealed class LambdaBinder
                 indexAssignment.Value,
                 indexAssignment.Type);
         }
+        #pragma warning restore GSA0005
     }
 
     private sealed class ErasedFunctionLiteralAdapterRewriter : BoundTreeRewriter
@@ -2380,6 +2390,11 @@ internal sealed class LambdaBinder
                 : new BoundLocalFunctionDeclaration(node.Syntax, rewritten);
         }
 
+        // GSA0005: IsRef is dropped deliberately: both rebuilds erase the return
+        // -- one to a bare `return;` for a void adapter, the other through a
+        // conversion to the adapter's return type -- and neither can return by
+        // reference.
+        #pragma warning disable GSA0005
         protected override BoundStatement RewriteReturnStatement(BoundReturnStatement node)
         {
             var rewritten = (BoundReturnStatement)base.RewriteReturnStatement(node);
@@ -2413,6 +2428,7 @@ internal sealed class LambdaBinder
                 null,
                 new BoundConversionExpression(null, this.adapterReturnType, rewritten.Expression));
         }
+        #pragma warning restore GSA0005
     }
 
     private sealed class CapturedVariableCollector : BoundTreeRewriter

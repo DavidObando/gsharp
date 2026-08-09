@@ -349,6 +349,10 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
     }
 
     /// <inheritdoc/>
+    // GSA0005: The rebuild is reached only after `rewritten.ReceiverExpression == null`
+    // returns, so this is the expression-receiver form: Receiver and
+    // InterfaceType are null on this path by construction.
+    #pragma warning disable GSA0005
     protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
     {
         var rewritten = (BoundFieldAssignmentExpression)base.RewriteFieldAssignmentExpression(node);
@@ -386,6 +390,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 
         return new BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment);
     }
+    #pragma warning restore GSA0005
 
     /// <summary>
     /// Issue #3292: whether <paramref name="receiver"/> is a value-typed

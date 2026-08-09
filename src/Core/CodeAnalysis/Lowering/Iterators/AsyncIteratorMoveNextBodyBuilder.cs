@@ -336,7 +336,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 if (rewrittenInit != node.Initializer)
                 {
-                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit);
+                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit, node.ConstantValue);
                 }
 
                 return node;

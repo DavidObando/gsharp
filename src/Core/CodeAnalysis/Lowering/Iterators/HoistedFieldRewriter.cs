@@ -79,7 +79,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
         {
             var rewrittenReceiver = this.FieldRead(proxyField);
-            return new BoundFieldAccessExpression(null, rewrittenReceiver, BoundNodeForm.DeclaringType(node), node.Field);
+            return new BoundFieldAccessExpression(null, rewrittenReceiver, BoundNodeForm.DeclaringType(node), node.Field, node.NarrowedType);
         }
 
         return base.RewriteFieldAccessExpression(node);
@@ -94,7 +94,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
         if (node.Receiver != null && this.fieldMap.TryGetValue(node.Receiver, out var proxyField))
         {
             var receiverExpr = this.FieldRead(proxyField);
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value, node.ResultType);
         }
 
         if (node.ReceiverExpression != null)
@@ -102,7 +102,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             var receiverExpr = this.RewriteExpression(node.ReceiverExpression);
             if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
             {
-                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value, node.ResultType);
             }
         }
         else if (!ReferenceEquals(value, node.Value))
@@ -123,7 +123,8 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
                 node.Receiver,
                 BoundNodeForm.DeclaringType(node),
                 node.Field,
-                value);
+                value,
+                node.ResultType);
         }
 
         return node;
@@ -144,6 +145,10 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     // field through its VariableSymbol target. Switch to the expression
     // target form reading the hoisted field (same fix as closure boxing,
     // issue #618).
+    // GSA0005: The rebuild sits inside `node.Target != null`, so this is the
+    // variable-target form; TargetExpression is null on this path and the
+    // expression-target form falls through to base.
+    #pragma warning disable GSA0005
     protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
         if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
@@ -158,9 +163,13 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
 
         return base.RewriteIndexAssignmentExpression(node);
     }
+    #pragma warning restore GSA0005
 
     // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v` or
     // `psi.Environment["k"] = v`) whose target temp is hoisted into a field.
+    // GSA0005: Same as RewriteIndexAssignmentExpression: guarded by `node.Target !=
+    // null`, so TargetExpression is null on the path that rebuilds.
+    #pragma warning disable GSA0005
     protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
         if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
@@ -171,11 +180,14 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
                 node.Indexer,
                 this.RewriteArguments(node.Arguments),
                 this.RewriteExpression(node.Value),
-                node.Type);
+                node.Type,
+                node.ConstrainedReceiverTypeParameter,
+                node.ConstrainedInterfaceType);
         }
 
         return base.RewriteClrIndexAssignmentExpression(node);
     }
+    #pragma warning restore GSA0005
 
     protected ImmutableArray<BoundExpression> RewriteArguments(ImmutableArray<BoundExpression> arguments)
     {

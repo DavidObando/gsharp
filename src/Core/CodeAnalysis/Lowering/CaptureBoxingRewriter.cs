@@ -630,6 +630,10 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild sits inside `node.Receiver != null`, so this is the
+        // variable-receiver form; every other form falls through to base.
+        // InterfaceType and ReceiverExpression are null on this path.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
         {
             // Issue #567: when the receiver of a field assignment is a boxed
@@ -650,13 +654,19 @@ internal static class CaptureBoxingRewriter
                     receiverExpr,
                     BoundNodeForm.DeclaringType(node),
                     node.Field,
-                    value);
+                    value,
+                    node.ResultType);
             }
 
             return base.RewriteFieldAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild sits inside `node.Target != null`, so this is the
+        // variable-target form; TargetExpression is null on this path and the
+        // expression-target form falls through to base.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
         {
             // Issue #618: when the target of an index assignment is a boxed
@@ -683,8 +693,12 @@ internal static class CaptureBoxingRewriter
 
             return base.RewriteIndexAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
+        // GSA0005: Same as RewriteIndexAssignmentExpression: guarded by `node.Target !=
+        // null`, so TargetExpression is null on the path that rebuilds.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
         {
             // Issue #618: same pattern for CLR indexer writes (e.g.
@@ -725,11 +739,14 @@ internal static class CaptureBoxingRewriter
                     node.Indexer,
                     args,
                     value,
-                    node.Type);
+                    node.Type,
+                    node.ConstrainedReceiverTypeParameter,
+                    node.ConstrainedInterfaceType);
             }
 
             return base.RewriteClrIndexAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
         protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
@@ -956,6 +973,10 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        // GSA0005: Not a clone: this declares the synthesized box local, a different
+        // variable from node.Variable, so node's ConstantValue does not belong to
+        // it. The unboxed case falls through to base.
+        #pragma warning disable GSA0005
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi) && bi.Original == node.Variable)
@@ -989,6 +1010,7 @@ internal static class CaptureBoxingRewriter
 
             return base.RewriteVariableDeclaration(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
         protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
