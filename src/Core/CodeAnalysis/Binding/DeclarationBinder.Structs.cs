@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -92,9 +94,9 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     /// <param name="enclosingType">The immediately enclosing type, or <see langword="null"/>.</param>
     /// <returns>The enclosing type parameters, outermost-first.</returns>
-    private static List<TypeParameterSymbol> CollectEnclosingTypeParameters(TypeSymbol enclosingType)
+    private static List<TypeParameterSymbol> CollectEnclosingTypeParameters(TypeSymbol? enclosingType)
     {
-        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        List<ImmutableArray<TypeParameterSymbol>>? levels = null;
         for (var c = enclosingType as StructSymbol; c != null; c = c.ContainingType as StructSymbol)
         {
             if (!c.TypeParameters.IsDefaultOrEmpty)
@@ -188,7 +190,7 @@ internal sealed partial class DeclarationBinder
     /// <c>protected</c> keyword. Used by callers that have already determined
     /// the surrounding context does not permit <c>protected</c>.
     /// </summary>
-    private void ReportProtectedToken(SyntaxToken modifier)
+    private void ReportProtectedToken(SyntaxToken? modifier)
     {
         if (modifier != null && modifier.Kind == SyntaxKind.ProtectedKeyword)
         {
@@ -201,9 +203,9 @@ internal sealed partial class DeclarationBinder
     /// A top-level type or function has no enclosing type to be inherited, so
     /// <c>protected</c> is meaningless there (GS0380).
     /// </summary>
-    internal void ValidateTopLevelProtected(SyntaxToken modifier) => ReportProtectedToken(modifier);
+    internal void ValidateTopLevelProtected(SyntaxToken? modifier) => ReportProtectedToken(modifier);
 
-    private static SyntaxToken GetMemberAccessibilityModifier(MemberSyntax member) => member switch
+    private static SyntaxToken? GetMemberAccessibilityModifier(MemberSyntax member) => member switch
     {
         StructDeclarationSyntax s => s.AccessibilityModifier,
         EnumDeclarationSyntax e => e.AccessibilityModifier,
@@ -224,8 +226,8 @@ internal sealed partial class DeclarationBinder
         List<(FieldSymbol Field, SyntaxNode Syntax)> PendingZeroValueStaticFields);
 
     private readonly record struct StructBaseBindingResult(
-        StructSymbol BaseClass,
-        TypeSymbol ImportedBaseType,
+        StructSymbol? BaseClass,
+        TypeSymbol? ImportedBaseType,
         ImmutableArray<InterfaceSymbol>.Builder ImplementedInterfaces,
         ImmutableArray<TypeSymbol>.Builder ImplementedClrInterfaces);
 
@@ -278,13 +280,15 @@ internal sealed partial class DeclarationBinder
         // declare fields of the same name + type, in source order, in addition
         // to becoming the ctor's parameters.
         var primaryCtorParameters = ImmutableArray<ParameterSymbol>.Empty;
-        if (syntax.HasPrimaryConstructor)
+        if (syntax.PrimaryConstructorParameters is { } primaryConstructorParameters)
         {
             var ctorBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
-            foreach (var paramSyntax in syntax.PrimaryConstructorParameters)
+            foreach (var paramSyntax in primaryConstructorParameters)
             {
                 var paramName = paramSyntax.Identifier.Text;
-                var paramType = bindTypeClause(paramSyntax.Type);
+                var paramType = paramSyntax.Type is { } paramTypeSyntax
+                    ? bindTypeClause(paramTypeSyntax)
+                    : TypeSymbol.Error;
                 if (paramType == null)
                 {
                     continue;
@@ -335,7 +339,7 @@ internal sealed partial class DeclarationBinder
                 // user sees one clear diagnostic instead of a downstream emit failure.
                 if (paramSyntax.HasRefKindModifier)
                 {
-                    Diagnostics.ReportRefKindOnPrimaryCtorParameter(paramSyntax.RefKindModifier.Location, paramName);
+                    Diagnostics.ReportRefKindOnPrimaryCtorParameter(paramSyntax.RefKindModifier?.Location ?? paramSyntax.Identifier.Location, paramName);
                 }
 
                 var primaryCtorParam = new ParameterSymbol(paramName, paramType, isVariadic, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
@@ -439,7 +443,7 @@ internal sealed partial class DeclarationBinder
             {
                 if (!binderCtx.InUnsafeContext)
                 {
-                    Diagnostics.ReportFixedBufferRequiresUnsafeContext(fieldSyntax.FixedKeyword.Location);
+                    Diagnostics.ReportFixedBufferRequiresUnsafeContext(fieldSyntax.FixedKeyword?.Location ?? fieldSyntax.Identifier.Location);
                     continue;
                 }
 
@@ -563,12 +567,12 @@ internal sealed partial class DeclarationBinder
         {
             if (syntax.IsData)
             {
-                Diagnostics.ReportInlineCannotBeCombinedWithData(syntax.InlineKeyword.Location);
+                Diagnostics.ReportInlineCannotBeCombinedWithData(syntax.InlineKeyword?.Location ?? syntax.Identifier.Location);
             }
 
             if (syntax.IsOpen)
             {
-                Diagnostics.ReportInlineCannotBeCombinedWithOpen(syntax.OpenModifier.Location);
+                Diagnostics.ReportInlineCannotBeCombinedWithOpen(syntax.OpenModifier?.Location ?? syntax.Identifier.Location);
             }
 
             if (fields.Count != 1)
@@ -622,8 +626,8 @@ internal sealed partial class DeclarationBinder
         // implemented by this class. A base class, if present, must be the
         // first identifier. All same-compilation type shells are already
         // declared, and the global binder orders class bodies base-first.
-        StructSymbol baseClassSymbol = null;
-        TypeSymbol importedBaseType = null;
+        StructSymbol? baseClassSymbol = null;
+        TypeSymbol? importedBaseType = null;
         var implementedInterfaces = ImmutableArray.CreateBuilder<InterfaceSymbol>();
         var implementedClrInterfaces = ImmutableArray.CreateBuilder<TypeSymbol>();
         if (syntax.HasBaseType)
@@ -999,7 +1003,9 @@ internal sealed partial class DeclarationBinder
                     {
                         var parameterSyntax = methodSyntax.Parameters[pIndex];
                         var parameterName = parameterSyntax.Identifier.Text;
-                        var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+                        var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                            ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                            : TypeSymbol.Error;
 
                         // ADR-0101 follow-up / issue #812: variadic parameters
                         // are now accepted on class instance methods. The body
@@ -1076,7 +1082,9 @@ internal sealed partial class DeclarationBinder
                     // FunctionSymbol.IsAsync below) so override / shadow matching
                     // compares the async-normalized effective return type.
                     var methodIsAsync = methodSyntax.IsAsync
-                        || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(methodSyntax.Body));
+                        || (isAsyncIteratorReturnType(returnType)
+                            && methodSyntax.Body is { } methodBody
+                            && IteratorDetection.ContainsYield(methodBody));
 
                     // Issue #2361: now that the parameter list/return type are
                     // bound, validate a data class/struct's ToString shape.
@@ -1096,9 +1104,9 @@ internal sealed partial class DeclarationBinder
 
                     // Phase 3.B.3 sub-step 3: open/override validation against
                     // base class chain per ADR-0017.
-                    FunctionSymbol overriddenMethod = null;
-                    MethodInfo externalOverriddenMethod = null;
-                    TypeSymbol externalOverrideContainingType = null;
+                    FunctionSymbol? overriddenMethod = null;
+                    MethodInfo? externalOverriddenMethod = null;
+                    TypeSymbol? externalOverrideContainingType = null;
                     if (methodSyntax.IsOverride)
                     {
                         // ADR-0063 §8: when the base exposes a name-overload set, the
@@ -1107,8 +1115,8 @@ internal sealed partial class DeclarationBinder
                         var baseOverloads = structSymbol.BaseClass?.GetMethodsIncludingInherited(methodName)
                             ?? System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Empty;
                         var baseTypeArgSubst = BuildBaseTypeArgumentSubstitution(structSymbol);
-                        FunctionSymbol baseMethod = null;
-                        FunctionSymbol baseSignatureMatch = null;
+                        FunctionSymbol? baseMethod = null;
+                        FunctionSymbol? baseSignatureMatch = null;
                         foreach (var candidate in baseOverloads)
                         {
                             baseMethod ??= candidate;
@@ -1214,7 +1222,11 @@ internal sealed partial class DeclarationBinder
                             var shadowedTypeArgSubst = WithMethodTypeParameterSubstitution(baseTypeArgSubst, shadowed, methodTypeParameters);
                             if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync))
                             {
-                                Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowed.ReceiverType.Name, methodName);
+                                if (shadowed.ReceiverType is { } shadowedReceiverType)
+                                {
+                                    Diagnostics.ReportMissingOverride(methodSyntax.Identifier.Location, shadowedReceiverType.Name, methodName);
+                                }
+
                                 break;
                             }
                         }
@@ -1236,7 +1248,9 @@ internal sealed partial class DeclarationBinder
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync
-                        || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(methodSyntax.Body));
+                        || (isAsyncIteratorReturnType(returnType)
+                            && methodSyntax.Body is { } methodBodyForSymbol
+                            && IteratorDetection.ContainsYield(methodBodyForSymbol));
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
@@ -1348,7 +1362,9 @@ internal sealed partial class DeclarationBinder
                                     out var bridgeMethod,
                                     out var bridgeSlot))
                             {
-                                bridgeMethod.ExplicitInterfaceSlot = bridgeSlot;
+                                var resolvedBridgeMethod = bridgeMethod
+                                    ?? throw new InvalidOperationException("A covariant interface bridge must identify its bridge method.");
+                                resolvedBridgeMethod.ExplicitInterfaceSlot = bridgeSlot;
                                 continue;
                             }
 
@@ -1421,7 +1437,9 @@ internal sealed partial class DeclarationBinder
                         structSymbol.IsClass ? Accessibility.Private : Accessibility.Internal,
                         isReadOnly: false);
 
-                    var parameterSyntax = syntax.PrimaryConstructorParameters
+                    var primaryConstructorParameters = syntax.PrimaryConstructorParameters
+                        ?? throw new InvalidOperationException("A data positional property requires primary constructor parameters.");
+                    var parameterSyntax = primaryConstructorParameters
                         .First(candidate => candidate.Identifier.Text == parameter.Name);
                     var propertyAttributes = BindDataPositionalPropertyAttributes(parameterSyntax);
                     if (!propertyAttributes.IsDefaultOrEmpty)
@@ -1445,7 +1463,7 @@ internal sealed partial class DeclarationBinder
                 {
                     if (propSyntax.Parameters.Count == 0)
                     {
-                        Diagnostics.ReportIndexerRequiresParameter(propSyntax.ThisKeyword.Location);
+                        Diagnostics.ReportIndexerRequiresParameter(propSyntax.ThisKeyword?.Location ?? propSyntax.Identifier.Location);
                         continue;
                     }
 
@@ -1454,7 +1472,9 @@ internal sealed partial class DeclarationBinder
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
                         var indexParamName = indexParamSyntax.Identifier.Text;
-                        var indexParamType = bindTypeClause(indexParamSyntax.Type) ?? TypeSymbol.Error;
+                        var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
+                            ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
+                            : TypeSymbol.Error;
                         if (!seenIndexParamNames.Add(indexParamName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName);
@@ -1503,7 +1523,9 @@ internal sealed partial class DeclarationBinder
                     explicitInterfaceClauseNames.Add(propName);
                 }
 
-                var propType = bindTypeClause(propSyntax.Type);
+                var propType = propSyntax.Type is { } propTypeSyntax
+                    ? bindTypeClause(propTypeSyntax)
+                    : TypeSymbol.Error;
                 if (propType == null)
                 {
                     continue;
@@ -1580,7 +1602,7 @@ internal sealed partial class DeclarationBinder
                 // indexer must declare a get and/or set accessor with a body.
                 if (isIndexer && isAutoProperty)
                 {
-                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword.Location);
+                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword?.Location ?? propSyntax.Identifier.Location);
                     continue;
                 }
 
@@ -1590,12 +1612,12 @@ internal sealed partial class DeclarationBinder
 
                 if (isVirtual && !structSymbol.IsOpen)
                 {
-                    Diagnostics.ReportOpenMemberInNonOpenClass(propSyntax.OpenModifier.Location, propName);
+                    Diagnostics.ReportOpenMemberInNonOpenClass(propSyntax.OpenModifier?.Location ?? propSyntax.Identifier.Location, propName);
                 }
 
                 // Validate: override needs base property
-                PropertyInfo externalOverriddenProperty = null;
-                TypeSymbol externalPropertyContainingType = null;
+                PropertyInfo? externalOverriddenProperty = null;
+                TypeSymbol? externalPropertyContainingType = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
@@ -1802,7 +1824,9 @@ internal sealed partial class DeclarationBinder
                     explicitInterfaceClauseNames.Add(eventName);
                 }
 
-                var handlerType = bindTypeClause(eventSyntax.Type);
+                var handlerType = eventSyntax.Type is { } eventTypeSyntax
+                    ? bindTypeClause(eventTypeSyntax)
+                    : TypeSymbol.Error;
                 if (handlerType == null)
                 {
                     continue;
@@ -1822,11 +1846,11 @@ internal sealed partial class DeclarationBinder
                 // Validate: open only on open class
                 if (isVirtual && !structSymbol.IsOpen)
                 {
-                    Diagnostics.ReportOpenMemberInNonOpenClass(eventSyntax.OpenModifier.Location, eventName);
+                    Diagnostics.ReportOpenMemberInNonOpenClass(eventSyntax.OpenModifier?.Location ?? eventSyntax.Identifier.Location, eventName);
                 }
 
-                EventInfo externalOverriddenEvent = null;
-                TypeSymbol externalEventContainingType = null;
+                EventInfo? externalOverriddenEvent = null;
+                TypeSymbol? externalEventContainingType = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetEvent(structSymbol.BaseClass, eventName, out var baseEvent))
@@ -2015,7 +2039,7 @@ internal sealed partial class DeclarationBinder
             return handlerType;
         }
 
-        TypeSymbol selected = null;
+        TypeSymbol? selected = null;
         var ambiguous = false;
 
         void Consider(TypeSymbol expected)
@@ -2051,7 +2075,7 @@ internal sealed partial class DeclarationBinder
 
         foreach (var ifaceSymbol in baseBinding.ImplementedClrInterfaces)
         {
-            var declaredInterface = ifaceSymbol?.ClrType;
+            var declaredInterface = ifaceSymbol.ClrType;
             if (declaredInterface?.IsInterface != true)
             {
                 continue;
@@ -2061,7 +2085,7 @@ internal sealed partial class DeclarationBinder
             interfaces.AddRange(declaredInterface.GetInterfaces());
             foreach (var clrInterface in interfaces)
             {
-                var containingType = ReferenceEquals(clrInterface, declaredInterface)
+                TypeSymbol containingType = ReferenceEquals(clrInterface, declaredInterface)
                     ? ifaceSymbol
                     : TypeSymbol.FromClrType(clrInterface);
                 foreach (var interfaceEvent in clrInterface.GetEvents(
@@ -2311,7 +2335,9 @@ internal sealed partial class DeclarationBinder
                     foreach (var parameterSyntax in methodSyntax.Parameters)
                     {
                         var parameterName = parameterSyntax.Identifier.Text;
-                        var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+                        var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                            ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                            : TypeSymbol.Error;
 
                         // ADR-0101 follow-up / issue #812: variadic parameters
                         // are now accepted on shared/static class methods. The
@@ -2366,13 +2392,15 @@ internal sealed partial class DeclarationBinder
                         methodSyntax,
                         package,
                         methodAccessibility,
-                        receiverType: null);
+                        receiverType: (TypeSymbol?)null);
                     methodSymbol.IsStatic = true;
                     methodSymbol.StaticOwnerType = structSymbol;
                     methodSymbol.TypeParameters = methodTypeParameters;
                     methodSymbol.ReturnRefKind = methodReturnRefKind;
                     methodSymbol.IsAsync = methodSyntax.IsAsync
-                        || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(methodSyntax.Body));
+                        || (isAsyncIteratorReturnType(returnType)
+                            && methodSyntax.Body is { } methodBody
+                            && IteratorDetection.ContainsYield(methodBody));
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
@@ -2503,7 +2531,7 @@ internal sealed partial class DeclarationBinder
                 // representation — report a clean diagnostic rather than crashing.
                 if (propSyntax.IsIndexer)
                 {
-                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword.Location);
+                    Diagnostics.ReportIndexerRequiresAccessorBody(propSyntax.ThisKeyword?.Location ?? propSyntax.Identifier.Location);
                     continue;
                 }
 
@@ -2534,7 +2562,9 @@ internal sealed partial class DeclarationBinder
                     explicitInterfaceClauseNames.Add(propName);
                 }
 
-                var propType = bindTypeClause(propSyntax.Type);
+                var propType = propSyntax.Type is { } propTypeSyntax
+                    ? bindTypeClause(propTypeSyntax)
+                    : TypeSymbol.Error;
                 if (propType == null)
                 {
                     continue;
@@ -2630,7 +2660,7 @@ internal sealed partial class DeclarationBinder
                             declaration: null,
                             package,
                             getterAccessibility,
-                            receiverType: null);
+                            receiverType: (TypeSymbol?)null);
                         getterSymbol.IsStatic = true;
                         getterSymbol.StaticOwnerType = structSymbol;
                         propertySymbol.GetterSymbol = getterSymbol;
@@ -2647,7 +2677,7 @@ internal sealed partial class DeclarationBinder
                             declaration: null,
                             package,
                             setterAccessibility,
-                            receiverType: null);
+                            receiverType: (TypeSymbol?)null);
                         setterSymbol.IsStatic = true;
                         setterSymbol.StaticOwnerType = structSymbol;
                         propertySymbol.SetterSymbol = setterSymbol;
@@ -2696,7 +2726,9 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var handlerType = bindTypeClause(eventSyntax.Type);
+                var handlerType = eventSyntax.Type is { } eventTypeSyntax
+                    ? bindTypeClause(eventTypeSyntax)
+                    : TypeSymbol.Error;
                 if (handlerType == null)
                 {
                     continue;
@@ -2759,7 +2791,7 @@ internal sealed partial class DeclarationBinder
                     declaration: null,
                     package,
                     eventAccessibility,
-                    receiverType: null) { IsSpecialName = true };
+                    receiverType: (TypeSymbol?)null) { IsSpecialName = true };
                 eventSymbol.AddMethodSymbol.IsStatic = true;
                 eventSymbol.AddMethodSymbol.StaticOwnerType = structSymbol;
                 eventSymbol.RemoveMethodSymbol = new FunctionSymbol(
@@ -2769,7 +2801,7 @@ internal sealed partial class DeclarationBinder
                     declaration: null,
                     package,
                     eventAccessibility,
-                    receiverType: null) { IsSpecialName = true };
+                    receiverType: (TypeSymbol?)null) { IsSpecialName = true };
                 eventSymbol.RemoveMethodSymbol.IsStatic = true;
                 eventSymbol.RemoveMethodSymbol.StaticOwnerType = structSymbol;
 
@@ -2795,7 +2827,7 @@ internal sealed partial class DeclarationBinder
                         declaration: null,
                         package,
                         eventAccessibility,
-                        receiverType: null) { IsSpecialName = true };
+                        receiverType: (TypeSymbol?)null) { IsSpecialName = true };
                     eventSymbol.RaiseMethodSymbol.IsStatic = true;
                     eventSymbol.RaiseMethodSymbol.StaticOwnerType = structSymbol;
                 }
@@ -2851,6 +2883,8 @@ internal sealed partial class DeclarationBinder
         var pendingInstanceInitializers = fieldBinding.PendingInstanceInitializers;
         var fields = fieldBinding.Fields;
         var primaryCtorParameters = fieldBinding.PrimaryConstructorParameters;
+        var structDeclaration = structSymbol.Declaration
+            ?? throw new InvalidOperationException("A struct with deferred initializers must have a declaration.");
 
         // Issue #1070: consolidated field-initializer binding. Every static member
         // symbol of the enclosing type (class const fields, `shared` static fields,
@@ -2883,7 +2917,7 @@ internal sealed partial class DeclarationBinder
         var fieldInitZeroValueStaticFields = fieldBinding.PendingZeroValueStaticFields;
         var fieldInitFields = fields.ToImmutable();
         var fieldInitPrimaryCtorParameters = primaryCtorParameters;
-        var fieldInitPackageName = package?.Name;
+        var fieldInitPackageName = package.Name;
         pendingFieldInitializerBindings.Add(() =>
         {
             var savedFieldInitScope = scope;
@@ -2899,7 +2933,7 @@ internal sealed partial class DeclarationBinder
             // reference in the initializer could resolve against an unrelated
             // package's same-simple-name homonym.
             var savedFieldInitPackage = scope.SetCurrentDeclaringPackage(fieldInitPackageName);
-            var savedFieldInitTree = scope.SetCurrentReferencingSyntaxTree(structSymbol.Declaration.SyntaxTree);
+            var savedFieldInitTree = scope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree);
 
             // Issue #2111: a static field/property initializer is bound outside
             // any function body, so no "current function" is established. The
@@ -3170,12 +3204,14 @@ internal sealed partial class DeclarationBinder
 
     private (FieldSymbol Field, BoundExpression Bound, TextLocation Location) BindConstFieldInitializer(FieldSymbol constField, FieldDeclarationSyntax fieldSyntaxNode, TypeSymbol fieldType)
     {
-        var boundInit = bindExpression(fieldSyntaxNode.Initializer);
-        var convertedInit = conversions.BindConversion(fieldSyntaxNode.Initializer.Location, boundInit, fieldType);
+        var initializer = fieldSyntaxNode.Initializer
+            ?? throw new InvalidOperationException("A deferred const field initializer must have an initializer expression.");
+        var boundInit = bindExpression(initializer);
+        var convertedInit = conversions.BindConversion(initializer.Location, boundInit, fieldType);
         var bound = boundInit is BoundErrorExpression || convertedInit is BoundErrorExpression
-            ? (BoundExpression)new BoundErrorExpression(fieldSyntaxNode.Initializer)
+            ? (BoundExpression)new BoundErrorExpression(initializer)
             : convertedInit;
-        return (constField, bound, fieldSyntaxNode.Initializer.Location);
+        return (constField, bound, initializer.Location);
     }
 
     /// <summary>
@@ -3540,7 +3576,11 @@ internal sealed partial class DeclarationBinder
             {
                 if (TryFindInstanceMemberReference(initSyntax, instanceMemberNames, out var offendingName, out var offendingLocation))
                 {
-                    Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, offendingName);
+                    if (offendingName is { } memberName)
+                    {
+                        Diagnostics.ReportFieldInitializerCannotReferenceInstanceMember(offendingLocation, memberName);
+                    }
+
                     continue;
                 }
 
