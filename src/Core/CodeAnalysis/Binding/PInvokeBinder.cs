@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // Elements should appear in the correct order — the new ADR-0096 helpers (SupportedUnmanagedTypes, TryAttachMarshalAsMetadata, …) are grouped together at the bottom for diff locality; keeping the layout means StyleCop would reject the field-after-method order.
 #pragma warning disable SA1202 // 'public' / 'internal' members should come before 'private' — the new ADR-0096 internal helper (ReportMarshalAsOnNonPInvokeFunction) lives next to its private helpers so the file stays one feature per block.
 
@@ -119,9 +121,9 @@ internal static class PInvokeBinder
             }
 
             TextLocation typeLocation = identifierLocation;
-            if (i < parameterSyntaxes.Count && parameterSyntaxes[i].Type != null)
+            if (i < parameterSyntaxes.Count && parameterSyntaxes[i].Type is { } typeClause)
             {
-                typeLocation = parameterSyntaxes[i].Type.Location;
+                typeLocation = typeClause.Location;
             }
 
             // ADR-0096 / issue #762: extract and validate the optional
@@ -187,11 +189,12 @@ internal static class PInvokeBinder
             // the tailored GS0349 "not blittable" message rather than the
             // generic GS0323. Pointers to structs (`*S`) likewise route
             // through the blittable check.
-            if (IsStructOrPointerToStruct(parameter.Type, out var structType))
+            if (IsStructOrPointerToStruct(parameter.Type, out var structType)
+                && structType is { } nonNullStructType)
             {
-                if (!blittableDetector.IsBlittable(structType))
+                if (!blittableDetector.IsBlittable(nonNullStructType))
                 {
-                    diagnostics.ReportPInvokeNonBlittableType(typeLocation, structType.Name);
+                    diagnostics.ReportPInvokeNonBlittableType(typeLocation, nonNullStructType.Name);
                 }
 
                 continue;
@@ -232,18 +235,19 @@ internal static class PInvokeBinder
             {
                 // FNPTR return is accepted directly.
             }
-            else if (IsStructOrPointerToStruct(function.Type, out var returnStruct))
+            else if (IsStructOrPointerToStruct(function.Type, out var returnStruct)
+                && returnStruct is { } nonNullReturnStruct)
             {
-                if (returnStruct.IsClass)
+                if (nonNullReturnStruct.IsClass)
                 {
                     // ADR-0093 §4 — classes are not supported as P/Invoke
                     // return values; the user must declare a struct or
                     // return `nint` for opaque handles.
-                    diagnostics.ReportPInvokeClassReturnNotSupported(returnLocation, returnStruct.Name);
+                    diagnostics.ReportPInvokeClassReturnNotSupported(returnLocation, nonNullReturnStruct.Name);
                 }
-                else if (!blittableDetector.IsBlittable(returnStruct))
+                else if (!blittableDetector.IsBlittable(nonNullReturnStruct))
                 {
-                    diagnostics.ReportPInvokeNonBlittableType(returnLocation, returnStruct.Name);
+                    diagnostics.ReportPInvokeNonBlittableType(returnLocation, nonNullReturnStruct.Name);
                 }
             }
             else if (!IsSupportedMarshallingType(function.Type))
@@ -263,8 +267,16 @@ internal static class PInvokeBinder
 
         // Extract metadata from the attribute arguments.
         var metadata = isLibraryImport
-            ? ExtractLibraryImportMetadata(libraryImport, function, hasStringParameter || returnIsString, diagnostics)
-            : ExtractDllImportMetadata(dllImport, syntax, function, diagnostics);
+            ? ExtractLibraryImportMetadata(
+                Invariant.Required(libraryImport, "a library import has a resolved LibraryImport attribute"),
+                function,
+                hasStringParameter || returnIsString,
+                diagnostics)
+            : ExtractDllImportMetadata(
+                Invariant.Required(dllImport, "a DLL import has a resolved DllImport attribute"),
+                syntax,
+                function,
+                diagnostics);
         if (metadata != null)
         {
             function.PInvokeMetadata = metadata;
@@ -454,7 +466,7 @@ internal static class PInvokeBinder
     /// generic <see cref="IsSupportedMarshallingType"/> set so the
     /// blittability check can produce a tailored diagnostic.
     /// </summary>
-    private static bool IsStructOrPointerToStruct(TypeSymbol type, out StructSymbol structSymbol)
+    private static bool IsStructOrPointerToStruct(TypeSymbol type, out StructSymbol? structSymbol)
     {
         if (type is StructSymbol direct)
         {
@@ -512,14 +524,14 @@ internal static class PInvokeBinder
         return false;
     }
 
-    private static PInvokeMetadata ExtractDllImportMetadata(
+    private static PInvokeMetadata? ExtractDllImportMetadata(
         BoundAttribute attribute,
         FunctionDeclarationSyntax syntax,
         FunctionSymbol function,
         DiagnosticBag diagnostics)
     {
         // 1) Required positional library name.
-        string libraryName = null;
+        string? libraryName = null;
         if (!attribute.PositionalArguments.IsDefaultOrEmpty
             && attribute.PositionalArguments[0].Value is string s
             && !string.IsNullOrEmpty(s))
@@ -564,7 +576,8 @@ internal static class PInvokeBinder
                     break;
 
                 case "CharSet":
-                    if (KnownAttributes.TryConvertAttributeEnum<CharSet>(named.Value, out var cs))
+                    if (named.Value is { } value
+                        && KnownAttributes.TryConvertAttributeEnum<CharSet>(value, out var cs))
                     {
                         charSet = cs;
                     }
@@ -584,7 +597,8 @@ internal static class PInvokeBinder
                     break;
 
                 case "CallingConvention":
-                    if (KnownAttributes.TryConvertAttributeEnum<CallingConvention>(named.Value, out var cc))
+                    if (named.Value is { } callingConventionValue
+                        && KnownAttributes.TryConvertAttributeEnum<CallingConvention>(callingConventionValue, out var cc))
                     {
                         callingConvention = cc;
                     }
@@ -661,14 +675,14 @@ internal static class PInvokeBinder
     /// — calling-convention overrides live on a separate
     /// <c>@UnmanagedCallConv</c> attribute, which v1 does not support.
     /// </summary>
-    private static PInvokeMetadata ExtractLibraryImportMetadata(
+    private static PInvokeMetadata? ExtractLibraryImportMetadata(
         BoundAttribute attribute,
         FunctionSymbol function,
         bool hasStringSurface,
         DiagnosticBag diagnostics)
     {
         // 1) Required positional library name.
-        string libraryName = null;
+        string? libraryName = null;
         if (!attribute.PositionalArguments.IsDefaultOrEmpty
             && attribute.PositionalArguments[0].Value is string s
             && !string.IsNullOrEmpty(s))
@@ -716,7 +730,8 @@ internal static class PInvokeBinder
                     break;
 
                 case "StringMarshalling":
-                    if (KnownAttributes.TryConvertAttributeEnum<StringMarshalling>(named.Value, out var sm))
+                    if (named.Value is { } value
+                        && KnownAttributes.TryConvertAttributeEnum<StringMarshalling>(value, out var sm))
                     {
                         stringMarshalling = sm;
                     }
@@ -747,7 +762,9 @@ internal static class PInvokeBinder
             && stringMarshalling != StringMarshalling.Utf8
             && stringMarshalling != StringMarshalling.Utf16)
         {
-            diagnostics.ReportLibraryImportRequiresStringMarshalling(function.Declaration.Identifier.Location, function.Name);
+            diagnostics.ReportLibraryImportRequiresStringMarshalling(
+                Invariant.Required(function.Declaration, "a LibraryImport function must retain its declaration").Identifier.Location,
+                function.Name);
         }
 
         return new PInvokeMetadata(
@@ -764,7 +781,7 @@ internal static class PInvokeBinder
             stringMarshalling: stringMarshalling);
     }
 
-    private static SyntaxNode FindNamedArgSyntax(AnnotationSyntax annotation, string name)
+    private static SyntaxNode? FindNamedArgSyntax(AnnotationSyntax? annotation, string? name)
     {
         if (annotation?.Arguments == null)
         {
@@ -844,7 +861,9 @@ internal static class PInvokeBinder
         }
 
         var annotationLocation = attr.Syntax?.Location
-            ?? (parameterIndex < parameterSyntaxes.Count ? parameterSyntaxes[parameterIndex].Location : function.Declaration.Identifier.Location);
+            ?? (parameterIndex < parameterSyntaxes.Count
+                ? parameterSyntaxes[parameterIndex].Location
+                : Invariant.Required(function.Declaration, "a MarshalAs parameter must retain its declaration").Identifier.Location);
 
         // ADR-0096 §3 — @MarshalAs on a string parameter under
         // @LibraryImport collides with the function-wide
@@ -862,7 +881,8 @@ internal static class PInvokeBinder
         // 1) Required positional UnmanagedType.
         UnmanagedType unmanagedType;
         if (attr.PositionalArguments.IsDefaultOrEmpty
-            || !KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(attr.PositionalArguments[0].Value, out unmanagedType))
+            || attr.PositionalArguments[0].Value is not { } positionalValue
+            || !KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(positionalValue, out unmanagedType))
         {
             diagnostics.ReportMarshalAsUnsupportedUnmanagedType(
                 annotationLocation,
@@ -886,7 +906,8 @@ internal static class PInvokeBinder
             switch (named.Name)
             {
                 case "ArraySubType":
-                    if (KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(named.Value, out var ast))
+                    if (named.Value is { } arraySubTypeValue
+                        && KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(arraySubTypeValue, out var ast))
                     {
                         arraySubType = ast;
                     }
@@ -894,7 +915,8 @@ internal static class PInvokeBinder
                     break;
 
                 case "SafeArraySubType":
-                    if (KnownAttributes.TryConvertAttributeEnum<VarEnum>(named.Value, out var sast))
+                    if (named.Value is { } safeArraySubTypeValue
+                        && KnownAttributes.TryConvertAttributeEnum<VarEnum>(safeArraySubTypeValue, out var sast))
                     {
                         safeArraySubType = sast;
                     }
@@ -1034,7 +1056,7 @@ internal static class PInvokeBinder
             || t == TypeSymbol.NInt || t == TypeSymbol.NUInt;
     }
 
-    private static bool TryReadInt32(object value, out int result)
+    private static bool TryReadInt32(object? value, out int result)
     {
         result = 0;
         if (value is int i)

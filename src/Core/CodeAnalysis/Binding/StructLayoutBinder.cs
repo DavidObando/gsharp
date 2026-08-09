@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
@@ -251,7 +253,7 @@ internal static class StructLayoutBinder
         return TryGetClrStorageSize(type?.ClrType, out size);
     }
 
-    private static bool TryGetClrStorageSize(Type type, out int size)
+    private static bool TryGetClrStorageSize(Type? type, out int size)
     {
         size = 0;
         if (type == null || !type.IsValueType)
@@ -270,7 +272,7 @@ internal static class StructLayoutBinder
         }
     }
 
-    private static StructLayoutMetadata ExtractStructLayout(BoundAttribute attribute, DiagnosticBag diagnostics)
+    private static StructLayoutMetadata? ExtractStructLayout(BoundAttribute? attribute, DiagnosticBag diagnostics)
     {
         if (attribute == null)
         {
@@ -282,7 +284,7 @@ internal static class StructLayoutBinder
         if (!attribute.PositionalArguments.IsDefaultOrEmpty)
         {
             var raw = attribute.PositionalArguments[0].Value;
-            if (KnownAttributes.TryConvertAttributeEnum<LayoutKind>(raw, out var parsed))
+            if (raw != null && KnownAttributes.TryConvertAttributeEnum<LayoutKind>(raw, out var parsed))
             {
                 if (parsed != LayoutKind.Sequential && parsed != LayoutKind.Explicit)
                 {
@@ -359,7 +361,7 @@ internal static class StructLayoutBinder
         return TryConvertToInt32(positional[0].Value, out value);
     }
 
-    private static bool TryConvertToInt32(object value, out int result)
+    private static bool TryConvertToInt32(object? value, out int result)
     {
         result = 0;
         switch (value)
