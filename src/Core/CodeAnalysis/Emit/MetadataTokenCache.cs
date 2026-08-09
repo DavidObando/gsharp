@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -458,7 +460,7 @@ internal sealed class MetadataTokenCache
             return true;
         }
 
-        public override bool Equals(object obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
+        public override bool Equals(object? obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
 
         public override int GetHashCode()
         {
@@ -522,7 +524,7 @@ internal sealed class MetadataTokenCache
             return true;
         }
 
-        public override bool Equals(object obj) => obj is CtorRefSymbolKey other && this.Equals(other);
+        public override bool Equals(object? obj) => obj is CtorRefSymbolKey other && this.Equals(other);
 
         public override int GetHashCode()
         {

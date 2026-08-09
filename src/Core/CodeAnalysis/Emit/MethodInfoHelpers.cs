@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -78,7 +80,7 @@ internal static class MethodInfoHelpers
                 var defIface = iface.Definition ?? iface;
                 foreach (var interfaceEvent in defIface.Events)
                 {
-                    EventSymbol implementationEvent = null;
+                    EventSymbol? implementationEvent = null;
                     foreach (var candidate in structSym.Events)
                     {
                         if (ReferenceEquals(candidate.AddMethodSymbol, method)

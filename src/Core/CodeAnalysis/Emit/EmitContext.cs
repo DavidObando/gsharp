@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.IO;
 using System.Reflection;
@@ -154,12 +156,12 @@ internal sealed class EmitContext
     /// row. Set by the static <see cref="ReflectionMetadataEmitter.Emit"/>
     /// entry point from the SDK-supplied value.
     /// </summary>
-    public string AssemblyVersionOverride { get; set; }
+    public string? AssemblyVersionOverride { get; set; }
 
     /// <summary>
     /// Gets or sets the long target framework moniker stamped on the assembly.
     /// </summary>
-    public string TargetFrameworkMoniker { get; set; }
+    public string? TargetFrameworkMoniker { get; set; }
 
     /// <summary>
     /// Gets or sets the Portable PDB options for this emit. Set by the static
@@ -176,7 +178,7 @@ internal sealed class EmitContext
     /// <see cref="DebugInformation"/>.<see cref="DebugInformationOptions.Format"/>
     /// is <see cref="DebugInformationFormat.Portable"/>; ignored otherwise.
     /// </summary>
-    public Stream PdbStream { get; set; }
+    public Stream? PdbStream { get; set; }
 
     /// <summary>
     /// Gets or sets the Portable PDB collaborator. Instantiated by
@@ -184,7 +186,7 @@ internal sealed class EmitContext
     /// <see langword="null"/> in every other configuration so the legacy PE-
     /// only emit path stays bit-for-bit identical.
     /// </summary>
-    public PortablePdbEmitter Pdb { get; set; }
+    public PortablePdbEmitter? Pdb { get; set; }
 
     /// <summary>
     /// Gets the BCL <see cref="object"/> <see cref="Type"/> resolved
@@ -290,7 +292,7 @@ internal sealed class EmitContext
     /// in place. Set for the duration of a synthesized <c>.cctor</c> body by
     /// <c>ConstructorBodyEmitter</c> (PR-E-15).
     /// </summary>
-    public Symbol CurrentStaticConstructorOwner { get; set; }
+    public Symbol? CurrentStaticConstructorOwner { get; set; }
 
     /// <summary>
     /// Resolves a BCL type from the target framework's references, falling back

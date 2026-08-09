@@ -56,3 +56,27 @@ src/Core/CodeAnalysis/*.cs
 # references per file against Symbols/'s 35, which is what made Symbols/
 # oscillate instead of converge.
 src/Core/CodeAnalysis/Lowering/**/*.cs
+
+# Slice 9a -- Emit/ infrastructure: the context, the encoders, and the leaves
+# that carry no emitter state. Emit/ is split by family (9a-9d) because it is
+# the second-most-coupled subsystem after Symbols/ (26 intra-subsystem type
+# references per file), so each family converges on its own.
+src/Core/CodeAnalysis/Emit/AccessibilityMap.cs
+src/Core/CodeAnalysis/Emit/CustomAttributeEncoder.cs
+src/Core/CodeAnalysis/Emit/DebugInformationFormat.cs
+src/Core/CodeAnalysis/Emit/DebugInformationOptions.cs
+src/Core/CodeAnalysis/Emit/EmitContext.cs
+src/Core/CodeAnalysis/Emit/EmitDiagnosticException.cs
+src/Core/CodeAnalysis/Emit/ExplicitInterfaceMetadataNaming.cs
+src/Core/CodeAnalysis/Emit/GenericRemapState.cs
+src/Core/CodeAnalysis/Emit/LambdaEnclosingTypeParameterCollector.cs
+src/Core/CodeAnalysis/Emit/MaxStackTracker.cs
+src/Core/CodeAnalysis/Emit/MetadataTokenCache.cs
+src/Core/CodeAnalysis/Emit/MethodInfoHelpers.cs
+src/Core/CodeAnalysis/Emit/MvidPEBuilder.cs
+src/Core/CodeAnalysis/Emit/NullableFlagsBuilder.cs
+src/Core/CodeAnalysis/Emit/PendingGenericParameter.cs
+src/Core/CodeAnalysis/Emit/RemapScope.cs
+src/Core/CodeAnalysis/Emit/SignatureEncoder.cs
+src/Core/CodeAnalysis/Emit/TypeIdentityComparer.cs
+src/Core/CodeAnalysis/Emit/WellKnownReferences.cs

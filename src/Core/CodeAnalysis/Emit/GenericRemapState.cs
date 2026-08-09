@@ -2,11 +2,14 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1214 // readonly fields should appear before non-readonly fields — the two mutable `active*` remap pointers are grouped with the readonly registration maps they mirror, preserving the original ReflectionMetadataEmitter band's field order
 
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
@@ -74,7 +77,7 @@ internal sealed class GenericRemapState
     // remap is pushed by StateMachineEmitter around each SM-member emit
     // boundary (TypeDef, FieldDefs, interface impls, MethodDefs) and popped
     // afterward, so non-SM code paths see the normal Var/MVar discrimination.
-    private Dictionary<TypeParameterSymbol, int> activeIteratorStateMachineRemap;
+    private Dictionary<TypeParameterSymbol, int>? activeIteratorStateMachineRemap;
 
     // Issue #2118: a non-capturing lambda whose signature/body references an
     // enclosing method/type parameter (e.g. `func Build[T IComparable[T]]() ...
@@ -89,7 +92,7 @@ internal sealed class GenericRemapState
     // parameter into the lambda method's own freshly-cloned method
     // type-parameter ordinal (MVar(idx)). Pushed around the lambda's
     // EmitFunction call; null everywhere else.
-    private Dictionary<TypeParameterSymbol, int> activeLambdaMethodTypeParamRemap;
+    private Dictionary<TypeParameterSymbol, int>? activeLambdaMethodTypeParamRemap;
 
     // Issue #810: per-SM-class remap, populated when SynthesizeIteratorStateMachines
     // creates each generic state-machine. Used to auto-push the remap inside
@@ -125,7 +128,7 @@ internal sealed class GenericRemapState
     /// object identity distinguishes the same symbol encoded under different
     /// active remaps).
     /// </summary>
-    internal Dictionary<TypeParameterSymbol, int> ActiveIteratorStateMachineRemap => this.activeIteratorStateMachineRemap;
+    internal Dictionary<TypeParameterSymbol, int>? ActiveIteratorStateMachineRemap => this.activeIteratorStateMachineRemap;
 
     /// <summary>
     /// Gets the currently active generic-promoted-lambda remap
@@ -133,7 +136,7 @@ internal sealed class GenericRemapState
     /// when none is pushed. Read by <c>EncodeTypeSymbol</c> and the deferred
     /// lambda constraint resolver.
     /// </summary>
-    internal Dictionary<TypeParameterSymbol, int> ActiveLambdaMethodTypeParamRemap => this.activeLambdaMethodTypeParamRemap;
+    internal Dictionary<TypeParameterSymbol, int>? ActiveLambdaMethodTypeParamRemap => this.activeLambdaMethodTypeParamRemap;
 
     /// <summary>
     /// Gets the current generic-remap scope identity (issue #3163): both
@@ -244,16 +247,16 @@ internal sealed class GenericRemapState
 
     internal bool TryGetLambdaMethodRemap(
         FunctionSymbol function,
-        out Dictionary<TypeParameterSymbol, int> remap)
+        [NotNullWhen(true)] out Dictionary<TypeParameterSymbol, int>? remap)
         => this.lambdaMethodTypeParamRemapsByFunction.TryGetValue(function, out remap);
 
     internal readonly struct SmRemapScope : IDisposable
     {
         private readonly GenericRemapState owner;
-        private readonly Dictionary<TypeParameterSymbol, int> previous;
+        private readonly Dictionary<TypeParameterSymbol, int>? previous;
         private readonly bool restore;
 
-        public SmRemapScope(GenericRemapState owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
+        public SmRemapScope(GenericRemapState owner, Dictionary<TypeParameterSymbol, int>? previous, bool restore)
         {
             this.owner = owner;
             this.previous = previous;
@@ -272,10 +275,10 @@ internal sealed class GenericRemapState
     internal readonly struct LambdaMethodRemapScope : IDisposable
     {
         private readonly GenericRemapState owner;
-        private readonly Dictionary<TypeParameterSymbol, int> previous;
+        private readonly Dictionary<TypeParameterSymbol, int>? previous;
         private readonly bool restore;
 
-        public LambdaMethodRemapScope(GenericRemapState owner, Dictionary<TypeParameterSymbol, int> previous, bool restore)
+        public LambdaMethodRemapScope(GenericRemapState owner, Dictionary<TypeParameterSymbol, int>? previous, bool restore)
         {
             this.owner = owner;
             this.previous = previous;

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -308,7 +310,7 @@ internal static class NullableFlagsBuilder
         }
     }
 
-    private static void AppendClrType(Type clrType, ImmutableArray<byte>.Builder builder)
+    private static void AppendClrType(Type? clrType, ImmutableArray<byte>.Builder builder)
     {
         if (clrType == null)
         {

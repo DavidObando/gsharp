@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Emit;
 
 /// <summary>
@@ -45,7 +47,7 @@ public sealed class DebugInformationOptions
     /// verbatim into the PE's <c>CodeView</c> debug-directory entry as
     /// the PDB path string.
     /// </summary>
-    public string PdbFilePath { get; set; }
+    public string? PdbFilePath { get; set; }
 
     /// <summary>
     /// Gets or sets the path of a Source Link JSON file (
@@ -54,7 +56,7 @@ public sealed class DebugInformationOptions
     /// <c>SourceLink</c> <c>CustomDebugInformation</c> blob, enabling
     /// debuggers to fetch matching source from the URL substitution map.
     /// </summary>
-    public string SourceLinkFilePath { get; set; }
+    public string? SourceLinkFilePath { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the emit must be

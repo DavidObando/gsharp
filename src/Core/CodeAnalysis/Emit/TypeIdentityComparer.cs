@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -56,7 +58,7 @@ internal sealed class TypeIdentityComparer : IEqualityComparer<Type>
     {
     }
 
-    public bool Equals(Type x, Type y)
+    public bool Equals(Type? x, Type? y)
     {
         if (ReferenceEquals(x, y))
         {
