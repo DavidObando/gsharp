@@ -173,3 +173,5 @@ src/Core/CodeAnalysis/Binding/ExternalClrOverrideResolver.cs
 src/Core/CodeAnalysis/Binding/InterpolatedStringHandlerInfo.cs
 # Slice 23 -- member lookup contracts.
 src/Core/CodeAnalysis/Binding/MemberLookup.cs
+# Slice 24 -- expression binder member and index access binding.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.cs
