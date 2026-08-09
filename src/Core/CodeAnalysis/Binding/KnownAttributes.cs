@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'public' members should come before 'private' members — the new ADR-0086 P/Invoke helpers (FindDllImport, TryConvertAttributeEnum) appear after the existing private helpers so the diff stays minimal; they form their own visually-grouped block.
 
 using System;
@@ -48,7 +50,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> if the attribute is reserved for the compiler.</returns>
-    public static bool IsReservedForCompiler(Type clrType)
+    public static bool IsReservedForCompiler(Type? clrType)
     {
         return clrType?.FullName != null && ReservedForCompilerNames.Contains(clrType.FullName);
     }
@@ -59,7 +61,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[Obsolete]</c>.</returns>
-    public static bool IsObsolete(BoundAttribute attribute)
+    public static bool IsObsolete(BoundAttribute? attribute)
     {
         return attribute?.AttributeType?.ClrType.IsSameAs(typeof(System.ObsoleteAttribute)) == true;
     }
@@ -75,7 +77,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[DllImport]</c>.</returns>
-    public static bool IsDllImport(Type clrType)
+    public static bool IsDllImport(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.DllImportAttribute));
     }
@@ -86,7 +88,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[DllImport]</c>.</returns>
-    public static bool IsDllImport(BoundAttribute attribute)
+    public static bool IsDllImport(BoundAttribute? attribute)
     {
         return IsDllImport(attribute?.AttributeType?.ClrType);
     }
@@ -100,7 +102,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[NotNullWhen]</c>.</returns>
-    public static bool IsNotNullWhen(Type clrType)
+    public static bool IsNotNullWhen(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.NotNullWhenAttribute));
     }
@@ -111,7 +113,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[NotNullWhen]</c>.</returns>
-    public static bool IsNotNullWhen(BoundAttribute attribute)
+    public static bool IsNotNullWhen(BoundAttribute? attribute)
     {
         return IsNotNullWhen(attribute?.AttributeType?.ClrType);
     }
@@ -122,7 +124,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[MaybeNullWhen]</c>.</returns>
-    public static bool IsMaybeNullWhen(Type clrType)
+    public static bool IsMaybeNullWhen(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MaybeNullWhenAttribute));
     }
@@ -133,7 +135,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[MaybeNullWhen]</c>.</returns>
-    public static bool IsMaybeNullWhen(BoundAttribute attribute)
+    public static bool IsMaybeNullWhen(BoundAttribute? attribute)
     {
         return IsMaybeNullWhen(attribute?.AttributeType?.ClrType);
     }
@@ -146,7 +148,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNull]</c>.</returns>
-    public static bool IsMemberNotNull(Type clrType)
+    public static bool IsMemberNotNull(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MemberNotNullAttribute));
     }
@@ -157,7 +159,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNull]</c>.</returns>
-    public static bool IsMemberNotNull(BoundAttribute attribute)
+    public static bool IsMemberNotNull(BoundAttribute? attribute)
     {
         return IsMemberNotNull(attribute?.AttributeType?.ClrType);
     }
@@ -168,7 +170,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNullWhen]</c>.</returns>
-    public static bool IsMemberNotNullWhen(Type clrType)
+    public static bool IsMemberNotNullWhen(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.MemberNotNullWhenAttribute));
     }
@@ -179,7 +181,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[MemberNotNullWhen]</c>.</returns>
-    public static bool IsMemberNotNullWhen(BoundAttribute attribute)
+    public static bool IsMemberNotNullWhen(BoundAttribute? attribute)
     {
         return IsMemberNotNullWhen(attribute?.AttributeType?.ClrType);
     }
@@ -231,7 +233,7 @@ internal static class KnownAttributes
             return false;
         }
 
-        ImmutableArray<string>.Builder builder = null;
+        ImmutableArray<string>.Builder? builder = null;
         foreach (var attr in attributes)
         {
             if (!IsMemberNotNull(attr) || attr.PositionalArguments.IsDefaultOrEmpty)
@@ -309,7 +311,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[EnumeratorCancellation]</c>.</returns>
-    public static bool IsEnumeratorCancellation(Type clrType)
+    public static bool IsEnumeratorCancellation(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.CompilerServices.EnumeratorCancellationAttribute));
     }
@@ -320,7 +322,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[EnumeratorCancellation]</c>.</returns>
-    public static bool IsEnumeratorCancellation(BoundAttribute attribute)
+    public static bool IsEnumeratorCancellation(BoundAttribute? attribute)
     {
         return IsEnumeratorCancellation(attribute?.AttributeType?.ClrType);
     }
@@ -331,7 +333,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attribute list on a parameter symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindEnumeratorCancellation(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindEnumeratorCancellation(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -360,7 +362,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[Conditional]</c>.</returns>
-    public static bool IsConditional(Type clrType)
+    public static bool IsConditional(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Diagnostics.ConditionalAttribute));
     }
@@ -371,7 +373,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[Conditional]</c>.</returns>
-    public static bool IsConditional(BoundAttribute attribute)
+    public static bool IsConditional(BoundAttribute? attribute)
     {
         return IsConditional(attribute?.AttributeType?.ClrType);
     }
@@ -457,7 +459,7 @@ internal static class KnownAttributes
     /// <param name="message">The optional user-supplied message, or <c>null</c>.</param>
     /// <param name="isError">Whether the attribute's <c>error</c> flag is set.</param>
     /// <returns><c>true</c> if any attribute in the list is <c>[Obsolete]</c>.</returns>
-    public static bool TryGetObsolete(ImmutableArray<BoundAttribute> attributes, out string message, out bool isError)
+    public static bool TryGetObsolete(ImmutableArray<BoundAttribute> attributes, out string? message, out bool isError)
     {
         message = null;
         isError = false;
@@ -664,7 +666,7 @@ internal static class KnownAttributes
         return false;
     }
 
-    private static bool TryConvertToInt32(object value, out int result)
+    private static bool TryConvertToInt32(object? value, out int result)
     {
         switch (value)
         {
@@ -705,7 +707,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a function symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindDllImport(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindDllImport(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -778,7 +780,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[LibraryImport]</c>.</returns>
-    public static bool IsLibraryImport(Type clrType)
+    public static bool IsLibraryImport(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.LibraryImportAttribute));
     }
@@ -789,7 +791,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[LibraryImport]</c>.</returns>
-    public static bool IsLibraryImport(BoundAttribute attribute)
+    public static bool IsLibraryImport(BoundAttribute? attribute)
     {
         return IsLibraryImport(attribute?.AttributeType?.ClrType);
     }
@@ -801,7 +803,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a function symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindLibraryImport(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindLibraryImport(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -828,7 +830,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[UnmanagedFunctionPointer]</c>.</returns>
-    public static bool IsUnmanagedFunctionPointer(Type clrType)
+    public static bool IsUnmanagedFunctionPointer(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute));
     }
@@ -839,7 +841,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[UnmanagedFunctionPointer]</c>.</returns>
-    public static bool IsUnmanagedFunctionPointer(BoundAttribute attribute)
+    public static bool IsUnmanagedFunctionPointer(BoundAttribute? attribute)
     {
         return IsUnmanagedFunctionPointer(attribute?.AttributeType?.ClrType);
     }
@@ -851,7 +853,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindUnmanagedFunctionPointer(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindUnmanagedFunctionPointer(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -880,7 +882,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[StructLayout]</c>.</returns>
-    public static bool IsStructLayout(Type clrType)
+    public static bool IsStructLayout(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.StructLayoutAttribute));
     }
@@ -891,7 +893,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[StructLayout]</c>.</returns>
-    public static bool IsStructLayout(BoundAttribute attribute)
+    public static bool IsStructLayout(BoundAttribute? attribute)
     {
         return IsStructLayout(attribute?.AttributeType?.ClrType);
     }
@@ -903,7 +905,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a struct or class symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindStructLayout(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindStructLayout(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -931,7 +933,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[FieldOffset]</c>.</returns>
-    public static bool IsFieldOffset(Type clrType)
+    public static bool IsFieldOffset(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.FieldOffsetAttribute));
     }
@@ -942,7 +944,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[FieldOffset]</c>.</returns>
-    public static bool IsFieldOffset(BoundAttribute attribute)
+    public static bool IsFieldOffset(BoundAttribute? attribute)
     {
         return IsFieldOffset(attribute?.AttributeType?.ClrType);
     }
@@ -953,7 +955,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a field symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindFieldOffset(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindFieldOffset(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -981,7 +983,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
-    public static bool IsPseudoCustomAttribute(BoundAttribute attribute)
+    public static bool IsPseudoCustomAttribute(BoundAttribute? attribute)
     {
         return IsDllImport(attribute)
             || IsLibraryImport(attribute)
@@ -1004,7 +1006,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[MethodImpl]</c>.</returns>
-    public static bool IsMethodImpl(Type clrType)
+    public static bool IsMethodImpl(Type? clrType)
     {
         // Use FullName matching (not typeof identity) so the recognition
         // also fires when the attribute type comes from the consumer's
@@ -1023,7 +1025,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[MethodImpl]</c>.</returns>
-    public static bool IsMethodImpl(BoundAttribute attribute)
+    public static bool IsMethodImpl(BoundAttribute? attribute)
     {
         return IsMethodImpl(attribute?.AttributeType?.ClrType);
     }
@@ -1035,7 +1037,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a function symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindMethodImpl(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindMethodImpl(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -1063,7 +1065,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A <c>@MethodImpl</c> attribute application; may be <c>null</c>.</param>
     /// <returns>The options bits (zero when absent or unrecognised).</returns>
-    public static System.Runtime.CompilerServices.MethodImplOptions GetMethodImplOptions(BoundAttribute attribute)
+    public static System.Runtime.CompilerServices.MethodImplOptions GetMethodImplOptions(BoundAttribute? attribute)
     {
         if (attribute == null || attribute.PositionalArguments.IsDefaultOrEmpty || attribute.PositionalArguments.Length < 1)
         {
@@ -1094,7 +1096,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[MarshalAs]</c>.</returns>
-    public static bool IsMarshalAs(Type clrType)
+    public static bool IsMarshalAs(Type? clrType)
     {
         return clrType.IsSameAs(typeof(System.Runtime.InteropServices.MarshalAsAttribute));
     }
@@ -1105,7 +1107,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is <c>[MarshalAs]</c>.</returns>
-    public static bool IsMarshalAs(BoundAttribute attribute)
+    public static bool IsMarshalAs(BoundAttribute? attribute)
     {
         return IsMarshalAs(attribute?.AttributeType?.ClrType);
     }
@@ -1117,7 +1119,7 @@ internal static class KnownAttributes
     /// </summary>
     /// <param name="attributes">The attributes attached to a parameter symbol.</param>
     /// <returns>The matching attribute, or <c>null</c>.</returns>
-    public static BoundAttribute FindMarshalAs(ImmutableArray<BoundAttribute> attributes)
+    public static BoundAttribute? FindMarshalAs(ImmutableArray<BoundAttribute> attributes)
     {
         if (attributes.IsDefaultOrEmpty)
         {

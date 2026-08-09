@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1512 // Single-line comments should not be followed by blank line
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -158,7 +161,7 @@ internal static class PartialTypeMerger
         return ordered;
     }
 
-    private static SyntaxToken GetIdentifier(MemberSyntax decl) => decl switch
+    private static SyntaxToken? GetIdentifier(MemberSyntax decl) => decl switch
     {
         StructDeclarationSyntax s => s.Identifier,
         InterfaceDeclarationSyntax i => i.Identifier,
@@ -181,14 +184,14 @@ internal static class PartialTypeMerger
         {
             foreach (var part in parts.Where(p => !p.IsPartial))
             {
-                diagnostics.ReportPartialModifierMissing(part.Identifier.Location, name);
+                diagnostics.ReportPartialModifierMissing(part.Identifier?.Location ?? default, name);
             }
         }
 
         // GS0476: aggregate kind (class vs struct) must agree.
         foreach (var part in parts.Skip(1).Where(p => p.IsClass != primary.IsClass))
         {
-            diagnostics.ReportPartialKindMismatch(part.Identifier.Location, name);
+            diagnostics.ReportPartialKindMismatch(part.Identifier?.Location ?? default, name);
         }
 
         var accessibilityModifier = ResolveAccessibility(parts, name, diagnostics);
@@ -205,12 +208,12 @@ internal static class PartialTypeMerger
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
         foreach (var part in parts.Skip(1).Where(p => NormalizeNodeText(p.TypeParameterList) != primaryTypeParams))
         {
-            diagnostics.ReportPartialTypeParameterMismatch(part.Identifier.Location, name);
+            diagnostics.ReportPartialTypeParameterMismatch(part.Identifier?.Location ?? default, name);
         }
 
         // Primary constructor: at most one part may declare one (GS0482).
-        StructDeclarationSyntax primaryCtorPart = null;
-        foreach (var part in parts.Where(p => p.HasPrimaryConstructor || p.PrimaryConstructorParameters.Count > 0))
+        StructDeclarationSyntax? primaryCtorPart = null;
+        foreach (var part in parts.Where(p => p.HasPrimaryConstructor || p.PrimaryConstructorParameters?.Count > 0))
         {
             if (primaryCtorPart == null)
             {
@@ -218,21 +221,27 @@ internal static class PartialTypeMerger
             }
             else
             {
-                diagnostics.ReportPartialMultiplePrimaryConstructors(part.Identifier.Location, name);
+                diagnostics.ReportPartialMultiplePrimaryConstructors(part.Identifier?.Location ?? default, name);
             }
         }
 
         // deinit: at most one across all parts (GS0483).
-        DeinitDeclarationSyntax deinit = null;
-        foreach (var part in parts.Where(p => p.Deinitializer != null))
+        DeinitDeclarationSyntax? deinit = null;
+        foreach (var part in parts)
         {
+            var deinitializer = part.Deinitializer;
+            if (deinitializer is null)
+            {
+                continue;
+            }
+
             if (deinit == null)
             {
-                deinit = part.Deinitializer;
+                deinit = deinitializer;
             }
             else
             {
-                diagnostics.ReportPartialMultipleDeinit(part.Deinitializer.Location, name);
+                diagnostics.ReportPartialMultipleDeinit(deinitializer.Location, name);
             }
         }
 
@@ -240,12 +249,14 @@ internal static class PartialTypeMerger
         var baseInfo = ResolveStructBaseClause(parts, primary, name, diagnostics);
 
         var mergedShared = MergeSharedBlocks(primary.SyntaxTree, parts.Select(p => p.SharedBlock));
+        var primaryIdentifier = primary.Identifier
+            ?? throw new InvalidOperationException("A partial declaration must have an identifier.");
 
         var merged = new StructDeclarationSyntax(
             primary.SyntaxTree,
             accessibilityModifier,
             primary.TypeKeyword,
-            primary.Identifier,
+            primaryIdentifier,
             primary.DataKeyword,
             primary.InlineKeyword,
             openModifier,
@@ -276,7 +287,7 @@ internal static class PartialTypeMerger
             UnsafeModifier = parts.Select(p => p.UnsafeModifier).FirstOrDefault(t => t != null),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             SealedKeyword = sealedKeyword,
-            PartialPartLocations = parts.Select(p => p.Identifier.Location).ToImmutableArray(),
+            PartialPartLocations = parts.Select(p => p.Identifier?.Location ?? default).ToImmutableArray(),
         };
 
         merged.WithAnnotations(UnionAnnotations(parts));
@@ -286,13 +297,13 @@ internal static class PartialTypeMerger
     private readonly struct BaseClauseInfo
     {
         public BaseClauseInfo(
-            SyntaxToken baseColonToken,
-            SyntaxToken baseTypeIdentifier,
-            ImmutableArray<SyntaxToken> additionalBaseTypeIdentifiers,
+            SyntaxToken? baseColonToken,
+            SyntaxToken? baseTypeIdentifier,
+            ImmutableArray<SyntaxToken?> additionalBaseTypeIdentifiers,
             SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses,
-            SyntaxToken baseConstructorOpenParenthesisToken,
+            SyntaxToken? baseConstructorOpenParenthesisToken,
             SeparatedSyntaxList<ExpressionSyntax> baseConstructorArguments,
-            SyntaxToken baseConstructorCloseParenthesisToken)
+            SyntaxToken? baseConstructorCloseParenthesisToken)
         {
             BaseColonToken = baseColonToken;
             BaseTypeIdentifier = baseTypeIdentifier;
@@ -303,19 +314,19 @@ internal static class PartialTypeMerger
             BaseConstructorCloseParenthesisToken = baseConstructorCloseParenthesisToken;
         }
 
-        public SyntaxToken BaseColonToken { get; }
+        public SyntaxToken? BaseColonToken { get; }
 
-        public SyntaxToken BaseTypeIdentifier { get; }
+        public SyntaxToken? BaseTypeIdentifier { get; }
 
-        public ImmutableArray<SyntaxToken> AdditionalBaseTypeIdentifiers { get; }
+        public ImmutableArray<SyntaxToken?> AdditionalBaseTypeIdentifiers { get; }
 
         public SeparatedSyntaxList<TypeClauseSyntax> BaseTypeClauses { get; }
 
-        public SyntaxToken BaseConstructorOpenParenthesisToken { get; }
+        public SyntaxToken? BaseConstructorOpenParenthesisToken { get; }
 
         public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments { get; }
 
-        public SyntaxToken BaseConstructorCloseParenthesisToken { get; }
+        public SyntaxToken? BaseConstructorCloseParenthesisToken { get; }
     }
 
     private static BaseClauseInfo ResolveStructBaseClause(
@@ -334,7 +345,7 @@ internal static class PartialTypeMerger
             return new BaseClauseInfo(
                 bp?.BaseColonToken,
                 bp?.BaseTypeIdentifier,
-                bp?.AdditionalBaseTypeIdentifiers ?? ImmutableArray<SyntaxToken>.Empty,
+                bp?.AdditionalBaseTypeIdentifiers ?? ImmutableArray<SyntaxToken?>.Empty,
                 bp?.BaseTypeClauses ?? new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty),
                 bp?.BaseConstructorOpenParenthesisToken,
                 bp?.BaseConstructorArguments ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
@@ -342,7 +353,7 @@ internal static class PartialTypeMerger
         }
 
         // GS0481: base-constructor arguments may appear on at most one part.
-        StructDeclarationSyntax ctorArgPart = null;
+        StructDeclarationSyntax? ctorArgPart = null;
         foreach (var part in basedParts.Where(p => p.HasBaseConstructorArguments))
         {
             if (ctorArgPart == null)
@@ -351,7 +362,7 @@ internal static class PartialTypeMerger
             }
             else
             {
-                diagnostics.ReportPartialBaseClauseConflict(part.Identifier.Location, name);
+                diagnostics.ReportPartialBaseClauseConflict(part.Identifier?.Location ?? default, name);
             }
         }
 
@@ -360,7 +371,7 @@ internal static class PartialTypeMerger
         // always an interface — union handles those with no conflict.)
         if (primary.IsClass)
         {
-            string firstBase = null;
+            string? firstBase = null;
             foreach (var part in basedParts.Where(p => p.BaseTypeClauses.Count > 0))
             {
                 var entry = part.BaseTypeClauses[0].DottedName;
@@ -370,7 +381,7 @@ internal static class PartialTypeMerger
                 }
                 else if (!string.Equals(firstBase, entry, System.StringComparison.Ordinal))
                 {
-                    diagnostics.ReportPartialBaseClauseConflict(part.Identifier.Location, name);
+                    diagnostics.ReportPartialBaseClauseConflict(part.Identifier?.Location ?? default, name);
                 }
             }
         }
@@ -394,7 +405,7 @@ internal static class PartialTypeMerger
         return new BaseClauseInfo(
             basedParts[0].BaseColonToken,
             baseTypeIdentifier: null,
-            ImmutableArray<SyntaxToken>.Empty,
+            ImmutableArray<SyntaxToken?>.Empty,
             mergedClauses,
             ctorArgPart?.BaseConstructorOpenParenthesisToken,
             ctorArgPart?.BaseConstructorArguments ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
@@ -414,7 +425,7 @@ internal static class PartialTypeMerger
         {
             foreach (var part in parts.Where(p => !p.IsPartial))
             {
-                diagnostics.ReportPartialModifierMissing(part.Identifier.Location, name);
+                diagnostics.ReportPartialModifierMissing(part.Identifier?.Location ?? default, name);
             }
         }
 
@@ -425,12 +436,12 @@ internal static class PartialTypeMerger
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
         foreach (var part in parts.Skip(1).Where(p => NormalizeNodeText(p.TypeParameterList) != primaryTypeParams))
         {
-            diagnostics.ReportPartialTypeParameterMismatch(part.Identifier.Location, name);
+            diagnostics.ReportPartialTypeParameterMismatch(part.Identifier?.Location ?? default, name);
         }
 
         // Base interfaces: union across parts, de-duplicating by textual name.
         var basedParts = parts.Where(p => p.HasBaseInterfaces).ToList();
-        SyntaxToken baseColon = basedParts.FirstOrDefault()?.BaseColonToken;
+        SyntaxToken? baseColon = basedParts.FirstOrDefault()?.BaseColonToken;
         SeparatedSyntaxList<TypeClauseSyntax> mergedBaseInterfaces;
         if (basedParts.Count <= 1)
         {
@@ -455,11 +466,13 @@ internal static class PartialTypeMerger
             mergedBaseInterfaces = BuildSeparatedList(primary.SyntaxTree, unique);
         }
 
+        var primaryIdentifier = primary.Identifier
+            ?? throw new InvalidOperationException("A partial declaration must have an identifier.");
         var merged = new InterfaceDeclarationSyntax(
             primary.SyntaxTree,
             accessibilityModifier,
             primary.TypeKeyword,
-            primary.Identifier,
+            primaryIdentifier,
             primary.TypeParameterList,
             sealedKeyword,
             primary.InterfaceKeyword,
@@ -473,7 +486,7 @@ internal static class PartialTypeMerger
             BaseTypeClauses = mergedBaseInterfaces,
             StaticFields = Concat(parts, p => p.StaticFields),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
-            PartialPartLocations = parts.Select(p => p.Identifier.Location).ToImmutableArray(),
+            PartialPartLocations = parts.Select(p => p.Identifier?.Location ?? default).ToImmutableArray(),
         };
 
         merged.WithAnnotations(UnionAnnotations(parts));
@@ -484,36 +497,48 @@ internal static class PartialTypeMerger
     // Shared helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static SyntaxToken ResolveAccessibility(List<StructDeclarationSyntax> parts, string name, DiagnosticBag diagnostics)
+    private static SyntaxToken? ResolveAccessibility(List<StructDeclarationSyntax> parts, string name, DiagnosticBag diagnostics)
     {
-        SyntaxToken stated = null;
-        foreach (var part in parts.Where(p => p.AccessibilityModifier != null))
+        SyntaxToken? stated = null;
+        foreach (var part in parts)
         {
+            var modifier = part.AccessibilityModifier;
+            if (modifier is null)
+            {
+                continue;
+            }
+
             if (stated == null)
             {
-                stated = part.AccessibilityModifier;
+                stated = modifier;
             }
-            else if (!string.Equals(stated.Text, part.AccessibilityModifier.Text, System.StringComparison.Ordinal))
+            else if (!string.Equals(stated.Text, modifier.Text, StringComparison.Ordinal))
             {
-                diagnostics.ReportPartialAccessibilityConflict(part.AccessibilityModifier.Location, name);
+                diagnostics.ReportPartialAccessibilityConflict(modifier.Location, name);
             }
         }
 
         return stated;
     }
 
-    private static SyntaxToken ResolveInterfaceAccessibility(List<InterfaceDeclarationSyntax> parts, string name, DiagnosticBag diagnostics)
+    private static SyntaxToken? ResolveInterfaceAccessibility(List<InterfaceDeclarationSyntax> parts, string name, DiagnosticBag diagnostics)
     {
-        SyntaxToken stated = null;
-        foreach (var part in parts.Where(p => p.AccessibilityModifier != null))
+        SyntaxToken? stated = null;
+        foreach (var part in parts)
         {
+            var modifier = part.AccessibilityModifier;
+            if (modifier is null)
+            {
+                continue;
+            }
+
             if (stated == null)
             {
-                stated = part.AccessibilityModifier;
+                stated = modifier;
             }
-            else if (!string.Equals(stated.Text, part.AccessibilityModifier.Text, System.StringComparison.Ordinal))
+            else if (!string.Equals(stated.Text, modifier.Text, StringComparison.Ordinal))
             {
-                diagnostics.ReportPartialAccessibilityConflict(part.AccessibilityModifier.Location, name);
+                diagnostics.ReportPartialAccessibilityConflict(modifier.Location, name);
             }
         }
 
@@ -528,7 +553,7 @@ internal static class PartialTypeMerger
         {
             // Report on the second-appearing offender in part order.
             var offender = parts.IndexOf(openPart) > parts.IndexOf(sealedPart) ? openPart : sealedPart;
-            diagnostics.ReportPartialOpenSealedConflict(offender.Identifier.Location, name);
+            diagnostics.ReportPartialOpenSealedConflict(offender.Identifier?.Location ?? default, name);
         }
     }
 
@@ -548,7 +573,7 @@ internal static class PartialTypeMerger
         // Inconsistent: report each part that lacks the modifier.
         foreach (var part in parts.Where(p => !hasModifier(p)))
         {
-            diagnostics.ReportPartialModifierMustMatchAllParts(part.Identifier.Location, modifier, name);
+            diagnostics.ReportPartialModifierMustMatchAllParts(part.Identifier?.Location ?? default, modifier, name);
         }
     }
 
@@ -683,7 +708,7 @@ internal static class PartialTypeMerger
     private static readonly IReadOnlyDictionary<SyntaxTree, PackageSymbol> EmptyPackages =
         new Dictionary<SyntaxTree, PackageSymbol>();
 
-    private static SharedBlockSyntax MergeSharedBlocks(SyntaxTree tree, IEnumerable<SharedBlockSyntax> blocks)
+    private static SharedBlockSyntax? MergeSharedBlocks(SyntaxTree tree, IEnumerable<SharedBlockSyntax?> blocks)
     {
         var present = blocks.Where(b => b != null).ToList();
         if (present.Count == 0)
@@ -693,19 +718,20 @@ internal static class PartialTypeMerger
 
         if (present.Count == 1)
         {
-            return present[0];
+            return present[0] ?? throw new InvalidOperationException("A present shared block cannot be null.");
         }
 
-        var first = present[0];
+        var first = present[0] ?? throw new InvalidOperationException("A present shared block cannot be null.");
+        var nonNullPresent = present.Cast<SharedBlockSyntax>().ToList();
         return new SharedBlockSyntax(
             tree,
             first.SharedKeyword,
             first.OpenBraceToken,
-            Concat(present, b => b.Fields),
-            Concat(present, b => b.Properties),
-            Concat(present, b => b.Events),
-            Concat(present, b => b.Methods),
-            Concat(present, b => b.InitBlocks),
+            Concat(nonNullPresent, b => b.Fields),
+            Concat(nonNullPresent, b => b.Properties),
+            Concat(nonNullPresent, b => b.Events),
+            Concat(nonNullPresent, b => b.Methods),
+            Concat(nonNullPresent, b => b.InitBlocks),
             first.CloseBraceToken);
     }
 
@@ -756,7 +782,7 @@ internal static class PartialTypeMerger
         return new SeparatedSyntaxList<TypeClauseSyntax>(withSeparators.ToImmutable());
     }
 
-    private static string NormalizeNodeText(SyntaxNode node)
+    private static string NormalizeNodeText(SyntaxNode? node)
     {
         if (node?.SyntaxTree?.Text == null)
         {

@@ -231,3 +231,12 @@ src/Core/CodeAnalysis/Binding/DeclarationBinder.InterfaceVerification.cs
 src/Core/CodeAnalysis/Binding/ControlFlowGraph.cs
 src/Core/CodeAnalysis/Binding/DefiniteAssignmentAnalyzer.cs
 src/Core/CodeAnalysis/Binding/ExhaustivenessAnalyzer.cs
+
+# Slice 47 -- remaining Binding contracts and analysis helpers.
+src/Core/CodeAnalysis/Binding/ExpressionTreeRestrictionValidator.cs
+src/Core/CodeAnalysis/Binding/IncrementalGlobalScopeReuse.cs
+src/Core/CodeAnalysis/Binding/KnownAttributes.cs
+src/Core/CodeAnalysis/Binding/PartialTypeMerger.cs
+src/Core/CodeAnalysis/Binding/PatternBinder.cs
+src/Core/CodeAnalysis/Binding/RefStructAsyncLivenessAnalyzer.cs
+src/Core/CodeAnalysis/Binding/SubmissionImports.cs

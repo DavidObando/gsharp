@@ -838,7 +838,8 @@ internal sealed partial class OverloadResolver
                 if (Scope.SubmissionImports is { } submissionImports)
                 {
                     if (bindImportedClrStaticCall != null
-                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType))
+                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType)
+                        && submissionProgramType is not null)
                     {
                         return bindImportedClrStaticCall(submissionProgramType, syntax);
                     }
@@ -1995,6 +1996,11 @@ internal sealed partial class OverloadResolver
         result = null;
         var name = syntax.Identifier.Text;
         if (!submissionImports.TryFindGlobalVariable(Scope.References, name, out var programType, out _))
+        {
+            return false;
+        }
+
+        if (programType is null)
         {
             return false;
         }

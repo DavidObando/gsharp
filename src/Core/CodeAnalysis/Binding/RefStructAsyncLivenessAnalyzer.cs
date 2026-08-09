@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Lowering;
@@ -124,7 +126,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         HashSet<VariableSymbol> liveOutOfRegion,
         HashSet<VariableSymbol> ambientLive,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var graph = ControlFlowGraph.Create(AsBlock(regionBody));
 
@@ -228,7 +230,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         ControlFlowGraph.BasicBlock block,
         HashSet<VariableSymbol> liveOut,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var live = new HashSet<VariableSymbol>(liveOut);
         for (var i = block.Statements.Count - 1; i >= 0; i--)
@@ -243,7 +245,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         BoundStatement statement,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         switch (statement)
         {
@@ -253,7 +255,10 @@ internal static class RefStructAsyncLivenessAnalyzer
             case BoundVariableDeclaration vd:
             {
                 var collector = new ReadAndAwaitCollector(interesting);
-                collector.VisitExpression(vd.Initializer);
+                if (vd.Initializer is { } initializer)
+                {
+                    collector.VisitExpression(initializer);
+                }
 
                 var isInteresting = vd.Variable is LocalVariableSymbol && interesting.Contains(vd.Variable);
                 var selfRead = isInteresting && collector.Reads.Contains(vd.Variable);
@@ -342,13 +347,13 @@ internal static class RefStructAsyncLivenessAnalyzer
         BoundTryStatement tryStmt,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var afterTry = new HashSet<VariableSymbol>(live);
 
         var exceptionalEscapeLive = new HashSet<VariableSymbol>();
 
-        HashSet<VariableSymbol> finallyLiveIn = null;
+        HashSet<VariableSymbol>? finallyLiveIn = null;
         if (tryStmt.FinallyBlock != null)
         {
             finallyLiveIn = AnalyzeRegion(tryStmt.FinallyBlock, afterTry, new HashSet<VariableSymbol>(), interesting, diagnostics);
@@ -389,7 +394,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         BoundSelectStatement selectStmt,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var afterSelect = new HashSet<VariableSymbol>(live);
         var union = new HashSet<VariableSymbol>();
@@ -427,7 +432,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         BoundFixedStatement fixedStmt,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var bodyLiveIn = AnalyzeRegion(fixedStmt.Body, live, new HashSet<VariableSymbol>(), interesting, diagnostics);
         bodyLiveIn.Remove(fixedStmt.PinnedVariable);
@@ -452,7 +457,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         BoundPatternSwitchStatement switchStmt,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         var afterSwitch = new HashSet<VariableSymbol>(live);
         var union = new HashSet<VariableSymbol>();
@@ -496,11 +501,11 @@ internal static class RefStructAsyncLivenessAnalyzer
     /// this same expression) is reported as unsafe.
     /// </summary>
     private static void ApplyExpression(
-        BoundExpression expression,
+        BoundExpression? expression,
         HashSet<VariableSymbol> live,
         HashSet<VariableSymbol> interesting,
-        DiagnosticBag diagnostics,
-        BoundStatement owningStatement)
+        DiagnosticBag? diagnostics,
+        BoundStatement? owningStatement)
     {
         if (expression == null)
         {
@@ -510,7 +515,7 @@ internal static class RefStructAsyncLivenessAnalyzer
         var collector = new ReadAndAwaitCollector(interesting);
         collector.VisitExpression(expression);
 
-        VariableSymbol killTarget = null;
+        VariableSymbol? killTarget = null;
         if (expression is BoundAssignmentExpression assign
             && interesting.Contains(assign.Variable)
             && !collector.Reads.Contains(assign.Variable))
@@ -540,9 +545,9 @@ internal static class RefStructAsyncLivenessAnalyzer
 
     private static void ReportIfUnsafe(
         HashSet<VariableSymbol> live,
-        VariableSymbol excludedSelfKill,
-        DiagnosticBag diagnostics,
-        BoundStatement owningStatement)
+        VariableSymbol? excludedSelfKill,
+        DiagnosticBag? diagnostics,
+        BoundStatement? owningStatement)
     {
         if (diagnostics == null)
         {

@@ -26,7 +26,7 @@ public sealed class BoundSlicePattern : BoundPattern
     /// for a pure discard slice (<c>..</c>) with no sub-pattern.</param>
     /// <param name="pattern">The optional sub-pattern matched against the middle
     /// slice value (typed <c>[]T</c>), or <c>null</c>.</param>
-    public BoundSlicePattern(SyntaxNode? syntax, TypeSymbol type, TypeSymbol elementType, LocalVariableSymbol variable, BoundPattern pattern)
+    public BoundSlicePattern(SyntaxNode? syntax, TypeSymbol type, TypeSymbol elementType, LocalVariableSymbol? variable, BoundPattern? pattern)
         : base(syntax, type)
     {
         ElementType = elementType;
@@ -44,8 +44,8 @@ public sealed class BoundSlicePattern : BoundPattern
     /// Gets the materialization target local for the middle slice, or <c>null</c>
     /// when the slice is a pure discard with no sub-pattern (no materialization).
     /// </summary>
-    public LocalVariableSymbol Variable { get; }
+    public LocalVariableSymbol? Variable { get; }
 
     /// <summary>Gets the optional sub-pattern matched against the middle slice, or <c>null</c>.</summary>
-    public BoundPattern Pattern { get; }
+    public BoundPattern? Pattern { get; }
 }
