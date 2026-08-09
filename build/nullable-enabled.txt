@@ -216,3 +216,5 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.IfLet.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.SwitchExpr.cs
 # Slice 40 -- operator, pointer, and lambda-body expression binding.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Operators.cs
+# Slice 41 -- lambda and function-literal binding contracts.
+src/Core/CodeAnalysis/Binding/LambdaBinder.cs

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -78,8 +80,8 @@ internal sealed class LambdaBinder
     private readonly Func<FunctionSymbol> getCurrentFunction;
     private readonly Action<FunctionSymbol> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
-    private readonly Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression;
-    private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList;
+    private readonly Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression;
+    private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LambdaBinder"/>
@@ -154,8 +156,8 @@ internal sealed class LambdaBinder
         Func<FunctionSymbol> getCurrentFunction,
         Action<FunctionSymbol> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
-        Func<ExpressionSyntax, BoundExpression> bindLambdaBodyExpression = null,
-        Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>> bindTypeParameterList = null)
+        Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression = null,
+        Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -194,7 +196,9 @@ internal sealed class LambdaBinder
     /// literal (possibly through a single
     /// <see cref="BoundConversionExpression"/> wrapper).</param>
     /// <returns><c>true</c> if a function literal was found.</returns>
-    public static bool TryGetFunctionLiteral(BoundExpression expression, out BoundFunctionLiteralExpression literal)
+    public static bool TryGetFunctionLiteral(
+        BoundExpression expression,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal)
     {
         if (expression is BoundFunctionLiteralExpression direct)
         {
@@ -231,7 +235,9 @@ internal sealed class LambdaBinder
     /// <c>&lt;lambdaN&gt;</c> synthetic name, so scope-based name lookup
     /// (<see cref="BoundScope.TryDeclareFunction"/>) can find it.</param>
     /// <returns>The bound function-literal expression.</returns>
-    public BoundExpression BindFunctionLiteralExpression(FunctionLiteralExpressionSyntax syntax, string explicitName = null)
+    public BoundExpression BindFunctionLiteralExpression(
+        FunctionLiteralExpressionSyntax syntax,
+        string? explicitName = null)
     {
         // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
         // Bind parameters, push a new scope chained to the current scope so
@@ -245,7 +251,9 @@ internal sealed class LambdaBinder
         foreach (var p in syntax.Parameters)
         {
             var pname = p.Identifier.Text;
-            var ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
+            var ptype = p.Type is TypeClauseSyntax type
+                ? bindTypeClause(type)
+                : TypeSymbol.Error;
 
             // ADR-0101 follow-up / issue #812: variadic parameters are now
             // accepted on function-literal lambdas. The body sees the
@@ -253,10 +261,12 @@ internal sealed class LambdaBinder
             // a typed delegate (the common case), pack/pass-through happens
             // on the indirect-call path inside OverloadResolver.
             var isVariadic = p.IsVariadic;
-            if (isVariadic && ptype != null && ptype != TypeSymbol.Error)
+            if (isVariadic && ptype != TypeSymbol.Error)
             {
                 ptype = SliceTypeSymbol.Get(ptype);
             }
+
+            var parameterType = Invariant.Required(ptype, "lambda parameter binding produces a type");
 
             // Issue #1262: the discard identifier `_` is not a real binding —
             // C# allows repeated `_` discard parameters (e.g. `(_, _) => ...`).
@@ -269,11 +279,11 @@ internal sealed class LambdaBinder
 
             var lambdaParam = new ParameterSymbol(
                 pname,
-                ptype,
+                parameterType,
                 isVariadic,
                 declaringSyntax: p.Identifier,
                 isScoped: p.IsScoped,
-                refKind: conversions.BindAndValidateParameterRefKind(p, pname, ptype, isVariadic, syntax.IsAsync ? "async" : null));
+                refKind: conversions.BindAndValidateParameterRefKind(p, pname, parameterType, isVariadic, syntax.IsAsync ? "async" : null));
 
             // ADR-0063 §5: function-literal (lambda) parameters can declare a
             // default value; lambdas can be invoked through their delegate type
@@ -503,7 +513,7 @@ internal sealed class LambdaBinder
     public BoundStatement BindGenericLocalFunctionDeclaration(VariableDeclarationSyntax syntax)
     {
         var name = syntax.Identifier.Text;
-        if (syntax.Keyword.Kind != SyntaxKind.LetKeyword || syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax)
+        if (syntax.Keyword?.Kind != SyntaxKind.LetKeyword || syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax)
         {
             Diagnostics.ReportGenericLocalFunctionMustBeLetBoundLiteral(syntax.Identifier.Location, name);
             return new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);
@@ -514,7 +524,12 @@ internal sealed class LambdaBinder
         ImmutableArray<TypeParameterSymbol> typeParameters;
         try
         {
-            typeParameters = bindTypeParameterList(syntax.TypeParameterList);
+            typeParameters = Invariant.Required(
+                bindTypeParameterList,
+                "generic local-function binding has a type-parameter callback")(
+                Invariant.Required(
+                    syntax.TypeParameterList,
+                    "a generic local-function declaration has a type-parameter list"));
 
             // Re-establish the type-parameter scope merged with any enclosing
             // ones (mirrors DeclarationBinder.BindDelegateDeclaration) so the
@@ -618,7 +633,10 @@ internal sealed class LambdaBinder
     /// method type parameter and a placeholder occupies the target's return
     /// slot).</param>
     /// <returns>The bound lambda as a <see cref="BoundFunctionLiteralExpression"/>.</returns>
-    public BoundExpression BindLambdaExpression(LambdaExpressionSyntax syntax, FunctionTypeSymbol targetFunctionType = null, bool inferReturnTypeFromBody = false)
+    public BoundExpression BindLambdaExpression(
+        LambdaExpressionSyntax syntax,
+        FunctionTypeSymbol? targetFunctionType = null,
+        bool inferReturnTypeFromBody = false)
     {
         if (bindLambdaBodyExpression == null)
         {
@@ -649,14 +667,20 @@ internal sealed class LambdaBinder
             TypeSymbol ptype;
             if (p.Type != null)
             {
-                ptype = bindTypeClause(p.Type) ?? TypeSymbol.Error;
+                var explicitType = p.Type;
+                ptype = bindTypeClause(
+                    Invariant.Required(explicitType, "an explicitly typed lambda parameter has a type clause"))
+                    ?? TypeSymbol.Error;
             }
             else if (arityMatchesTarget)
             {
                 // ADR-0076 / issue #716: target-typed parameter inference —
                 // an omitted parameter type is filled in from the target's
                 // corresponding slot.
-                ptype = targetFunctionType.ParameterTypes[i] ?? TypeSymbol.Error;
+                ptype = Invariant.Required(
+                    targetFunctionType,
+                    "a target-typed lambda has a target function type").ParameterTypes[i]
+                    ?? TypeSymbol.Error;
             }
             else
             {
@@ -684,10 +708,12 @@ internal sealed class LambdaBinder
                 ptype = SliceTypeSymbol.Get(ptype);
             }
 
+            var parameterType = Invariant.Required(ptype, "lambda parameter binding produces a type");
+
             var refKind = conversions.BindAndValidateParameterRefKind(
                 p,
                 pname,
-                ptype,
+                parameterType,
                 isVariadic,
                 isAsync ? "async" : null);
 
@@ -700,15 +726,20 @@ internal sealed class LambdaBinder
             // pairs retain their existing runtime-compatible behavior.
             if (p.Type != null
                 && arityMatchesTarget
-                && ptype != TypeSymbol.Error
-                && targetFunctionType.ParameterTypes[i] is TypeSymbol targetParameterType
+                && parameterType != TypeSymbol.Error
+                && Invariant.Required(
+                    targetFunctionType,
+                    "an explicitly typed lambda with a target has a target function type").ParameterTypes[i]
+                    is TypeSymbol targetParameterType
                 && targetParameterType != TypeSymbol.Error)
             {
                 var runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     targetParameterType,
-                    ptype);
-                var conversion = Conversion.ClassifyNonStructural(targetParameterType, ptype);
-                var structurallyCompatibleDelegate = ptype is FunctionTypeSymbol writtenFunctionType
+                    parameterType);
+                var conversion = Conversion.ClassifyNonStructural(
+                    targetParameterType,
+                    parameterType);
+                var structurallyCompatibleDelegate = parameterType is FunctionTypeSymbol writtenFunctionType
                     && targetParameterType is not FunctionTypeSymbol
                     && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(targetParameterType, out var targetDelegateFunctionType)
                     && Conversion.ClassifyNonStructural(targetDelegateFunctionType, writtenFunctionType).IsImplicit;
@@ -716,16 +747,24 @@ internal sealed class LambdaBinder
                     || structurallyCompatibleDelegate
                     || (refKind == RefKind.None
                         && (conversion.IsImplicit
-                            || conversions.HasUserDefinedImplicitConversion(targetParameterType, ptype)));
+                            || conversions.HasUserDefinedImplicitConversion(
+                                targetParameterType,
+                                parameterType)));
                 if (!compatible)
                 {
                     if (conversion.Exists)
                     {
-                        Diagnostics.ReportCannotConvertImplicitly(p.Type.Location, targetParameterType, ptype);
+                        Diagnostics.ReportCannotConvertImplicitly(
+                            p.Type.Location,
+                            targetParameterType,
+                            parameterType);
                     }
                     else
                     {
-                        Diagnostics.ReportCannotConvert(p.Type.Location, targetParameterType, ptype);
+                        Diagnostics.ReportCannotConvert(
+                            p.Type.Location,
+                            targetParameterType,
+                            parameterType);
                     }
 
                     hasIncompatibleExplicitParameter = true;
@@ -747,7 +786,7 @@ internal sealed class LambdaBinder
 
             var lambdaParam = new ParameterSymbol(
                 pname,
-                ptype,
+                parameterType,
                 isVariadic,
                 declaringSyntax: p.Identifier,
                 isScoped: p.IsScoped,
@@ -760,7 +799,7 @@ internal sealed class LambdaBinder
             conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
             AttachParameterAttributes(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
-            parameterTypes.Add(ptype);
+            parameterTypes.Add(parameterType);
         }
 
         if (hasIncompatibleExplicitParameter)
@@ -820,7 +859,9 @@ internal sealed class LambdaBinder
         BoundExpression boundBody;
         try
         {
-            boundBody = bindLambdaBodyExpression(syntax.Body);
+            boundBody = Invariant.Required(
+                bindLambdaBodyExpression,
+                "lambda binding has a body-expression callback")(syntax.Body);
             FinalizeNestedFrameLabels();
         }
         finally
@@ -926,9 +967,12 @@ internal sealed class LambdaBinder
             return literal;
         }
 
+        var target = Invariant.Required(
+            targetFunctionType,
+            "an explicit lambda parameter adapter has a target function type");
         var adapterTarget = FunctionTypeSymbol.Get(
-            targetFunctionType.ParameterTypes,
-            targetFunctionType.IsVariadic,
+            target.ParameterTypes,
+            target.IsVariadic,
             observableReturnType);
         return CreateErasedFunctionLiteralAdapter(
             literal,
@@ -1015,14 +1059,19 @@ internal sealed class LambdaBinder
             if (bindConvertedLocal)
             {
                 var converted = conversions.BindConversion(
-                    original.DeclaringSyntax?.Location ?? literal.Syntax.Location,
+                    original.DeclaringSyntax?.Location
+                        ?? Invariant.Required(
+                            literal.Syntax,
+                            "an adapted function literal has syntax").Location,
                     adapterRead,
                     original.Type);
+                var declaringSyntax = original.DeclaringSyntax
+                    ?? Invariant.Required(literal.Syntax, "an adapted function literal has syntax");
                 var convertedLocal = new LocalVariableSymbol(
                     $"<lambda_parameter{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
                     isReadOnly: true,
                     original.Type,
-                    original.DeclaringSyntax);
+                    declaringSyntax);
                 adapterPrefix.Add(new BoundVariableDeclaration(
                     original.DeclaringSyntax,
                     convertedLocal,
@@ -1126,7 +1175,9 @@ internal sealed class LambdaBinder
         BoundClrMethodGroupExpression group,
         FunctionTypeSymbol targetFunctionType)
     {
-        var method = group.ResolvedMethod;
+        var method = Invariant.Required(
+            group.ResolvedMethod,
+            "a CLR method-group adapter has a resolved method");
         var methodParameters = method.GetParameters();
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
@@ -1152,8 +1203,8 @@ internal sealed class LambdaBinder
 
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(targetFunctionType.ParameterTypes.Length);
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(methodParameters.Length);
-        LocalVariableSymbol receiverTemp = null;
-        BoundExpression adapterReceiver = group.Receiver;
+        LocalVariableSymbol? receiverTemp = null;
+        BoundExpression? adapterReceiver = group.Receiver;
         if (group.Receiver != null)
         {
             receiverTemp = new LocalVariableSymbol(
@@ -1168,7 +1219,9 @@ internal sealed class LambdaBinder
             arguments.Add(new BoundConversionExpression(
                 null,
                 ClrNullability.GetParameterTypeSymbol(methodParameters[0]),
-                adapterReceiver));
+                Invariant.Required(
+                    adapterReceiver,
+                    "a closed static method-group adapter has a receiver")));
         }
 
         for (var i = 0; i < targetFunctionType.ParameterTypes.Length; i++)
@@ -1176,7 +1229,9 @@ internal sealed class LambdaBinder
             var parameter = new ParameterSymbol(
                 $"arg{i}",
                 targetFunctionType.ParameterTypes[i],
-                declaringSyntax: group.Syntax);
+                declaringSyntax: Invariant.Required(
+                    group.Syntax,
+                    "a method-group adapter has syntax"));
             adapterParameters.Add(parameter);
             arguments.Add(new BoundConversionExpression(
                 null,
@@ -1191,7 +1246,9 @@ internal sealed class LambdaBinder
             ? new BoundClrStaticCallExpression(null, method, methodReturnType, arguments.MoveToImmutable())
             : new BoundImportedInstanceCallExpression(
                 null,
-                adapterReceiver,
+                Invariant.Required(
+                    adapterReceiver,
+                    "an instance method-group adapter has a receiver"),
                 method,
                 methodReturnType,
                 arguments.MoveToImmutable());
@@ -1484,7 +1541,7 @@ internal sealed class LambdaBinder
         }
     }
 
-    private static TypeSymbol ResolveLexicalEnclosingType(FunctionSymbol outerFunction)
+    private static TypeSymbol? ResolveLexicalEnclosingType(FunctionSymbol? outerFunction)
         => outerFunction?.ReceiverType
             ?? outerFunction?.StaticOwnerType
             ?? outerFunction?.LexicalEnclosingType;
@@ -1528,7 +1585,12 @@ internal sealed class LambdaBinder
 
         var trailingConverted = trailing.Type == returnType
             ? trailing
-            : conversions.BindConversion(trailingStatement.Syntax.Location, trailing, returnType);
+            : conversions.BindConversion(
+                Invariant.Required(
+                    trailingStatement.Syntax,
+                    "a bound trailing expression statement has syntax").Location,
+                trailing,
+                returnType);
 
         var rewritten = statements.ToBuilder();
         rewritten[^1] = new BoundReturnStatement(trailingStatement.Syntax, trailingConverted);
@@ -1662,7 +1724,7 @@ internal sealed class LambdaBinder
     private static TypeSymbol InferLambdaReturnType(
         BoundExpression boundBody,
         LambdaExpressionSyntax syntax,
-        FunctionTypeSymbol targetFunctionType,
+        FunctionTypeSymbol? targetFunctionType,
         bool isAsync)
     {
         if (boundBody is BoundErrorExpression)
@@ -1742,7 +1804,7 @@ internal sealed class LambdaBinder
         // every candidate is convertible to it — this handles the case where
         // the lambda value flows into a variable whose explicit type pins the
         // return type up-front.
-        TypeSymbol targetReturn = null;
+        TypeSymbol? targetReturn = null;
         if (targetFunctionType != null)
         {
             targetReturn = targetFunctionType.ReturnType;
@@ -1819,7 +1881,7 @@ internal sealed class LambdaBinder
     // surface; the rule is intentionally identical so a lambda's return-
     // type inference picks the same shape as a ternary expression mixing
     // the same operand types.
-    private static TypeSymbol ComputeLambdaCommonType(TypeSymbol left, TypeSymbol right)
+    private static TypeSymbol? ComputeLambdaCommonType(TypeSymbol? left, TypeSymbol? right)
     {
         if (left == null || right == null)
         {
@@ -1875,7 +1937,7 @@ internal sealed class LambdaBinder
     // compared against the candidates the body produces. Returns the
     // unwrapped type when the input is recognisably a Task shape;
     // otherwise returns the input unchanged.
-    private static TypeSymbol UnwrapTaskReturnType(TypeSymbol returnType)
+    private static TypeSymbol? UnwrapTaskReturnType(TypeSymbol? returnType)
     {
         if (returnType?.ClrType == null)
         {
@@ -2016,7 +2078,7 @@ internal sealed class LambdaBinder
     /// <param name="body">The bound body to scan.</param>
     /// <param name="enclosingTypeParameters">The in-scope type parameters owned by an enclosing method or class.</param>
     /// <returns>The first offending enclosing type parameter found, or <see langword="null"/> if none.</returns>
-    private static TypeParameterSymbol FindEnclosingTypeParameterReference(
+    private static TypeParameterSymbol? FindEnclosingTypeParameterReference(
         FunctionSymbol function,
         BoundStatement body,
         ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
@@ -2076,7 +2138,7 @@ internal sealed class LambdaBinder
 
         public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
 
-        public (string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)[] LoopStack { get; }
+        public (string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)[] LoopStack { get; }
     }
 
     // Issue #1451: collects the locals declared by inline `out var`/`out let`
@@ -2229,7 +2291,7 @@ internal sealed class LambdaBinder
         {
             var body = (BoundBlockStatement)this.RewriteStatement(node.Body);
             var captured = node.CapturedVariables;
-            ImmutableArray<VariableSymbol>.Builder builder = null;
+            ImmutableArray<VariableSymbol>.Builder? builder = null;
             for (var i = 0; i < captured.Length; i++)
             {
                 if (!this.substitution.TryGetValue(captured[i], out var replacement))
@@ -2307,7 +2369,9 @@ internal sealed class LambdaBinder
             return new BoundFieldAssignmentExpression(
                 fieldAssignment.Syntax,
                 replacement,
-                fieldAssignment.StructType,
+                Invariant.Required(
+                    fieldAssignment.StructType,
+                    "a variable field assignment has a struct type"),
                 fieldAssignment.Field,
                 fieldAssignment.Value,
                 fieldAssignment.ResultType);
@@ -2442,7 +2506,7 @@ internal sealed class LambdaBinder
             HashSet<VariableSymbol> parameters,
             HashSet<VariableSymbol> seen,
             ImmutableArray<VariableSymbol>.Builder captured,
-            IEnumerable<VariableSymbol> preDeclared = null)
+            IEnumerable<VariableSymbol>? preDeclared = null)
         {
             this.parameters = parameters;
             this.seen = seen;
@@ -2739,9 +2803,9 @@ internal sealed class LambdaBinder
             this.enclosingTypeParameters = enclosingTypeParameters;
         }
 
-        public TypeParameterSymbol Found { get; private set; }
+        public TypeParameterSymbol? Found { get; private set; }
 
-        public void CheckType(TypeSymbol type)
+        public void CheckType(TypeSymbol? type)
         {
             if (Found != null || type == null)
             {
@@ -2776,10 +2840,10 @@ internal sealed class LambdaBinder
                     CheckTypeArguments(userInstanceCall.MethodTypeArguments);
                     break;
                 case BoundImportedCallExpression importedCall:
-                    CheckTypeArguments(importedCall.TypeArgumentSymbols);
+                    CheckNullableTypeArguments(importedCall.TypeArgumentSymbols);
                     break;
                 case BoundImportedInstanceCallExpression importedInstanceCall:
-                    CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
+                    CheckNullableTypeArguments(importedInstanceCall.TypeArgumentSymbols);
                     break;
                 case BoundIsExpression isExpression:
                     CheckType(isExpression.TargetType);
@@ -2834,6 +2898,19 @@ internal sealed class LambdaBinder
         }
 
         private void CheckTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        {
+            if (typeArguments.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            foreach (var typeArgument in typeArguments)
+            {
+                CheckType(typeArgument);
+            }
+        }
+
+        private void CheckNullableTypeArguments(ImmutableArray<TypeSymbol?> typeArguments)
         {
             if (typeArguments.IsDefaultOrEmpty)
             {
