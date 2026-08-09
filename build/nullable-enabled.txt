@@ -131,3 +131,4 @@ src/Core/CodeAnalysis/Binding/BoundTreeRewriter.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Arguments.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Candidates.cs
+src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Invocations.cs

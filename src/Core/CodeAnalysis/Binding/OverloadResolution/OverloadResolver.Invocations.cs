@@ -7,6 +7,8 @@
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1202 // Elements should be ordered by access
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -48,7 +50,7 @@ internal sealed partial class OverloadResolver
         VariableSymbol variable,
         FunctionTypeSymbol fnType,
         ImmutableArray<BoundExpression> args,
-        TypeSymbol narrowedTargetType = null,
+        TypeSymbol? narrowedTargetType = null,
         ImmutableArray<RefKind> argumentRefKinds = default)
     {
         // Compute the receiver load and its static type for each variable
@@ -73,8 +75,8 @@ internal sealed partial class OverloadResolver
         }
         else if (TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var memberLoad, narrowedTargetType))
         {
-            receiverLoad = memberLoad;
-            receiverType = memberLoad.Type ?? narrowedTargetType ?? variable.Type;
+            receiverLoad = Invariant.Required(memberLoad, "an implicit member load succeeds with a bound expression");
+            receiverType = receiverLoad.Type ?? narrowedTargetType ?? variable.Type;
         }
         else
         {
@@ -141,7 +143,7 @@ internal sealed partial class OverloadResolver
         var resultType = returnType is NullableTypeSymbol
             ? returnType
             : (TypeSymbol)NullableTypeSymbol.Get(returnType);
-        LocalVariableSymbol resultSlot = null;
+        LocalVariableSymbol? resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
             && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
@@ -163,7 +165,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private static BoundExpression BuildImplicitFieldLoad(
         ImplicitFieldVariableSymbol implicitField,
-        TypeSymbol narrowedType = null) =>
+        TypeSymbol? narrowedType = null) =>
         new BoundFieldAccessExpression(
             null,
             new BoundVariableExpression(null, implicitField.Receiver),
@@ -178,7 +180,7 @@ internal sealed partial class OverloadResolver
         ImmutableArray<string> argumentNames,
         out BoundExpression result)
     {
-        result = null;
+        result = new BoundErrorExpression(null);
         if (syntax.NullableQuestionToken == null
             || variable.Type is not NullableTypeSymbol nullable
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(nullable.UnderlyingType, out var functionType))
@@ -187,7 +189,7 @@ internal sealed partial class OverloadResolver
         }
 
         var delegateLoad = TryBuildImplicitMemberLoad(variable, syntax.Identifier.Location, out var implicitLoad)
-            ? implicitLoad
+            ? Invariant.Required(implicitLoad, "an implicit member load succeeds with a bound expression")
             : new BoundVariableExpression(null, variable);
         if (delegateLoad is BoundErrorExpression)
         {
@@ -205,6 +207,7 @@ internal sealed partial class OverloadResolver
             && nullable.UnderlyingType.ClrType is System.Type delegateClr
             && ClrTypeUtilities.IsDelegateType(delegateClr))
         {
+            // The callback uses null to mean that no explicit type arguments were supplied.
             if (!tryBindInheritedClrInstanceCall(
                 captureRef,
                 delegateClr,
@@ -212,7 +215,7 @@ internal sealed partial class OverloadResolver
                 boundArguments,
                 syntax,
                 out whenNotNull,
-                explicitTypeArgs: null,
+                explicitTypeArgs: null!,
                 typeArgSymbols: default,
                 argumentNames))
             {
@@ -264,7 +267,7 @@ internal sealed partial class OverloadResolver
         var resultType = functionType.ReturnType is NullableTypeSymbol
             ? functionType.ReturnType
             : (TypeSymbol)NullableTypeSymbol.Get(functionType.ReturnType);
-        LocalVariableSymbol resultSlot = null;
+        LocalVariableSymbol? resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
             && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
@@ -332,7 +335,7 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         var permutedArgs = boundArguments;
         bool hasNamedArguments =
             syntax.Arguments.Any(argument => argument is NamedArgumentExpressionSyntax);
@@ -345,7 +348,8 @@ internal sealed partial class OverloadResolver
                     calleeName,
                     FirstNamedArgumentName(
                         syntax.Arguments
-                            .Select(argument => (argument as NamedArgumentExpressionSyntax)?.NameToken.Text)
+                            .OfType<NamedArgumentExpressionSyntax>()
+                            .Select(argument => argument.NameToken.Text)
                             .ToImmutableArray()));
                 return false;
             }
@@ -419,8 +423,8 @@ internal sealed partial class OverloadResolver
                 ? parameterSyntax[i]?.Location ?? syntax.Identifier.Location
                 : syntax.Identifier.Location;
             var argument = permutedArgs[i];
-            var argSyntax = i < parameterSyntax.Length
-                ? UnwrapNamedArgumentValue(parameterSyntax[i])
+            var argSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } parameterExpression
+                ? UnwrapNamedArgumentValue(parameterExpression)
                 : null;
             if (argSyntax != null
                 && bindLambdaWithTarget != null
@@ -485,7 +489,7 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         var arguments = boundArguments;
         if (!argumentNames.IsDefault && !isVariadic)
         {
@@ -572,8 +576,8 @@ internal sealed partial class OverloadResolver
             hasRefKinds |= parameter.RefKind != RefKind.None;
 
             var argument = arguments[i];
-            var argumentSyntax = i < parameterSyntax.Length
-                ? UnwrapNamedArgumentValue(parameterSyntax[i])
+            var argumentSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } parameterExpression
+                ? UnwrapNamedArgumentValue(parameterExpression)
                 : null;
             var argumentLocation = argumentSyntax?.Location ?? syntax.Identifier.Location;
             if (parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax)
@@ -670,8 +674,8 @@ internal sealed partial class OverloadResolver
     private bool TryBuildImplicitMemberLoad(
         VariableSymbol variable,
         TextLocation location,
-        out BoundExpression load,
-        TypeSymbol narrowedType = null)
+        out BoundExpression? load,
+        TypeSymbol? narrowedType = null)
     {
         load = null;
         switch (variable)
@@ -684,9 +688,11 @@ internal sealed partial class OverloadResolver
                 }
                 else
                 {
+                    // Static member access has no instance receiver; this constructor's
+                    // non-null annotation predates its use for static fields.
                     load = new BoundFieldAccessExpression(
                         null,
-                        receiver: null,
+                        receiver: null!,
                         staticField.StructType,
                         staticField.Field,
                         narrowedType);
@@ -724,9 +730,11 @@ internal sealed partial class OverloadResolver
                     return true;
                 }
 
+                // Static member access has no instance receiver; this constructor's
+                // non-null annotation predates its use for static properties.
                 load = new BoundPropertyAccessExpression(
                     null,
-                    receiver: null,
+                    receiver: null!,
                     staticProp.StructType,
                     staticProp.Property,
                     narrowedType);
@@ -772,7 +780,7 @@ internal sealed partial class OverloadResolver
     /// Walks the active frame stack innermost-first — the topmost narrowing
     /// wins, mirroring the name-expression lookup.
     /// </summary>
-    private TypeSymbol TryGetNarrowedVariableType(VariableSymbol variable)
+    private TypeSymbol? TryGetNarrowedVariableType(VariableSymbol variable)
     {
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
@@ -795,6 +803,7 @@ internal sealed partial class OverloadResolver
                 || (variable is ImplicitPropertyVariableSymbol prop && prop.Property.HasGetter));
         if (isNarrowableImplicitMember
             && TryBuildImplicitMemberLoad(variable, default, out var memberLoad)
+            && memberLoad is not null
             && memberLoad is not BoundErrorExpression
             && SmartCastStability.TryGetStablePath(memberLoad) is AccessPath memberPath
             && memberPath.HasMembers)
@@ -822,7 +831,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression BindIndirectCallExpression(CallExpressionSyntax syntax)
     {
-        var calleeSyntax = syntax.Callee;
+        var calleeSyntax = Invariant.Required(syntax.Callee, "an indirect call has a callee expression");
         var callee = bindExpression(calleeSyntax);
         var calleeName = calleeSyntax.SyntaxTree.Text.ToString(calleeSyntax.Span);
         return BindIndirectCallExpression(
@@ -845,7 +854,7 @@ internal sealed partial class OverloadResolver
             return callee;
         }
 
-        BoundNullConditionalAccessExpression nullConditionalCallee = null;
+        BoundNullConditionalAccessExpression? nullConditionalCallee = null;
         var assertions = new Stack<BoundUnaryExpression>();
         var assertedCallee = callee;
         while (assertedCallee is BoundUnaryExpression assertion
@@ -861,7 +870,9 @@ internal sealed partial class OverloadResolver
             callee = assertedNullConditional.WhenNotNull;
             while (assertions.TryPop(out var assertion))
             {
-                var assertionOperator = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, callee.Type);
+                var assertionOperator = Invariant.Required(
+                    BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, callee.Type),
+                    "a null assertion has a bound unary operator");
                 callee = new BoundUnaryExpression(
                     assertion.Syntax,
                     assertionOperator,
@@ -964,7 +975,7 @@ internal sealed partial class OverloadResolver
         // callable through its `Invoke` method, mirroring the direct-call path.
         if (callee.Type?.ClrType is System.Type calleeClrType && ClrTypeUtilities.IsDelegateType(calleeClrType))
         {
-            if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
+            if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null!, default, argumentNames))
             {
                 return CompleteInvocation(invokeCall);
             }
@@ -1011,7 +1022,7 @@ internal sealed partial class OverloadResolver
         // positional calls may omit trailing optional parameters; the omitted
         // slots are padded from each parameter's captured default value after
         // the reorder below.
-        ExpressionSyntax[] permutedSyntax;
+        ExpressionSyntax?[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
         if (!argumentNames.IsDefault)
         {
@@ -1072,7 +1083,7 @@ internal sealed partial class OverloadResolver
         // left-to-right inference from the receiver and argument types matched
         // against the declared parameter types. Mirrors the free-function
         // generic path (Phase 4.1 / ADR-0020).
-        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null;
         if (extension.IsGeneric)
         {
             substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
@@ -1147,7 +1158,10 @@ internal sealed partial class OverloadResolver
 
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(extension.Parameters.Length);
         var receiverParamType = substitution != null ? substituteType(extension.Parameters[0].Type, substitution) : extension.Parameters[0].Type;
-        convertedArgs.Add(conversions.BindConversion(ce.Location, receiver, receiverParamType));
+        convertedArgs.Add(conversions.BindConversion(
+            ce.Location,
+            Invariant.Required(receiver, "an extension call has a bound receiver"),
+            receiverParamType));
         for (var i = 0; i < permutedArguments.Length; i++)
         {
             var paramType = extension.Parameters[i + 1].Type;
@@ -1177,7 +1191,9 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            var argLoc = i < permutedSyntax.Length ? permutedSyntax[i].Location : ce.Location;
+            var argLoc = i < permutedSyntax.Length
+                ? permutedSyntax[i]?.Location ?? ce.Location
+                : ce.Location;
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
         }
 
@@ -1227,7 +1243,7 @@ internal sealed partial class OverloadResolver
         return new BoundCallExpression(null, extension, finalArguments) { MethodTypeArguments = extensionMethodTypeArguments };
     }
 
-    public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol constrainedReceiverTypeParameter = null)
+    public BoundExpression BindUserInstanceCall(BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, ImmutableArray<string> argumentNames = default, TypeParameterSymbol? constrainedReceiverTypeParameter = null)
     {
         // Issue #950 / #2044 / #2058: enforce `protected`/`private` method
         // access — a `protected` method is only callable from the declaring
@@ -1301,7 +1317,7 @@ internal sealed partial class OverloadResolver
         // order. ADR-0063 / issue #1319: positional calls may omit trailing
         // optional parameters; the omitted slots are padded from each
         // parameter's captured default value after the reorder below.
-        ExpressionSyntax[] permutedSyntax;
+        ExpressionSyntax?[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
         if (!argumentNames.IsDefault && !isVariadic)
         {
@@ -1361,7 +1377,7 @@ internal sealed partial class OverloadResolver
         // type with the receiver's type-argument map. The method symbol
         // itself (and its bound body) are kept intact so runtime dispatch
         // through program.Functions[method] continues to work.
-        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = TryBuildReceiverSubstitution(receiver.Type);
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = TryBuildReceiverSubstitution(receiver.Type);
 
         // Issue #312 / ADR-0020: the method may declare its own generic
         // type-parameter list (`func M[T](...) T`). Resolve those type
@@ -1499,7 +1515,7 @@ internal sealed partial class OverloadResolver
                     return new BoundErrorExpression(null);
                 }
 
-                var newSyntax = new ExpressionSyntax[fixedCallableParamCount + 1];
+                var newSyntax = new ExpressionSyntax?[fixedCallableParamCount + 1];
                 for (var i = 0; i < fixedCallableParamCount; i++)
                 {
                     newSyntax[i] = permutedSyntax[i];
@@ -1540,7 +1556,7 @@ internal sealed partial class OverloadResolver
             {
                 var slotSyntax = i < permutedSyntax.Length ? permutedSyntax[i] : null;
                 var pointeeType = substitution != null ? substituteType(paramType, substitution) : paramType;
-                var reboundOutVar = tryRebindInlineOutVarPlaceholder(permutedArguments[i], slotSyntax, parameter, pointeeType);
+                var reboundOutVar = tryRebindInlineOutVarPlaceholder(permutedArguments[i], slotSyntax!, parameter, pointeeType);
                 if (reboundOutVar != null)
                 {
                     convertedArgs.Add(reboundOutVar);
@@ -1619,7 +1635,7 @@ internal sealed partial class OverloadResolver
             convertedArgs.ToImmutable(),
             p => method.Parameters[p + parameterOffset].Name);
 
-        BoundUserInstanceCallExpression MakeCall(TypeSymbol returnTypeOverride)
+        BoundUserInstanceCallExpression MakeCall(TypeSymbol? returnTypeOverride)
         {
             var result = new BoundUserInstanceCallExpression(null, receiver, method, finalArguments, returnTypeOverride, constrainedReceiverTypeParameter, constrainedReceiverTypeParameter?.InterfaceConstraint);
             result.MethodTypeArguments = methodTypeArguments;
@@ -1653,7 +1669,7 @@ internal sealed partial class OverloadResolver
         return MakeCall(returnTypeOverride: null);
     }
 
-    private static Dictionary<TypeParameterSymbol, TypeSymbol> TryBuildReceiverSubstitution(TypeSymbol receiverType)
+    private static Dictionary<TypeParameterSymbol, TypeSymbol>? TryBuildReceiverSubstitution(TypeSymbol receiverType)
     {
         if (receiverType is not StructSymbol start)
         {
@@ -1669,7 +1685,7 @@ internal sealed partial class OverloadResolver
         // seen at the most-derived level. Walk the chain accumulating each
         // class's declaration-parameter -> (resolved) argument mappings, exactly
         // like Conversion.DerivesFromConstructed threads its map for subtyping.
-        Dictionary<TypeParameterSymbol, TypeSymbol> map = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? map = null;
         for (var c = start; c != null; c = c.BaseClass)
         {
             // Issue #1537: a receiver that is a generic type nested inside a
