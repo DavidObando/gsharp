@@ -135,3 +135,7 @@ src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Invocations.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.CallBinding.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Constructors.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/ClrOverloadResolution.cs
+
+# Slice 12 -- operator metadata helpers shared by binding and overload resolution.
+src/Core/CodeAnalysis/Binding/OperatorNames.cs
+src/Core/CodeAnalysis/Binding/NumericWideningLattice.cs

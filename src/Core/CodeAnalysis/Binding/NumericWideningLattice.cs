@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -93,7 +95,7 @@ internal static class NumericWideningLattice
     /// </summary>
     /// <param name="clrFullName">The CLR <see cref="Type.FullName"/> to test.</param>
     /// <returns><see langword="true"/> when the type is a numeric primitive.</returns>
-    public static bool IsNumericPrimitive(string clrFullName)
+    public static bool IsNumericPrimitive(string? clrFullName)
         => clrFullName != null && NumericClrFullNames.Contains(clrFullName);
 
     /// <summary>
@@ -106,7 +108,7 @@ internal static class NumericWideningLattice
     /// <param name="fromClrFullName">Source CLR <see cref="Type.FullName"/>.</param>
     /// <param name="toClrFullName">Target CLR <see cref="Type.FullName"/>.</param>
     /// <returns><see langword="true"/> when the source widens to the target.</returns>
-    public static bool IsWidening(string fromClrFullName, string toClrFullName)
+    public static bool IsWidening(string? fromClrFullName, string? toClrFullName)
         => fromClrFullName != null
             && toClrFullName != null
             && WideningTargetsBySource.TryGetValue(fromClrFullName, out var targets)
@@ -120,7 +122,7 @@ internal static class NumericWideningLattice
     /// <param name="from">Source CLR type.</param>
     /// <param name="to">Target CLR type.</param>
     /// <returns><see langword="true"/> when the source widens to the target.</returns>
-    public static bool IsWidening(Type from, Type to)
+    public static bool IsWidening(Type? from, Type? to)
         => IsWidening(from?.FullName, to?.FullName);
 
     /// <summary>
@@ -130,7 +132,7 @@ internal static class NumericWideningLattice
     /// </summary>
     /// <param name="fromClrFullName">Source CLR <see cref="Type.FullName"/>.</param>
     /// <returns>The set of CLR full names the source widens to.</returns>
-    public static IReadOnlyCollection<string> WideningTargets(string fromClrFullName)
+    public static IReadOnlyCollection<string> WideningTargets(string? fromClrFullName)
         => fromClrFullName != null && WideningTargetsBySource.TryGetValue(fromClrFullName, out var targets)
             ? targets
             : EmptyTargets;
