@@ -183,3 +183,5 @@ src/Core/CodeAnalysis/Binding/StatementBinder.Jumps.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Blocks.cs
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Attributes.cs
+# Slice 26 -- declaration binder core contracts and declaration dispatch.
+src/Core/CodeAnalysis/Binding/DeclarationBinder.cs

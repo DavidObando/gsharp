@@ -95,7 +95,7 @@ public sealed class StructSymbol : TypeSymbol
     private ImmutableArray<TypeSymbol> implementedClrInterfacesStore = ImmutableArray<TypeSymbol>.Empty;
     private ImmutableArray<EventSymbol> eventsStore = ImmutableArray<EventSymbol>.Empty;
     private TypeSymbol importedBaseTypeStore;
-    private StructSymbol baseClassStore;
+    private StructSymbol? baseClassStore;
     private BaseClassSnapshot substitutedBaseClass;
     private ParameterArraySnapshot substitutedPrimaryConstructorParameters;
     private InterfaceArraySnapshot substitutedInterfaces;
@@ -217,7 +217,7 @@ public sealed class StructSymbol : TypeSymbol
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
-        StructSymbol baseClass)
+        StructSymbol? baseClass)
         : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass, primaryConstructorParameters, isOpen, baseClass, clrType: null)
     {
     }
@@ -250,7 +250,7 @@ public sealed class StructSymbol : TypeSymbol
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
-        StructSymbol baseClass,
+        StructSymbol? baseClass,
         Type clrType)
         : base(name, clrType)
     {
@@ -366,7 +366,7 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
-    public StructSymbol BaseClass
+    public StructSymbol? BaseClass
     {
         get
         {
@@ -748,7 +748,7 @@ public sealed class StructSymbol : TypeSymbol
     /// be called exactly once by the binder during <c>BindStructDeclaration</c>.
     /// </summary>
     /// <param name="baseClass">The resolved base class symbol, or <c>null</c>.</param>
-    public void SetBaseClass(StructSymbol baseClass)
+    public void SetBaseClass(StructSymbol? baseClass)
     {
         Volatile.Write(ref baseClassStore, baseClass);
     }
@@ -1972,7 +1972,7 @@ public sealed class StructSymbol : TypeSymbol
         return Interlocked.CompareExchange(ref substitutionMap, map, null) ?? map;
     }
 
-    private StructSymbol GetSubstitutedBaseClass()
+    private StructSymbol? GetSubstitutedBaseClass()
     {
         var source = Definition.BaseClass;
         var snapshot = Volatile.Read(ref substitutedBaseClass);
@@ -2608,15 +2608,15 @@ public sealed class StructSymbol : TypeSymbol
 
     private sealed class BaseClassSnapshot
     {
-        public BaseClassSnapshot(StructSymbol source, StructSymbol value)
+        public BaseClassSnapshot(StructSymbol? source, StructSymbol? value)
         {
             Source = source;
             Value = value;
         }
 
-        public StructSymbol Source { get; }
+        public StructSymbol? Source { get; }
 
-        public StructSymbol Value { get; }
+        public StructSymbol? Value { get; }
     }
 
     private sealed class ParameterArraySnapshot
