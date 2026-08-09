@@ -289,3 +289,16 @@ src/Core/CodeAnalysis/Symbols/FunctionTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/InterfaceSymbol.cs
 src/Core/CodeAnalysis/Symbols/NullableTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/PinnedTypeSymbol.cs
+
+# Slice 55 -- symbol metadata, accessibility, and generic discriminants.
+src/Core/CodeAnalysis/Symbols/Accessibility.cs
+src/Core/CodeAnalysis/Symbols/AccessibilityChecker.cs
+src/Core/CodeAnalysis/Symbols/MarshalAsMetadata.cs
+src/Core/CodeAnalysis/Symbols/MemberKinds.cs
+src/Core/CodeAnalysis/Symbols/PInvokeMetadata.cs
+src/Core/CodeAnalysis/Symbols/ReferenceMetadataIndex.cs
+src/Core/CodeAnalysis/Symbols/StructLayoutMetadata.cs
+src/Core/CodeAnalysis/Symbols/SymbolKind.cs
+src/Core/CodeAnalysis/Symbols/TypeArgsKey.cs
+src/Core/CodeAnalysis/Symbols/TypeParameterConstraint.cs
+src/Core/CodeAnalysis/Symbols/TypeParameterVariance.cs

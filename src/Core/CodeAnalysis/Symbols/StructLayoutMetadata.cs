@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Runtime.InteropServices;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
