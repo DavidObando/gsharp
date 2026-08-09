@@ -147,7 +147,7 @@ internal sealed partial class StatementBinder
     /// before control reaches the next iteration.</param>
     private BoundStatement BindLoopBody(
         StatementSyntax body,
-        string labelName,
+        string? labelName,
         out BoundLabel breakLabel,
         out BoundLabel continueLabel,
         int inheritedNarrowingFrameCount = -1,
