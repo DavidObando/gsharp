@@ -206,3 +206,5 @@ src/Core/CodeAnalysis/Binding/SubmissionGlobalTypeProjection.cs
 src/Core/CodeAnalysis/Binding/ConversionClassifier.cs
 # Slice 36 -- nullable lifting and CLR Nullable<T> conversion helpers.
 src/Core/CodeAnalysis/Symbols/NullableLifting.cs
+# Slice 37 -- conversion classification contracts.
+src/Core/CodeAnalysis/Binding/Conversion.cs

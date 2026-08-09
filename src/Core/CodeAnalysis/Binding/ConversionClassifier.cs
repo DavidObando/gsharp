@@ -2488,7 +2488,9 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        var conversion = Conversion.Classify(source, target);
+        var conversion = Conversion.Classify(
+            Invariant.Required(source, "numeric return widening has a source type"),
+            Invariant.Required(target, "numeric return widening has a target type"));
         return conversion.Exists && conversion.IsImplicit;
     }
 

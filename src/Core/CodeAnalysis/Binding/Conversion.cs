@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -123,6 +126,9 @@ public sealed class Conversion
         {
             to = toAnnotated.BaseType;
         }
+
+        from = Invariant.Required(from, "conversion classification always has a source type");
+        to = Invariant.Required(to, "conversion classification always has a target type");
 
         if (from == to)
         {
@@ -496,10 +502,16 @@ public sealed class Conversion
                 // rule above and intentionally excluded here. Note this never
                 // makes `T? → U` (non-nullable target, handled below) implicit,
                 // so the narrowing null-dropping conversion still errors.
-                if (IsReferenceLikeTarget(fromNullable.UnderlyingType)
-                    && IsReferenceLikeTarget(toNullable.UnderlyingType))
+                var fromUnderlying = Invariant.Required(
+                    fromNullable.UnderlyingType,
+                    "a nullable source has an underlying type");
+                var toUnderlying = Invariant.Required(
+                    toNullable.UnderlyingType,
+                    "a nullable target has an underlying type");
+                if (IsReferenceLikeTarget(fromUnderlying)
+                    && IsReferenceLikeTarget(toUnderlying))
                 {
-                    var underlyingConversion = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+                    var underlyingConversion = Classify(fromUnderlying, toUnderlying);
                     if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
                     {
                         return Conversion.Implicit;
@@ -516,7 +528,7 @@ public sealed class Conversion
                 // `BoundConversionExpression` so emit inserts the box.
                 if (fromNullable.UnderlyingType?.ClrType is { IsValueType: true })
                 {
-                    var boxedConversion = Classify(fromNullable.UnderlyingType, toNullable.UnderlyingType);
+                    var boxedConversion = Classify(fromUnderlying, toUnderlying);
                     if (boxedConversion.Exists && boxedConversion.IsImplicit)
                     {
                         return Conversion.Implicit;
@@ -531,7 +543,7 @@ public sealed class Conversion
                 // throws InvalidCastException. Keep this explicit-only and
                 // symbol-aware so primitive/imported/user enum or struct
                 // targets and `[T struct] T?` all share the same rule.
-                if (HasExplicitUnboxingConversion(fromNullable.UnderlyingType, toNullable))
+                if (HasExplicitUnboxingConversion(fromUnderlying, toNullable))
                 {
                     return Conversion.Explicit;
                 }
@@ -543,7 +555,9 @@ public sealed class Conversion
             // distinct symbols for the same referenced CLR type. Compare the
             // bare source with the nullable underlying through the ordinary
             // identity classifier instead of reference equality.
-            if (ClassifyNonStructural(from, toNullable.UnderlyingType).IsIdentity)
+            if (ClassifyNonStructural(
+                    Invariant.Required(from, "conversion classification has a source type"),
+                    Invariant.Required(toNullable.UnderlyingType, "a nullable target has an underlying type")).IsIdentity)
             {
                 return Conversion.Implicit;
             }
@@ -569,7 +583,10 @@ public sealed class Conversion
                 // arm for (NotSupportedException at emit for e.g.
                 // `Source → System.Uri?`). ClassifyNonStructural callers now
                 // also stop classifying a projection-only pair as implicit.
-                var underlyingConversion = ClassifyCore(from, toNullable.UnderlyingType, allowStructuralProjection);
+                var underlyingConversion = ClassifyCore(
+                    Invariant.Required(from, "conversion classification has a source type"),
+                    Invariant.Required(toNullable.UnderlyingType, "a nullable target has an underlying type"),
+                    allowStructuralProjection);
                 if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
                 {
                     return underlyingConversion.IsStructuralProjection
@@ -622,7 +639,10 @@ public sealed class Conversion
                 return Conversion.Implicit;
             }
 
-            if (IsInterfaceLikeType(to) && TypeParameterConvertsTo(nullableUnderlyingTypeParam, to))
+            if (IsInterfaceLikeType(to)
+                && TypeParameterConvertsTo(
+                    nullableUnderlyingTypeParam,
+                    Invariant.Required(to, "a conversion target is present")))
             {
                 return Conversion.Implicit;
             }
@@ -653,7 +673,10 @@ public sealed class Conversion
         // G#-declared-type-or-constraint arm below is relaxed.
         if (from == TypeSymbol.Null && !(to is NullableTypeSymbol))
         {
-            return IsNilAssignableWithoutNullableWrapper(to) ? Conversion.Implicit : Conversion.None;
+            return IsNilAssignableWithoutNullableWrapper(
+                Invariant.Required(to, "a conversion classification has a target type"))
+                ? Conversion.Implicit
+                : Conversion.None;
         }
 
         // ADR-0102 follow-up / issue #818: two anonymous function types that
@@ -697,7 +720,9 @@ public sealed class Conversion
         // resolved without depending on reflection over `ClrType`.
         if (from is FunctionTypeSymbol fnFromSymbolic
             && to is not FunctionTypeSymbol
-            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(to, out var toFnSymbolic)
+            && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                Invariant.Required(to, "a delegate conversion has a target type"),
+                out var toFnSymbolic)
             && IsFunctionShapeAssignable(fnFromSymbolic, toFnSymbolic))
         {
             return Conversion.Implicit;
@@ -913,7 +938,9 @@ public sealed class Conversion
         // implementing `System.IComparable`) use the CLR's
         // `IsAssignableFrom` check.
         if (IsValueTypeLikeFrom(from) && IsInterfaceLikeType(to)
-            && IsValueTypeAssignableToInterface(from, to))
+            && IsValueTypeAssignableToInterface(
+                Invariant.Required(from, "a value-type conversion has a source type"),
+                Invariant.Required(to, "a value-type conversion has a target type")))
         {
             return Conversion.Implicit;
         }
@@ -1156,7 +1183,7 @@ public sealed class Conversion
         // `AreTypeArgumentsEquivalent` requires the elements to match.
         if (from is SliceTypeSymbol sliceSrcSym && sliceSrcSym.ClrType == null)
         {
-            TypeSymbol targetElementSym = to switch
+            TypeSymbol? targetElementSym = to switch
             {
                 SliceTypeSymbol toSlice => toSlice.ElementType,
                 ArrayTypeSymbol toArray => toArray.ElementType,
@@ -1605,7 +1632,7 @@ public sealed class Conversion
     /// </summary>
     /// <param name="type">The candidate (non-nullable-wrapper) target type.</param>
     /// <returns><see langword="true"/> when <c>nil</c> converts to <paramref name="type"/> without a <c>T?</c> wrapper.</returns>
-    internal static bool IsNilAssignableWithoutNullableWrapper(TypeSymbol type)
+    internal static bool IsNilAssignableWithoutNullableWrapper(TypeSymbol? type)
     {
         return type is InterfaceSymbol
             || type is StructSymbol { IsClass: true }
@@ -1765,7 +1792,9 @@ public sealed class Conversion
                 return true;
             }
 
-            var underlyingConversion = Classify(classConstraint, target);
+            var underlyingConversion = Classify(
+                classConstraint,
+                Invariant.Required(target, "a type-parameter conversion has a target type"));
             if (underlyingConversion.Exists && underlyingConversion.IsImplicit)
             {
                 return true;
@@ -1780,7 +1809,7 @@ public sealed class Conversion
     /// may itself be an imported CLR interface (e.g. when the interface bound's
     /// own <c>ClrType</c> is populated during a later phase).
     /// </summary>
-    private static bool ClrInterfaceMatches(InterfaceSymbol iface, TypeSymbol target)
+    private static bool ClrInterfaceMatches(InterfaceSymbol iface, TypeSymbol? target)
     {
         return iface?.ClrType != null && target?.ClrType != null
             && ClrTypeUtilities.IsAssignableByName(target.ClrType, iface.ClrType);
@@ -1790,7 +1819,7 @@ public sealed class Conversion
     /// Issue #1196: determines whether an imported CLR-typed constraint source is
     /// assignable to the target via the cross-context-safe by-name check.
     /// </summary>
-    private static bool ClrAssignableTarget(TypeSymbol source, TypeSymbol target)
+    private static bool ClrAssignableTarget(TypeSymbol? source, TypeSymbol? target)
     {
         if (source == target)
         {
@@ -1856,7 +1885,10 @@ public sealed class Conversion
     /// projected through <see cref="TypeSymbol.FromClrType"/> so primitive
     /// aliases and their BCL counterparts unify.
     /// </summary>
-    private static bool TryGetConstructedGenericShape(ImportedTypeSymbol symbol, out Type openDefinition, out ImmutableArray<TypeSymbol> typeArguments)
+    private static bool TryGetConstructedGenericShape(
+        ImportedTypeSymbol symbol,
+        [NotNullWhen(true)] out Type? openDefinition,
+        out ImmutableArray<TypeSymbol> typeArguments)
     {
         if (symbol.OpenDefinition != null && !symbol.TypeArguments.IsDefaultOrEmpty)
         {
@@ -2020,7 +2052,7 @@ public sealed class Conversion
     {
         // Maps each visited class's declaration type parameters onto concrete
         // type arguments resolved in fromClass's context, composed across hops.
-        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
 
         for (var c = fromClass; c != null; c = c.BaseClass)
         {
@@ -2066,7 +2098,7 @@ public sealed class Conversion
     private static bool MatchesConstructedTarget(
         StructSymbol c,
         StructSymbol toClass,
-        Dictionary<TypeParameterSymbol, TypeSymbol> running)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? running)
     {
         if (!ReferenceEquals(c.Definition, toClass.Definition))
         {
@@ -2267,7 +2299,9 @@ public sealed class Conversion
         // return type. Consulted by CLR full name so it is safe across reflection
         // contexts. Narrowing and signed/unsigned same-width mismatches are not
         // accepted here; they still require an explicit cast.
-        return WidensNumerically(fnReturnClr, invokeReturnType);
+        return WidensNumerically(
+            fnReturnClr,
+            Invariant.Required(invokeReturnType, "a resolved delegate Invoke method has a return type"));
     }
 
     /// <summary>
@@ -2283,7 +2317,10 @@ public sealed class Conversion
     /// actual type argument. Returns <see langword="false"/> when no usable
     /// <c>Invoke</c> can be resolved.
     /// </summary>
-    private static bool TryGetDelegateInvokeSignature(Type delegateType, out Type[] parameterTypes, out Type returnType)
+    private static bool TryGetDelegateInvokeSignature(
+        Type delegateType,
+        out Type[] parameterTypes,
+        [NotNullWhen(true)] out Type? returnType)
     {
         parameterTypes = Array.Empty<Type>();
         returnType = null;
@@ -2335,7 +2372,7 @@ public sealed class Conversion
             return false;
         }
 
-        Type Substitute(Type t)
+        Type? Substitute(Type? t)
         {
             if (t != null && t.IsGenericParameter)
             {
@@ -2353,10 +2390,14 @@ public sealed class Conversion
         parameterTypes = new Type[openParms.Length];
         for (var i = 0; i < openParms.Length; i++)
         {
-            parameterTypes[i] = Substitute(openParms[i].ParameterType);
+            parameterTypes[i] = Invariant.Required(
+                Substitute(openParms[i].ParameterType),
+                "a delegate Invoke parameter type is present");
         }
 
-        returnType = Substitute(openInvoke.ReturnType);
+        returnType = Invariant.Required(
+            Substitute(openInvoke.ReturnType),
+            "a delegate Invoke method has a return type");
         return true;
     }
 
@@ -2518,7 +2559,7 @@ public sealed class Conversion
     // directions are explicit per C# §10.3.3 / §10.3.4 — the binder must
     // permit them so the cast syntax (`int32(myEnum)`) reaches the emitter,
     // which then routes them through the underlying numeric primitive.
-    private static bool TryClassifyEnumConversion(TypeSymbol from, TypeSymbol to, out Conversion conversion)
+    private static bool TryClassifyEnumConversion(TypeSymbol? from, TypeSymbol? to, out Conversion conversion)
     {
         var fromIsEnum = IsEnumLikeType(from);
         var toIsEnum = IsEnumLikeType(to);
@@ -2627,7 +2668,7 @@ public sealed class Conversion
         return conversion.Exists && conversion.IsImplicit;
     }
 
-    private static bool IsEnumLikeType(TypeSymbol type)
+    private static bool IsEnumLikeType(TypeSymbol? type)
     {
         if (type is EnumSymbol)
         {
@@ -2655,11 +2696,11 @@ public sealed class Conversion
     /// behaves as a reference type for conversion and equality purposes in both
     /// its nullable (<c>T?</c>) and non-nullable (<c>T</c>) forms.
     /// </summary>
-    private static bool IsReferenceConstrainedTypeParameter(TypeSymbol type)
+    private static bool IsReferenceConstrainedTypeParameter(TypeSymbol? type)
         => type is TypeParameterSymbol tp
             && (tp.HasReferenceTypeConstraint || tp.ClassConstraint != null);
 
-    private static bool IsInterfaceLikeType(TypeSymbol type)
+    private static bool IsInterfaceLikeType(TypeSymbol? type)
     {
         if (type is InterfaceSymbol)
         {
@@ -2685,7 +2726,7 @@ public sealed class Conversion
         }
     }
 
-    private static bool HasExplicitUnboxingConversion(TypeSymbol from, TypeSymbol to)
+    private static bool HasExplicitUnboxingConversion(TypeSymbol? from, TypeSymbol? to)
     {
         if (from is NullableTypeSymbol nullableFrom)
         {
@@ -2729,7 +2770,7 @@ public sealed class Conversion
             && IsValueTypeAssignableToInterface(to, from);
     }
 
-    private static bool IsValueTypeLikeFrom(TypeSymbol type)
+    private static bool IsValueTypeLikeFrom(TypeSymbol? type)
     {
         if (type is TypeParameterSymbol { HasValueTypeConstraint: true })
         {
@@ -2757,7 +2798,7 @@ public sealed class Conversion
         return type?.ClrType != null && type.ClrType.IsValueType;
     }
 
-    private static bool IsValueTypeAssignableToInterface(TypeSymbol from, TypeSymbol to)
+    private static bool IsValueTypeAssignableToInterface(TypeSymbol? from, TypeSymbol? to)
     {
         // Nullable<T> has the boxing conversions of its underlying value type:
         // a present value boxes as T and a missing value boxes as null.
@@ -2835,7 +2876,7 @@ public sealed class Conversion
     /// <c>System.ValueTuple&lt;…&gt;</c> instantiation (with identical
     /// closed element types).
     /// </summary>
-    private static bool IsTupleClrEquivalent(TypeSymbol a, TypeSymbol b)
+    private static bool IsTupleClrEquivalent(TypeSymbol? a, TypeSymbol? b)
     {
         if (a == null || b == null)
         {
