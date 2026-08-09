@@ -227,3 +227,7 @@ src/Core/CodeAnalysis/Binding/StatementBinder.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Loops.cs
 # Slice 45 -- declaration binder interface implementation verification.
 src/Core/CodeAnalysis/Binding/DeclarationBinder.InterfaceVerification.cs
+# Slice 46 -- control-flow and definite-assignment analysis.
+src/Core/CodeAnalysis/Binding/ControlFlowGraph.cs
+src/Core/CodeAnalysis/Binding/DefiniteAssignmentAnalyzer.cs
+src/Core/CodeAnalysis/Binding/ExhaustivenessAnalyzer.cs

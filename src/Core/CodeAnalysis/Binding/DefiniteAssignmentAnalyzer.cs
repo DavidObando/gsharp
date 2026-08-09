@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -51,9 +53,9 @@ internal static class DefiniteAssignmentAnalyzer
     private static void AnalyzeWithCaptured(
         BoundBlockStatement body,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
-        IEnumerable<VariableSymbol> capturedAssigned,
-        IEnumerable<VariableSymbol> capturedTracked)
+        DiagnosticBag? diagnostics,
+        IEnumerable<VariableSymbol>? capturedAssigned,
+        IEnumerable<VariableSymbol>? capturedTracked)
     {
         if (body == null || function == null)
         {
@@ -127,7 +129,7 @@ internal static class DefiniteAssignmentAnalyzer
             // are simply skipped on this rare path.
             foreach (var op in outParams)
             {
-                diagnostics.ReportOutParameterNotAssigned(function.Declaration?.Location ?? default(TextLocation), op.Name);
+                diagnostics?.ReportOutParameterNotAssigned(function.Declaration?.Location ?? default(TextLocation), op.Name);
             }
         }
     }
@@ -145,21 +147,21 @@ internal static class DefiniteAssignmentAnalyzer
     /// paths are merged and returned. Returns null when the region never
     /// completes normally.
     /// </summary>
-    private static HashSet<VariableSymbol> AnalyzeRegion(
+    private static HashSet<VariableSymbol>? AnalyzeRegion(
         BoundStatement regionBody,
         HashSet<VariableSymbol> initialAssigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel,
+        BoundLabel? methodExitLabel,
         bool isFunctionBody = false)
     {
         var graph = ControlFlowGraph.Create(AsBlock(regionBody));
 
-        var entryAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>>();
-        var exitAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>>();
+        var entryAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>?>();
+        var exitAssigned = new Dictionary<ControlFlowGraph.BasicBlock, HashSet<VariableSymbol>?>();
         foreach (var b in graph.Blocks)
         {
             entryAssigned[b] = b.IsStart ? new HashSet<VariableSymbol>(initialAssigned) : null;
@@ -178,7 +180,7 @@ internal static class DefiniteAssignmentAnalyzer
                     continue;
                 }
 
-                HashSet<VariableSymbol> entry;
+                HashSet<VariableSymbol>? entry;
                 if (block.IsStart)
                 {
                     entry = new HashSet<VariableSymbol>(initialAssigned);
@@ -214,7 +216,13 @@ internal static class DefiniteAssignmentAnalyzer
                     changed = true;
                 }
 
-                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(entryAssigned[block]), outParams, function, null, pointerAliases, tracked, methodExitLabel);
+                var currentEntry = entryAssigned[block];
+                if (currentEntry is null)
+                {
+                    continue;
+                }
+
+                var exit = SimulateBlock(block, new HashSet<VariableSymbol>(currentEntry), outParams, function, null, pointerAliases, tracked, methodExitLabel);
                 var prevExit = exitAssigned[block];
                 if (prevExit == null || !SetsEqual(prevExit, exit))
                 {
@@ -268,7 +276,7 @@ internal static class DefiniteAssignmentAnalyzer
 
         // Not the function body: discard throw paths, check function-return
         // paths, and merge normal fall-through paths.
-        HashSet<VariableSymbol> normalExit = null;
+        HashSet<VariableSymbol>? normalExit = null;
         var anyNormal = false;
         foreach (var endBranch in graph.End.Incoming)
         {
@@ -306,7 +314,7 @@ internal static class DefiniteAssignmentAnalyzer
         return anyNormal ? normalExit : null;
     }
 
-    private static BoundLabel FindMethodExitLabel(BoundBlockStatement body)
+    private static BoundLabel? FindMethodExitLabel(BoundBlockStatement body)
     {
         if (body.Statements.Length >= 2
             && body.Statements[^2] is BoundLabelStatement { Syntax: null } label
@@ -318,7 +326,7 @@ internal static class DefiniteAssignmentAnalyzer
         return null;
     }
 
-    private static BoundBlockStatement AsBlock(BoundStatement statement)
+    private static BoundBlockStatement AsBlock(BoundStatement? statement)
     {
         if (statement is BoundBlockStatement block)
         {
@@ -379,10 +387,10 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
         foreach (var statement in block.Statements)
         {
@@ -397,10 +405,10 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
         switch (statement)
         {
@@ -543,10 +551,10 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
         var preTry = new HashSet<VariableSymbol>(assigned);
 
@@ -576,7 +584,7 @@ internal static class DefiniteAssignmentAnalyzer
         // outer CFG's synthetic fall-through is unreachable. Unreachable is
         // the top state for a must analysis, so it cannot create a second,
         // false GS0238 at the function's synthetic final return.
-        if (anyReachable)
+        if (anyReachable && meet is not null)
         {
             assigned.Clear();
             assigned.UnionWith(meet);
@@ -608,12 +616,12 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
-        HashSet<VariableSymbol> meet = null;
+        HashSet<VariableSymbol>? meet = null;
         var any = false;
 
         foreach (var c in selectStmt.Cases)
@@ -644,7 +652,7 @@ internal static class DefiniteAssignmentAnalyzer
             meet = meet == null ? caseExit : Intersect(meet, caseExit);
         }
 
-        if (any)
+        if (any && meet is not null)
         {
             assigned.Clear();
             assigned.UnionWith(meet);
@@ -659,10 +667,10 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
         ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases, tracked);
 
@@ -695,14 +703,14 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> assigned,
         ImmutableArray<ParameterSymbol> outParams,
         FunctionSymbol function,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        BoundLabel methodExitLabel)
+        BoundLabel? methodExitLabel)
     {
         ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases, tracked);
 
-        HashSet<VariableSymbol> meet = null;
+        HashSet<VariableSymbol>? meet = null;
         var any = false;
         var hasDefault = false;
 
@@ -734,7 +742,7 @@ internal static class DefiniteAssignmentAnalyzer
             any = true;
         }
 
-        if (any)
+        if (any && meet is not null)
         {
             assigned.Clear();
             assigned.UnionWith(meet);
@@ -768,7 +776,7 @@ internal static class DefiniteAssignmentAnalyzer
         }
     }
 
-    private static bool TryResolvePointerTarget(BoundExpression pointerExpr, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, out VariableSymbol target)
+    private static bool TryResolvePointerTarget(BoundExpression pointerExpr, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, out VariableSymbol? target)
     {
         if (pointerExpr is BoundAddressOfExpression addr && addr.Operand is BoundVariableExpression bve)
         {
@@ -796,7 +804,7 @@ internal static class DefiniteAssignmentAnalyzer
         BoundVariableExpression read,
         HashSet<VariableSymbol> assigned,
         HashSet<VariableSymbol> tracked,
-        DiagnosticBag diagnostics)
+        DiagnosticBag? diagnostics)
     {
         if (diagnostics == null
             || read.Variable == null
@@ -812,7 +820,7 @@ internal static class DefiniteAssignmentAnalyzer
             read.Variable.Type.Name);
     }
 
-    private static void ProcessExpression(BoundExpression expression, HashSet<VariableSymbol> assigned, DiagnosticBag diagnostics, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, HashSet<VariableSymbol> tracked)
+    private static void ProcessExpression(BoundExpression? expression, HashSet<VariableSymbol> assigned, DiagnosticBag? diagnostics, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, HashSet<VariableSymbol> tracked)
     {
         if (expression == null)
         {
@@ -889,7 +897,10 @@ internal static class DefiniteAssignmentAnalyzer
                 ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases, tracked);
                 if (TryResolvePointerTarget(indirect.Pointer, pointerAliases, out var indirectTarget))
                 {
-                    assigned.Add(indirectTarget);
+                    if (indirectTarget is not null)
+                    {
+                        assigned.Add(indirectTarget);
+                    }
                 }
 
                 break;
@@ -923,10 +934,10 @@ internal static class DefiniteAssignmentAnalyzer
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<ParameterSymbol> parameters,
         HashSet<VariableSymbol> assigned,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode callSyntax)
+        SyntaxNode? callSyntax)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
@@ -939,10 +950,10 @@ internal static class DefiniteAssignmentAnalyzer
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> refKinds,
         HashSet<VariableSymbol> assigned,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode callSyntax)
+        SyntaxNode? callSyntax)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
@@ -955,10 +966,10 @@ internal static class DefiniteAssignmentAnalyzer
         BoundExpression argument,
         RefKind refKind,
         HashSet<VariableSymbol> assigned,
-        DiagnosticBag diagnostics,
+        DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode callSyntax)
+        SyntaxNode? callSyntax)
     {
         if (refKind != RefKind.None
             && argument is BoundAddressOfExpression { Operand: BoundVariableExpression variable })
@@ -1005,9 +1016,9 @@ internal static class DefiniteAssignmentAnalyzer
     {
         private readonly HashSet<VariableSymbol> assigned;
         private readonly HashSet<VariableSymbol> tracked;
-        private readonly DiagnosticBag diagnostics;
+        private readonly DiagnosticBag? diagnostics;
 
-        public FunctionLiteralAndUseWalker(HashSet<VariableSymbol> assigned, HashSet<VariableSymbol> tracked, DiagnosticBag diagnostics)
+        public FunctionLiteralAndUseWalker(HashSet<VariableSymbol> assigned, HashSet<VariableSymbol> tracked, DiagnosticBag? diagnostics)
         {
             this.assigned = assigned;
             this.tracked = tracked;
