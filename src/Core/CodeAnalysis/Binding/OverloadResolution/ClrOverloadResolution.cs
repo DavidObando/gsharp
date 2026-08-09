@@ -1273,7 +1273,7 @@ internal static class ClrOverloadResolution
                 return false;
             }
 
-            MethodInfo invoke;
+            MethodInfo? invoke;
             ParameterInfo[] invokeParams;
             try
             {
@@ -1714,8 +1714,8 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        MethodInfo targetInvoke;
-        MethodInfo sourceInvoke;
+        MethodInfo? targetInvoke;
+        MethodInfo? sourceInvoke;
         try
         {
             targetInvoke = target.GetMethodSafe("Invoke");

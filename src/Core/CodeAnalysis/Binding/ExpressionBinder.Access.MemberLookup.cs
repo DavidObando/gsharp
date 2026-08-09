@@ -243,7 +243,7 @@ internal sealed partial class ExpressionBinder
                 if (classSymbol != null)
                 {
                     var foundMember = classSymbol.TryLookupMember(ne.IdentifierToken.Text, ne, out var staticMember);
-                    if (!foundMember)
+                    if (!foundMember || staticMember is null)
                     {
                         // Issue #337: a static member name that resolves to a
                         // method (not a field/property) is a method group. In a

@@ -991,7 +991,7 @@ internal sealed partial class ExpressionBinder
             if (GetInheritedClrBaseType(structSymbol) is System.Type inheritedBaseClr)
             {
                 var memberName = syntax.FieldIdentifier.Text;
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
                 {
@@ -2259,7 +2259,7 @@ internal sealed partial class ExpressionBinder
             // base chain and include inherited protected members).
             if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
             {
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
                 if (clrMember != null)
                 {

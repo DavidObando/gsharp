@@ -1307,7 +1307,7 @@ public sealed class Lowerer : BoundTreeRewriter
         enumeratorType = null;
 
         var collectionType = collection.Type;
-        System.Type openDef;
+        System.Type? openDef;
         ImmutableArray<TypeSymbol> typeArguments;
 
         switch (collectionType)
@@ -1337,6 +1337,11 @@ public sealed class Lowerer : BoundTreeRewriter
                 break;
             default:
                 return false;
+        }
+
+        if (openDef is null)
+        {
+            return false;
         }
 
         // Determine the IEnumerable<X> element CLR type from the open

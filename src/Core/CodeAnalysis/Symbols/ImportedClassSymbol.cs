@@ -2,11 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -41,7 +42,7 @@ public sealed class ImportedClassSymbol : Symbol
         ExpressionSyntax? declaration,
         ImportedTypeSymbol? symbolicReceiver = null,
         ReferenceResolver? references = null)
-        : base(type.FullName)
+        : base(type.FullName ?? type.Name)
     {
         ClassType = type;
         Declaration = declaration;
@@ -65,19 +66,19 @@ public sealed class ImportedClassSymbol : Symbol
     /// member access recovers symbolic member types and the emitter parents
     /// static member references at the constructed generic TypeSpec.
     /// </summary>
-    public ImportedTypeSymbol SymbolicReceiver { get; }
+    public ImportedTypeSymbol? SymbolicReceiver { get; }
 
     /// <summary>
     /// Gets the active reference resolver for the current compilation, when
     /// available. Used so imported-member lookup can honor friendship from
     /// <c>InternalsVisibleTo</c> on referenced assemblies.
     /// </summary>
-    public ReferenceResolver References { get; }
+    public ReferenceResolver? References { get; }
 
     /// <summary>
     /// Gets the imported class declaration.
     /// </summary>
-    public ExpressionSyntax Declaration { get; }
+    public ExpressionSyntax? Declaration { get; }
 
     /// <summary>
     /// Tries to get a static member (field or property) from this imported
@@ -88,7 +89,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="ne">The name expression (currently unused; reserved for diagnostics).</param>
     /// <param name="member">The resulting member when found.</param>
     /// <returns>Whether we found a matching public static field or property.</returns>
-    public bool TryLookupMember(string text, NameExpressionSyntax? ne, out MemberInfo member)
+    public bool TryLookupMember(string text, NameExpressionSyntax? ne, [NotNullWhen(true)] out MemberInfo? member)
     {
         _ = ne;
         var level = FindNearestNamedMemberLevel(text);
@@ -147,7 +148,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// array indicates an all-positional call site (the common path).
     /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null)
         => TryLookupFunction(text, callExpression, arguments, out function, out parameterMapping, out isAmbiguous, out _, out _, explicitTypeArgs, typeArgSymbols, projectTypeArgument, argumentNames);
 
     /// <summary>
@@ -167,7 +168,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
     /// <param name="argumentNames">Per-source-argument names parallel to <paramref name="arguments"/>.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null)
         => TryLookupFunction(text, callExpression, arguments, out function, out parameterMapping, out isAmbiguous, out ambiguousMethods, out _, explicitTypeArgs, typeArgSymbols, projectTypeArgument, argumentNames);
 
     /// <summary>
@@ -189,7 +190,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
     /// <param name="argumentNames">Per-source-argument names parallel to <paramref name="arguments"/>.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null, IReadOnlyList<string> argumentNames = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null)
     {
         function = null;
         parameterMapping = default;
@@ -204,7 +205,7 @@ public sealed class ImportedClassSymbol : Symbol
             return false;
         }
 
-        var argTypes = new Type[arguments.Length];
+        var argTypes = new Type?[arguments.Length];
         var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
@@ -328,7 +329,7 @@ public sealed class ImportedClassSymbol : Symbol
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
             ? (source, target) => IsUserClassAssignableToInterface(arguments, argTypes, source, target)
             : null;
 
@@ -338,7 +339,7 @@ public sealed class ImportedClassSymbol : Symbol
         // satisfy `where T : struct`, e.g. MemoryMarshal.Cast/AsBytes).
         var symbolicArgVector = MemberLookup.BuildSymbolicArgTypeVector(
             receiverType: null,
-            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+            ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
         nameMatches = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             nameMatches,
             symbolicArgVector,
@@ -359,7 +360,9 @@ public sealed class ImportedClassSymbol : Symbol
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
-            methodGroupInference: ExpressionBinder.MakeMethodGroupInference(arguments, ProjectMethodGroupType));
+            methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
+                arguments,
+                type => Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable")));
 
         switch (result.Outcome)
         {
@@ -368,9 +371,10 @@ public sealed class ImportedClassSymbol : Symbol
                 // of its method type parameters and was closed over a user-defined
                 // type argument (placeholder CLR type), recover the real return
                 // type from the explicit type-argument symbol.
-                TypeSymbol returnOverride = null;
+                TypeSymbol? returnOverride = null;
+                var bestMethod = Invariant.Required(result.Best, "a resolved overload has a selected method");
                 if (!typeArgSymbols.IsDefaultOrEmpty
-                    && ClrOverloadResolution.TryGetGenericMethodParameterReturnPosition(result.Best, out var position)
+                    && ClrOverloadResolution.TryGetGenericMethodParameterReturnPosition(bestMethod, out var position)
                     && position >= 0
                     && position < typeArgSymbols.Length)
                 {
@@ -385,14 +389,14 @@ public sealed class ImportedClassSymbol : Symbol
                 if (returnOverride == null)
                 {
                     var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
-                        result.Best,
+                        bestMethod,
                         typeArgSymbols,
                         symbolicArgVector,
                         result.IsExpanded);
-                    returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(result.Best, symbolicMethodTypeArgs, receiverType: null);
+                    returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(bestMethod, symbolicMethodTypeArgs, receiverType: null);
                 }
 
-                function = new ImportedFunctionSymbol(text, this, result.Best, callExpression, returnOverride);
+                function = new ImportedFunctionSymbol(text, this, bestMethod, callExpression, returnOverride);
                 parameterMapping = result.ParameterMapping;
                 isExpanded = result.IsExpanded;
                 return true;
@@ -419,7 +423,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="typeArgSymbols">Explicit type-argument symbols in source order, or default.</param>
     /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function, out bool isAmbiguous, Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type> projectTypeArgument = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out bool isAmbiguous, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null)
         => TryLookupFunction(text, callExpression, arguments, out function, out _, out isAmbiguous, explicitTypeArgs, typeArgSymbols, projectTypeArgument);
 
     /// <summary>
@@ -430,7 +434,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="arguments">The bound arguments.</param>
     /// <param name="function">The resulting function, if one is found.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, out ImportedFunctionSymbol function)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function)
         => TryLookupFunction(text, callExpression, arguments, out function, out _);
 
     /// <summary>
@@ -450,7 +454,7 @@ public sealed class ImportedClassSymbol : Symbol
                 && IsVisibleToCurrentCompilation(m))
             .ToImmutableArray();
 
-    private static Type ProjectMethodGroupType(TypeSymbol type)
+    private static Type? ProjectMethodGroupType(TypeSymbol type)
     {
         var clrType = NullableTypeSymbol.GetEffectiveClrType(type);
         if (clrType != null)
@@ -478,14 +482,14 @@ public sealed class ImportedClassSymbol : Symbol
     /// <c>IFormattable</c>/<c>FormattableString</c> parameters. Returns
     /// <see langword="null"/> when no argument qualifies (the common path).
     /// </summary>
-    private static System.Collections.Generic.IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(CallExpressionSyntax callExpression, int count)
+    private static System.Collections.Generic.IReadOnlyList<bool>? ComputeInterpolatedStringArgFlags(CallExpressionSyntax callExpression, int count)
     {
         if (callExpression == null)
         {
             return null;
         }
 
-        bool[] flags = null;
+        bool[]? flags = null;
         var argumentSyntax = callExpression.Arguments;
         var limit = Math.Min(count, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
@@ -544,7 +548,7 @@ public sealed class ImportedClassSymbol : Symbol
         return NamedMemberLevel.Empty;
     }
 
-    private static Type GetBaseTypeSafe(Type type)
+    private static Type? GetBaseTypeSafe(Type type)
     {
         try
         {
@@ -602,7 +606,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// </summary>
     private static bool IsUserClassAssignableToInterface(
         ImmutableArray<BoundExpression> boundArguments,
-        Type[] argTypes,
+        Type?[] argTypes,
         Type source,
         Type target)
     {

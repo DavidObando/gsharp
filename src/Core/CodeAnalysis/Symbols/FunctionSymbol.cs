@@ -66,7 +66,7 @@ public sealed class FunctionSymbol : Symbol
         FunctionDeclarationSyntax? declaration,
         PackageSymbol? package,
         Accessibility accessibility,
-        StructSymbol receiverType)
+        StructSymbol? receiverType)
         : this(name, parameters, type, declaration, package, accessibility, receiverType, isOpen: false, isOverride: false)
     {
     }

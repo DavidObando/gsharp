@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
@@ -60,7 +60,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <summary>
     /// Gets the declaration.
     /// </summary>
-    public ExpressionSyntax Declaration { get; }
+    public ExpressionSyntax? Declaration { get; }
 
     /// <summary>
     /// Gets the imported function type.
@@ -68,7 +68,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     public TypeSymbol Type { get; }
 
     /// <inheritdoc/>
-    public override DocumentationComment GetDocumentation()
+    public override DocumentationComment? GetDocumentation()
     {
         return AssemblyDocumentationProvider.Resolve(Method) ?? base.GetDocumentation();
     }
@@ -76,6 +76,6 @@ public sealed class ImportedFunctionSymbol : Symbol
     private TypeSymbol GetMethodType(MethodInfo method)
     {
         var returnType = ClrNullability.GetReturnTypeSymbol(method);
-        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass?.References);
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass.References);
     }
 }
