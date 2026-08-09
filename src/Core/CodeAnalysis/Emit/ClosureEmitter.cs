@@ -428,7 +428,10 @@ internal sealed class ClosureEmitter
         // Issue #2669: field accesses inside a reified generic closure's Invoke
         // must be parented at the constructed display-class TypeSpec, including
         // fields whose own type is non-generic.
-        var rewriter = new CaptureRewriter(constructedClass, captureFields, invokeMethod.ThisParameter);
+        var rewriter = new CaptureRewriter(
+            constructedClass,
+            captureFields,
+            Invariant.Required(invokeMethod.ThisParameter, "a closure Invoke method has an instance receiver"));
         var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
         if (rewriter.UnsupportedCapture != null)
         {

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -652,7 +654,7 @@ public sealed class Binder
     /// <param name="previous">The previous global scope.</param>
     /// <param name="syntaxTrees">The new syntax trees.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees)
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope? previous, ImmutableArray<SyntaxTree> syntaxTrees)
         => BindGlobalScope(previous, syntaxTrees, references: null, implicitSystemImport: true);
 
     /// <summary>
@@ -664,7 +666,7 @@ public sealed class Binder
     /// <param name="syntaxTrees">The new syntax trees.</param>
     /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references)
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope? previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver? references)
         => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport: true);
 
     /// <summary>
@@ -675,7 +677,7 @@ public sealed class Binder
     /// <param name="references">The reference resolver; <c>null</c> selects <see cref="ReferenceResolver.Default"/>.</param>
     /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport)
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope? previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver? references, bool implicitSystemImport)
         => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols: null);
 
     /// <summary>
@@ -690,7 +692,7 @@ public sealed class Binder
     /// <param name="implicitSystemImport">When <c>true</c>, an implicit <c>import System</c> is seeded before user imports are processed.</param>
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols)
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope? previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver? references, bool implicitSystemImport, ImmutableHashSet<string>? preprocessorSymbols)
         => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols, isLibrary: false);
 
     /// <summary>
@@ -707,7 +709,7 @@ public sealed class Binder
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; <c>null</c> means the empty set.</param>
     /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary)
+    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope? previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver? references, bool implicitSystemImport, ImmutableHashSet<string>? preprocessorSymbols, bool isLibrary)
         => BindGlobalScope(previous, syntaxTrees, references, implicitSystemImport, preprocessorSymbols, isLibrary, submission: null);
 
     /// <summary>
@@ -725,7 +727,14 @@ public sealed class Binder
     /// <param name="isLibrary">When <c>true</c>, the compilation produces a library and top-level statements are reported as <c>GS0285</c> at the first global statement.</param>
     /// <param name="submission">Interactive submission options, or <c>null</c> for an ordinary compilation.</param>
     /// <returns>The new chained bound global scope.</returns>
-    public static BoundGlobalScope BindGlobalScope(BoundGlobalScope previous, ImmutableArray<SyntaxTree> syntaxTrees, ReferenceResolver references, bool implicitSystemImport, ImmutableHashSet<string> preprocessorSymbols, bool isLibrary, SubmissionBindingOptions submission)
+    public static BoundGlobalScope BindGlobalScope(
+        BoundGlobalScope? previous,
+        ImmutableArray<SyntaxTree> syntaxTrees,
+        ReferenceResolver? references,
+        bool implicitSystemImport,
+        ImmutableHashSet<string>? preprocessorSymbols,
+        bool isLibrary,
+        SubmissionBindingOptions? submission)
     {
         var parentScope = CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees: false, submissionImports: submission?.Imports);
         var binder = new Binder(parentScope, function: null);
@@ -1543,7 +1552,7 @@ public sealed class Binder
     /// referenced libraries or third-party packages) to fail inside bodies.
     /// </param>
     /// <returns>A bound program.</returns>
-    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references = null)
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references = null)
     {
         return BindProgram(globalScope, references, cache: null);
     }
@@ -1568,7 +1577,7 @@ public sealed class Binder
     /// emitted IL or the diagnostics relative to a from-scratch bind.
     /// </param>
     /// <returns>A bound program.</returns>
-    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache)
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references, BoundBodyCache cache)
         => BindProgram(globalScope, references, cache, dirtyTrees: null);
 
     /// <summary>
@@ -1593,7 +1602,7 @@ public sealed class Binder
     /// cache when the soundness gate allows it.
     /// </param>
     /// <returns>A bound program.</returns>
-    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver references, BoundBodyCache cache, ImmutableHashSet<SyntaxTree> dirtyTrees)
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references, BoundBodyCache? cache, ImmutableHashSet<SyntaxTree>? dirtyTrees)
     {
         var parentScope = CreateParentScope(globalScope, references, preprocessorSymbols: globalScope?.PreprocessorSymbols, preserveLatestImportSyntaxTrees: true);
 

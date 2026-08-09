@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -136,7 +138,7 @@ public sealed class FieldSymbol : Symbol
     /// </summary>
     /// <param name="staticConstructorOwner">The type whose <c>.cctor</c> is active, or <c>null</c>.</param>
     /// <returns><c>true</c> when taking the field address is legal.</returns>
-    internal bool IsStaticAddressLegal(Symbol staticConstructorOwner)
+    internal bool IsStaticAddressLegal(Symbol? staticConstructorOwner)
     {
         if (!(IsReadOnly && IsStatic) || IsConst)
         {

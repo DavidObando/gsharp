@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -112,7 +114,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName)
         : this(name, fields, accessibility, declaration, packageName, isData: false, isInline: false)
     {
@@ -132,7 +134,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline = false)
@@ -155,7 +157,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -180,7 +182,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -208,7 +210,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -241,7 +243,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -278,7 +280,7 @@ public sealed class StructSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the declaring syntax node.</summary>
-    public StructDeclarationSyntax Declaration { get; private set; }
+    public StructDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }

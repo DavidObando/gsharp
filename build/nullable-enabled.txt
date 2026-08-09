@@ -119,3 +119,8 @@ src/Core/CodeAnalysis/Emit/SlotPlanner.cs
 src/Core/CodeAnalysis/Emit/BclMember.cs
 src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs
 src/Core/CodeAnalysis/Emit/StateMachineEmitter.cs
+# Slice 10a -- symbol member state contracts.
+src/Core/CodeAnalysis/Symbols/EventSymbol.cs
+src/Core/CodeAnalysis/Symbols/FunctionSymbol.cs
+src/Core/CodeAnalysis/Symbols/PropertySymbol.cs
+src/Core/CodeAnalysis/Symbols/BaseConstructorInitializer.cs

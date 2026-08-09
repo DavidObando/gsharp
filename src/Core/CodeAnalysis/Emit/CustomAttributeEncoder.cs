@@ -498,7 +498,12 @@ internal sealed class CustomAttributeEncoder
             return;
         }
 
-        if (!this.emitCtx.References.TryResolveType(clrType.FullName, requireExternalVisibility: false, out var resolved))
+        if (clrType.FullName is not { } fullName)
+        {
+            return;
+        }
+
+        if (!this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved))
         {
             resolved = clrType;
         }

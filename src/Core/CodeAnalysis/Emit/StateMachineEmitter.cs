@@ -625,22 +625,42 @@ internal sealed class StateMachineEmitter
             var reset = new FunctionSymbol("Reset", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             smClass.SetMethods(ImmutableArray.Create(moveNext, getCurrent, getCurrentObject, getEnumerator, getEnumeratorObject, dispose, reset));
 
-            var moveNextBody = IteratorMoveNextBodyBuilder.BuildWithFieldAccess(plan, stateField, currentField, moveNext.ThisParameter, smClass, fieldMap).Body;
+            var moveNextBody = IteratorMoveNextBodyBuilder.BuildWithFieldAccess(
+                plan,
+                stateField,
+                currentField,
+                Invariant.Required(moveNext.ThisParameter, "a state-machine method has an instance receiver"),
+                smClass,
+                fieldMap).Body;
             this.lambdaBodies[moveNext] = moveNextBody;
             this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrent.ThisParameter), smClass, currentField)))));
+                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(
+                    null,
+                    Invariant.Required(getCurrent.ThisParameter, "a state-machine method has an instance receiver")), smClass, currentField)))));
             this.lambdaBodies[getCurrentObject] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
                 new BoundReturnStatement(null,
                     new BoundConversionExpression(
                     null,
                     TypeSymbol.FromClrType(typeof(object)),
-                    new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrentObject.ThisParameter), smClass, currentField))))));
-            this.lambdaBodies[dispose] = IteratorMoveNextBodyBuilder.BuildDisposeBody(plan, stateField, dispose.ThisParameter, smClass, fieldMap);
+                    new BoundFieldAccessExpression(null, new BoundVariableExpression(
+                        null,
+                        Invariant.Required(getCurrentObject.ThisParameter, "a state-machine method has an instance receiver")), smClass, currentField))))));
+            this.lambdaBodies[dispose] = IteratorMoveNextBodyBuilder.BuildDisposeBody(
+                plan,
+                stateField,
+                Invariant.Required(dispose.ThisParameter, "a state-machine method has an instance receiver"),
+                smClass,
+                fieldMap);
             this.lambdaBodies[reset] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(null, reset.ThisParameter, smClass, stateField, new BoundLiteralExpression(null, -1))),
+                new BoundExpressionStatement(null, new BoundFieldAssignmentExpression(
+                    null,
+                    Invariant.Required(reset.ThisParameter, "a state-machine method has an instance receiver"),
+                    smClass,
+                    stateField,
+                    new BoundLiteralExpression(null, -1))),
                 new BoundReturnStatement(null, null))));
 
             // Issue #810: the GetEnumerator and the outer-method kickoff
@@ -663,14 +683,54 @@ internal sealed class StateMachineEmitter
                 // MakeGenericType, mirroring #1958's InterfaceSymbol/StructSymbol fix.
                 : StructSymbol.Construct(smClass, scopeTPs.CastArray<TypeSymbol>(), this.emitCtx.References.MapClrTypeToReferences);
 
+            var getEnumeratorThisParameter = Invariant.Required(getEnumerator.ThisParameter, "a state-machine method has an instance receiver");
+            var getEnumeratorObjectThisParameter = Invariant.Required(getEnumeratorObject.ThisParameter, "a state-machine method has an instance receiver");
+            BoundExpression GetEnumeratorField(ParameterSymbol parameter)
+                => new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, getEnumeratorThisParameter),
+                    smClass,
+                    parameterFields[parameter]);
+            BoundExpression GetEnumeratorObjectField(ParameterSymbol parameter)
+                => new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, getEnumeratorObjectThisParameter),
+                    smClass,
+                    parameterFields[parameter]);
+            var getEnumeratorThisProxy = thisProxyField != null
+                ? new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, getEnumeratorThisParameter),
+                    smClass,
+                    thisProxyField)
+                : null;
+            var getEnumeratorObjectThisProxy = thisProxyField != null
+                ? new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, getEnumeratorObjectThisParameter),
+                    smClass,
+                    thisProxyField)
+                : null;
             this.lambdaBodies[getEnumerator] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, parameterFields[p]),
-                    thisProxyField, thisProxyField != null ? new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumerator.ThisParameter), smClass, thisProxyField) : null)))));
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(
+                    smClass,
+                    stateField,
+                    parameterFields,
+                    plan.Function.Parameters,
+                    GetEnumeratorField,
+                    thisProxyField,
+                    getEnumeratorThisProxy)))));
             this.lambdaBodies[getEnumeratorObject] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(smClass, stateField, parameterFields, plan.Function.Parameters, p => new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, parameterFields[p]),
-                    thisProxyField, thisProxyField != null ? new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getEnumeratorObject.ThisParameter), smClass, thisProxyField) : null)))));
+                new BoundReturnStatement(null, this.CreateIteratorStateMachineLiteral(
+                    smClass,
+                    stateField,
+                    parameterFields,
+                    plan.Function.Parameters,
+                    GetEnumeratorObjectField,
+                    thisProxyField,
+                    getEnumeratorObjectThisProxy)))));
 
             this.IteratorKickoffBodies[plan.Function] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
@@ -934,7 +994,11 @@ internal sealed class StateMachineEmitter
 
             // Build MoveNext body (handles both yield and await).
             var moveNextBody = AsyncIteratorMoveNextBodyBuilder.Build(
-                plan, smClass, moveNext.ThisParameter, stateField, currentField,
+                plan,
+                smClass,
+                Invariant.Required(moveNext.ThisParameter, "a state-machine method has an instance receiver"),
+                stateField,
+                currentField,
                 promiseField, disposeModeField, disposeExceptionField,
                 builderField, fieldMap, awaiterPoolFields);
             this.lambdaBodies[moveNext] = Lowerer.Lower(moveNextBody);
@@ -942,7 +1006,9 @@ internal sealed class StateMachineEmitter
             // get_Current: return this.<>2__current;
             this.lambdaBodies[getCurrent] = Lowerer.Lower(new BoundBlockStatement(null,
                 ImmutableArray.Create<BoundStatement>(
-                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(null, getCurrent.ThisParameter), smClass, currentField)))));
+                new BoundReturnStatement(null, new BoundFieldAccessExpression(null, new BoundVariableExpression(
+                    null,
+                    Invariant.Required(getCurrent.ThisParameter, "a state-machine method has an instance receiver")), smClass, currentField)))));
 
             // MoveNextAsync: reset promise, call builder.MoveNext(ref this), return ValueTask<bool>
             // For simplicity: directly set result. The builder calls MoveNext synchronously first;
@@ -1029,7 +1095,7 @@ internal sealed class StateMachineEmitter
         FieldSymbol builderField,
         FunctionSymbol moveNextMethod)
     {
-        var thisParam = moveNextAsync.ThisParameter;
+        var thisParam = Invariant.Required(moveNextAsync.ThisParameter, "a state-machine method has an instance receiver");
         var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
         // if (state == -2) return default(ValueTask<bool>); // completed
@@ -1101,7 +1167,7 @@ internal sealed class StateMachineEmitter
         FieldSymbol builderField,
         FunctionSymbol moveNextMethod)
     {
-        var thisParam = disposeAsync.ThisParameter;
+        var thisParam = Invariant.Required(disposeAsync.ThisParameter, "a state-machine method has an instance receiver");
         var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
         // if (state == -2) return default(ValueTask);
@@ -1198,7 +1264,7 @@ internal sealed class StateMachineEmitter
         ImmutableArray<ParameterSymbol> userParameters,
         Dictionary<ParameterSymbol, FieldSymbol> parameterFields)
     {
-        var thisParam = getAsyncEnumerator.ThisParameter;
+        var thisParam = Invariant.Required(getAsyncEnumerator.ThisParameter, "a state-machine method has an instance receiver");
         var ctParam = getAsyncEnumerator.Parameters[0];
         var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -1286,7 +1352,7 @@ internal sealed class StateMachineEmitter
     private BoundBlockStatement BuildVtsGetStatusBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
     {
         // return promise.GetStatus(token);
-        var thisParam = func.ThisParameter;
+        var thisParam = Invariant.Required(func.ThisParameter, "a state-machine method has an instance receiver");
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = BclMember.Method(promiseType, "GetStatus", typeof(short));
@@ -1303,7 +1369,7 @@ internal sealed class StateMachineEmitter
     private BoundBlockStatement BuildVtsGetResultBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
     {
         // return promise.GetResult(token);
-        var thisParam = func.ThisParameter;
+        var thisParam = Invariant.Required(func.ThisParameter, "a state-machine method has an instance receiver");
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = BclMember.Method(promiseType, "GetResult", typeof(short));
@@ -1320,7 +1386,7 @@ internal sealed class StateMachineEmitter
     private BoundBlockStatement BuildVtsOnCompletedBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
     {
         // promise.OnCompleted(continuation, state, token, flags);
-        var thisParam = func.ThisParameter;
+        var thisParam = Invariant.Required(func.ThisParameter, "a state-machine method has an instance receiver");
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = BclMember.Method(promiseType, "OnCompleted");
         var promiseAddr = new BoundAddressOfExpression(
@@ -1341,7 +1407,7 @@ internal sealed class StateMachineEmitter
     private BoundBlockStatement BuildVtsGetResultVoidBody(FunctionSymbol func, StructSymbol smClass, FieldSymbol promiseField)
     {
         // promise.GetResult(token); // discard bool
-        var thisParam = func.ThisParameter;
+        var thisParam = Invariant.Required(func.ThisParameter, "a state-machine method has an instance receiver");
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
         var method = BclMember.Method(promiseType, "GetResult", typeof(short));

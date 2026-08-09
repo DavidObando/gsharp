@@ -179,7 +179,7 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
             fields: Fields,
             accessibility: Accessibility.Private,
             declaration: null,
-            packageName: KickoffMethod.Package?.Name,
+            packageName: KickoffMethod.Package?.Name ?? string.Empty,
             isData: false,
             isInline: false,
             isClass: ContainerKind == StateMachineContainerKind.Class);

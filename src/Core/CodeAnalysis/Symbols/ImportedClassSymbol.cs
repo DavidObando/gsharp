@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -34,7 +36,11 @@ public sealed class ImportedClassSymbol : Symbol
     /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary imported class.
     /// </param>
     /// <param name="references">The active reference resolver for imported-assembly visibility checks.</param>
-    public ImportedClassSymbol(Type type, ExpressionSyntax declaration, ImportedTypeSymbol symbolicReceiver = null, ReferenceResolver references = null)
+    public ImportedClassSymbol(
+        Type type,
+        ExpressionSyntax? declaration,
+        ImportedTypeSymbol? symbolicReceiver = null,
+        ReferenceResolver? references = null)
         : base(type.FullName)
     {
         ClassType = type;

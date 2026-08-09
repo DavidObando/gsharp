@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 
@@ -166,7 +168,10 @@ internal static class SynthesizedClosureReifier
     /// erase-on-mismatch fallback for same-compilation-only callers.
     /// </param>
     /// <returns>The constructed instance over the original parameters.</returns>
-    public static StructSymbol Reify(StructSymbol definition, ImmutableArray<TypeParameterSymbol> origTPs, System.Func<System.Type, System.Type> mapClrType = null)
+    public static StructSymbol Reify(
+        StructSymbol definition,
+        ImmutableArray<TypeParameterSymbol> origTPs,
+        System.Func<System.Type, System.Type>? mapClrType = null)
     {
         var clones = CloneWithRemappedConstraints(origTPs);
 

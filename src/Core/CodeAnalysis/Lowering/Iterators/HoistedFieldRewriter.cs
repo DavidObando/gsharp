@@ -134,7 +134,11 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     {
         if (this.fieldMap.TryGetValue(node.Variable, out var field))
         {
-            return new BoundExpressionStatement(null, this.FieldWrite(field, this.RewriteExpression(node.Initializer)));
+            return new BoundExpressionStatement(
+                null,
+                this.FieldWrite(
+                    field,
+                    this.RewriteExpression(Invariant.Required(node.Initializer, "a variable declaration has an initializer"))));
         }
 
         return base.RewriteVariableDeclaration(node);

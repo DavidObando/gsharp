@@ -293,7 +293,9 @@ internal sealed class InterfaceImplEmitter
 
             foreach (var iface in structSymbol.Interfaces)
             {
-                if (!DeclarationBinder.TypeSignaturesEquivalent(prop.ExplicitInterfaceClauseTarget, iface))
+                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                    Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
+                    iface))
                 {
                     continue;
                 }
@@ -555,7 +557,9 @@ internal sealed class InterfaceImplEmitter
                     : TypeSymbol.FromClrType(clrInterface);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                        Invariant.Required(containingType, "a CLR interface slot has a containing type"),
+                        slotEvent);
                     if (IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
                         || !TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
                         || (ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike)
@@ -627,7 +631,9 @@ internal sealed class InterfaceImplEmitter
                     : TypeSymbol.FromClrType(clrInterface);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                        Invariant.Required(containingType, "a CLR interface slot has a containing type"),
+                        slotEvent);
                     if (!IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
                         && TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
                         && !ReferenceEquals(declaringType, structSymbol))
@@ -1106,7 +1112,7 @@ internal sealed class InterfaceImplEmitter
                 {
                     if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)
                         && DeclarationBinder.TypeSignaturesEquivalent(
-                            explicitCandidate.ExplicitInterfaceClauseTarget,
+                            Invariant.Required(explicitCandidate.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                             iface))
                     {
                         implProp = explicitCandidate;

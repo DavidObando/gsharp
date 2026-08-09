@@ -234,7 +234,9 @@ internal sealed class UserTokenResolver
         }
 
         var args = new TypeSymbol[tps.Length];
-        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(call.Function, call.ReturnType);
+        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(
+            call.Function,
+            Invariant.Required(call.ReturnType, "a generic call has a return type for inference"));
         for (int i = 0; i < tps.Length; i++)
         {
             args[i] = InferMethodTypeArgument(call.Function, call.Arguments, inferenceReturn, tps[i]);

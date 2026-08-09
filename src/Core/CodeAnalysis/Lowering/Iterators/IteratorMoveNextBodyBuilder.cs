@@ -244,7 +244,8 @@ public static class IteratorMoveNextBodyBuilder
                 // hoisted locals resolve to fields on the state machine
                 // (Dispose has its own `this`, distinct from MoveNext's).
                 var disposeRewriter = new HoistedFieldRewriter(smClass, thisParameter, hoistedFieldMap);
-                var rewrittenFinally = disposeRewriter.RewriteStatement(tryStmt.FinallyBlock);
+                var rewrittenFinally = disposeRewriter.RewriteStatement(
+                    Invariant.Required(tryStmt.FinallyBlock, "a try statement with a lowered finally has a finally block"));
 
                 // try {} finally { … }
                 var emptyTryBody = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);

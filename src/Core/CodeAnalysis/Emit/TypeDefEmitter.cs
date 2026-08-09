@@ -1933,7 +1933,9 @@ internal sealed class TypeDefEmitter
     {
         if (init.IsClrBase)
         {
-            return this.getCtorReferenceForType(init.ClrConstructor, classSym.ImportedBaseType);
+            return this.getCtorReferenceForType(
+                Invariant.Required(init.ClrConstructor, "a CLR base initializer has a CLR constructor"),
+                classSym.ImportedBaseType);
         }
 
         var gsharpBase = init.GSharpBaseType;
@@ -1952,7 +1954,9 @@ internal sealed class TypeDefEmitter
                 : ((gsharpBase != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(gsharpBase)) ? gsharpBase : null);
         if (constructedGenericBase != null)
         {
-            return this.resolveConstructedBaseExplicitCtorToken(constructedGenericBase, init.GSharpConstructor);
+            return this.resolveConstructedBaseExplicitCtorToken(
+                constructedGenericBase,
+                Invariant.Required(init.GSharpConstructor, "a constructed G# base initializer has an explicit constructor"));
         }
 
         // Issue #1060: when the base initializer resolved to a specific explicit

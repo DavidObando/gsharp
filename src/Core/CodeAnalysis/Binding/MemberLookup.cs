@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -975,7 +977,7 @@ internal sealed class MemberLookup
     /// <returns>The symbolic parameter value type.</returns>
     public static TypeSymbol MapOpenClrParameterTypeToSymbolic(
         Type openClr,
-        Type openDefinition,
+        Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
         MethodInfo openMethodDefinition = null,
         ImmutableArray<TypeSymbol> methodTypeArguments = default)
@@ -1008,9 +1010,9 @@ internal sealed class MemberLookup
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
     public static TypeSymbol MapOpenClrTypeToSymbolic(
         Type openClr,
-        Type openDefinition,
+        Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
-        MethodInfo openMethodDefinition,
+        MethodInfo? openMethodDefinition,
         ImmutableArray<TypeSymbol> methodTypeArguments)
     {
         if (openClr == null)

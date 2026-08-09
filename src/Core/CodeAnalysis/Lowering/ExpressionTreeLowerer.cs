@@ -501,7 +501,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var memberName = property.Member.Name;
-        var ownerType = property.StaticContainerType ?? TypeSymbol.FromClrType(property.Member.DeclaringType);
+        var ownerType = property.StaticContainerType
+            ?? TypeSymbol.FromClrType(
+                Invariant.Required(property.Member.DeclaringType, "a CLR property has a declaring type"));
         var isField = property.Member is FieldInfo;
         var staticMethod = isField ? ExpressionFieldStaticMethod : ExpressionPropertyStaticMethod;
         var instanceMethod = isField ? ExpressionFieldInstanceMethod : ExpressionPropertyInstanceMethod;
@@ -835,7 +837,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionCallStaticMethod,
             TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(call.Function.Method.DeclaringType)),
+                CreateTypeOf(TypeSymbol.FromClrType(
+                    Invariant.Required(call.Function.Method.DeclaringType, "a CLR method has a declaring type"))),
                 new BoundLiteralExpression(null, call.Function.Method.Name, TypeSymbol.String),
                 BuildTypeArray(GetTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Function.Method.GetParameters(), parameterMap))));
@@ -850,7 +853,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionCallStaticMethod,
             TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(call.Method.DeclaringType)),
+                CreateTypeOf(TypeSymbol.FromClrType(
+                    Invariant.Required(call.Method.DeclaringType, "a CLR method has a declaring type"))),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
                 BuildTypeArray(ImmutableArray<TypeSymbol>.Empty),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Method.GetParameters(), parameterMap))));

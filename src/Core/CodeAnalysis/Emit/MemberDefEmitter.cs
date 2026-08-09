@@ -174,7 +174,9 @@ internal sealed class MemberDefEmitter
                 attributes: PropertyAttributes.None,
                 name: this.emitCtx.Metadata.GetOrAddString(
                     prop.HasExplicitInterfaceClause
-                        ? ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+                        ? ExplicitInterfaceMetadataNaming.GetMetadataName(
+                            prop.Name,
+                            Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"))
                         : prop.Name),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature));
 
@@ -384,7 +386,9 @@ internal sealed class MemberDefEmitter
         // explicit implementations sharing a plain property name would
         // otherwise also share the identical "get_Name" accessor name).
         var getterName = prop.HasExplicitInterfaceClause
-            ? "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            ? "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                prop.Name,
+                Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"))
             : $"get_{prop.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(
@@ -496,7 +500,9 @@ internal sealed class MemberDefEmitter
 
         // ADR-0149: see the matching comment in EmitPropertyGetter.
         var setterName = prop.HasExplicitInterfaceClause
-            ? "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget)
+            ? "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                prop.Name,
+                Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"))
             : $"set_{prop.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(
@@ -955,7 +961,9 @@ internal sealed class MemberDefEmitter
                         || (clrProp.SetMethod != null && !prop.HasSetter)
                         || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                                 prop.Type,
-                                MemberLookup.GetClrPropertyTypeSymbol(ifaceSym, clrProp)))
+                                MemberLookup.GetClrPropertyTypeSymbol(
+                                    Invariant.Required(ifaceSym, "a CLR interface entry has a type symbol"),
+                                    clrProp)))
                     {
                         continue;
                     }
@@ -965,7 +973,10 @@ internal sealed class MemberDefEmitter
                     {
                         if (!DeclarationBinder.TypeSignaturesEquivalent(
                             prop.Parameters[i].Type,
-                            MemberLookup.GetIndexerParameterTypeSymbol(ifaceSym, clrProp, i)))
+                            MemberLookup.GetIndexerParameterTypeSymbol(
+                                Invariant.Required(ifaceSym, "a CLR interface entry has a type symbol"),
+                                clrProp,
+                                i)))
                         {
                             parametersMatch = false;
                             break;
@@ -1068,7 +1079,10 @@ internal sealed class MemberDefEmitter
 
                 foreach (var clrEvent in clrIface.GetEvents(BindingFlags.Public | BindingFlags.Instance))
                 {
-                    if (clrEvent.Name == ev.Name && (evClr == null || ClrTypeUtilities.AreSame(evClr, clrEvent.EventHandlerType)))
+                    if (clrEvent.Name == ev.Name
+                        && (evClr == null
+                            || (clrEvent.EventHandlerType is { } eventHandlerType
+                                && ClrTypeUtilities.AreSame(evClr, eventHandlerType))))
                     {
                         return true;
                     }
@@ -1238,7 +1252,9 @@ internal sealed class MemberDefEmitter
     private int EmitEventCasLoopBody(StructSymbol structSym, EventSymbol ev, FieldDefinitionHandle backingHandle, bool isStatic, bool isAdd)
     {
         var backingToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(structSym)
-            ? this.resolveFieldToken(structSym, ev.BackingField)
+            ? this.resolveFieldToken(
+                structSym,
+                Invariant.Required(ev.BackingField, "a field-like event has a backing field"))
             : (EntityHandle)backingHandle;
 
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
@@ -1380,7 +1396,9 @@ internal sealed class MemberDefEmitter
         // ADR-0149: a collision-free metadata name, mirroring
         // EmitPropertyGetter/Setter's getterName/setterName synthesis.
         var addName = ev.HasExplicitInterfaceClause
-            ? "add_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            ? "add_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                ev.Name,
+                Invariant.Required(ev.ExplicitInterfaceClauseTarget, "an explicit event implementation has a target"))
             : $"add_{ev.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(
@@ -1457,7 +1475,9 @@ internal sealed class MemberDefEmitter
 
         // ADR-0149: see the matching comment in EmitEventAddAccessor.
         var removeName = ev.HasExplicitInterfaceClause
-            ? "remove_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            ? "remove_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                ev.Name,
+                Invariant.Required(ev.ExplicitInterfaceClauseTarget, "an explicit event implementation has a target"))
             : $"remove_{ev.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(
@@ -1557,7 +1577,9 @@ internal sealed class MemberDefEmitter
 
         // ADR-0149: see the matching comment in EmitEventAddAccessor.
         var raiseName = ev.HasExplicitInterfaceClause
-            ? "raise_" + ExplicitInterfaceMetadataNaming.GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget)
+            ? "raise_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                ev.Name,
+                Invariant.Required(ev.ExplicitInterfaceClauseTarget, "an explicit event implementation has a target"))
             : $"raise_{ev.Name}";
 
         return this.emitCtx.Metadata.AddMethodDefinition(

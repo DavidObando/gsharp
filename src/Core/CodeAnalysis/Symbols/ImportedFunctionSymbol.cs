@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -32,7 +34,7 @@ public sealed class ImportedFunctionSymbol : Symbol
         string name,
         ImportedClassSymbol importedClass,
         MethodInfo method,
-        ExpressionSyntax declaration,
+        ExpressionSyntax? declaration,
         TypeSymbol returnTypeOverride = null)
         : base(name)
     {

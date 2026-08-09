@@ -3048,7 +3048,8 @@ internal sealed class ReflectionMetadataEmitter
                 // ADR-0092 / issue #758: a LibraryImport function emits TWO
                 // MethodDef rows — the user-visible managed stub (handle above)
                 // and a hidden blittable inner P/Invoke that the stub calls.
-                if (fn.IsPInvoke && fn.PInvokeMetadata.IsLibraryImport)
+                if (fn.IsPInvoke
+                    && Invariant.Required(fn.PInvokeMetadata, "a P/Invoke function has P/Invoke metadata").IsLibraryImport)
                 {
                     this.cache.LibraryImportInnerHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
                 }
@@ -4941,7 +4942,8 @@ internal sealed class ReflectionMetadataEmitter
                     candidateType = candidateType.GetElementType();
                 }
 
-                if (methodType != null && !ClrTypeUtilities.AreSame(candidateType, methodType))
+                if (methodType != null
+                    && (candidateType is null || !ClrTypeUtilities.AreSame(candidateType, methodType)))
                 {
                     matches = false;
                     break;

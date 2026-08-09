@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -40,10 +42,10 @@ public sealed class FunctionSymbol : Symbol
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration = null,
-        PackageSymbol package = null,
+        FunctionDeclarationSyntax? declaration = null,
+        PackageSymbol? package = null,
         Accessibility accessibility = Accessibility.Public)
-        : this(name, parameters, type, declaration, package, accessibility, receiverType: null)
+        : this(name, parameters, type, declaration, package, accessibility, receiverType: (TypeSymbol?)null)
     {
     }
 
@@ -61,8 +63,8 @@ public sealed class FunctionSymbol : Symbol
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration,
-        PackageSymbol package,
+        FunctionDeclarationSyntax? declaration,
+        PackageSymbol? package,
         Accessibility accessibility,
         StructSymbol receiverType)
         : this(name, parameters, type, declaration, package, accessibility, receiverType, isOpen: false, isOverride: false)
@@ -85,13 +87,13 @@ public sealed class FunctionSymbol : Symbol
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration,
-        PackageSymbol package,
+        FunctionDeclarationSyntax? declaration,
+        PackageSymbol? package,
         Accessibility accessibility,
-        StructSymbol receiverType,
+        StructSymbol? receiverType,
         bool isOpen,
         bool isOverride)
-        : this(name, parameters, type, declaration, package, accessibility, (TypeSymbol)receiverType, isOpen, isOverride)
+        : this(name, parameters, type, declaration, package, accessibility, (TypeSymbol?)receiverType, isOpen, isOverride)
     {
     }
 
@@ -109,10 +111,10 @@ public sealed class FunctionSymbol : Symbol
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration,
-        PackageSymbol package,
+        FunctionDeclarationSyntax? declaration,
+        PackageSymbol? package,
         Accessibility accessibility,
-        TypeSymbol receiverType,
+        TypeSymbol? receiverType,
         bool isOpen = false,
         bool isOverride = false)
         : this(name, parameters, type, declaration, package, accessibility, receiverType, explicitReceiverParameter: null, isOpen, isOverride)
@@ -134,11 +136,11 @@ public sealed class FunctionSymbol : Symbol
         string name,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol type,
-        FunctionDeclarationSyntax declaration,
-        PackageSymbol package,
+        FunctionDeclarationSyntax? declaration,
+        PackageSymbol? package,
         Accessibility accessibility,
-        TypeSymbol receiverType,
-        ParameterSymbol explicitReceiverParameter,
+        TypeSymbol? receiverType,
+        ParameterSymbol? explicitReceiverParameter,
         bool isOpen = false,
         bool isOverride = false)
         : base(name)
@@ -171,13 +173,13 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets the declaration of the function.
     /// </summary>
-    public FunctionDeclarationSyntax Declaration { get; private set; }
+    public FunctionDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>
     /// Gets the package this function belongs to. <c>null</c> for built-in
     /// functions, which are not scoped to a user package.
     /// </summary>
-    public PackageSymbol Package { get; }
+    public PackageSymbol? Package { get; }
 
     /// <summary>
     /// Gets the CLR visibility level for this function.
@@ -189,16 +191,16 @@ public sealed class FunctionSymbol : Symbol
     /// method (Phase 3.B.3 sub-step 2b). <c>null</c> for top-level functions
     /// and static methods.
     /// </summary>
-    public TypeSymbol ReceiverType { get; }
+    public TypeSymbol? ReceiverType { get; }
 
     /// <summary>Gets a value indicating whether this function is an instance method on a user-defined class.</summary>
     public bool IsInstanceMethod => ReceiverType != null;
 
     /// <summary>Gets the synthesized <c>this</c> parameter for instance methods, or <c>null</c> for non-instance functions. Always at IL parameter slot 0 when emitted.</summary>
-    public ParameterSymbol ThisParameter { get; }
+    public ParameterSymbol? ThisParameter { get; }
 
     /// <summary>Gets the source receiver parameter for <c>func (r R) M</c> methods-with-receivers; <c>null</c> for in-body methods and non-method functions.</summary>
-    public ParameterSymbol ExplicitReceiverParameter { get; }
+    public ParameterSymbol? ExplicitReceiverParameter { get; }
 
     /// <summary>Gets a value indicating whether this method is declared <c>open</c> — overridable per ADR-0017 (Phase 3.B.3 sub-step 3).</summary>
     public bool IsOpen { get; }
@@ -219,7 +221,7 @@ public sealed class FunctionSymbol : Symbol
     public bool IsAbstract { get; set; }
 
     /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
-    public FunctionSymbol OverriddenMethod { get; set; }
+    public FunctionSymbol? OverriddenMethod { get; set; }
 
     /// <summary>
     /// Gets or sets the imported CLR virtual method this method overrides.
@@ -227,20 +229,20 @@ public sealed class FunctionSymbol : Symbol
     /// is required for covariant-return overrides and keeps reflection/runtime
     /// dispatch tied to the external base slot.
     /// </summary>
-    public MethodInfo ExternalOverriddenMethod { get; set; }
+    public MethodInfo? ExternalOverriddenMethod { get; set; }
 
     /// <summary>
     /// Gets or sets the imported constructed base type that owns
     /// <see cref="ExternalOverriddenMethod"/>. Preserves symbolic generic type
     /// arguments when the base is inherited as <c>Base[T]</c>.
     /// </summary>
-    public TypeSymbol ExternalOverrideContainingType { get; set; }
+    public TypeSymbol? ExternalOverrideContainingType { get; set; }
 
     /// <summary>Gets or sets a value indicating whether this function is an extension function (Phase 3.B.6, ADR-0019). When true, the function's first parameter is the receiver and call sites <c>x.Foo(args)</c> bind to <c>Foo(x, args)</c>.</summary>
     public bool IsExtension { get; set; }
 
     /// <summary>Gets or sets the receiver type for an extension function (Phase 3.B.6). <c>null</c> when <see cref="IsExtension"/> is false.</summary>
-    public TypeSymbol ExtensionReceiverType { get; set; }
+    public TypeSymbol? ExtensionReceiverType { get; set; }
 
 #pragma warning disable SA1201
     private ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
@@ -276,7 +278,7 @@ public sealed class FunctionSymbol : Symbol
     public bool IsStatic { get; set; }
 
     /// <summary>Gets or sets the type that owns this static method (ADR-0053 for struct/class owners; ADR-0089 for interface owners). <c>null</c> for non-static or top-level functions.</summary>
-    public TypeSymbol StaticOwnerType { get; set; }
+    public TypeSymbol? StaticOwnerType { get; set; }
 
     /// <summary>
     /// Gets or sets the nearest enclosing user-defined type whose member body
@@ -288,7 +290,7 @@ public sealed class FunctionSymbol : Symbol
     /// member itself. <c>null</c> for ordinary methods and top-level functions
     /// (which carry their context via <see cref="ReceiverType"/>/<see cref="StaticOwnerType"/>).
     /// </summary>
-    public TypeSymbol LexicalEnclosingType { get; set; }
+    public TypeSymbol? LexicalEnclosingType { get; set; }
 
     /// <summary>Gets or sets a value indicating whether this function should be emitted with <c>MethodAttributes.SpecialName</c> (e.g., event accessor methods).</summary>
     public bool IsSpecialName { get; set; }
@@ -342,7 +344,7 @@ public sealed class FunctionSymbol : Symbol
     /// <see cref="object"/> to avoid a project-layer cycle (state-machine
     /// types live under <c>Lowering.Async</c>); callers cast to
     /// <c>SynthesizedStateMachineType</c>.</summary>
-    public object StateMachineType { get; set; }
+    public object? StateMachineType { get; set; }
 
     /// <summary>
     /// Gets or sets the by-reference passing mode of this function's return value
@@ -376,7 +378,7 @@ public sealed class FunctionSymbol : Symbol
     /// entry point at the runtime's native-library loader. Defaults to
     /// <c>null</c> for ordinary managed functions.
     /// </summary>
-    public PInvokeMetadata PInvokeMetadata { get; set; }
+    public PInvokeMetadata? PInvokeMetadata { get; set; }
 
     /// <summary>
     /// Gets or sets the CLR interface slot this method explicitly implements via
@@ -390,10 +392,10 @@ public sealed class FunctionSymbol : Symbol
     /// implement an interface slot, so the explicit row is required for the
     /// resulting type to load. Defaults to <c>null</c> for ordinary methods.
     /// </summary>
-    public System.Reflection.MethodInfo ExplicitInterfaceSlot { get; set; }
+    public System.Reflection.MethodInfo? ExplicitInterfaceSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface type that owns <see cref="ExplicitInterfaceSlot"/>.</summary>
-    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+    public TypeSymbol? ExplicitInterfaceSlotContainingType { get; set; }
 
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this method
@@ -419,7 +421,7 @@ public sealed class FunctionSymbol : Symbol
     /// source/diagnostic name stays the plain declared name). Defaults to
     /// <c>null</c> for ordinary methods.
     /// </summary>
-    public FunctionSymbol ExplicitInterfaceMember { get; set; }
+    public FunctionSymbol? ExplicitInterfaceMember { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether this method's declaration carries a
@@ -444,7 +446,7 @@ public sealed class FunctionSymbol : Symbol
     /// bind to an interface implemented by the containing type (a diagnostic
     /// is reported in that case).
     /// </summary>
-    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol? ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;

@@ -588,10 +588,10 @@ public static class SymbolDisplay
         builder.Punctuation(")");
 
         var returnType = isAsync ? UnwrapTaskReturnType(method.ReturnType) : method.ReturnType;
-        if (!returnType.IsSameAs(typeof(void)))
+        if (returnType is { } nonVoidReturnType && !nonVoidReturnType.IsSameAs(typeof(void)))
         {
             builder.Space();
-            builder.Type(FormatClrTypeName(returnType, format.QualifyNames));
+            builder.Type(FormatClrTypeName(nonVoidReturnType, format.QualifyNames));
         }
     }
 

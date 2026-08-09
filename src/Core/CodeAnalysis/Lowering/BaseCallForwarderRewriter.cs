@@ -89,7 +89,7 @@ public static class BaseCallForwarderRewriter
         var methodsByClass = new Dictionary<StructSymbol, ImmutableArray<FunctionSymbol>.Builder>();
         foreach (var forwarder in forwarderBodies.Keys)
         {
-            var owner = (StructSymbol)forwarder.ReceiverType;
+            var owner = Invariant.Required(forwarder.ReceiverType as StructSymbol, "a synthesized forwarder has a struct receiver");
             if (!methodsByClass.TryGetValue(owner, out var builder))
             {
                 builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
@@ -229,7 +229,7 @@ public static class BaseCallForwarderRewriter
                 receiverType: this.classDef,
                 explicitReceiverParameter: null);
 
-            var thisExpr = new BoundVariableExpression(null, forwarder.ThisParameter);
+            var thisExpr = new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver"));
             var argBuilder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
             foreach (var p in parameters)
             {
@@ -271,7 +271,7 @@ public static class BaseCallForwarderRewriter
             {
                 var refKind = node.ArgumentRefKinds.IsDefault ? RefKind.None : node.ArgumentRefKinds[i];
                 parameters.Add(new ParameterSymbol(
-                    i < methodParameters.Length ? methodParameters[i].Name : "arg" + i,
+                    i < methodParameters.Length ? methodParameters[i].Name ?? "arg" + i : "arg" + i,
                     node.Arguments[i].Type,
                     refKind: refKind));
             }
@@ -298,7 +298,7 @@ public static class BaseCallForwarderRewriter
 
             var innerCall = new BoundImportedInstanceCallExpression(
                 null,
-                new BoundVariableExpression(null, forwarder.ThisParameter),
+                new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver")),
                 node.Method,
                 node.Type,
                 arguments.ToImmutable(),

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -31,7 +33,7 @@ public sealed class EventSymbol : Symbol
         bool isVirtual,
         bool isOverride,
         bool isStatic = false,
-        EventDeclarationSyntax declaration = null)
+        EventDeclarationSyntax? declaration = null)
         : base(name)
     {
         Type = type;
@@ -65,52 +67,52 @@ public sealed class EventSymbol : Symbol
     public bool IsStatic { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized events.</summary>
-    public EventDeclarationSyntax Declaration { get; private set; }
+    public EventDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>Gets or sets the synthesized backing delegate field (null for explicit accessors).</summary>
-    public FieldSymbol BackingField { get; set; }
+    public FieldSymbol? BackingField { get; set; }
 
     /// <summary>Gets or sets the synthesized add method symbol.</summary>
-    public FunctionSymbol AddMethodSymbol { get; set; }
+    public FunctionSymbol? AddMethodSymbol { get; set; }
 
     /// <summary>Gets or sets the synthesized remove method symbol.</summary>
-    public FunctionSymbol RemoveMethodSymbol { get; set; }
+    public FunctionSymbol? RemoveMethodSymbol { get; set; }
 
     /// <summary>Gets or sets the synthesized raise method symbol (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
-    public FunctionSymbol RaiseMethodSymbol { get; set; }
+    public FunctionSymbol? RaiseMethodSymbol { get; set; }
 
     /// <summary>Gets or sets the imported CLR add slot overridden by this event.</summary>
-    public MethodInfo ExternalOverriddenAddMethod { get; set; }
+    public MethodInfo? ExternalOverriddenAddMethod { get; set; }
 
     /// <summary>Gets or sets the imported CLR remove slot overridden by this event.</summary>
-    public MethodInfo ExternalOverriddenRemoveMethod { get; set; }
+    public MethodInfo? ExternalOverriddenRemoveMethod { get; set; }
 
     /// <summary>Gets or sets the imported CLR raise slot overridden by this event.</summary>
-    public MethodInfo ExternalOverriddenRaiseMethod { get; set; }
+    public MethodInfo? ExternalOverriddenRaiseMethod { get; set; }
 
     /// <summary>Gets or sets the imported interface add slot explicitly implemented by this event.</summary>
-    public MethodInfo ExplicitInterfaceAddSlot { get; set; }
+    public MethodInfo? ExplicitInterfaceAddSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface remove slot explicitly implemented by this event.</summary>
-    public MethodInfo ExplicitInterfaceRemoveSlot { get; set; }
+    public MethodInfo? ExplicitInterfaceRemoveSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface raise slot explicitly implemented by this event.</summary>
-    public MethodInfo ExplicitInterfaceRaiseSlot { get; set; }
+    public MethodInfo? ExplicitInterfaceRaiseSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface type that owns the explicit accessor slots.</summary>
-    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+    public TypeSymbol? ExplicitInterfaceSlotContainingType { get; set; }
 
     /// <summary>Gets or sets the imported constructed base type that owns the overridden event accessors.</summary>
-    public TypeSymbol ExternalOverrideContainingType { get; set; }
+    public TypeSymbol? ExternalOverrideContainingType { get; set; }
 
     /// <summary>Gets or sets the explicit add body syntax (null for field-like events).</summary>
-    public Syntax.BlockStatementSyntax AddBodySyntax { get; set; }
+    public Syntax.BlockStatementSyntax? AddBodySyntax { get; set; }
 
     /// <summary>Gets or sets the explicit remove body syntax (null for field-like events).</summary>
-    public Syntax.BlockStatementSyntax RemoveBodySyntax { get; set; }
+    public Syntax.BlockStatementSyntax? RemoveBodySyntax { get; set; }
 
     /// <summary>Gets or sets the explicit raise body syntax (issue #257). Null when no <c>raise</c> accessor is declared.</summary>
-    public Syntax.BlockStatementSyntax RaiseBodySyntax { get; set; }
+    public Syntax.BlockStatementSyntax? RaiseBodySyntax { get; set; }
 
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this event
@@ -128,7 +130,7 @@ public sealed class EventSymbol : Symbol
     /// dispatch to this event's own distinct accessor bodies. Defaults to
     /// <see langword="null"/> for ordinary events.
     /// </summary>
-    public EventSymbol ExplicitInterfaceMember { get; set; }
+    public EventSymbol? ExplicitInterfaceMember { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether this event's declaration carries a
@@ -145,7 +147,7 @@ public sealed class EventSymbol : Symbol
     /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
     /// <c>null</c> until resolved.
     /// </summary>
-    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol? ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) event at the declaration node

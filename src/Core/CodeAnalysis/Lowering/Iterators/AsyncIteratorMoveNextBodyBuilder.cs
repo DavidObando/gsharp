@@ -609,7 +609,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
                 // TAwaiter awaiter = <expr>.GetAwaiter();
-                var rewrittenOperand = RewriteExpression(awaitExpr.Expression);
+                var rewrittenOperand = RewriteExpression(
+                    Invariant.Required(awaitExpr.Expression, "an await expression has an operand"));
                 BoundExpression getAwaiterReceiver;
                 var awaitableClrType = awaitExpr.Expression?.Type?.ClrType;
                 if (awaitableClrType != null && awaitableClrType.IsValueType)

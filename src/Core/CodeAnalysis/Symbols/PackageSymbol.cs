@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -16,7 +18,7 @@ public sealed class PackageSymbol : Symbol
     /// </summary>
     /// <param name="name">The name of the package.</param>
     /// <param name="declaration">The declaration.</param>
-    public PackageSymbol(string name, PackageSyntax declaration)
+    public PackageSymbol(string name, PackageSyntax? declaration)
         : base(name)
     {
         Declaration = declaration;

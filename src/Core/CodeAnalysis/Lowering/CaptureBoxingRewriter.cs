@@ -988,7 +988,8 @@ internal static class CaptureBoxingRewriter
                 // of type Box_n. Note `Lowerer.Flatten` will inline this nested
                 // block into the enclosing block during the post-binding lower pass.
                 this.allocated.Add(bi.Original);
-                var initializer = this.RewriteExpression(node.Initializer);
+                var initializer = this.RewriteExpression(
+                    Invariant.Required(node.Initializer, "a captured variable declaration has an initializer"));
                 var stmts = ImmutableArray.Create<BoundStatement>(
                     new BoundVariableDeclaration(
                         null,

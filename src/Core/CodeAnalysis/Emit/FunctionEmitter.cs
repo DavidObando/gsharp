@@ -152,7 +152,7 @@ internal sealed class FunctionEmitter
             // MoveNext is instance on the SM struct: arg0 = this.
             var parameters = new Dictionary<ParameterSymbol, int>
             {
-                [moveNextBody.ThisParameter] = 0,
+                [Invariant.Required(moveNextBody.ThisParameter, "a state-machine method has an instance receiver")] = 0,
             };
 
             var localsSignature = session.BuildLocalsSignature();
@@ -165,7 +165,7 @@ internal sealed class FunctionEmitter
                 : null;
             var emitter = session.CreateEmitter(
                 parameters,
-                structThisParameter: moveNextBody.ThisParameter,
+                structThisParameter: Invariant.Required(moveNextBody.ThisParameter, "a state-machine method has an instance receiver"),
                 asyncFieldMap: plan.FieldMap,
                 asyncPlan: plan,
                 enclosingClosure: enclosingClosure);
@@ -208,7 +208,7 @@ internal sealed class FunctionEmitter
         // plus a hidden blittable inner P/Invoke.
         if (function.IsPInvoke)
         {
-            if (function.PInvokeMetadata.IsLibraryImport)
+            if (Invariant.Required(function.PInvokeMetadata, "a P/Invoke function has P/Invoke metadata").IsLibraryImport)
             {
                 return this.EmitLibraryImportFunction(function);
             }
@@ -318,7 +318,7 @@ internal sealed class FunctionEmitter
                 int paramSlotShift = function.IsInstanceMethod ? 1 : 0;
                 if (function.IsInstanceMethod)
                 {
-                    parameters[function.ThisParameter] = 0;
+                    parameters[Invariant.Required(function.ThisParameter, "an instance function has an instance receiver")] = 0;
                 }
 
                 var emittedParameterIndex = 0;
@@ -350,7 +350,7 @@ internal sealed class FunctionEmitter
                     && function.ReceiverType is StructSymbol recvStruct
                     && !recvStruct.IsClass)
                 {
-                    structThis = function.ThisParameter;
+                    structThis = Invariant.Required(function.ThisParameter, "a struct instance method has an instance receiver");
                 }
 
                 var enclosingClosureInfo = this.outer.closures.ClosureInvokeToInfo.TryGetValue(function, out var ec) ? ec : null;
@@ -973,7 +973,7 @@ internal sealed class FunctionEmitter
     /// <returns>The handle of the emitted MethodDef.</returns>
     private MethodDefinitionHandle EmitPInvokeFunction(FunctionSymbol function)
     {
-        var pInvoke = function.PInvokeMetadata;
+        var pInvoke = Invariant.Required(function.PInvokeMetadata, "a P/Invoke function has P/Invoke metadata");
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
@@ -1186,7 +1186,7 @@ internal sealed class FunctionEmitter
     /// <returns>The handle of the emitted outer managed stub.</returns>
     private MethodDefinitionHandle EmitLibraryImportFunction(FunctionSymbol function)
     {
-        var pInvoke = function.PInvokeMetadata;
+        var pInvoke = Invariant.Required(function.PInvokeMetadata, "a LibraryImport function has P/Invoke metadata");
 
         // Plan which parameters need string marshalling. Indices are into
         // the function's parameter list.
@@ -1403,7 +1403,7 @@ internal sealed class FunctionEmitter
         // null / IntPtr.Zero respectively, so the stub does not need null
         // guards.
         var marshalType = typeof(Marshal);
-        var isUtf16 = function.PInvokeMetadata.StringMarshalling == StringMarshalling.Utf16;
+        var isUtf16 = Invariant.Required(function.PInvokeMetadata, "a LibraryImport function has P/Invoke metadata").StringMarshalling == StringMarshalling.Utf16;
 
         MemberReferenceHandle convertRef = default;
         MemberReferenceHandle freeRef = default;

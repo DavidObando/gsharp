@@ -283,7 +283,8 @@ public static class AsyncStateMachineTypeBuilder
                 //
                 // Issues #2381/#2713: erase every symbolic projection only
                 // for reflection-based builder discovery; emission restores it.
-                if (TypeSymbol.RequiresSymbolicProjection(kickoff.Type))
+                if (TypeSymbol.RequiresSymbolicProjection(
+                    Invariant.Required(kickoff.Type, "an async kickoff method has a return type")))
                 {
                     inner = references.MapClrTypeToReferences(typeof(object));
                 }

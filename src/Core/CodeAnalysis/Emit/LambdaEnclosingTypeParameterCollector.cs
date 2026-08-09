@@ -73,8 +73,16 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
                 break;
             case BoundImportedInstanceCallExpression importedInstanceCall:
                 this.CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
-                TypeSymbol.CollectReferencedTypeParameters(importedInstanceCall.ConstrainedReceiverTypeParameter, this.sink);
-                TypeSymbol.CollectReferencedTypeParameters(importedInstanceCall.ConstrainedInterfaceType, this.sink);
+                if (importedInstanceCall.ConstrainedReceiverTypeParameter is { } receiverTypeParameter)
+                {
+                    TypeSymbol.CollectReferencedTypeParameters(receiverTypeParameter, this.sink);
+                }
+
+                if (importedInstanceCall.ConstrainedInterfaceType is { } interfaceType)
+                {
+                    TypeSymbol.CollectReferencedTypeParameters(interfaceType, this.sink);
+                }
+
                 break;
             case BoundIsExpression isExpression:
                 TypeSymbol.CollectReferencedTypeParameters(isExpression.TargetType, this.sink);

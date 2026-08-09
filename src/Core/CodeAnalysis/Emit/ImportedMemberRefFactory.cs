@@ -1017,7 +1017,7 @@ internal sealed class ImportedMemberRefFactory
             "TryNormalizeToSymbolicContainer only reports success with an open definition, and the interface re-targeting above keeps one");
         var symbolicView = ImportedTypeSymbol.GetConstructed(
             openContainer.MakeGenericType(this.GetErasedObjectArgs(openContainer)),
-            openDefinition,
+            openContainer,
             typeArguments);
 
         var parentBlob = new BlobBuilder();
