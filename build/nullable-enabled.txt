@@ -139,3 +139,7 @@ src/Core/CodeAnalysis/Binding/OverloadResolution/ClrOverloadResolution.cs
 # Slice 12 -- operator metadata helpers shared by binding and overload resolution.
 src/Core/CodeAnalysis/Binding/OperatorNames.cs
 src/Core/CodeAnalysis/Binding/NumericWideningLattice.cs
+
+# Slice 13 -- binding discriminants used by attribute and CLR-call contracts.
+src/Core/CodeAnalysis/Binding/AttributeTargetKind.cs
+src/Core/CodeAnalysis/Binding/RefKind.cs
