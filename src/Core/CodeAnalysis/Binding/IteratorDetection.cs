@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -30,7 +32,7 @@ public static class IteratorDetection
     /// <returns><see langword="true"/> when the body's own lexical scope contains a yield.</returns>
     public static bool ContainsYield(SyntaxNode body) => ContainsYieldSyntax(body);
 
-    private static bool ContainsYieldSyntax(SyntaxNode node)
+    private static bool ContainsYieldSyntax(SyntaxNode? node)
     {
         if (node == null)
         {

@@ -153,3 +153,6 @@ src/Core/CodeAnalysis/Binding/SmartCastStability.cs
 
 # Slice 16 -- shared if-let/guard-let nullable binding contract.
 src/Core/CodeAnalysis/Binding/IfLetBindingSupport.cs
+
+# Slice 17 -- lexical iterator/yield detection helper.
+src/Core/CodeAnalysis/Binding/IteratorDetection.cs
