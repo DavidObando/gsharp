@@ -29,7 +29,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("9999999999\n", CompileAndRun(source));
+        Assert.Equal($"9999999999{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("3.5\n", CompileAndRun(source));
+        Assert.Equal($"3.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("2.5\n", CompileAndRun(source));
+        Assert.Equal($"2.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("3.14\n", CompileAndRun(source));
+        Assert.Equal($"3.14{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class PrimitiveLiteralEmitTests
             Console.WriteLine(c)
             """;
 
-        Assert.Equal("A\n", CompileAndRun(source));
+        Assert.Equal($"A{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -232,7 +232,7 @@ public class PrimitiveLiteralEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

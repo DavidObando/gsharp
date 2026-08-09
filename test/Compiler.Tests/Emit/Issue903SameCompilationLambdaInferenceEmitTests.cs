@@ -62,7 +62,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(net.Id)
             """;
 
-        Assert.Equal("network\n", CompileAndRun(source));
+        Assert.Equal($"network{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(ids.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(filtered.Single((c) -> true).Id)
             """;
 
-        Assert.Equal("1\nnetwork\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}network{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(indices.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(net.Id)
             """;
 
-        Assert.Equal("network\n", CompileAndRun(source));
+        Assert.Equal($"network{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(filtered.Count)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(ids.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -242,7 +242,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
             Console.WriteLine(net.Id)
             """;
 
-        Assert.Equal("network\n", CompileAndRun(source));
+        Assert.Equal($"network{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -317,7 +317,7 @@ public class Issue903SameCompilationLambdaInferenceEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

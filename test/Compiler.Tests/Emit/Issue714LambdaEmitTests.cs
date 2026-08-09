@@ -31,7 +31,7 @@ public class Issue714LambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class Issue714LambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue714LambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue714LambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -143,7 +143,7 @@ public class Issue714LambdaEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

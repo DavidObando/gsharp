@@ -52,7 +52,7 @@ public class Issue1448PropertyReceiverMemberAssignEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1448PropertyReceiverMemberAssignEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -160,7 +160,7 @@ public class Issue1448PropertyReceiverMemberAssignEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

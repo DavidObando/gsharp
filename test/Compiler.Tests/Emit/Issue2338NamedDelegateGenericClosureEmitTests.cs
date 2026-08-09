@@ -89,7 +89,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\nabc\n", output);
+        Assert.Equal($"7{Environment.NewLine}abc{Environment.NewLine}", output);
     }
 
     // Facet B: generic FUNCTION (MVAR) whose lambda captures the
@@ -117,7 +117,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\nhi\n", output);
+        Assert.Equal($"42{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     // Facet C: nested generic context — a generic method with its own
@@ -153,7 +153,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\nnested\n", output);
+        Assert.Equal($"10{Environment.NewLine}nested{Environment.NewLine}", output);
     }
 
     // Facet D: non-generic control — a plain (non-generic) lambda capturing
@@ -176,7 +176,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -253,7 +253,7 @@ public class Issue2338NamedDelegateGenericClosureEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

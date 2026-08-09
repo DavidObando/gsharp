@@ -87,7 +87,7 @@ public class Issue2838GenericPointerStrideEmitTests
             """;
 
         var output = CompileAndRun(source, UnsafeIlVerifyIgnored);
-        Assert.Equal("1\n2\n4\n8\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}4{Environment.NewLine}8{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -127,7 +127,7 @@ public class Issue2838GenericPointerStrideEmitTests
             """;
 
         var output = CompileAndRun(source, UnsafeIlVerifyIgnored);
-        Assert.Equal("3\n6\n12\n24\n", output);
+        Assert.Equal($"3{Environment.NewLine}6{Environment.NewLine}12{Environment.NewLine}24{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -421,7 +421,7 @@ public class Issue2838GenericPointerStrideEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

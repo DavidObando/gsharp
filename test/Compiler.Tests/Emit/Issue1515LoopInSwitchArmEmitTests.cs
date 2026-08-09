@@ -56,7 +56,7 @@ public class Issue1515LoopInSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n3\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue1515LoopInSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n2\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue1515LoopInSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n3\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1515LoopInSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n8\n9\n", output);
+        Assert.Equal($"7{Environment.NewLine}8{Environment.NewLine}9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class Issue1515LoopInSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n2\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -237,7 +237,7 @@ public class Issue1515LoopInSwitchArmEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -118,7 +118,7 @@ public class Issue1653RelationalPatternWidthEmittedSessionTests
             Console.WriteLine(le)
             """);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("nope\nnope\nnope\nnope\n", output.Replace("\r\n", "\n"));
+        Assert.Contains($"nope{Environment.NewLine}nope{Environment.NewLine}nope{Environment.NewLine}nope{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

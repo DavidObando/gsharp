@@ -45,7 +45,7 @@ public class Issue1017ConversionOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("100\n", output);
+        Assert.Equal($"100{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue1017ConversionOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1017ConversionOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1017ConversionOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("212\n212\n", output);
+        Assert.Equal($"212{Environment.NewLine}212{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public class Issue1017ConversionOperatorEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
 
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

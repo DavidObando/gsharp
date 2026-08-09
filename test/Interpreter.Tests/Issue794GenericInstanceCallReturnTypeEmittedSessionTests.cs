@@ -36,7 +36,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(arr[1])
             """;
 
-        Assert.Equal("2\n42\n42\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(arr[0])
             """;
 
-        Assert.Equal("1\nhi\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}hi{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(Sequences.CountThree[string](""))
             """;
 
-        Assert.Equal("3\n3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(MakeAndCount[string]("x", "y"))
             """;
 
-        Assert.Equal("2\n2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(Helper.FirstOrFallback[int32, string](-1, ""))
             """;
 
-        Assert.Equal("fallback\n-1\n", RunSubmission(source));
+        Assert.Equal($"fallback{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.WriteLine(doubled[3])
             """;
 
-        Assert.Equal("4\n1\n2\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -174,6 +174,6 @@ public class Issue794GenericInstanceCallReturnTypeEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

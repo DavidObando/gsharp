@@ -58,7 +58,7 @@ public class Issue1522StackAllocArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue1522StackAllocArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue1522StackAllocArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue1522StackAllocArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -206,7 +206,7 @@ public class Issue1522StackAllocArgEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

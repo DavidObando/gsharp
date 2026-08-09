@@ -48,7 +48,7 @@ public class Issue1610InterfaceByRefParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue1610InterfaceByRefParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n15\n45\n", output);
+        Assert.Equal($"42{Environment.NewLine}15{Environment.NewLine}45{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -162,7 +162,7 @@ public class Issue1610InterfaceByRefParamEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

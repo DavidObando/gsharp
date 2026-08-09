@@ -68,7 +68,7 @@ public sealed class Issue2642NullableInheritedImportedPropertyEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            Assert.Equal("\n2642\n", stdout.Replace("\r\n", "\n"));
+            Assert.Equal($"{Environment.NewLine}2642{Environment.NewLine}", stdout.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

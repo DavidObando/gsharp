@@ -46,7 +46,7 @@ public class Adr0065ConvenienceInitEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n4\n5\n5\n", output);
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}5{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Adr0065ConvenienceInitEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("https://example\n5\nhttps://other\n30\nhttp://localhost\n30\n", output);
+        Assert.Equal($"https://example{Environment.NewLine}5{Environment.NewLine}https://other{Environment.NewLine}30{Environment.NewLine}http://localhost{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Adr0065ConvenienceInitEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Settings\nsettings\nFalse\nhome\nhome\n", output);
+        Assert.Equal($"Settings{Environment.NewLine}settings{Environment.NewLine}False{Environment.NewLine}home{Environment.NewLine}home{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Adr0065ConvenienceInitEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Alice\n42\n", output);
+        Assert.Equal($"Alice{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public class Adr0065ConvenienceInitEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n128\n255\n", output);
+        Assert.Equal($"0{Environment.NewLine}128{Environment.NewLine}255{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -357,7 +357,7 @@ public class Adr0065ConvenienceInitEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -408,7 +408,7 @@ public class Adr0065ConvenienceInitEmitTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

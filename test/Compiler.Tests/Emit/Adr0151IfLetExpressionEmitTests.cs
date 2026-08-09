@@ -39,7 +39,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(b)
             """;
 
-        Assert.Equal("hi\nnone\n", CompileAndRun(source));
+        Assert.Equal($"hi{Environment.NewLine}none{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("short\nhello\nshort\n", CompileAndRun(source));
+        Assert.Equal($"short{Environment.NewLine}hello{Environment.NewLine}short{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(if let v = Get() { v } else { "none" })
             """;
 
-        Assert.Equal("arg\n", CompileAndRun(source));
+        Assert.Equal($"arg{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(empty.First ?? "none")
             """;
 
-        Assert.Equal("first\nnone\n", CompileAndRun(source));
+        Assert.Equal($"first{Environment.NewLine}none{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(calls)
             """;
 
-        Assert.Equal("x\n1\n", CompileAndRun(source));
+        Assert.Equal($"x{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(guardCalls)
             """;
 
-        Assert.Equal("none\n0\n0\n", CompileAndRun(source));
+        Assert.Equal($"none{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(log)
             """;
 
-        Assert.Equal("AB\nab\n", CompileAndRun(source));
+        Assert.Equal($"AB{Environment.NewLine}ab{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("3\n-1\n-1\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(nil, nil))
             """;
 
-        Assert.Equal("a\nb\nnone\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}none{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(false, "hit"))
             """;
 
-        Assert.Equal("hit\ninner\nouter\n", CompileAndRun(source));
+        Assert.Equal($"hit{Environment.NewLine}inner{Environment.NewLine}outer{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("4\n0\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class Adr0151IfLetExpressionEmitTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("4\n-1\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -352,7 +352,7 @@ public class Adr0151IfLetExpressionEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

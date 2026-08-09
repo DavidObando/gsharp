@@ -45,7 +45,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n42\n42\n", output);
+        Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nhi\n", output);
+        Assert.Equal($"1{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n3\n", output);
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n2\n", output);
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("fallback\n-1\n", output);
+        Assert.Equal($"fallback{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n1\n2\n", output);
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("9\n2\n5\n", output);
+        Assert.Equal($"9{Environment.NewLine}2{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -298,7 +298,7 @@ public class Issue794GenericInstanceCallReturnTypeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

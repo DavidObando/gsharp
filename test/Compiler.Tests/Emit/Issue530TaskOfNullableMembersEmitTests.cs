@@ -34,7 +34,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("awaited\n", output);
+        Assert.Equal($"awaited{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("world\n", output);
+        Assert.Equal($"world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("configured\n", output);
+        Assert.Equal($"configured{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -234,7 +234,7 @@ public class Issue530TaskOfNullableMembersEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

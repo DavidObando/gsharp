@@ -66,7 +66,7 @@ public class Issue1516CoalesceAsTypeParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("x\n", output);
+        Assert.Equal($"x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1516CoalesceAsTypeParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("fallback\n", output);
+        Assert.Equal($"fallback{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue1516CoalesceAsTypeParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\nfb2\n", output);
+        Assert.Equal($"hello{Environment.NewLine}fb2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public class Issue1516CoalesceAsTypeParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("present\nfb\n", output);
+        Assert.Equal($"present{Environment.NewLine}fb{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -250,7 +250,7 @@ public class Issue1516CoalesceAsTypeParamEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

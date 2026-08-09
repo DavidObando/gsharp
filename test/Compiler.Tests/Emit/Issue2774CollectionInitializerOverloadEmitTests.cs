@@ -117,7 +117,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
             """;
 
         using var result = Compile(source, includeContracts: true);
-        Assert.Equal("base\ninterface\nnullable\nlong\n", Run(result.OutputPath));
+        Assert.Equal($"base{Environment.NewLine}interface{Environment.NewLine}nullable{Environment.NewLine}long{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
             """;
 
         using var result = Compile(source);
-        Assert.Equal("2\nbase\n", Run(result.OutputPath));
+        Assert.Equal($"2{Environment.NewLine}base{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
             """;
 
         using var result = Compile(source);
-        Assert.Equal("1\n42\n1\nTrue\n", Run(result.OutputPath));
+        Assert.Equal($"1{Environment.NewLine}42{Environment.NewLine}1{Environment.NewLine}True{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
             """;
 
         using var result = Compile(source, includeContracts: true);
-        Assert.Equal("ctor,eval1,add1,eval2,add2\n", Run(result.OutputPath));
+        Assert.Equal($"ctor,eval1,add1,eval2,add2{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
             additionalReferences: new[] { Path.Combine(AppContext.BaseDirectory, "System.CommandLine.dll") },
             outOfProcess: true,
             useExplicitBclReferences: true);
-        Assert.Equal("1\n1\n1\n1\n1\n1\n1\n0\n0\n", Run(result.OutputPath));
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -440,7 +440,7 @@ public sealed class Issue2774CollectionInitializerOverloadEmitTests
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private sealed class CompilationResult : IDisposable

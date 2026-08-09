@@ -80,6 +80,6 @@ public class Issue2397LiftedUserOperatorEmittedSessionTests
             Console.SetOut(previous);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

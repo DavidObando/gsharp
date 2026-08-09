@@ -58,7 +58,7 @@ public class Issue1325StructConstraintEmitTests
 
         // 2 E (4 bytes each) -> 8 bytes; cast to uint32 -> 2 elements whose
         // little-endian values are the original int32 fields.
-        Assert.Equal("8\n2\n16909060\n84281096\n", output);
+        Assert.Equal($"8{Environment.NewLine}2{Environment.NewLine}16909060{Environment.NewLine}84281096{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string[] ilVerifyIgnored)
@@ -122,7 +122,7 @@ public class Issue1325StructConstraintEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

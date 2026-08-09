@@ -46,7 +46,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue891LambdaArgumentEmitTests
                 """;
 
             var output = CompileAndRun(source, referencePaths: new[] { helperDll });
-            Assert.Equal("made\n", output);
+            Assert.Equal($"made{Environment.NewLine}", output);
         }
         finally
         {
@@ -121,7 +121,7 @@ public class Issue891LambdaArgumentEmitTests
                 """;
 
             var output = CompileAndRun(source, referencePaths: new[] { helperDll });
-            Assert.Equal("constructed\n", output);
+            Assert.Equal($"constructed{Environment.NewLine}", output);
         }
         finally
         {
@@ -147,7 +147,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("network\n", output);
+        Assert.Equal($"network{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n6\n", output);
+        Assert.Equal($"3{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public class Issue891LambdaArgumentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\nTrue\n", output);
+        Assert.Equal($"2{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -359,7 +359,7 @@ public class Issue891LambdaArgumentEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

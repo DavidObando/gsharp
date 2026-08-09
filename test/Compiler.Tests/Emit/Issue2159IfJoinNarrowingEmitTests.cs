@@ -41,7 +41,7 @@ public class Issue2159IfJoinNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("made\nkept\n", output);
+        Assert.Equal($"made{Environment.NewLine}kept{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue2159IfJoinNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("made\ngiven\n", output);
+        Assert.Equal($"made{Environment.NewLine}given{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -142,7 +142,7 @@ public class Issue2159IfJoinNarrowingEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
 
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

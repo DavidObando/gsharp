@@ -47,7 +47,7 @@ public class Issue757BaseInterfaceCallEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("AB\n", output);
+        Assert.Equal($"AB{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue757BaseInterfaceCallEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("default\n", output);
+        Assert.Equal($"default{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue757BaseInterfaceCallEmitTests
         var output = CompileAndRun(source);
         // 1 + 2 * 10 == 21 — all three call-sites converge on C.V via
         // virtual dispatch.
-        Assert.Equal("21\n21\n21\n", output);
+        Assert.Equal($"21{Environment.NewLine}21{Environment.NewLine}21{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public class Issue757BaseInterfaceCallEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

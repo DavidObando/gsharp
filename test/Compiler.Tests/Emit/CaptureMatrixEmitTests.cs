@@ -494,7 +494,7 @@ public class CaptureMatrixEmitTests
                 proc.ExitCode == 0,
                 $"{name}: exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

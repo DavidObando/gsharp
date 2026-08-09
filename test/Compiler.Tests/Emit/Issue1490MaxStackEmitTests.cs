@@ -64,7 +64,7 @@ public class Issue1490MaxStackEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("36\nok1490guid\n", output);
+        Assert.Equal($"36{Environment.NewLine}ok1490guid{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1490MaxStackEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.EndsWith("ok1490nested\n", output);
+        Assert.EndsWith($"ok1490nested{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue1490MaxStackEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("36\nok1490async\n", output);
+        Assert.Equal($"36{Environment.NewLine}ok1490async{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue1490MaxStackEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("36\nok1490ctor\n", output);
+        Assert.Equal($"36{Environment.NewLine}ok1490ctor{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -251,7 +251,7 @@ public class Issue1490MaxStackEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

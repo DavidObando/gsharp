@@ -57,7 +57,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("42\nTrue\n", output);
+        Assert.Equal($"42{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("3.14\n", output);
+        Assert.Equal($"3.14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n42\n", output);
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("A\n", output);
+        Assert.Equal($"A{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("99\nTrue\n", output);
+        Assert.Equal($"99{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -356,7 +356,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("10\nhi\nTrue\n", output);
+        Assert.Equal($"10{Environment.NewLine}hi{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -388,7 +388,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -424,7 +424,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("123\ntest\n", output);
+        Assert.Equal($"123{Environment.NewLine}test{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -456,7 +456,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -488,7 +488,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("3000000000\n", output);
+        Assert.Equal($"3000000000{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -521,7 +521,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("1024\n", output);
+        Assert.Equal($"1024{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -555,7 +555,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("99\nTrue\n", output);
+        Assert.Equal($"99{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -586,7 +586,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -620,7 +620,7 @@ public class Issue638NullableValueReturnEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource);
-        Assert.Equal("2.718\nTrue\n", output);
+        Assert.Equal($"2.718{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     // ----- helpers -----
@@ -716,7 +716,7 @@ public class Issue638NullableValueReturnEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

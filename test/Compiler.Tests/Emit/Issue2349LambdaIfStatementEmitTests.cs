@@ -49,7 +49,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("export\nrun\n", output);
+        Assert.Equal($"export{Environment.NewLine}run{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("p\ndone\nn\ndone\nz\ndone\n", output);
+        Assert.Equal($"p{Environment.NewLine}done{Environment.NewLine}n{Environment.NewLine}done{Environment.NewLine}z{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ab\nafter-inner\ndone\na\nafter-inner\ndone\nnone\ndone\n", output);
+        Assert.Equal($"ab{Environment.NewLine}after-inner{Environment.NewLine}done{Environment.NewLine}a{Environment.NewLine}after-inner{Environment.NewLine}done{Environment.NewLine}none{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("y\nn\n", output);
+        Assert.Equal($"y{Environment.NewLine}n{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -191,7 +191,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("pretty: export\n0\njson: run\n0\n", output);
+        Assert.Equal($"pretty: export{Environment.NewLine}0{Environment.NewLine}json: run{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class Issue2349LambdaIfStatementEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\nc\nb\nc\n", output);
+        Assert.Equal($"a{Environment.NewLine}c{Environment.NewLine}b{Environment.NewLine}c{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -294,7 +294,7 @@ public class Issue2349LambdaIfStatementEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

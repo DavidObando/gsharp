@@ -55,7 +55,7 @@ public class Issue920NestedClassCtorEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue920NestedClassCtorEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("987654\n", output);
+        Assert.Equal($"987654{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue920NestedClassCtorEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("from-init\n", output);
+        Assert.Equal($"from-init{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public class Issue920NestedClassCtorEmitTests
             Console.WriteLine(b.Make())
             """);
 
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public class Issue920NestedClassCtorEmitTests
             Console.WriteLine(i.Get())
             """);
 
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -268,7 +268,7 @@ public class Issue920NestedClassCtorEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

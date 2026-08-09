@@ -47,7 +47,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("world\n", output);
+        Assert.Equal($"world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("accessor\n", output);
+        Assert.Equal($"accessor{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("initial\nupdated\n", output);
+        Assert.Equal($"initial{Environment.NewLine}updated{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -329,7 +329,7 @@ public class Issue573FieldSatisfiesGetterPropertyContractTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

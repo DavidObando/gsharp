@@ -29,7 +29,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(Length(nil))
             """;
 
-        Assert.Equal("5\n-1\n", RunSubmission(source));
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(Length(nil))
             """;
 
-        Assert.Equal("2\n-1\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(Length(nil, false))
             """;
 
-        Assert.Equal("5\n-1\n-1\n", RunSubmission(source));
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(Both(nil, "ya"))
             """;
 
-        Assert.Equal("4\n-1\n-1\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(DescribeOrDefault(nil))
             """;
 
-        Assert.Equal("hi Alice\nnone\n", RunSubmission(source));
+        Assert.Equal($"hi Alice{Environment.NewLine}none{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(DescribeOrDefault(nil))
             """;
 
-        Assert.Equal("hi Alice\nnone\n", RunSubmission(source));
+        Assert.Equal($"hi Alice{Environment.NewLine}none{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.WriteLine(Classify(-3))
             """;
 
-        Assert.Equal("1\n-1\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -183,6 +183,6 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

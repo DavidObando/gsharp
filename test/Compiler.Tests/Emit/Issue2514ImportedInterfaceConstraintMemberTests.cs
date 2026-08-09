@@ -187,7 +187,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
 
         using var result = Compile(source, "exe");
         Assert.Equal(
-            "Ada\nGrace\nvalue\nindexed\necho!\nnumber:7\n2514\n100\nmade:created\n",
+            $"Ada{Environment.NewLine}Grace{Environment.NewLine}value{Environment.NewLine}indexed{Environment.NewLine}echo!{Environment.NewLine}number:7{Environment.NewLine}2514{Environment.NewLine}100{Environment.NewLine}made:created{Environment.NewLine}",
             Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
 
@@ -206,7 +206,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
 
         var consumerPath = EmitCSharpConsumer(result.DirectoryPath, result.OutputPath, result.ContractsPath);
         Assert.Equal(
-            "CSharp\nconsumer\nconsumer!\nnumber:8\n2514\n100\nmade:created\n1\nitem\n",
+            $"CSharp{Environment.NewLine}consumer{Environment.NewLine}consumer!{Environment.NewLine}number:8{Environment.NewLine}2514{Environment.NewLine}100{Environment.NewLine}made:created{Environment.NewLine}1{Environment.NewLine}item{Environment.NewLine}",
             Run(consumerPath));
     }
 
@@ -240,7 +240,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
             """;
 
         using var result = Compile(source, "exe");
-        Assert.Equal("Ada!\nGrace!\n", Run(result.OutputPath));
+        Assert.Equal($"Ada!{Environment.NewLine}Grace!{Environment.NewLine}", Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
     }
 
@@ -263,7 +263,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
             """;
 
         using var result = Compile(source, "exe");
-        Assert.Equal("ordinary!\n", Run(result.OutputPath));
+        Assert.Equal($"ordinary!{Environment.NewLine}", Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
     }
 
@@ -288,7 +288,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
             """;
 
         using var result = Compile(source, "exe");
-        Assert.Equal("async!\n", Run(result.OutputPath));
+        Assert.Equal($"async!{Environment.NewLine}", Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
     }
 
@@ -371,7 +371,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
                 "exe",
                 contractsPath);
             IlVerifier.Verify(consumerPath, additionalReferences: new[] { contractsPath });
-            Assert.Equal("source\nsibling\n", Run(consumerPath));
+            Assert.Equal($"source{Environment.NewLine}sibling{Environment.NewLine}", Run(consumerPath));
         }
         finally
         {
@@ -565,7 +565,7 @@ public sealed class Issue2514ImportedInterfaceConstraintMemberTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

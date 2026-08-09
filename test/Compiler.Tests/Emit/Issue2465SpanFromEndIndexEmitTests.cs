@@ -92,7 +92,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode}):\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.Equal("1441\n", stdout.Replace("\r\n", "\n"));
+            Assert.Equal($"1441{Environment.NewLine}", stdout.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

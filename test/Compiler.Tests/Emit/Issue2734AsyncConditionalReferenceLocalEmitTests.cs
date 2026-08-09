@@ -91,7 +91,7 @@ public class Issue2734AsyncConditionalReferenceLocalEmitTests
             """;
 
         Assert.Equal(
-            "credentials:11\nbrowser:7\n1:1\n",
+            $"credentials:11{Environment.NewLine}browser:7{Environment.NewLine}1:1{Environment.NewLine}",
             CompileVerifyAndRun(Source, HelperSource));
     }
 
@@ -148,7 +148,7 @@ public class Issue2734AsyncConditionalReferenceLocalEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string BuildHelper(string directory, string source)

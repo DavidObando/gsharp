@@ -47,7 +47,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Run(Cat{Name: "Whiskers"}, false)
             """;
 
-        Assert.Equal("Rex:woof\nskipped\nskipped\n", RunSubmission(source));
+        Assert.Equal($"Rex:woof{Environment.NewLine}skipped{Environment.NewLine}skipped{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Run(Dog{Name: "Rex"}, true)
             """;
 
-        Assert.Equal("Rex:woof\nRex (dog)\nskipped\n", RunSubmission(source));
+        Assert.Equal($"Rex:woof{Environment.NewLine}Rex (dog){Environment.NewLine}skipped{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Console.WriteLine(Run(Cat{Name: "Whiskers"}))
             """;
 
-        Assert.Equal("True\nTrue\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Console.WriteLine(Length(nil, false))
             """;
 
-        Assert.Equal("5\n-1\n-1\n", RunSubmission(source));
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Run(Cat{Name: "Whiskers"})
             """;
 
-        Assert.Equal("Rex:woof\nWhiskers:purr\n", RunSubmission(source));
+        Assert.Equal($"Rex:woof{Environment.NewLine}Whiskers:purr{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Run(Cat{Name: "Whiskers"})
             """;
 
-        Assert.Equal("matched dog\nRex:woof\nmatched cat\n", RunSubmission(source));
+        Assert.Equal($"matched dog{Environment.NewLine}Rex:woof{Environment.NewLine}matched cat{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -182,6 +182,6 @@ public class Issue712FlowNarrowingExtensionsEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

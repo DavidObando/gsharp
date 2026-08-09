@@ -37,7 +37,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.WriteLine("done")
             """;
 
-        Assert.Equal("0\ndone\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}done{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.WriteLine(count)
             """;
 
-        Assert.Equal("0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.WriteLine(arr.Length)
             """;
 
-        Assert.Equal("0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.WriteLine(arrS.Length)
             """;
 
-        Assert.Equal("0\n0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             }
             """;
 
-        Assert.Equal("42\n42\n42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.WriteLine(count)
             """;
 
-        Assert.Equal("0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -158,6 +158,6 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

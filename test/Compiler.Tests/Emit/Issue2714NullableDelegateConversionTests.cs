@@ -64,7 +64,7 @@ public sealed class Issue2714NullableDelegateConversionTests
                 Console.SetOut(previous);
             }
 
-            Assert.Equal("ok\n", output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            Assert.Equal($"ok{Environment.NewLine}", output.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -151,7 +151,7 @@ public sealed class Issue2714NullableDelegateConversionTests
             }
             """;
 
-        Assert.Equal("25\n", CompileAndRun(source, "Issue2714Runtime"));
+        Assert.Equal($"25{Environment.NewLine}", CompileAndRun(source, "Issue2714Runtime"));
     }
 
     [Theory]
@@ -252,7 +252,7 @@ public sealed class Issue2714NullableDelegateConversionTests
                 Console.SetOut(previous);
             }
 
-            return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -44,7 +44,7 @@ public class Issue1298NullableUserEnumEmitTests
             """;
 
         // present A == A -> True; present B == A -> False; nil == A -> False.
-        Assert.Equal("True\nFalse\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue1298NullableUserEnumEmitTests
             """;
 
         // A != A -> False; B != A -> True; nil != A -> True (nil unequal to value).
-        Assert.Equal("False\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue1298NullableUserEnumEmitTests
             """;
 
         // a==nil -> False; n==nil -> True; a!=nil -> True; n!=nil -> False.
-        Assert.Equal("False\nTrue\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1298NullableUserEnumEmitTests
             Console.WriteLine(IsNil(n))
             """;
 
-        Assert.Equal("False\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue1298NullableUserEnumEmitTests
 
         // nil==nil -> True; a==nil -> False; a==a -> True; a==b -> False;
         // a!=b -> True; nil!=nil -> False.
-        Assert.Equal("True\nFalse\nTrue\nFalse\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -219,7 +219,7 @@ public class Issue1298NullableUserEnumEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

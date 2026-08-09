@@ -72,7 +72,7 @@ public class Issue2516SliceCovarianceEmitTests
             }
             """);
 
-        Assert.Equal("True\n2\n2\n2\n2\n2\n2\n2\n", output);
+        Assert.Equal($"True{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue2516SliceCovarianceEmitTests
             Console.WriteLine(Widen(nil) == nil)
             """);
 
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue2516SliceCovarianceEmitTests
 
         // C# omits representation-preserving reference conversions from an
         // expression tree; translator-generated `as` incorrectly produced TypeAs.
-        Assert.Equal("Parameter\n", output);
+        Assert.Equal($"Parameter{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class Issue2516SliceCovarianceEmitTests
             sibling,
             gsource,
             siblingName: "Probe.CSharp.Issue2516");
-        Assert.Equal("True\nTrue\n2\n3\n1\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Theory]
@@ -224,7 +224,7 @@ public class Issue2516SliceCovarianceEmitTests
             Console.WriteLine(Object.ReferenceEquals(dogs, widened))
             """);
 
-        Assert.Equal("3\nTrue\n", output);
+        Assert.Equal($"3{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -543,7 +543,7 @@ public class Issue2516SliceCovarianceEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"dotnet exec exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void RunDotnet(string workingDirectory, params string[] arguments)

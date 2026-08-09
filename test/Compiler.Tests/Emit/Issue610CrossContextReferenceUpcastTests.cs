@@ -66,7 +66,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "CrossCtx");
-        Assert.Equal("less\n", output);
+        Assert.Equal($"less{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "CustomIface");
-        Assert.Equal("HELLO\n", output);
+        Assert.Equal($"HELLO{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Trigger");
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "GenCtx");
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "SliceGuard");
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "SliceAssign");
-        Assert.Equal("alpha\n2\n", output);
+        Assert.Equal($"alpha{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "RetWiden");
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ public class Issue610CrossContextReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "NegVt");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -455,7 +455,7 @@ public class Issue610CrossContextReferenceUpcastTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -527,7 +527,7 @@ public class Issue610CrossContextReferenceUpcastTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

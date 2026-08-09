@@ -48,7 +48,7 @@ public class Issue522InitOnlyPropertyEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("X\n", output);
+        Assert.Equal($"X{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue522InitOnlyPropertyEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Y\nT\n", output);
+        Assert.Equal($"Y{Environment.NewLine}T{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue522InitOnlyPropertyEmitTests
 
         // Asin defaults to null because the auto-property backing field is
         // never assigned. Console.WriteLine renders that as an empty line.
-        Assert.Equal("\n", output);
+        Assert.Equal(Environment.NewLine, output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue522InitOnlyPropertyEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("only\n", output);
+        Assert.Equal($"only{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue522InitOnlyPropertyEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Z\n", output);
+        Assert.Equal($"Z{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -207,7 +207,7 @@ public class Issue522InitOnlyPropertyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -37,7 +37,7 @@ public class Issue991WhenGuardEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("small\nbig\nnonpositive\n", output);
+        Assert.Equal($"small{Environment.NewLine}big{Environment.NewLine}nonpositive{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue991WhenGuardEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("small\nbig\nnonpositive\n", output);
+        Assert.Equal($"small{Environment.NewLine}big{Environment.NewLine}nonpositive{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue991WhenGuardEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("the famous Rex\nBuddy:woof\nWhiskers:purr\n", output);
+        Assert.Equal($"the famous Rex{Environment.NewLine}Buddy:woof{Environment.NewLine}Whiskers:purr{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -162,7 +162,7 @@ public class Issue991WhenGuardEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

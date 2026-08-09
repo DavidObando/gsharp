@@ -73,7 +73,7 @@ public sealed class Issue2733GenericInitAccessorMemberRefEmitTests
         AssertAccessorMemberRefMatchesDefinition(outputPath, "set_CursorIndex", initOnly: true);
         AssertAccessorMemberRefMatchesDefinition(outputPath, "set_Selected", initOnly: true);
         AssertAccessorMemberRefMatchesDefinition(outputPath, "set_MutableIndex", initOnly: false);
-        Assert.Equal("1\none\n1\n", Run(outputPath, directory));
+        Assert.Equal($"1{Environment.NewLine}one{Environment.NewLine}1{Environment.NewLine}", Run(outputPath, directory));
     }
 
     [Fact]
@@ -192,6 +192,6 @@ public sealed class Issue2733GenericInitAccessorMemberRefEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"Exact MissingMethod fingerprint {ExactOahuCliFingerprint} still reproduces:\n{error}");
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

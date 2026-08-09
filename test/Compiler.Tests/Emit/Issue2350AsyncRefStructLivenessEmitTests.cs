@@ -46,7 +46,7 @@ public class Issue2350AsyncRefStructLivenessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue2350AsyncRefStructLivenessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue2350AsyncRefStructLivenessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n", output);
+        Assert.Equal($"4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue2350AsyncRefStructLivenessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -203,7 +203,7 @@ public class Issue2350AsyncRefStructLivenessEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

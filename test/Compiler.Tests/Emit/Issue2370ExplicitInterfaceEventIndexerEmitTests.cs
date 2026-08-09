@@ -160,7 +160,7 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
             explicitRemove.Invoke(instance, new object[] { handler });
         });
 
-        Assert.Equal("pub-add\nexp-add\npub-remove\nexp-remove\n", stdout);
+        Assert.Equal($"pub-add{Environment.NewLine}exp-add{Environment.NewLine}pub-remove{Environment.NewLine}exp-remove{Environment.NewLine}", stdout);
     }
 
     private static string CaptureConsoleOut(Action action)
@@ -177,7 +177,7 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
             Console.SetOut(prevOut);
         }
 
-        return writer.ToString().Replace("\r\n", "\n");
+        return writer.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 
     private const string IndexerReproSource = """
@@ -956,7 +956,7 @@ public class Issue2370ExplicitInterfaceEventIndexerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

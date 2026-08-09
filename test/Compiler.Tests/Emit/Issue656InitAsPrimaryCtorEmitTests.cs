@@ -72,7 +72,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("0\nnil\n", output);
+        Assert.Equal($"0{Environment.NewLine}nil{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -145,7 +145,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Settings\nsettings\nFalse\n", output);
+        Assert.Equal($"Settings{Environment.NewLine}settings{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -171,7 +171,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -197,7 +197,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Hello, world!\n", output);
+        Assert.Equal($"Hello, world!{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -225,7 +225,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("default\n7\n", output);
+        Assert.Equal($"default{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -258,7 +258,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Alice\n42\n", output);
+        Assert.Equal($"Alice{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("255\n128\n", output);
+        Assert.Equal($"255{Environment.NewLine}128{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -360,7 +360,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("[80x24]\n", output);
+        Assert.Equal($"[80x24]{Environment.NewLine}", output);
     }
 
     // ====================================================================
@@ -428,7 +428,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -472,7 +472,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -572,7 +572,7 @@ public class Issue656InitAsPrimaryCtorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

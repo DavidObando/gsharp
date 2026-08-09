@@ -51,7 +51,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
         var output = CompileAndRun(source);
 
         // Non-null left -> Foo.Bar() == 1; nil left -> Baz.Bar() == 2.
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("real\nnull\nreal\nnull\n", output);
+        Assert.Equal($"real{Environment.NewLine}null{Environment.NewLine}real{Environment.NewLine}null{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("null\nTrue\n", output);
+        Assert.Equal($"null{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
         var output = CompileAndRun(source);
 
         // Non-null left -> Dog.Speak() == 20; nil left -> Animal.Speak() == 10.
-        Assert.Equal("20\n10\n", output);
+        Assert.Equal($"20{Environment.NewLine}10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
         var output = CompileAndRun(source);
 
         // Non-null left -> 100 (int32); nil left -> 7 widened from uint16.
-        Assert.Equal("100\n7\n", output);
+        Assert.Equal($"100{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
         var output = CompileAndRun(source);
 
         // Non-null left -> 100 widened to int64; nil left -> 9000000000.
-        Assert.Equal("100\n9000000000\n", output);
+        Assert.Equal($"100{Environment.NewLine}9000000000{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("42\n7\n", output);
+        Assert.Equal($"42{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("5\n5\n", output);
+        Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -306,7 +306,7 @@ public class Issue1239CoalesceCommonTypeEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

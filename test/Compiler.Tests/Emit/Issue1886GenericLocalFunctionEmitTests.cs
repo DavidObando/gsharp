@@ -37,7 +37,7 @@ public class Issue1886GenericLocalFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nx\n", output);
+        Assert.Equal($"1{Environment.NewLine}x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class Issue1886GenericLocalFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1y\n34\n", output);
+        Assert.Equal($"1y{Environment.NewLine}34{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1886GenericLocalFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1886GenericLocalFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nx\n", output);
+        Assert.Equal($"1{Environment.NewLine}x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public class Issue1886GenericLocalFunctionEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

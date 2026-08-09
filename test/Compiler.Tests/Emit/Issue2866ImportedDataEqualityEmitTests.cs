@@ -49,7 +49,7 @@ public class Issue2866ImportedDataEqualityEmitTests
             }
             """;
 
-        Assert.Equal("True,False\n", CompileAndRun(source, library, "i2866lib1"));
+        Assert.Equal($"True,False{Environment.NewLine}", CompileAndRun(source, library, "i2866lib1"));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue2866ImportedDataEqualityEmitTests
             }
             """;
 
-        Assert.Equal("False,True\n", CompileAndRun(source, library, "i2866lib2"));
+        Assert.Equal($"False,True{Environment.NewLine}", CompileAndRun(source, library, "i2866lib2"));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue2866ImportedDataEqualityEmitTests
             }
             """;
 
-        Assert.Equal("True,False\n", CompileAndRun(source, library, "i2866lib3"));
+        Assert.Equal($"True,False{Environment.NewLine}", CompileAndRun(source, library, "i2866lib3"));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue2866ImportedDataEqualityEmitTests
             }
             """;
 
-        Assert.Equal("False\n", CompileAndRun(source, library, "i2866lib4"));
+        Assert.Equal($"False{Environment.NewLine}", CompileAndRun(source, library, "i2866lib4"));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class Issue2866ImportedDataEqualityEmitTests
             }
             """;
 
-        Assert.Equal("True,False\n", CompileAndRun(source));
+        Assert.Equal($"True,False{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -197,7 +197,7 @@ public class Issue2866ImportedDataEqualityEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

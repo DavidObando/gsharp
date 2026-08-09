@@ -77,7 +77,7 @@ public sealed class Issue2443ExternalOverrideTranslationTests
 
         string printed = Translate(Source, includeExternalBase: false);
         Assert.Contains("override func Post", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("\n    func Post", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain($"{Environment.NewLine}    func Post", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(string source, bool includeExternalBase = true)

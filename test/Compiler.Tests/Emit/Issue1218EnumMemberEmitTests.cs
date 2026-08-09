@@ -39,7 +39,7 @@ public class Issue1218EnumMemberEmitTests
             Console.WriteLine(Color.Blue.HasFlag(Color.Green))
             """;
 
-        Assert.Equal("True\nFalse\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class Issue1218EnumMemberEmitTests
             Console.WriteLine(Color.Green.GetType().Name)
             """;
 
-        Assert.Equal("Green\nColor\n", CompileAndRun(source));
+        Assert.Equal($"Green{Environment.NewLine}Color{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1218EnumMemberEmitTests
             Console.WriteLine(Color.Green.GetHashCode() == Color.Blue.GetHashCode())
             """;
 
-        Assert.Equal("True\nFalse\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1218EnumMemberEmitTests
             Console.WriteLine(c.Test(Color.Blue, Color.Green))
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -169,7 +169,7 @@ public class Issue1218EnumMemberEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

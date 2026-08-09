@@ -54,7 +54,7 @@ public class Issue2727AsyncLambdaFieldWriteEmitTests
             Console.WriteLine(screen.Result)
             """;
 
-        Assert.Equal("42:2:ok\n", CompileVerifyAndRun(Source, "ExactQueueScreen"));
+        Assert.Equal($"42:2:ok{Environment.NewLine}", CompileVerifyAndRun(Source, "ExactQueueScreen"));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue2727AsyncLambdaFieldWriteEmitTests
             Console.WriteLine(worker.Result)
             """;
 
-        Assert.Equal("3:True\n", CompileVerifyAndRun(Source, "PrePostAwaitCatch"));
+        Assert.Equal($"3:True{Environment.NewLine}", CompileVerifyAndRun(Source, "PrePostAwaitCatch"));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue2727AsyncLambdaFieldWriteEmitTests
             Console.WriteLine(worker.Value)
             """;
 
-        Assert.Equal("4\n5\n", CompileVerifyAndRun(Source, "NestedEscaping"));
+        Assert.Equal($"4{Environment.NewLine}5{Environment.NewLine}", CompileVerifyAndRun(Source, "NestedEscaping"));
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class Issue2727AsyncLambdaFieldWriteEmitTests
             Console.WriteLine(worker.Value)
             """;
 
-        Assert.Equal("7\n8\n", CompileVerifyAndRun(Source, "DirectControls"));
+        Assert.Equal($"7{Environment.NewLine}8{Environment.NewLine}", CompileVerifyAndRun(Source, "DirectControls"));
     }
 
     [Fact]
@@ -257,6 +257,6 @@ public class Issue2727AsyncLambdaFieldWriteEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

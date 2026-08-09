@@ -64,7 +64,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nFINALLY RAN\ncaught\ndone\n", output);
+        Assert.Equal($"1{Environment.NewLine}FINALLY RAN{Environment.NewLine}caught{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\nFINALLY RAN\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}FINALLY RAN{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nFINALLY RAN\n", output);
+        Assert.Equal($"1{Environment.NewLine}FINALLY RAN{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\ninner\nouter\ncaught\ndone\n", output);
+        Assert.Equal($"1{Environment.NewLine}inner{Environment.NewLine}outer{Environment.NewLine}caught{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("FINALLY RAN\ncaught\ndone\n", output);
+        Assert.Equal($"FINALLY RAN{Environment.NewLine}caught{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -250,7 +250,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\na\n2\nb\ncaught\ndone\n", output);
+        Assert.Equal($"1{Environment.NewLine}a{Environment.NewLine}2{Environment.NewLine}b{Environment.NewLine}caught{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -327,7 +327,7 @@ public class Issue1618IteratorFinallyOnThrowEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

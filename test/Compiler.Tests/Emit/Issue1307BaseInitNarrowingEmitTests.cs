@@ -37,7 +37,7 @@ public class Issue1307BaseInitNarrowingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1307BaseInitNarrowingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

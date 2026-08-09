@@ -134,7 +134,7 @@ public class Issue710NullConditionalIndexingEmittedSessionTests
 
             main()
             """;
-        var output = RunSubmission(source).Replace("\r\n", "\n");
+        var output = RunSubmission(source).ReplaceLineEndings(Environment.NewLine);
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("8", lines[0]);
         Assert.Equal("1", lines[1]);

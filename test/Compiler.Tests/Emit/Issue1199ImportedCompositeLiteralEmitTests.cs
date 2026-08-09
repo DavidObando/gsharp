@@ -33,7 +33,7 @@ public class Issue1199ImportedCompositeLiteralEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("128\n", output);
+        Assert.Equal($"128{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue1199ImportedCompositeLiteralEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("64\nhi\n", output);
+        Assert.Equal($"64{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -115,7 +115,7 @@ public class Issue1199ImportedCompositeLiteralEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

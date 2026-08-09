@@ -97,7 +97,7 @@ namespace Demo
 }");
 
         Assert.Contains("data class OahuConfig {", printed);
-        Assert.DoesNotContain("\nclass OahuConfig {", printed);
+        Assert.DoesNotContain($"{Environment.NewLine}class OahuConfig {{", printed);
         Assert.Contains("private var _downloadDirectory string = CliPaths.DefaultDownloadDir", printed);
         Assert.Contains("prop DownloadDirectory string {", printed);
     }

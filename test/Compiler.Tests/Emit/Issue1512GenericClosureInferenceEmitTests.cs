@@ -65,7 +65,7 @@ public class Issue1512GenericClosureInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue1512GenericClosureInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("v3\nv4\n", output);
+        Assert.Equal($"v3{Environment.NewLine}v4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue1512GenericClosureInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue1512GenericClosureInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue1512GenericClosureInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -269,7 +269,7 @@ public class Issue1512GenericClosureInferenceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

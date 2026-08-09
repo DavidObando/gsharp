@@ -40,7 +40,7 @@ public class Issue941NullCoalescingOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("fallback\npresent\n", output);
+        Assert.Equal($"fallback{Environment.NewLine}present{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue941NullCoalescingOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("-1\n7\n", output);
+        Assert.Equal($"-1{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue941NullCoalescingOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("third\nsecond\n", output);
+        Assert.Equal($"third{Environment.NewLine}second{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue941NullCoalescingOperatorEmitTests
 
         // present branch: prints "present" and never calls Side().
         // absent branch: calls Side() (prints "SIDE") then yields "from-side".
-        Assert.Equal("present\nSIDE\nfrom-side\n", output);
+        Assert.Equal($"present{Environment.NewLine}SIDE{Environment.NewLine}from-side{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue941NullCoalescingOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("defaulted\nkept\n", output);
+        Assert.Equal($"defaulted{Environment.NewLine}kept{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -278,7 +278,7 @@ public class Issue941NullCoalescingOperatorEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

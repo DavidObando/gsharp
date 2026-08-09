@@ -40,7 +40,7 @@ let s = Issue1812StaticFormattableFixture.Render(""n=${n:D3}"")
 Console.WriteLine(s)
 ";
         var output = CompileAndRun(Source, "Issue1812Static");
-        Assert.Equal("n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ let s = prefix.Render(""n=${n:D3}"")
 Console.WriteLine(s)
 ";
         var output = CompileAndRun(Source, "Issue1812Extension");
-        Assert.Equal("val:n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"val:n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -80,7 +80,7 @@ let t = MyThing(42)
 Console.WriteLine(t.Rendered)
 ";
         var output = CompileAndRun(Source, "Issue1812BaseCtor");
-        Assert.Equal("n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static string CompileAndRun(string source, string contextName)

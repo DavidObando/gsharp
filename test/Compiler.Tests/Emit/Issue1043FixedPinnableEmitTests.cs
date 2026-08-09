@@ -64,7 +64,7 @@ public class Issue1043FixedPinnableEmitTests
             """;
 
         var output = CompileAndRun(source, FixedIlVerifyIgnored);
-        Assert.Equal("65\n66\n67\n", output);
+        Assert.Equal($"65{Environment.NewLine}66{Environment.NewLine}67{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue1043FixedPinnableEmitTests
         var output = CompileAndRun(source, FixedIlVerifyIgnored);
 
         // 10 + 20 + 30 = 60
-        Assert.Equal("60\n", output);
+        Assert.Equal($"60{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue1043FixedPinnableEmitTests
             """;
 
         var output = CompileAndRun(source, FixedIlVerifyIgnored);
-        Assert.Equal("42\n0\n", output);
+        Assert.Equal($"42{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string[] ilVerifyIgnored)
@@ -193,7 +193,7 @@ public class Issue1043FixedPinnableEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

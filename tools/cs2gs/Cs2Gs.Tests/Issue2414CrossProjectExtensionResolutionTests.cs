@@ -211,7 +211,7 @@ namespace Oahu.App
             ("Core.gs", printedCore),
             ("App.gs", printedApp));
 
-        string[] lines = stdout.Replace("\r\n", "\n").Trim('\n').Split('\n');
+        string[] lines = stdout.ReplaceLineEndings(Environment.NewLine).Trim(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
         Assert.Equal(new[] { "True", "False", "True", "False", "False" }, lines);
     }
 

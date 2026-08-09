@@ -126,7 +126,7 @@ public class Issue1356FuncReturnCovarianceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi!\n", output);
+        Assert.Equal($"hi!{Environment.NewLine}", output);
     }
 
     private static string CompileLibrary(string source)
@@ -245,7 +245,7 @@ public class Issue1356FuncReturnCovarianceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

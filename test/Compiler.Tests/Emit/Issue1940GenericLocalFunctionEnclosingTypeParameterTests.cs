@@ -119,7 +119,7 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\ndone\n", output);
+        Assert.Equal($"42{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -293,7 +293,7 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\nhi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -435,7 +435,7 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

@@ -344,7 +344,7 @@ public class LexerTests
         var tokens = SyntaxTree.ParseTokens("`a\r\nb\rc`", out var diagnostics);
         var token = Assert.Single(tokens);
         Assert.Empty(diagnostics);
-        Assert.Equal("a\nb\nc", token.Value);
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}c", token.Value);
     }
 
     [Fact]
@@ -446,7 +446,7 @@ public class LexerTests
         var fragments = (ImmutableArray<InterpolationFragment>)token.Value;
         Assert.Equal(2, fragments.Length);
         Assert.False(fragments[0].IsExpression);
-        Assert.Equal("hello\n", fragments[0].Text);
+        Assert.Equal($"hello{Environment.NewLine}", fragments[0].Text);
     }
 
     [Fact]

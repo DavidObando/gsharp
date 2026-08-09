@@ -80,7 +80,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, SafeSpanIlVerifyIgnored);
-        Assert.Equal("4\n30\n100\n", output);
+        Assert.Equal($"4{Environment.NewLine}30{Environment.NewLine}100{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, SafeSpanIlVerifyIgnored);
-        Assert.Equal("0\n0\n", output);
+        Assert.Equal($"0{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue1024StackAllocEmitTests
         var output = CompileAndRun(source, SafeSpanIlVerifyIgnored);
 
         // 0 + 1 + 4 + 9 = 14
-        Assert.Equal("14\n", output);
+        Assert.Equal($"14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
-        Assert.Equal("3\n10\n20\n30\n", output);
+        Assert.Equal($"3{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue1024StackAllocEmitTests
         var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
 
         // 1 + 2 + 3 = 6
-        Assert.Equal("3\n6\n", output);
+        Assert.Equal($"3{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, SafeSpanInitializerIlVerifyIgnored);
-        Assert.Equal("3\n5\n25\n", output);
+        Assert.Equal($"3{Environment.NewLine}5{Environment.NewLine}25{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
-        Assert.Equal("5\n6\n7\n", output);
+        Assert.Equal($"5{Environment.NewLine}6{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -245,7 +245,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
-        Assert.Equal("0\n0\n", output);
+        Assert.Equal($"0{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -266,7 +266,7 @@ public class Issue1024StackAllocEmitTests
             """;
 
         var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
-        Assert.Equal("11\n22\n33\n", output);
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public class Issue1024StackAllocEmitTests
         var output = CompileAndRun(source, UnsafePointerIlVerifyIgnored);
 
         // 7 + 8 + 9 + 10 = 34
-        Assert.Equal("34\n", output);
+        Assert.Equal($"34{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string[] ilVerifyIgnored)
@@ -358,7 +358,7 @@ public class Issue1024StackAllocEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

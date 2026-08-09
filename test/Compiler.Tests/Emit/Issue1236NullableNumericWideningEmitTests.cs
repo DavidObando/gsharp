@@ -43,7 +43,7 @@ public class Issue1236NullableNumericWideningEmitTests
             """;
 
         // present 11 == 11 -> True; nil == 11 -> False (lifted equality).
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue1236NullableNumericWideningEmitTests
             """;
 
         // uint8? 3 == int32? 3 -> True; uint8? 3 == nil -> False.
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1236NullableNumericWideningEmitTests
             """;
 
         // 5 + 11 -> 16; 5 + nil -> nil (null-propagation).
-        Assert.Equal("16\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"16{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1236NullableNumericWideningEmitTests
             Console.WriteLine(Add(nil) == nil)
             """;
 
-        Assert.Equal("16\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"16{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue1236NullableNumericWideningEmitTests
             """;
 
         // 3 < 10 -> True; 3 < nil -> False (lifted ordering with a null operand).
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -204,7 +204,7 @@ public class Issue1236NullableNumericWideningEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

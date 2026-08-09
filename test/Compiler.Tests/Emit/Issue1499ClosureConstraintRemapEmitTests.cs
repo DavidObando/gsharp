@@ -57,7 +57,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("-1\n1\n0\n", output);
+        Assert.Equal($"-1{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("-1\n1\n", output);
+        Assert.Equal($"-1{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("77\n", output);
+        Assert.Equal($"77{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -231,7 +231,7 @@ public class Issue1499ClosureConstraintRemapEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

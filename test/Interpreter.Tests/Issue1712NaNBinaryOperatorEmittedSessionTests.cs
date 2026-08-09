@@ -32,8 +32,8 @@ public class Issue1712NaNBinaryOperatorEmittedSessionTests
             """);
         Assert.DoesNotContain("error GS", output);
         Assert.Equal(
-            "False\nFalse\nFalse\nFalse\nFalse\nFalse\nFalse\nFalse\n",
-            output.Replace("\r\n", "\n"));
+            $"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}",
+            output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -54,8 +54,8 @@ public class Issue1712NaNBinaryOperatorEmittedSessionTests
             """);
         Assert.DoesNotContain("error GS", output);
         Assert.Equal(
-            "False\nFalse\nFalse\nFalse\nFalse\nFalse\nFalse\nFalse\n",
-            output.Replace("\r\n", "\n"));
+            $"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}",
+            output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class Issue1712NaNBinaryOperatorEmittedSessionTests
             Console.WriteLine(nan != nan)
             """);
         Assert.DoesNotContain("error GS", output);
-        Assert.Equal("False\nTrue\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -90,8 +90,8 @@ public class Issue1712NaNBinaryOperatorEmittedSessionTests
             """);
         Assert.DoesNotContain("error GS", output);
         Assert.Equal(
-            "True\nFalse\nTrue\nTrue\nFalse\nTrue\n",
-            output.Replace("\r\n", "\n"));
+            $"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}",
+            output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue1712NaNBinaryOperatorEmittedSessionTests
             Console.WriteLine(d2 >= d1)
             """);
         Assert.DoesNotContain("error GS", output);
-        Assert.Equal("True\nFalse\nTrue\nTrue\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static string RunSubmission(string text)

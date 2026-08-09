@@ -191,7 +191,7 @@ public class Issue2749GenericClassAsyncEmitterTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

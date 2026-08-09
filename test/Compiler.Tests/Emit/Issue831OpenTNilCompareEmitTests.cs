@@ -68,7 +68,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello!\nmissing\n", output);
+        Assert.Equal($"hello!{Environment.NewLine}missing{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("value\nfallback\n", output);
+        Assert.Equal($"value{Environment.NewLine}fallback{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("present\nfallback\n", output);
+        Assert.Equal($"present{Environment.NewLine}fallback{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("caught\n", output);
+        Assert.Equal($"caught{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue831OpenTNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n0\n1\n0\n", output);
+        Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -325,7 +325,7 @@ public class Issue831OpenTNilCompareEmitTests
                     "exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -42,7 +42,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("Alice\n30\n", output);
+        Assert.Equal($"Alice{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("0\nTrue\nFalse\n", output);
+        Assert.Equal($"0{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("35\n", output);
+        Assert.Equal($"35{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("Woof\n", output);
+        Assert.Equal($"Woof{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("derived\n", output);
+        Assert.Equal($"derived{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("Bob\n", output);
+        Assert.Equal($"Bob{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("True\nTrue\nTrue\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("localhost\n8080\n", output);
+        Assert.Equal($"localhost{Environment.NewLine}8080{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -328,8 +328,8 @@ public class PropertyInteropTests
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
         Assert.Contains("\"Name\":\"Widget\"", output);
         Assert.Contains("\"Price\":999", output);
-        Assert.Equal("Widget", output.Split('\n')[1]);
-        Assert.Equal("999", output.Split('\n')[2]);
+        Assert.Equal("Widget", output.Split(Environment.NewLine)[1]);
+        Assert.Equal("999", output.Split(Environment.NewLine)[2]);
     }
 
     [Fact]
@@ -357,7 +357,7 @@ public class PropertyInteropTests
             """;
 
         var output = CompileGSharpAndRunCSharp(gsSource, csSource);
-        Assert.Equal("25\n", output);
+        Assert.Equal($"25{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -488,7 +488,7 @@ public class PropertyInteropTests
                 runProc.ExitCode == 0,
                 $"dotnet run failed (exit {runProc.ExitCode}):\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

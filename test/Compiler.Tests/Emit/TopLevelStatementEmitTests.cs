@@ -34,7 +34,7 @@ public class TopLevelStatementEmitTests
 
         var result = CompileAndRun(("Program.gs", source));
 
-        Assert.Equal("tls-single-file-marker\n", result.Stdout);
+        Assert.Equal($"tls-single-file-marker{Environment.NewLine}", result.Stdout);
 
         // ADR-0066 §3: the synthesized entry-point method must be named
         // <Main>$ on the emitted assembly.
@@ -67,7 +67,7 @@ public class TopLevelStatementEmitTests
 
         var result = CompileAndRun(("B.gs", fileB), ("A.gs", fileA));
 
-        Assert.Equal("first\nsecond\n", result.Stdout);
+        Assert.Equal($"first{Environment.NewLine}second{Environment.NewLine}", result.Stdout);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class TopLevelStatementEmitTests
 
         var result = CompileAndRun(("Program.gs", source));
 
-        Assert.Equal("0\n", result.Stdout);
+        Assert.Equal($"0{Environment.NewLine}", result.Stdout);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class TopLevelStatementEmitTests
             new[] { ("Program.gs", source) },
             extraRuntimeArgs: new[] { "alpha", "beta", "gamma" });
 
-        Assert.Equal("3\n", result.Stdout);
+        Assert.Equal($"3{Environment.NewLine}", result.Stdout);
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class TopLevelStatementEmitTests
 
         var result = CompileAndRun(("Program.gs", source));
 
-        Assert.Equal("tls-wins\n", result.Stdout);
+        Assert.Equal($"tls-wins{Environment.NewLine}", result.Stdout);
         Assert.Contains("<Main>$", result.MethodNames);
         Assert.Contains("GS0166", result.CompileOutput);
         Assert.Contains("warning GS0166", result.CompileOutput);
@@ -319,7 +319,7 @@ public class TopLevelStatementEmitTests
                     $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
             }
 
-            return new CompileResult(stdout.Replace("\r\n", "\n"), methodNames, proc.ExitCode, compile.Stdout + compile.Stderr);
+            return new CompileResult(stdout.ReplaceLineEndings(Environment.NewLine), methodNames, proc.ExitCode, compile.Stdout + compile.Stderr);
         }
         finally
         {

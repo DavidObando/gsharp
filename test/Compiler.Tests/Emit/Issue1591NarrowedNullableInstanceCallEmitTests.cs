@@ -48,7 +48,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("none\n", output);
+        Assert.Equal($"none{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Green\n", output);
+        Assert.Equal($"Green{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("43\n", output);
+        Assert.Equal($"43{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -229,7 +229,7 @@ public class Issue1591NarrowedNullableInstanceCallEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

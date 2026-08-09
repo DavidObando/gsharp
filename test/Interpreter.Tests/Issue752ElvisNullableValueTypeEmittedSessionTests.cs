@@ -23,7 +23,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("0\n", RunSubmission(source));
+        Assert.Equal($"0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(r!!)
             """;
 
-        Assert.Equal("99\n", RunSubmission(source));
+        Assert.Equal($"99{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine(u)
             """;
 
-        Assert.Equal("missing\nhello\n", RunSubmission(source));
+        Assert.Equal($"missing{Environment.NewLine}hello{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.WriteLine((w ?? -1).ToString())
             """;
 
-        Assert.Equal("42\n-1\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -122,6 +122,6 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

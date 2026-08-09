@@ -55,7 +55,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("Hello, world!\n", output);
+        Assert.Equal($"Hello, world!{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -93,7 +93,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("Hello, world!\n", output);
+        Assert.Equal($"Hello, world!{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -125,7 +125,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("hix3\n", output);
+        Assert.Equal($"hix3{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -159,7 +159,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("noarg\narg:42\n", output);
+        Assert.Equal($"noarg{Environment.NewLine}arg:42{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -197,7 +197,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("Overridden: world\n", output);
+        Assert.Equal($"Overridden: world{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -232,7 +232,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("deep-dim\n", output);
+        Assert.Equal($"deep-dim{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -264,7 +264,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("sealed-dim\n", output);
+        Assert.Equal($"sealed-dim{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -296,7 +296,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("default-label\n", output);
+        Assert.Equal($"default-label{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -334,7 +334,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("foo-dim\nbar-dim\n", output);
+        Assert.Equal($"foo-dim{Environment.NewLine}bar-dim{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -366,7 +366,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("Int32\n", output);
+        Assert.Equal($"Int32{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -456,7 +456,7 @@ public class Issue572DimDispatchOnConcreteTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

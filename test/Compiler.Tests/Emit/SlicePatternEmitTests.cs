@@ -40,7 +40,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("bookend\nbookend\nbookend\nother\nother\n", output);
+        Assert.Equal($"bookend{Environment.NewLine}bookend{Environment.NewLine}bookend{Environment.NewLine}other{Environment.NewLine}other{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("other\nother\n", output);
+        Assert.Equal($"other{Environment.NewLine}other{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("last=200\nlast=7\nempty\n", output);
+        Assert.Equal($"last=200{Environment.NewLine}last=7{Environment.NewLine}empty{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("first=42\nfirst=9\nempty\n", output);
+        Assert.Equal($"first=42{Environment.NewLine}first=9{Environment.NewLine}empty{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("any\nany\nany\n", output);
+        Assert.Equal($"any{Environment.NewLine}any{Environment.NewLine}any{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class SlicePatternEmitTests
 
         var output = CompileAndRun(gsource);
         Assert.Equal(
-            "first=10 last=40 restLen=2\nfirst=7 last=8 restLen=0\nnomatch\n",
+            $"first=10 last=40 restLen=2{Environment.NewLine}first=7 last=8 restLen=0{Environment.NewLine}nomatch{Environment.NewLine}",
             output);
     }
 
@@ -179,7 +179,7 @@ public class SlicePatternEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("20 30\n", output);
+        Assert.Equal($"20 30{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -243,7 +243,7 @@ public class SlicePatternEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

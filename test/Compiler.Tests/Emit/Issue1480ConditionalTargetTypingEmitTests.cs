@@ -44,7 +44,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n20\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n4\n", output);
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n6\n", output);
+        Assert.Equal($"5{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("base\nbase\n", output);
+        Assert.Equal($"base{Environment.NewLine}base{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("base\nbase\n", output);
+        Assert.Equal($"base{Environment.NewLine}base{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -243,7 +243,7 @@ public class Issue1480ConditionalTargetTypingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

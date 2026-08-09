@@ -43,7 +43,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n6\n", output);
+        Assert.Equal($"4{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n6\n", output);
+        Assert.Equal($"4{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -205,7 +205,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -337,7 +337,7 @@ public class Issue1554CompoundAssignOperatorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

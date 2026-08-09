@@ -31,7 +31,7 @@ public class Issue1056ClassConstraintEmitTests
             func Main() { System.Console.WriteLine(Describe[Dog](Dog())) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("woof\n", output);
+        Assert.Equal($"woof{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue1056ClassConstraintEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

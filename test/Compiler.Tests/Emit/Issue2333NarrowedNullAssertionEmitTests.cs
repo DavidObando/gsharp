@@ -74,7 +74,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(0.0, -1.0))
             """;
 
-        Assert.Equal("-1\n2.5\n0\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}2.5{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(3.5f, -1.0f))
             """;
 
-        Assert.Equal("-1\n3.5\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}3.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(epoch, DateTime(1999, 1, 1)) == epoch)
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine("${r2.X},${r2.Y}")
             """;
 
-        Assert.Equal("-1,-1\n3,4\n", CompileAndRun(source));
+        Assert.Equal($"-1,-1{Environment.NewLine}3,4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(ColorK.Green, ColorK.Blue))
             """;
 
-        Assert.Equal("2\n0\n1\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}0{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(nil, -1))
             """;
 
-        Assert.Equal("0\n5\n-1\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}5{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F(nil, true))
             """;
 
-        Assert.Equal("False\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -250,7 +250,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F[float64](2.25, -1.0))
             """;
 
-        Assert.Equal("-1\n7\n-1\n2.25\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}7{Environment.NewLine}-1{Environment.NewLine}2.25{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -273,7 +273,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(Unwrap[float64](1.5))
             """;
 
-        Assert.Equal("9\n1.5\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}1.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -314,7 +314,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(Probe[int32](nil))
             """;
 
-        Assert.Equal("5\n\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -352,7 +352,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(G(2.5))
             """;
 
-        Assert.Equal("2.5\n", CompileAndRun(source));
+        Assert.Equal($"2.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -389,7 +389,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(F("abc"))
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -414,7 +414,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(FindFloatArg(0.0))
             """;
 
-        Assert.Equal("0\n3.5\n0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}3.5{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -442,7 +442,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(ShouldRun(baseline, baseline.AddHours(2.0)))
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -466,7 +466,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             Console.WriteLine(Sum(3.0))
             """;
 
-        Assert.Equal("0\n9\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -544,7 +544,7 @@ public class Issue2333NarrowedNullAssertionEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

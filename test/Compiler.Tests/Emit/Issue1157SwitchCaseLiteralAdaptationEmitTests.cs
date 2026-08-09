@@ -43,7 +43,7 @@ public class Issue1157SwitchCaseLiteralAdaptationEmitTests
             """;
 
         // case 1 -> 20, no match -> default 30, case 0 -> 10
-        Assert.Equal("20\n30\n10\n", CompileAndRun(source));
+        Assert.Equal($"20{Environment.NewLine}30{Environment.NewLine}10{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -107,7 +107,7 @@ public class Issue1157SwitchCaseLiteralAdaptationEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

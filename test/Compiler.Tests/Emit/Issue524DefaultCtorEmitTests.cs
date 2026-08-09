@@ -53,7 +53,7 @@ public class Issue524DefaultCtorEmitTests
         var output = CompileAndRun(source);
         // String fields default to CLR `null`, which Console.WriteLine
         // prints as an empty line.
-        Assert.Equal("0\n\nFalse\n", output);
+        Assert.Equal($"0{Environment.NewLine}{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n4\n", output);
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public class Issue524DefaultCtorEmitTests
         var output = CompileAndRunWithProbe(source);
         // Label is a reference-type field on a freshly zero-initialised
         // value type, so it reads back as CLR `null` and prints empty.
-        Assert.Equal("0\n\n", output);
+        Assert.Equal($"0{Environment.NewLine}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n60\n", output);
+        Assert.Equal($"0{Environment.NewLine}60{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -262,7 +262,7 @@ public class Issue524DefaultCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public class Issue524DefaultCtorEmitTests
         var output = CompileAndRun(source);
         // Default-string is CLR null, which Console.WriteLine prints as
         // an empty line.
-        Assert.Equal("\n", output);
+        Assert.Equal(Environment.NewLine, output);
     }
 
     private static string CompileAndRun(string source)
@@ -407,7 +407,7 @@ public class Issue524DefaultCtorEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

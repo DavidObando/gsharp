@@ -79,7 +79,7 @@ public sealed class Issue2548ImportedEnumExhaustivenessTests
                 Console.SetOut(originalOut);
             }
 
-            Assert.Equal("ready\ndone\n", output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            Assert.Equal($"ready{Environment.NewLine}done{Environment.NewLine}", output.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

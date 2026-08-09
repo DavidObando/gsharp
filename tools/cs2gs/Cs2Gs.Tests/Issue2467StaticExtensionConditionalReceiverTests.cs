@@ -247,8 +247,8 @@ public class Issue2467StaticExtensionConditionalReceiverTests
 
         string output = CompileAndRun(printed, "C.Run()");
         Assert.Equal(
-            "False\nTrue\nFalse\nTrue\nnil!\nMMMNV0V1RAB\n",
-            output.Replace("\r\n", "\n"));
+            $"False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}nil!{Environment.NewLine}MMMNV0V1RAB{Environment.NewLine}",
+            output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static int CountOccurrences(string text, string value)

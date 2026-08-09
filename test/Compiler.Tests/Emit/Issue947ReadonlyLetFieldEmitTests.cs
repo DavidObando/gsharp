@@ -64,7 +64,7 @@ public class Issue947ReadonlyLetFieldEmitTests
             Console.WriteLine(p.Sum())
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue947ReadonlyLetFieldEmitTests
             Console.WriteLine(a.age)
             """;
 
-        Assert.Equal("ctor\n30\n", CompileAndRun(source));
+        Assert.Equal($"ctor{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue947ReadonlyLetFieldEmitTests
             Console.WriteLine(c.Get())
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue947ReadonlyLetFieldEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

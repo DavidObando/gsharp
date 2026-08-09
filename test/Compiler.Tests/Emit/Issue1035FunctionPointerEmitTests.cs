@@ -54,7 +54,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("30\n42\n", output);
+        Assert.Equal($"30{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Theory]
@@ -254,7 +254,7 @@ public class Issue1035FunctionPointerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -44,7 +44,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.WriteLine(sumVal)
             """;
 
-        Assert.Equal("3\n60\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}60{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.WriteLine(concat)
             """;
 
-        Assert.Equal("3\nabc\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}abc{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.WriteLine(concatSecond)
             """;
 
-        Assert.Equal("ab\nbc\n", RunSubmission(source));
+        Assert.Equal($"ab{Environment.NewLine}bc{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.WriteLine(sum3)
             """;
 
-        Assert.Equal("3\n33\n303\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}33{Environment.NewLine}303{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.WriteLine(sumInner2)
             """;
 
-        Assert.Equal("3\n33\n303\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}33{Environment.NewLine}303{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -192,6 +192,6 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

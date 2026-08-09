@@ -90,7 +90,7 @@ public class ReifiedGenericsReflectionTests
             """;
 
         var stdout = CompileAndRun(source);
-        Assert.Equal("7\n", stdout);
+        Assert.Equal($"7{Environment.NewLine}", stdout);
     }
 
     // -----------------------------------------------------------------
@@ -581,7 +581,7 @@ public class ReifiedGenericsReflectionTests
             Console.WriteLine(Map[int32, int32](21, func(n int32) int32 { return n * 2 }))
             Console.WriteLine(Map[int32, string](7, func(n int32) string { return "n=" }))
             """);
-        Assert.Equal("42\nn=\n", stdout);
+        Assert.Equal($"42{Environment.NewLine}n={Environment.NewLine}", stdout);
     }
 
     /// <summary>
@@ -628,7 +628,7 @@ public class ReifiedGenericsReflectionTests
             Console.WriteLine(Twice[int32](2, func(n int32) int32 { return n + n }))
             Console.WriteLine(Twice[string]("a", func(s string) string { return s + s }))
             """);
-        Assert.Equal("8\naaaa\n", stdout);
+        Assert.Equal($"8{Environment.NewLine}aaaa{Environment.NewLine}", stdout);
     }
 
     // -----------------------------------------------------------------
@@ -798,7 +798,7 @@ public class ReifiedGenericsReflectionTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

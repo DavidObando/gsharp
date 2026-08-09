@@ -133,7 +133,7 @@ Console.WriteLine(""done"")
                 $"sample exited {proc.ExitCode} (invalid IL would surface as InvalidProgramException)\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
             var lines = stdout
-                .Replace("\r\n", "\n")
+.ReplaceLineEndings(Environment.NewLine)
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
             // Both spawned async tasks must have run to completion (structured join)...

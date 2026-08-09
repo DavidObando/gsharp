@@ -76,7 +76,7 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -221,7 +221,7 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

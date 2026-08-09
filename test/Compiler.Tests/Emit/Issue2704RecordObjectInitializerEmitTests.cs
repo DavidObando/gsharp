@@ -64,7 +64,7 @@ public sealed class Issue2704RecordObjectInitializerEmitTests
             """;
 
         using var result = Compile(source);
-        Assert.Equal("A1\nBook\nauthor\nnarrator\n", Run(result.OutputPath));
+        Assert.Equal($"A1{Environment.NewLine}Book{Environment.NewLine}author{Environment.NewLine}narrator{Environment.NewLine}", Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath);
 
         var loadContext = new AssemblyLoadContext("issue2704-" + Guid.NewGuid(), isCollectible: true);
@@ -178,7 +178,7 @@ public sealed class Issue2704RecordObjectInitializerEmitTests
         string stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

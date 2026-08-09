@@ -33,7 +33,7 @@ public class Issue1246CompoundAssignWideningEmitTests
             Console.WriteLine(a)
             """;
 
-        Assert.Equal("300\n", CompileAndRun(source));
+        Assert.Equal($"300{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class Issue1246CompoundAssignWideningEmitTests
             Console.WriteLine(acc)
             """;
 
-        Assert.Equal("15\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue1246CompoundAssignWideningEmitTests
             Console.WriteLine(a)
             """;
 
-        Assert.Equal("10000000000\n", CompileAndRun(source));
+        Assert.Equal($"10000000000{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1246CompoundAssignWideningEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("4000000000\n", CompileAndRun(source));
+        Assert.Equal($"4000000000{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue1246CompoundAssignWideningEmitTests
             Console.WriteLine(a)
             """;
 
-        Assert.Equal("300\n", CompileAndRun(source));
+        Assert.Equal($"300{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -172,6 +172,6 @@ public class Issue1246CompoundAssignWideningEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

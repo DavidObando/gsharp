@@ -41,7 +41,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n42\n7\n", output);
+        Assert.Equal($"1{Environment.NewLine}42{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n12\n13\n", output);
+        Assert.Equal($"11{Environment.NewLine}12{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue523ClosureCaptureByRefTests
         // n is shared through the box; the inner lambda is built when outer
         // runs, but it still resolves n through the same cell that the
         // outermost write `n = 5` touched.
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("14\n", output);
+        Assert.Equal($"14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("first\nsecond\n", output);
+        Assert.Equal($"first{Environment.NewLine}second{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -267,7 +267,7 @@ public class Issue523ClosureCaptureByRefTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n99\n", output);
+        Assert.Equal($"1{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -330,7 +330,7 @@ public class Issue523ClosureCaptureByRefTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

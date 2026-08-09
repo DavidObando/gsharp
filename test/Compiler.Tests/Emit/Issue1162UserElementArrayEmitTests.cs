@@ -48,7 +48,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(Len(xs))
             """;
 
-        Assert.Equal("3\n", CompileAndRun(gsource, InitOnlyStructLiteral));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(gsource, InitOnlyStructLiteral));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(Len(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(gsource));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(Len(xs))
             """;
 
-        Assert.Equal("4\n", CompileAndRun(gsource));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(Take(xs))
             """;
 
-        Assert.Equal("3\n", CompileAndRun(gsource, InitOnlyStructLiteral));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(gsource, InitOnlyStructLiteral));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(First(xs))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(gsource, InitOnlyStructLiteral));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(gsource, InitOnlyStructLiteral));
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(F(xs))
             """;
 
-        Assert.Equal("60\n", CompileAndRun(gsource, InitOnlyStructLiteral));
+        Assert.Equal($"60{Environment.NewLine}", CompileAndRun(gsource, InitOnlyStructLiteral));
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(F(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(gsource));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(F(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(gsource));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class Issue1162UserElementArrayEmitTests
             Console.WriteLine(F2(xs))
             """;
 
-        Assert.Equal("6\n3\n4\n", CompileAndRun(gsource));
+        Assert.Equal($"6{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     private static string CompileAndRun(string source, string[] ignoredIlErrorCodes = null)
@@ -290,7 +290,7 @@ public class Issue1162UserElementArrayEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

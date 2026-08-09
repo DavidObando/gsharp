@@ -225,7 +225,7 @@ public class Issue2291ImportedRecordWithCopyTests
                 Console.SetOut(stdout);
             }
 
-            Assert.Equal("ready\n3\ncopied\n8\n", captured.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            Assert.Equal($"ready{Environment.NewLine}3{Environment.NewLine}copied{Environment.NewLine}8{Environment.NewLine}", captured.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

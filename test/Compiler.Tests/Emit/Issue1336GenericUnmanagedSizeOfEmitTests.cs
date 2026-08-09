@@ -61,7 +61,7 @@ public class Issue1336GenericUnmanagedSizeOfEmitTests
         // inferred from the typed local, so each instantiation emits a distinct
         // generic `sizeof !!T`.
         var output = CompileAndRun(source, Array.Empty<string>());
-        Assert.Equal("1\n4\n8\n", output);
+        Assert.Equal($"1{Environment.NewLine}4{Environment.NewLine}8{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1336GenericUnmanagedSizeOfEmitTests
             """;
 
         var output = CompileAndRun(source, Array.Empty<string>());
-        Assert.Equal("32\n16\n8\n", output);
+        Assert.Equal($"32{Environment.NewLine}16{Environment.NewLine}8{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue1336GenericUnmanagedSizeOfEmitTests
         // Raw pointer code is unverifiable by design; tolerate the inherent
         // pointer codes while still gating other verification regressions.
         var output = CompileAndRun(source, UnsafeIlVerifyIgnored);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string[] ignoredIlVerifyCodes)
@@ -180,7 +180,7 @@ public class Issue1336GenericUnmanagedSizeOfEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

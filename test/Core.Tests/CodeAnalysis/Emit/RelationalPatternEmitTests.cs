@@ -110,7 +110,7 @@ Console.WriteLine(ge)
 Console.WriteLine(le)
 ";
         var output = CompileLoadInvokeCaptureStdout(Source, "RelPatFloat64NaN");
-        Assert.Equal("nope\nnope\nnope\nnope\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"nope{Environment.NewLine}nope{Environment.NewLine}nope{Environment.NewLine}nope{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ Console.WriteLine(ge)
 Console.WriteLine(le)
 ";
         var output = CompileLoadInvokeCaptureStdout(Source, "RelPatFloat32NaN");
-        Assert.Equal("nope\nnope\nnope\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"nope{Environment.NewLine}nope{Environment.NewLine}nope{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

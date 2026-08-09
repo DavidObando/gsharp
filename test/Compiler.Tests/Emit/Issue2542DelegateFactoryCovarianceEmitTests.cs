@@ -39,7 +39,7 @@ public class Issue2542DelegateFactoryCovarianceEmitTests
             }
             """);
 
-        Assert.Equal("product\nproduct\n", output);
+        Assert.Equal($"product{Environment.NewLine}product{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue2542DelegateFactoryCovarianceEmitTests
             var stderr = process.StandardError.ReadToEnd();
             process.WaitForExit();
             Assert.True(process.ExitCode == 0, stderr);
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

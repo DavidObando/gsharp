@@ -79,7 +79,7 @@ public sealed class Issue2613StaticDelegateMemberPipelineTests
         process.WaitForExit();
 
         Assert.True(process.ExitCode == 0, error);
-        Assert.Equal("12\n6\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"12{Environment.NewLine}6{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static string WriteFixture(string sourceRoot)

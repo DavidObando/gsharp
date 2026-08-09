@@ -68,7 +68,7 @@ public class Issue974GenericInterfaceImplEmitTests
             }
             """;
 
-        Assert.Equal("10\n20\n30\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue974GenericInterfaceImplEmitTests
             Console.WriteLine(b.Get())
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue974GenericInterfaceImplEmitTests
             }
             """;
 
-        Assert.Equal("7\n8\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class Issue974GenericInterfaceImplEmitTests
             Console.WriteLine(bag.AddAll(xs))
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class Issue974GenericInterfaceImplEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -306,7 +306,7 @@ public class Issue974GenericInterfaceImplEmitTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

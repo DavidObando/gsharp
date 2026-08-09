@@ -64,7 +64,7 @@ var c = Make[int32]()
 Console.WriteLine(c.Result)
 ";
         var stdout = CompileLoadInvokeCaptureStdout(Source, nameof(DefaultNullableTypeParameter_Unconstrained_RefAndValue_JitsAndRuns));
-        var lines = stdout.Replace("\r\n", "\n").Trim().Split('\n');
+        var lines = stdout.ReplaceLineEndings(Environment.NewLine).Trim().Split(Environment.NewLine);
         Assert.Equal("True", lines[0].Trim());
         Assert.Equal("0", lines[1].Trim());
     }

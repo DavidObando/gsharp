@@ -41,7 +41,7 @@ public class Issue986BaseClassCallEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("shape circle\n", output);
+        Assert.Equal($"shape circle{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue986BaseClassCallEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("shape circle\n", output);
+        Assert.Equal($"shape circle{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue986BaseClassCallEmitTests
             """;
         var output = CompileAndRun(source);
         // base.Add(2,3) == 5, override adds 100 → 105.
-        Assert.Equal("105\n", output);
+        Assert.Equal($"105{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue986BaseClassCallEmitTests
             """;
         var output = CompileAndRun(source);
         // B does not override Name, so base.Name() resolves to A::Name.
-        Assert.Equal("AC\n", output);
+        Assert.Equal($"AC{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue986BaseClassCallEmitTests
             }
             """;
 
-        Assert.Equal("NUMBER\n", CompileAndRun(source));
+        Assert.Equal($"NUMBER{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -351,7 +351,7 @@ public class Issue986BaseClassCallEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

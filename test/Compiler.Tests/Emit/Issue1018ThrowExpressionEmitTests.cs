@@ -39,7 +39,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("boom-null\n", output);
+        Assert.Equal($"boom-null{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ternary-boom\n", output);
+        Assert.Equal($"ternary-boom{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("true-boom\n", output);
+        Assert.Equal($"true-boom{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -233,7 +233,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("auth\nnumber\nnamed\naction\ndone\n", output);
+        Assert.Equal($"auth{Environment.NewLine}number{Environment.NewLine}named{Environment.NewLine}action{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("got:argval\n", output);
+        Assert.Equal($"got:argval{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -281,7 +281,7 @@ public class Issue1018ThrowExpressionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("stmt-boom\n", output);
+        Assert.Equal($"stmt-boom{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -424,7 +424,7 @@ public class Issue1018ThrowExpressionEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

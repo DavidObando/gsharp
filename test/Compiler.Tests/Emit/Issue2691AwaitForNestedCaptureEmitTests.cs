@@ -54,7 +54,7 @@ public class Issue2691AwaitForNestedCaptureEmitTests
             Console.WriteLine(action().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("1\n", CompileVerifyAndRun(Source, "Oahu"));
+        Assert.Equal($"1{Environment.NewLine}", CompileVerifyAndRun(Source, "Oahu"));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue2691AwaitForNestedCaptureEmitTests
             Run().GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("BA\n", CompileVerifyAndRun(Source, "Escaping"));
+        Assert.Equal($"BA{Environment.NewLine}", CompileVerifyAndRun(Source, "Escaping"));
     }
 
     [Fact]
@@ -169,6 +169,6 @@ public class Issue2691AwaitForNestedCaptureEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

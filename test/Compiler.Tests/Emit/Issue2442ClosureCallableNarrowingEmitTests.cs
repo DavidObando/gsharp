@@ -51,7 +51,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             job.Convert([]uint8{21}, conv)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             Run(conv, 7)
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             Run(conv, 6)
             """;
 
-        Assert.Equal("36\n", CompileAndRun(source));
+        Assert.Equal($"36{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
             Run(conv, 5)
             """;
 
-        Assert.Equal("-5\n-6\n", CompileAndRun(source));
+        Assert.Equal($"-5{Environment.NewLine}-6{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -219,7 +219,7 @@ public class Issue2442ClosureCallableNarrowingEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

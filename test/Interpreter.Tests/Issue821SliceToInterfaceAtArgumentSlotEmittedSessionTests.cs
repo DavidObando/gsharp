@@ -42,7 +42,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(sumVal)
             """;
 
-        Assert.Equal("3\n60\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}60{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(concat)
             """;
 
-        Assert.Equal("3\nabc\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}abc{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(Count[int32]([]int32{10, 20, 30}))
             """;
 
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(Sink.Take[int32]([]int32{1, 2, 3}))
             """;
 
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(Sink.Take[int32]([]int32{1, 2, 3, 4}))
             """;
 
-        Assert.Equal("4\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.WriteLine(Sink.Take[int32]([]int32{7, 8, 9}))
             """;
 
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -171,6 +171,6 @@ public class Issue821SliceToInterfaceAtArgumentSlotEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

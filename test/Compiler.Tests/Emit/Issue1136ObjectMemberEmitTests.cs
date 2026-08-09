@@ -36,7 +36,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(object.ReferenceEquals(activeModal, Modal{}))
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(c.GetHashCode() == c.GetHashCode())
             """;
 
-        Assert.Equal("C\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"C{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(c.Name())
             """;
 
-        Assert.Equal("C\n", CompileAndRun(source));
+        Assert.Equal($"C{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(Report())
             """;
 
-        Assert.Equal("S True True\n", CompileAndRun(source));
+        Assert.Equal($"S True True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(c.ToString())
             """;
 
-        Assert.Equal("custom-C\n", CompileAndRun(source));
+        Assert.Equal($"custom-C{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(a.Equals(a))
             """;
 
-        Assert.Equal("False\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue1136ObjectMemberEmitTests
             Console.WriteLine(Use(g))
             """;
 
-        Assert.Equal("custom-C\nP.D\n", CompileAndRun(source));
+        Assert.Equal($"custom-C{Environment.NewLine}P.D{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -232,7 +232,7 @@ public class Issue1136ObjectMemberEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

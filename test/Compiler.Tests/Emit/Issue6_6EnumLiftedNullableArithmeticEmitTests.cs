@@ -30,7 +30,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a + b)
             """;
 
-        Assert.Equal("Wednesday\n", CompileAndRun(source));
+        Assert.Equal($"Wednesday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a + b)
             """;
 
-        Assert.Equal("\n", CompileAndRun(source));
+        Assert.Equal(Environment.NewLine, CompileAndRun(source));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a + b)
             """;
 
-        Assert.Equal("\n", CompileAndRun(source));
+        Assert.Equal(Environment.NewLine, CompileAndRun(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a - b)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a - b)
             """;
 
-        Assert.Equal("\n", CompileAndRun(source));
+        Assert.Equal(Environment.NewLine, CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a - b)
             """;
 
-        Assert.Equal("Thursday\n", CompileAndRun(source));
+        Assert.Equal($"Thursday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a + b)
             """;
 
-        Assert.Equal("Thursday\n", CompileAndRun(source));
+        Assert.Equal($"Thursday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
             Console.WriteLine(a + int32(4))
             """;
 
-        Assert.Equal("Friday\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Helpers (same pattern as Issue574 / Issue6_6 arithmetic) ───────
@@ -205,7 +205,7 @@ public class Issue6_6EnumLiftedNullableArithmeticEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

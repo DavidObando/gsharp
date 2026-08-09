@@ -241,7 +241,7 @@ public class Issue937AwaitForBreakContinueEmitTests
 
         // 1 and 2 produced and summed; break prevents "produce 3". Sum = 3.
         var (_, stdout) = CompileRunCapture(source);
-        Assert.Equal("produce 1\nproduce 2\n3", stdout.Trim());
+        Assert.Equal($"produce 1{Environment.NewLine}produce 2{Environment.NewLine}3", stdout.Trim());
     }
 
     #endregion
@@ -302,7 +302,7 @@ public class Issue937AwaitForBreakContinueEmitTests
             Console.SetOut(prevOut2);
         }
 
-        return (assembly, captured.ToString().Replace("\r\n", "\n"));
+        return (assembly, captured.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     #endregion

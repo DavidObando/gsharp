@@ -51,7 +51,7 @@ let s = Render(Issue1852RendererFixture())
 Console.WriteLine(s)
 ";
         var output = CompileAndRun(Source, "Issue1852Constrained");
-        Assert.Equal("n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ let s = RenderTwo(Issue1852RendererFixture())
 Console.WriteLine(s)
 ";
         var output = CompileAndRun(Source, "Issue1852ConstrainedMixed");
-        Assert.Equal("tag:n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"tag:n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

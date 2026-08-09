@@ -42,7 +42,7 @@ public class Issue618IndexCaptureRegressionTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -68,7 +68,7 @@ public class Issue618IndexCaptureRegressionTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -94,7 +94,7 @@ public class Issue618IndexCaptureRegressionTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -123,7 +123,7 @@ public class Issue618IndexCaptureRegressionTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("55\n", output);
+        Assert.Equal($"55{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -151,7 +151,7 @@ public class Issue618IndexCaptureRegressionTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -214,7 +214,7 @@ public class Issue618IndexCaptureRegressionTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

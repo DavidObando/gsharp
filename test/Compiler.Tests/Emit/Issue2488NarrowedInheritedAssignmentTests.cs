@@ -185,7 +185,7 @@ public class Issue2488NarrowedInheritedAssignmentTests
             Console.WriteLine(ValueCalls)
             """;
 
-        Assert.Equal("3\n9\n16\n1\n1\n1\n1\n1\n", CompileAndRun(source, ImportedTypes));
+        Assert.Equal($"3{Environment.NewLine}9{Environment.NewLine}16{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source, ImportedTypes));
     }
 
     [Fact]
@@ -330,7 +330,7 @@ public class Issue2488NarrowedInheritedAssignmentTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

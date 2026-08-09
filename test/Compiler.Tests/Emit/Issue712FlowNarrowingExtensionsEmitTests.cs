@@ -59,7 +59,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nskipped\nskipped\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}skipped{Environment.NewLine}skipped{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nRex (dog)\nskipped\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}Rex (dog){Environment.NewLine}skipped{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n-1\n-1\n", output);
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nWhiskers:purr\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}Whiskers:purr{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("matched dog\nRex:woof\n", output);
+        Assert.Equal($"matched dog{Environment.NewLine}Rex:woof{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -239,7 +239,7 @@ public class Issue712FlowNarrowingExtensionsEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -39,7 +39,7 @@ public class Issue1211CompositeLiteralPropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\nabc\n5\n", output);
+        Assert.Equal($"7{Environment.NewLine}abc{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue1211CompositeLiteralPropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n3\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1211CompositeLiteralPropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n6\n", output);
+        Assert.Equal($"5{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -150,7 +150,7 @@ public class Issue1211CompositeLiteralPropEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -43,7 +43,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Filtered(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Total(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Narrowed(xs))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Combo(xs))
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Positives(xs))
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Shortest(xs))
             """;
 
-        Assert.Equal("fig\n", CompileAndRun(source));
+        Assert.Equal($"fig{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
             Console.WriteLine(Positive(xs))
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -215,7 +215,7 @@ public class Issue1507SliceUntypedLambdaLinqEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -137,7 +137,7 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
             """;
 
         Assert.Equal(
-            "first.test\nexample.test\ngeneric\nnullable.test\n3:triple:True\n7\n8\n9\n15\n8\nnested:2.5\ngeneric-pair:generic-pair\n8\nfinal.test\n",
+            $"first.test{Environment.NewLine}example.test{Environment.NewLine}generic{Environment.NewLine}nullable.test{Environment.NewLine}3:triple:True{Environment.NewLine}7{Environment.NewLine}8{Environment.NewLine}9{Environment.NewLine}15{Environment.NewLine}8{Environment.NewLine}nested:2.5{Environment.NewLine}generic-pair:generic-pair{Environment.NewLine}8{Environment.NewLine}final.test{Environment.NewLine}",
             CompileVerifyAndRun(source, helperSource));
     }
 
@@ -173,7 +173,7 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
             Console.WriteLine(RunAsync().GetAwaiter().GetResult()!!.Host)
             """;
 
-        Assert.Equal("box\n42\ncontrol.test\n", CompileVerifyAndRun(source));
+        Assert.Equal($"box{Environment.NewLine}42{Environment.NewLine}control.test{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     private static string CompileVerifyAndRun(string source, string helperSource = null)
@@ -234,7 +234,7 @@ public sealed class Issue2750AsyncTupleAwaiterEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string BuildHelper(string directory, string source)

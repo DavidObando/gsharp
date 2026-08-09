@@ -49,7 +49,7 @@ public class Issue1104BasePropertyAccessEmitTests
             """;
         var output = CompileAndRun(source);
         // base.RenderSize == 10 (base getter, no recursion), override adds 5 → 15.
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1104BasePropertyAccessEmitTests
             """;
         var output = CompileAndRun(source);
         // B does not override Tag, so base.Tag resolves to A::get_Tag == 1.
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue1104BasePropertyAccessEmitTests
             """;
         var output = CompileAndRun(source);
         // Initial base.Stored == 100; after base.Stored = 42 it reads back 42.
-        Assert.Equal("100\n42\n", output);
+        Assert.Equal($"100{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Issue1104BasePropertyAccessEmitTests
         var output = CompileAndRun(source);
         // base[Base].RenderSize == 10 (grandparent, non-virtual) and
         // base.RenderSize == 99 (immediate base Mid) → 109.
-        Assert.Equal("109\n", output);
+        Assert.Equal($"109{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue1104BasePropertyAccessEmitTests
             """;
         var output = CompileAndRun(source);
         // Initial base[Base].Stored == 100; after the write it reads back 42.
-        Assert.Equal("100\n42\n", output);
+        Assert.Equal($"100{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -473,7 +473,7 @@ public class Issue1104BasePropertyAccessEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

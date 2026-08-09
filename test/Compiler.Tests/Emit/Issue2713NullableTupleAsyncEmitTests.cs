@@ -75,7 +75,7 @@ public sealed class Issue2713NullableTupleAsyncEmitTests
             Console.WriteLine(RunAsync().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("ok\n7\n", CompileVerifyAndRun(source));
+        Assert.Equal($"ok{Environment.NewLine}7{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -151,6 +151,6 @@ public sealed class Issue2713NullableTupleAsyncEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

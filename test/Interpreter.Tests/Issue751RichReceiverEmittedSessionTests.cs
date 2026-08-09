@@ -28,7 +28,7 @@ public class Issue751RichReceiverEmittedSessionTests
             Console.WriteLine(absent.OrElse("nope"))
             """;
 
-        Assert.Equal("hi\nnope\n", RunSubmission(source));
+        Assert.Equal($"hi{Environment.NewLine}nope{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class Issue751RichReceiverEmittedSessionTests
             Console.WriteLine(p.Show())
             """;
 
-        Assert.Equal("42:hi\n", RunSubmission(source));
+        Assert.Equal($"42:hi{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue751RichReceiverEmittedSessionTests
             Console.WriteLine(absent.FirstOrZero())
             """;
 
-        Assert.Equal("10\n0\n", RunSubmission(source));
+        Assert.Equal($"10{Environment.NewLine}0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue751RichReceiverEmittedSessionTests
             Console.WriteLine(m.CountKeys())
             """;
 
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -99,6 +99,6 @@ public class Issue751RichReceiverEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

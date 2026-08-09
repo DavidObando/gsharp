@@ -68,7 +68,7 @@ public class AsyncValueReturnEmitTests
 
         var output = CompileAndRunThroughMetadataLoadContext(source);
 
-        Assert.Equal("done\n", output);
+        Assert.Equal($"done{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunThroughMetadataLoadContext(string source)
@@ -144,7 +144,7 @@ public class AsyncValueReturnEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

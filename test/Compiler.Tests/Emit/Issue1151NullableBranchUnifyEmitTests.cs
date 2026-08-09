@@ -44,7 +44,7 @@ public class Issue1151NullableBranchUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("5\n-1\n", output);
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1151NullableBranchUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("5\n-1\n", output);
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1151NullableBranchUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("42\n-1\n", output);
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue1151NullableBranchUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("123\n999\n", output);
+        Assert.Equal($"123{Environment.NewLine}999{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -205,7 +205,7 @@ public class Issue1151NullableBranchUnifyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

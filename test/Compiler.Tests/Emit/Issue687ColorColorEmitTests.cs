@@ -42,7 +42,7 @@ public class Issue687ColorColorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var expected = System.IO.Path.Combine("root", "leaf.txt") + "\n";
+        var expected = System.IO.Path.Combine("root", "leaf.txt") + Environment.NewLine;
         Assert.Equal(expected, output);
     }
 
@@ -57,7 +57,7 @@ public class Issue687ColorColorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var expected = System.IO.Path.Combine("a", "b") + "\n";
+        var expected = System.IO.Path.Combine("a", "b") + Environment.NewLine;
         Assert.Equal(expected, output);
     }
 
@@ -86,7 +86,7 @@ public class Issue687ColorColorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n", output);
+        Assert.Equal($"4{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -149,7 +149,7 @@ public class Issue687ColorColorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

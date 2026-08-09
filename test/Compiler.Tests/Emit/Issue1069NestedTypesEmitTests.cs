@@ -42,7 +42,7 @@ public class Issue1069NestedTypesEmitTests
             Console.WriteLine(int32(o.Make()))
             """);
 
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue1069NestedTypesEmitTests
             Console.WriteLine(int32(o.Make()))
             """);
 
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1069NestedTypesEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue1069NestedTypesEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue1069NestedTypesEmitTests
             Console.WriteLine(p.X)
             """);
 
-        Assert.Equal("4\n1\n11\n", output);
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class Issue1069NestedTypesEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -54,7 +54,7 @@ public class Issue759StructMarshallingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n4\n", output);
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue759StructMarshallingEmitTests
         var output = CompileAndRun(source);
 
         // 0x5566778811223344 = 6153737367135073092.
-        Assert.Equal("6153737367135073092\n", output);
+        Assert.Equal($"6153737367135073092{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -345,7 +345,7 @@ public class Issue759StructMarshallingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

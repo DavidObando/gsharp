@@ -77,7 +77,7 @@ public class Issue1002UserClassAsyncIteratorEmitTests
 
         var output = CompileRunAndCaptureOutput(source);
 
-        var lines = output.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+        var lines = output.ReplaceLineEndings(Environment.NewLine).TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
         Assert.Equal(new[] { "shape", "shape" }, lines);
     }
 

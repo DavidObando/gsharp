@@ -32,7 +32,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Apply((x) -> x * 2, 5))
             """;
 
-        Assert.Equal("10\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Apply(x -> x + 1, 41))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Apply((x) -> x * 3, 5))
             """;
 
-        Assert.Equal("15\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Run(x -> Console.WriteLine(x), 7)
             """;
 
-        Assert.Equal("12\n7\n", CompileAndRun(source));
+        Assert.Equal($"12{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Test(x -> x > 10, 5))
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Apply2((a, b) -> a + b, 3, 4))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(r)
             """;
 
-        Assert.Equal("11\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Apply((x) -> x.ToString(), 7))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(g(41))
             """;
 
-        Assert.Equal("42\n42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(c.Apply(x -> x + 1, 9))
             """;
 
-        Assert.Equal("10\n10\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}10{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(r.Run((x) -> x * 2, 6))
             """;
 
-        Assert.Equal("12\n", CompileAndRun(source));
+        Assert.Equal($"12{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(Calc.Apply((x) -> x * 2, 5))
             """;
 
-        Assert.Equal("10\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             for d in xs.Select(x -> x * 2) { Console.WriteLine(d) }
             """;
 
-        Assert.Equal("2\n4\n2\n4\n6\n8\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}4{Environment.NewLine}2{Environment.NewLine}4{Environment.NewLine}6{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
             Console.WriteLine(xs.Exists(x -> x > 10))
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -300,7 +300,7 @@ public class Issue951CanonicalArrowLambdaEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

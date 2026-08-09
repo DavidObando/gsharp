@@ -50,7 +50,7 @@ public sealed class Issue2579NullableReferenceFidelityEmitTests
             Console.WriteLine(total)
             """);
 
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -116,7 +116,7 @@ public sealed class Issue2579NullableReferenceFidelityEmitTests
             string stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "Emitted program timed out.");
             Assert.True(process.ExitCode == 0, stderr);
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

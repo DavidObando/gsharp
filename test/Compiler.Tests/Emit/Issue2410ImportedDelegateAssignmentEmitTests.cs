@@ -36,7 +36,7 @@ public class Issue2410ImportedDelegateAssignmentEmitTests
             """,
             nameof(ImportedStaticDelegateFieldAndProperty_UntypedLambdas_RunAndVerify));
 
-        Assert.Equal("11\n12\n", output);
+        Assert.Equal($"11{Environment.NewLine}12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue2410ImportedDelegateAssignmentEmitTests
             """,
             nameof(ImportedDelegateAssignment_SiblingMemberPaths_RunAndVerify));
 
-        Assert.Equal("13\n14\n15\n16\n", output);
+        Assert.Equal($"13{Environment.NewLine}14{Environment.NewLine}15{Environment.NewLine}16{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string caseName)
@@ -103,7 +103,7 @@ public class Issue2410ImportedDelegateAssignmentEmitTests
                 Console.SetOut(output);
             }
 
-            return captured.ToString().Replace("\r\n", "\n");
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

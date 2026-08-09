@@ -48,7 +48,7 @@ public class Issue1235TypeParameterClassMemberEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("162\n", output);
+        Assert.Equal($"162{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1235TypeParameterClassMemberEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("55\n", output);
+        Assert.Equal($"55{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue1235TypeParameterClassMemberEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

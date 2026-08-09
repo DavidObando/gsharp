@@ -64,7 +64,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -247,7 +247,7 @@ public class Issue2793UserGenericLambdaCacheEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

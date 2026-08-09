@@ -60,7 +60,7 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("c\n", output);
+        Assert.Equal($"c{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\ndisposed\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}disposed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -406,7 +406,7 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -435,7 +435,7 @@ public class Issue949SelfTypeArgumentInBaseClauseEmitTests
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
 
             var combined = compileOut + compileErr;
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

@@ -64,7 +64,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
-        Assert.Equal("hello\n42\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
-        Assert.Equal("7\nwidget\nalpha\n99\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}widget{Environment.NewLine}alpha{Environment.NewLine}99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,9 +120,9 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             """;
 
         Assert.Equal(
-            "info\nhello\n99\n"
-            + "InteractionMessage(Type=info, Message=hello, Data=99)\n"
-            + "True\nTrue\nTrue\n",
+            $"info{Environment.NewLine}hello{Environment.NewLine}99{Environment.NewLine}"
+            + $"InteractionMessage(Type=info, Message=hello, Data=99){Environment.NewLine}"
+            + $"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -147,7 +147,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
-        Assert.Equal("hello\n42\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
-        Assert.Equal("hello\n42\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             }
             """;
 
-        Assert.Equal("hello\n42\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
             """;
 
         Assert.Equal(
-            "hello\n42\nDerived2338DataExtendsData(Name=hello, Value=42)\n",
+            $"hello{Environment.NewLine}42{Environment.NewLine}Derived2338DataExtendsData(Name=hello, Value=42){Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -300,7 +300,7 @@ public class Issue2338GenericPrimaryCtorBaseInitializerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

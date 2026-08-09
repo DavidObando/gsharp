@@ -54,7 +54,7 @@ public class Issue1858ObjectInitializerCollectionMemberWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n3\n2\n1\n2\n", output);
+        Assert.Equal($"10{Environment.NewLine}3{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1858ObjectInitializerCollectionMemberWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n1\n42\n", output);
+        Assert.Equal($"7{Environment.NewLine}1{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue1858ObjectInitializerCollectionMemberWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n80\n30\n", output);
+        Assert.Equal($"7{Environment.NewLine}80{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -193,7 +193,7 @@ public class Issue1858ObjectInitializerCollectionMemberWithCtorArgsEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

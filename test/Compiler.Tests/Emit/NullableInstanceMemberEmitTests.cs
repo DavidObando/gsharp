@@ -40,7 +40,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n0\n", output);
+        Assert.Equal($"7{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n99\n", output);
+        Assert.Equal($"7{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRunWithProbe(source);
-        Assert.Equal("True\n2026\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}2026{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n5\nFalse\n-1\n", output);
+        Assert.Equal($"True{Environment.NewLine}5{Environment.NewLine}False{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nFalse\nTrue\nTrue\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRunWithProbe(source);
-        Assert.Equal("True\nTrue\nTrue\nFalse\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public class NullableInstanceMemberEmitTests
             """;
 
         var output = CompileAndRunWithProbe(source);
-        Assert.Equal("-1\n7\n", output);
+        Assert.Equal($"-1{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -404,7 +404,7 @@ public class NullableInstanceMemberEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

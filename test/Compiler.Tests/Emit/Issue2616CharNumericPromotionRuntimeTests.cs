@@ -41,7 +41,7 @@ public class Issue2616CharNumericPromotionRuntimeTests
             Console.WriteLine(int32(shifted.Value))
             """;
 
-        Assert.Equal("4\n-53\n-50\n54\nB\n3\n8\n", CompileAndRun(Source));
+        Assert.Equal($"4{Environment.NewLine}-53{Environment.NewLine}-50{Environment.NewLine}54{Environment.NewLine}B{Environment.NewLine}3{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(Source));
     }
 
     private static string CompileAndRun(string source)
@@ -96,7 +96,7 @@ public class Issue2616CharNumericPromotionRuntimeTests
             var runtimeError = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"runtime failed:\n{runtimeOutput}\n{runtimeError}");
-            return runtimeOutput.Replace("\r\n", "\n");
+            return runtimeOutput.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

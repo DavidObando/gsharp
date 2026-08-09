@@ -52,7 +52,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var (output, ilBytes) = CompileRunAndCaptureMethodIl(source, methodName: "Guard");
-        Assert.Equal("bound\nnil\n", output);
+        Assert.Equal($"bound{Environment.NewLine}nil{Environment.NewLine}", output);
         Assert.True(
             ContainsSequence(ilBytes, ILOpCode.Ldnull, ILOpCode.Ceq),
             "Expected `ldnull; ceq` pattern in the Guard method body for a function-typed `== nil` comparison.");
@@ -75,7 +75,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var (output, ilBytes) = CompileRunAndCaptureMethodIl(source, methodName: "Sum");
-        Assert.Equal("6\n-1\n", output);
+        Assert.Equal($"6{Environment.NewLine}-1{Environment.NewLine}", output);
         Assert.True(
             ContainsSequence(ilBytes, ILOpCode.Ldnull, ILOpCode.Ceq),
             "Expected `ldnull; ceq` pattern in the Sum method body for a sequence-typed `== nil` comparison.");
@@ -154,7 +154,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n-1\n", output);
+        Assert.Equal($"15{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("bound\nnil\n", output);
+        Assert.Equal($"bound{Environment.NewLine}nil{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -281,7 +281,7 @@ public class Issue796FunctionAndSequenceNilCompareEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return (stdout.Replace("\r\n", "\n"), methodIl);
+            return (stdout.ReplaceLineEndings(Environment.NewLine), methodIl);
         }
         finally
         {

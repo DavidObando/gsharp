@@ -110,7 +110,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             }
             """;
 
-        Assert.Equal("7\n1\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}1{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             }
             """;
 
-        Assert.Equal("42\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             }
             """;
 
-        Assert.Equal("17\n23\n", CompileAndRun(source));
+        Assert.Equal($"17{Environment.NewLine}23{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             }
             """;
 
-        Assert.Equal("31\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"31{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static MethodInfo GetProgramMethod(Assembly assembly, string name)
@@ -260,7 +260,7 @@ public sealed class Issue2492NullableBoxedConversionEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode}):\nstdout:\n{runtimeOutput}\nstderr:\n{runtimeError}");
-            return runtimeOutput.Replace("\r\n", "\n");
+            return runtimeOutput.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

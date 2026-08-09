@@ -54,7 +54,7 @@ public sealed class Issue2498NullableLambdaGenericInferenceEmitTests
             }
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class Issue2498NullableLambdaGenericInferenceEmitTests
             }
             """;
 
-        Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public sealed class Issue2498NullableLambdaGenericInferenceEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode}):\nstdout:\n{runtimeOutput}\nstderr:\n{runtimeError}");
-            return runtimeOutput.Replace("\r\n", "\n");
+            return runtimeOutput.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

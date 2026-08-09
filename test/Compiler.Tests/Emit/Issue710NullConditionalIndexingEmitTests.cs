@@ -39,7 +39,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("nil\n", CompileAndRun(source));
+        Assert.Equal($"nil{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("20\n", CompileAndRun(source));
+        Assert.Equal($"20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("nil\n", CompileAndRun(source));
+        Assert.Equal($"nil{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("100\n", CompileAndRun(source));
+        Assert.Equal($"100{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("world\nnil\n", CompileAndRun(source));
+        Assert.Equal($"world{Environment.NewLine}nil{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class Issue710NullConditionalIndexingEmitTests
 
         // After the first `?[]`: receiver=1, index=1, x=8.
         // After the second `?[]`: receiver=2, index still 1, y=nil.
-        Assert.Equal("8\n1\n1\nnil\n2\n1\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}nil{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class Issue710NullConditionalIndexingEmitTests
             main()
             """;
 
-        Assert.Equal("2\nnil-data\nnil-holder\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}nil-data{Environment.NewLine}nil-holder{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -286,7 +286,7 @@ public class Issue710NullConditionalIndexingEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

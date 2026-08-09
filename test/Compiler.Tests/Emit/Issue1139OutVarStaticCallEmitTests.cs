@@ -44,7 +44,7 @@ public class Issue1139OutVarStaticCallEmitTests
             Console.WriteLine(C.F())
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1139OutVarStaticCallEmitTests
             Console.WriteLine(C.F())
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue1139OutVarStaticCallEmitTests
             Console.WriteLine(C.F())
             """;
 
-        Assert.Equal("11\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue1139OutVarStaticCallEmitTests
             Console.WriteLine(C.F())
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue1139OutVarStaticCallEmitTests
             Console.WriteLine(C.F())
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -210,7 +210,7 @@ public class Issue1139OutVarStaticCallEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

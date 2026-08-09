@@ -57,7 +57,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(first.Price)
             """;
 
-        Assert.Equal("a\n1\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(xs[0].Price)
             """;
 
-        Assert.Equal("y\n7\n", CompileAndRun(source));
+        Assert.Equal($"y{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(total)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(got.Price)
             """;
 
-        Assert.Equal("deep\n7\n", CompileAndRun(source));
+        Assert.Equal($"deep{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(first.Price)
             """;
 
-        Assert.Equal("a\n1\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(ns[1])
             """;
 
-        Assert.Equal("5\n6\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public class Issue957IndexerBoxingEmitTests
             Console.WriteLine(v.Price)
             """;
 
-        Assert.Equal("dictval\n3\n", CompileAndRun(source));
+        Assert.Equal($"dictval{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -251,7 +251,7 @@ public class Issue957IndexerBoxingEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

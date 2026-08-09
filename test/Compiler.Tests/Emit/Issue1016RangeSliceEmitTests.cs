@@ -38,7 +38,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n20\n30\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n10\n20\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n40\n50\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}40{Environment.NewLine}50{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[4])
             """;
 
-        Assert.Equal("5\n10\n50\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}10{Environment.NewLine}50{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[0])
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(s[0..5])
             """;
 
-        Assert.Equal("hello\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(s[..])
             """;
 
-        Assert.Equal("world\nhello\nhello world\n", CompileAndRun(source));
+        Assert.Equal($"world{Environment.NewLine}hello{Environment.NewLine}hello world{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(sl[1].X)
             """;
 
-        Assert.Equal("3\n5\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(sub[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class Issue1016RangeSliceEmitTests
             Console.WriteLine(b[3])
             """;
 
-        Assert.Equal("4\n2\n5\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}2{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -260,7 +260,7 @@ public class Issue1016RangeSliceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

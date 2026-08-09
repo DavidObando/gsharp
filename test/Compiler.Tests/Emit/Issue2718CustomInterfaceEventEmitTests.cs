@@ -70,7 +70,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
             """;
 
         using var artifacts = Compile(source, "exe", DownloadSettingsContract);
-        Assert.Equal("1\n", Run(artifacts.OutputPath));
+        Assert.Equal($"1{Environment.NewLine}", Run(artifacts.OutputPath));
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.ContractsPath });
 
         using var stream = File.OpenRead(artifacts.OutputPath);
@@ -162,7 +162,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
             """;
 
         using var artifacts = Compile(source, "exe", contracts);
-        Assert.Equal("restored\n", Run(artifacts.OutputPath));
+        Assert.Equal($"restored{Environment.NewLine}", Run(artifacts.OutputPath));
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.ContractsPath });
 
         var loadContext = new AssemblyLoadContext("Issue2726", isCollectible: true);
@@ -407,7 +407,7 @@ public sealed class Issue2718CustomInterfaceEventEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private sealed class CompilationArtifacts : IDisposable

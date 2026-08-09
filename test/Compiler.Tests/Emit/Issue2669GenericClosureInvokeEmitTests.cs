@@ -65,7 +65,7 @@ public class Issue2669GenericClosureInvokeEmitTests
             }
             """;
 
-        Assert.Equal("True\n", CompileAndRun(Source, nameof(AppInteractionCallbackMac_ExactGenericClosure_RunsAndVerifies)));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(Source, nameof(AppInteractionCallbackMac_ExactGenericClosure_RunsAndVerifies)));
     }
 
     [Theory]
@@ -99,7 +99,7 @@ public class Issue2669GenericClosureInvokeEmitTests
             """;
 
         Assert.Equal(
-            expected + "True\n",
+            expected + $"True{Environment.NewLine}",
             CompileAndRun(source, nameof(GenericMethod_NonGenericCaptureField_UsesConstructedClosure) + type));
     }
 
@@ -185,6 +185,6 @@ public class Issue2669GenericClosureInvokeEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

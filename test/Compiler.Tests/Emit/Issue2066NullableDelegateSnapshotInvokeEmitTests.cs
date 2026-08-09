@@ -50,7 +50,7 @@ public class Issue2066NullableDelegateSnapshotInvokeEmitTests
             c.Fire(42)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue2066NullableDelegateSnapshotInvokeEmitTests
             c.Fire(7)
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -148,7 +148,7 @@ public class Issue2066NullableDelegateSnapshotInvokeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

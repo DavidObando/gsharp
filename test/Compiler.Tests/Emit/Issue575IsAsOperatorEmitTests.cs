@@ -32,7 +32,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n", output);
+        Assert.Equal($"False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n", output);
+        Assert.Equal($"False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n", output);
+        Assert.Equal($"False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Issue575IsAsOperatorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -321,10 +321,10 @@ public class Issue575IsAsOperatorEmitTests
 
             if (proc.ExitCode != 0)
             {
-                return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+                return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
             }
 
-            return (0, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (0, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

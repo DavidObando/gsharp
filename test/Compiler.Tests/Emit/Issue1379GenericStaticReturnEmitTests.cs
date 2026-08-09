@@ -37,7 +37,7 @@ public class Issue1379GenericStaticReturnEmitTests
             Console.WriteLine(b.V)
             """;
 
-        Assert.Equal("5\n", CompileVerifyAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class Issue1379GenericStaticReturnEmitTests
             Console.WriteLine(b.V)
             """;
 
-        Assert.Equal("hi\n", CompileVerifyAndRun(source));
+        Assert.Equal($"hi{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1379GenericStaticReturnEmitTests
             Console.WriteLine(Box[int32].Make() + 1)
             """;
 
-        Assert.Equal("42\n", CompileVerifyAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     private static string CompileVerifyAndRun(string source)
@@ -107,7 +107,7 @@ public class Issue1379GenericStaticReturnEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

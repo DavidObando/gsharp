@@ -49,7 +49,7 @@ Console.WriteLine(DiffersFromOther[Animal](a, Animal()))
 Console.WriteLine(DiffersFromOther[Animal](a, a))
 ";
         var lines = CompileLoadInvokeCaptureStdout(Source, nameof(NullableClassTypeParam_StoredInObjectAndCompared_JitsAndRuns))
-            .Replace("\r\n", "\n").Trim().Split('\n');
+.ReplaceLineEndings(Environment.NewLine).Trim().Split(Environment.NewLine);
 
         Assert.Equal("True", lines[0].Trim());  // reference stored in object? equals itself
         Assert.Equal("True", lines[1].Trim());  // nil stored in object? equals nil
@@ -72,7 +72,7 @@ Console.WriteLine(Eq[string](""x"", ""x""))
 Console.WriteLine(Eq[string](""x"", ""y""))
 ";
         var lines = CompileLoadInvokeCaptureStdout(Source, nameof(NullableClassTypeParam_EmitsBoxAndCeqNoInvalidProgram))
-            .Replace("\r\n", "\n").Trim().Split('\n');
+.ReplaceLineEndings(Environment.NewLine).Trim().Split(Environment.NewLine);
 
         Assert.Equal("True", lines[0].Trim());
         Assert.Equal("False", lines[1].Trim());
@@ -101,7 +101,7 @@ Console.WriteLine(p == q)
 Console.WriteLine(p != q)
 ";
         var lines = CompileLoadInvokeCaptureStdout(Source, nameof(UserDefinedEqualityOperatorOnClass_StillTakesPrecedence))
-            .Replace("\r\n", "\n").Trim().Split('\n');
+.ReplaceLineEndings(Environment.NewLine).Trim().Split(Environment.NewLine);
 
         // Distinct instances with equal fields: user `==` returns True (value
         // equality); a reference-identity fallback would have returned False.

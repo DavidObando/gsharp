@@ -41,7 +41,7 @@ public class Issue750ConstraintOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ADA\n14\n", output);
+        Assert.Equal($"ADA{Environment.NewLine}14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue750ConstraintOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("<none>\n", output);
+        Assert.Equal($"<none>{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue750ConstraintOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("-1\n", output);
+        Assert.Equal($"-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue750ConstraintOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("default\n99\n", output);
+        Assert.Equal($"default{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue750ConstraintOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("alpha\n11\n", output);
+        Assert.Equal($"alpha{Environment.NewLine}11{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -192,7 +192,7 @@ public class Issue750ConstraintOverloadEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

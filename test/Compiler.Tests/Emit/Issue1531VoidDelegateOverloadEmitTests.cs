@@ -45,7 +45,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Ext.Run(Sink, 42) }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Ext.Run(Sink) }
             """;
 
-        Assert.Equal("zero\n", CompileAndRun(source));
+        Assert.Equal($"zero{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Ext.Run(Sink, 1, 2) }
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Ext.Run(Sink, 1, 2, 3) }
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Ext.Run((x int32) -> { Console.WriteLine(x) }, 42) }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             }
             """;
 
-        Assert.Equal("7\n107\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}107{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Console.WriteLine(Ext.Run(Val, 10)) }
             """;
 
-        Assert.Equal("20\n", CompileAndRun(source));
+        Assert.Equal($"20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             func Main() { Console.WriteLine(Ext.Run((x int32) -> x * 3, 4)) }
             """;
 
-        Assert.Equal("12\n", CompileAndRun(source));
+        Assert.Equal($"12{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
             }
             """;
 
-        Assert.Equal("5\ndone\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -276,7 +276,7 @@ public class Issue1531VoidDelegateOverloadEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

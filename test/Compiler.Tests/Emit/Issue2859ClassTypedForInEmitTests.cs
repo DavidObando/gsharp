@@ -74,7 +74,7 @@ public class Issue2859ClassTypedForInEmitTests
             }
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue2859ClassTypedForInEmitTests
             }
             """;
 
-        Assert.Equal("16\n", CompileAndRun(source));
+        Assert.Equal($"16{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue2859ClassTypedForInEmitTests
             }
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source, library, "i2859lib"));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(source, library, "i2859lib"));
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue2859ClassTypedForInEmitTests
             }
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source, library, "i2859ducklib"));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source, library, "i2859ducklib"));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue2859ClassTypedForInEmitTests
             }
             """;
 
-        Assert.Equal("10\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -310,7 +310,7 @@ public class Issue2859ClassTypedForInEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -44,7 +44,7 @@ public sealed class Issue2751GenericAsyncResultEmitTests
             Console.WriteLine(Closed().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("42\n", CompileVerifyAndRun(source, "exact"));
+        Assert.Equal($"42{Environment.NewLine}", CompileVerifyAndRun(source, "exact"));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class Issue2751GenericAsyncResultEmitTests
             Console.WriteLine(Forward[string]("open").GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("open\n", CompileVerifyAndRun(source, "open"));
+        Assert.Equal($"open{Environment.NewLine}", CompileVerifyAndRun(source, "open"));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class Issue2751GenericAsyncResultEmitTests
             Console.WriteLine(Run().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("42\n", CompileVerifyAndRun(source, "closed"));
+        Assert.Equal($"42{Environment.NewLine}", CompileVerifyAndRun(source, "closed"));
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public sealed class Issue2751GenericAsyncResultEmitTests
             Console.WriteLine(Controls().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("10\n", CompileVerifyAndRun(source, "controls"));
+        Assert.Equal($"10{Environment.NewLine}", CompileVerifyAndRun(source, "controls"));
     }
 
     private static string CompileVerifyAndRun(string source, string name)
@@ -160,7 +160,7 @@ public sealed class Issue2751GenericAsyncResultEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static (string Directory, string OutputPath) CompileAndVerify(string source, string name)

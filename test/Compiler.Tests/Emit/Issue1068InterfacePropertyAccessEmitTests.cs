@@ -45,7 +45,7 @@ public class Issue1068InterfacePropertyAccessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue1068InterfacePropertyAccessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("40\n2\n40\n82\n", output);
+        Assert.Equal($"40{Environment.NewLine}2{Environment.NewLine}40{Environment.NewLine}82{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -143,7 +143,7 @@ public class Issue1068InterfacePropertyAccessEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

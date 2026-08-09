@@ -57,7 +57,7 @@ public class Issue520ClrArrayForRangeTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath, verifyIl: true);
-            Assert.Equal("0\n1\n2\n", output);
+            Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
         }
         finally
         {
@@ -92,7 +92,7 @@ public class Issue520ClrArrayForRangeTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath, verifyIl: false);
-            Assert.Equal("ok\nok\nok\n", output);
+            Assert.Equal($"ok{Environment.NewLine}ok{Environment.NewLine}ok{Environment.NewLine}", output);
         }
         finally
         {
@@ -118,7 +118,7 @@ public class Issue520ClrArrayForRangeTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("97\n98\n99\n", output);
+        Assert.Equal($"97{Environment.NewLine}98{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue520ClrArrayForRangeTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n11\n12\n", output);
+        Assert.Equal($"10{Environment.NewLine}11{Environment.NewLine}12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue520ClrArrayForRangeTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("x\ny\nz\n", output);
+        Assert.Equal($"x{Environment.NewLine}y{Environment.NewLine}z{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class Issue520ClrArrayForRangeTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Us\nUk\nDe\nFr\nEs\nIt\nPt\nPl\nCz\nAt\nNl\n", output);
+        Assert.Equal($"Us{Environment.NewLine}Uk{Environment.NewLine}De{Environment.NewLine}Fr{Environment.NewLine}Es{Environment.NewLine}It{Environment.NewLine}Pt{Environment.NewLine}Pl{Environment.NewLine}Cz{Environment.NewLine}At{Environment.NewLine}Nl{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -343,7 +343,7 @@ public class Issue520ClrArrayForRangeTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

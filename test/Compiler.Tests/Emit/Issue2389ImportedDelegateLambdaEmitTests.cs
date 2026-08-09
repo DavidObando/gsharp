@@ -70,7 +70,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_CustomOneParamDelegate_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("tick 5\n", output);
+        Assert.Equal($"tick 5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_EventHandlerShape_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("changed\n", output);
+        Assert.Equal($"changed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_ZeroParamDelegate_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("pulsed\n", output);
+        Assert.Equal($"pulsed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_ThreeParamDelegate_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("combined 1 2 3\n", output);
+        Assert.Equal($"combined 1 2 3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_NonVoidDelegate_UntypedLambda_InfersReturnType_RunsAndVerifies));
 
-        Assert.Equal("transform 20\n", output);
+        Assert.Equal($"transform 20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(StaticEvent_CustomOneParamDelegate_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("static tick 9\n", output);
+        Assert.Equal($"static tick 9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(StaticEvent_EventHandlerShape_UntypedLambda_RunsAndVerifies));
 
-        Assert.Equal("static changed\n", output);
+        Assert.Equal($"static changed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
             """,
             nameof(InstanceEvent_UntypedLambda_AddThenRemove_SymmetricallyBindsAndVerifies));
 
-        Assert.Equal("added 1\nremoved-ok\n", output);
+        Assert.Equal($"added 1{Environment.NewLine}removed-ok{Environment.NewLine}", output);
     }
 
     private static string EmitCSharpLibrary(string caseName)
@@ -360,7 +360,7 @@ public class Issue2389ImportedDelegateLambdaEmitTests
                     Console.SetOut(stdout);
                 }
 
-                return captured.ToString().Replace("\r\n", "\n");
+                return captured.ToString().ReplaceLineEndings(Environment.NewLine);
             }
             finally
             {

@@ -33,7 +33,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(DayOfWeek.Monday + int32(2))
             """;
 
-        Assert.Equal("Wednesday\n", CompileAndRun(source));
+        Assert.Equal($"Wednesday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(int32(2) + DayOfWeek.Monday)
             """;
 
-        Assert.Equal("Wednesday\n", CompileAndRun(source));
+        Assert.Equal($"Wednesday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(DayOfWeek.Friday - int32(1))
             """;
 
-        Assert.Equal("Thursday\n", CompileAndRun(source));
+        Assert.Equal($"Thursday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(DayOfWeek.Friday - DayOfWeek.Monday)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(c == Color.Blue)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(Color.Blue - Color.Red)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(c == Color.Green)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(v == ByteEnum.Three)
             """;
 
-        Assert.Equal("True\n", CompileAndRunWithSiblingCs(csSource, gSource, "TestEnums"));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gSource, "TestEnums"));
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Console.WriteLine(ByteEnum.Three - ByteEnum.One)
             """;
 
-        Assert.Equal("2\n", CompileAndRunWithSiblingCs(csSource, gSource, "TestEnums"));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gSource, "TestEnums"));
     }
 
     [Fact]
@@ -283,7 +283,7 @@ public class Issue6_6EnumArithmeticEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -334,7 +334,7 @@ public class Issue6_6EnumArithmeticEmitTests
             Assert.True(compileExit != 0, $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -428,7 +428,7 @@ public class Issue6_6EnumArithmeticEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

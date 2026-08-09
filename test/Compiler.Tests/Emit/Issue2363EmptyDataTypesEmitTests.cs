@@ -112,7 +112,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("Empty()\nEmpty()\n", output);
+        Assert.Equal($"Empty(){Environment.NewLine}Empty(){Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("Empty()\n", output);
+        Assert.Equal($"Empty(){Environment.NewLine}", output);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("True\nFalse\nTrue\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("True\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("False\nFalse\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -308,7 +308,7 @@ public class Issue2363EmptyDataTypesEmitTests
             }
             """);
 
-        Assert.Equal("mfa\ncvf\napproval\nMfaChallenge()\n", output);
+        Assert.Equal($"mfa{Environment.NewLine}cvf{Environment.NewLine}approval{Environment.NewLine}MfaChallenge(){Environment.NewLine}", output);
     }
 
     [Fact]
@@ -376,11 +376,11 @@ public class Issue2363EmptyDataTypesEmitTests
             """);
 
         Assert.Equal(
-            "captcha: CaptchaChallenge(ImageBytes=7)\n" +
-            "mfa: MfaChallenge()\n" +
-            "cvf: CvfChallenge()\n" +
-            "approval: ApprovalChallenge()\n" +
-            "external-login: ExternalLoginChallenge(LoginUri=https://example.test)\n",
+            $"captcha: CaptchaChallenge(ImageBytes=7){Environment.NewLine}" +
+            $"mfa: MfaChallenge(){Environment.NewLine}" +
+            $"cvf: CvfChallenge(){Environment.NewLine}" +
+            $"approval: ApprovalChallenge(){Environment.NewLine}" +
+            $"external-login: ExternalLoginChallenge(LoginUri=https://example.test){Environment.NewLine}",
             output);
     }
 
@@ -449,7 +449,7 @@ public class Issue2363EmptyDataTypesEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

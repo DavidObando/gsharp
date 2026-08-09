@@ -80,7 +80,7 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
         process.WaitForExit();
 
         Assert.True(process.ExitCode == 0, error);
-        Assert.Equal("2026\naccount\n2026\n2026\nnullable\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"2026{Environment.NewLine}account{Environment.NewLine}2026{Environment.NewLine}2026{Environment.NewLine}nullable{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static (string ApiProject, string AppProject) WriteFixture(string sourceRoot)

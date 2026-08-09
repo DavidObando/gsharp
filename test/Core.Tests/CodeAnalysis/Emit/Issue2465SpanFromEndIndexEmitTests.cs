@@ -58,7 +58,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.WriteLine(ReadBox(bs).Value)
             """;
 
-        Assert.Equal("30\n9\n13\n", CompileAndRun(Source));
+        Assert.Equal($"30{Environment.NewLine}9{Environment.NewLine}13{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.WriteLine(Run([]int32{ 1, 2, 3, 4 }))
             """;
 
-        Assert.Equal("32310\n", CompileAndRun(Source));
+        Assert.Equal($"32310{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.WriteLine(calls[1])
             """;
 
-        Assert.Equal("11\n10\n1\n1\n", CompileAndRun(Source));
+        Assert.Equal($"11{Environment.NewLine}10{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.WriteLine(ei[^1])
             """;
 
-        Assert.Equal("3\n5\nc\n9\n42\n", CompileAndRun(Source));
+        Assert.Equal($"3{Environment.NewLine}5{Environment.NewLine}c{Environment.NewLine}9{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.WriteLine(Update([]int32{ 1, 2, 3 }))
             """;
 
-        Assert.Equal("19\n", CompileAndRun(Source));
+        Assert.Equal($"19{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public class Issue2465SpanFromEndIndexEmitTests
             Console.SetOut(originalOut);
         }
 
-        return captured.ToString().Replace("\r\n", "\n");
+        return captured.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 
     private static Assembly Compile(string source, string contextName)

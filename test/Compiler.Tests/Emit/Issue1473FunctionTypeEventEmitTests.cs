@@ -60,7 +60,7 @@ public class Issue1473FunctionTypeEventEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1473FunctionTypeEventEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("21\n", output);
+        Assert.Equal($"21{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1473FunctionTypeEventEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("static-ok\n", output);
+        Assert.Equal($"static-ok{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -191,7 +191,7 @@ public class Issue1473FunctionTypeEventEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

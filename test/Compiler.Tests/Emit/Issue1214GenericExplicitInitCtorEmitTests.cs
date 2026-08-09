@@ -51,7 +51,7 @@ public class Issue1214GenericExplicitInitCtorEmitTests
         // 5 proves the `value = v` field assignment in the constructor ran and
         // the int32 argument round-tripped through the `!0` slot; "x" proves the
         // second (string) init parameter was passed and stored correctly.
-        Assert.Equal("5\nx\n", output);
+        Assert.Equal($"5{Environment.NewLine}x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue1214GenericExplicitInitCtorEmitTests
         // Two distinct closed constructions (Box[int32] and Box[string]) each
         // newobj the SAME erased .ctor through a per-construction TypeSpec
         // MemberRef; 42 and hello prove both arguments were passed and stored.
-        Assert.Equal("42\nhello\n", output);
+        Assert.Equal($"42{Environment.NewLine}hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue1214GenericExplicitInitCtorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("clip\n", output);
+        Assert.Equal($"clip{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -171,7 +171,7 @@ public class Issue1214GenericExplicitInitCtorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

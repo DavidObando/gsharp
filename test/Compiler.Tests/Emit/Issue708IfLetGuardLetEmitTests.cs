@@ -36,7 +36,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil)
             """;
 
-        Assert.Equal("got:hello\n", CompileAndRun(source));
+        Assert.Equal($"got:hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil)
             """;
 
-        Assert.Equal("got:a\nnil\n", CompileAndRun(source));
+        Assert.Equal($"got:a{Environment.NewLine}nil{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil, nil)
             """;
 
-        Assert.Equal("both:a/b\nmissing\nmissing\nmissing\n", CompileAndRun(source));
+        Assert.Equal($"both:a/b{Environment.NewLine}missing{Environment.NewLine}missing{Environment.NewLine}missing{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil)
             """;
 
-        Assert.Equal("ok:hi\nnil-exit\n", CompileAndRun(source));
+        Assert.Equal($"ok:hi{Environment.NewLine}nil-exit{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil, "b")
             """;
 
-        Assert.Equal("both:a/b\nexit\nexit\n", CompileAndRun(source));
+        Assert.Equal($"both:a/b{Environment.NewLine}exit{Environment.NewLine}exit{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class Issue708IfLetGuardLetEmitTests
             Demo(nil)
             """;
 
-        Assert.Equal("3\n4\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -215,7 +215,7 @@ public class Issue708IfLetGuardLetEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

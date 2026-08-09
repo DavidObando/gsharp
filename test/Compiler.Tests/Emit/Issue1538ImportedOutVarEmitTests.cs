@@ -51,7 +51,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n42\n43\n", output);
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}43{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n7\n", output);
+        Assert.Equal($"True{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n0\n", output);
+        Assert.Equal($"False{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n13\n", output);
+        Assert.Equal($"True{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue1538ImportedOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n42\n", output);
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -256,7 +256,7 @@ public class Issue1538ImportedOutVarEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

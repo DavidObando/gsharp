@@ -43,7 +43,7 @@ public class Issue775ConstraintEmitTests
             """;
 
         var outPath = CompileAndRun(source, out var output);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
 
         var attrs = ReadGenericParamAttrs(outPath, "Pick");
         Assert.True((attrs & GenericParameterAttributes.ReferenceTypeConstraint) != 0,
@@ -66,7 +66,7 @@ public class Issue775ConstraintEmitTests
             """;
 
         var outPath = CompileAndRun(source, out var output);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
 
         var attrs = ReadGenericParamAttrs(outPath, "Pick");
         Assert.True((attrs & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0,
@@ -211,7 +211,7 @@ public class Issue775ConstraintEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            output = stdout.Replace("\r\n", "\n");
+            output = stdout.ReplaceLineEndings(Environment.NewLine);
             return keepPath;
         }
         finally

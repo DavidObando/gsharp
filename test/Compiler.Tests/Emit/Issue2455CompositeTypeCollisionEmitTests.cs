@@ -111,7 +111,7 @@ public class Issue2455CompositeTypeCollisionEmitTests
 
         var output = CompileAndRun(sources);
 
-        Assert.Equal("My Audiobook\n1\nPrologue\n", output);
+        Assert.Equal($"My Audiobook{Environment.NewLine}1{Environment.NewLine}Prologue{Environment.NewLine}", output);
     }
 
     // Issue #2455 (real-world shape): the actual Oahu AaxExporter.cs does not
@@ -170,7 +170,7 @@ public class Issue2455CompositeTypeCollisionEmitTests
 
         var output = CompileAndRun(sources);
 
-        Assert.Equal("My Audiobook\n", output);
+        Assert.Equal($"My Audiobook{Environment.NewLine}", output);
     }
 
     [Theory]
@@ -285,7 +285,7 @@ public class Issue2455CompositeTypeCollisionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

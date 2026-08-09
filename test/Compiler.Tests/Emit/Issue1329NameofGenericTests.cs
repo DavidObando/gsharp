@@ -37,7 +37,7 @@ public class Issue1329NameofGenericTests
             Console.WriteLine(nameof(List[int32]))
             """;
 
-        Assert.Equal("List\n", CompileAndRun(source));
+        Assert.Equal($"List{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class Issue1329NameofGenericTests
             Console.WriteLine(C().F(5))
             """;
 
-        Assert.Equal("IAppleData\n", CompileAndRun(source));
+        Assert.Equal($"IAppleData{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1329NameofGenericTests
             Console.WriteLine(nameof(Dictionary[string, int32]))
             """;
 
-        Assert.Equal("Dictionary\n", CompileAndRun(source));
+        Assert.Equal($"Dictionary{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1329NameofGenericTests
             Console.WriteLine(nameof(List[List[int32]]))
             """;
 
-        Assert.Equal("List\n", CompileAndRun(source));
+        Assert.Equal($"List{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue1329NameofGenericTests
             Console.WriteLine(nameof(Console.WriteLine))
             """;
 
-        Assert.Equal("List\nWriteLine\n", CompileAndRun(source));
+        Assert.Equal($"List{Environment.NewLine}WriteLine{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -164,7 +164,7 @@ public class Issue1329NameofGenericTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

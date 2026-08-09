@@ -59,7 +59,7 @@ namespace Corpus.Issue1528
         // The unparsable verbatim/keyword forms never leak into the output.
         Assert.DoesNotContain("@default", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(".default ", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain(".default\n", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain($".default{Environment.NewLine}", rendered, StringComparison.Ordinal);
     }
 
     [Fact]

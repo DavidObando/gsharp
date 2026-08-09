@@ -84,7 +84,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("x\n", CompileAndRun(source));
+        Assert.Equal($"x{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("free-func\n", CompileAndRun(source));
+        Assert.Equal($"free-func{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("inst-method\n", CompileAndRun(source));
+        Assert.Equal($"inst-method{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             """;
 
         // "rw".Length == 2, invoked twice via the same shared box: 4.
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("shared\n6\n", CompileAndRun(source));
+        Assert.Equal($"shared{Environment.NewLine}6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("1:Probe2329Oahu.Worker:oahu-shape\n", CompileAndRun(source));
+        Assert.Equal($"1:Probe2329Oahu.Worker:oahu-shape{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("caught: boom1437regress\n", CompileAndRun(source));
+        Assert.Equal($"caught: boom1437regress{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("str:hello2329\n", CompileAndRun(source));
+        Assert.Equal($"str:hello2329{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -314,7 +314,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("str:hello2329b\n", CompileAndRun(source));
+        Assert.Equal($"str:hello2329b{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -377,7 +377,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("90\n", CompileAndRun(source, FixedIlVerifyIgnored));
+        Assert.Equal($"90{Environment.NewLine}", CompileAndRun(source, FixedIlVerifyIgnored));
     }
 
     [Fact]
@@ -410,7 +410,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source, FixedIlVerifyIgnored));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source, FixedIlVerifyIgnored));
     }
 
     [Fact]
@@ -436,7 +436,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
             }
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -575,7 +575,7 @@ public class Issue2329CatchCaptureBoxingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

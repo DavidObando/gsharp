@@ -38,7 +38,7 @@ public class Issue1066InheritedInterfaceEmitTests
             func Main() { System.Console.WriteLine(Get(Leaf())) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class Issue1066InheritedInterfaceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

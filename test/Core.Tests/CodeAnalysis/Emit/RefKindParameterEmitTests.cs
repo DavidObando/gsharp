@@ -432,7 +432,7 @@ Console.WriteLine(inPredicate(in value))
 Console.WriteLine(inPredicate.Invoke(in value))
 ";
 
-        Assert.Equal("42\n42\nTrue\nTrue\n", CompileAndRun(Source, "DelegateByRefInvoke"));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(Source, "DelegateByRefInvoke"));
     }
 
     [Fact]
@@ -469,7 +469,7 @@ Console.WriteLine(value)
 Console.WriteLine(Test[int32](inPredicate, in value))
 ";
 
-        Assert.Equal("42\n42\nTrue\n", CompileAndRun(Source, "GenericDelegateByRefInvoke"));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(Source, "GenericDelegateByRefInvoke"));
     }
 
     private static string CompileAndRun(string source, string contextName)

@@ -436,7 +436,7 @@ namespace Demo
         string printed = TranslateAndValidate(Source);
         string stdout = CompileAndRun(printed, "C.Run()");
 
-        string[] lines = stdout.Trim().Replace("\r\n", "\n").Split('\n');
+        string[] lines = stdout.Trim().ReplaceLineEndings(Environment.NewLine).Split(Environment.NewLine);
         Assert.Equal(2, lines.Length);
         Assert.Equal((3L + 1.25 * 2.0).ToString("R"), lines[0].Trim());
         Assert.Equal((1.25 * 2.0 + 3L).ToString("R"), lines[1].Trim());

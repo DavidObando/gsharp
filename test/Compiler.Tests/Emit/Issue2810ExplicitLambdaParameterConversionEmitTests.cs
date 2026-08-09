@@ -42,7 +42,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionEmitTests
             }
             """;
 
-        Assert.Equal("2\n4\n", CompileAndRun(Source));
+        Assert.Equal($"2{Environment.NewLine}4{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionEmitTests
             nums.ForEach((x Wrapped) -> Console.WriteLine(x.Get()))
             """;
 
-        Assert.Equal("1\n2\n3\n4\n", CompileAndRun(Source));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionEmitTests
             }
             """;
 
-        Assert.Equal("convert\nconvert\n", CompileAndRun(Source));
+        Assert.Equal($"convert{Environment.NewLine}convert{Environment.NewLine}", CompileAndRun(Source));
     }
 
     private static string CompileAndRun(string source)
@@ -140,7 +140,7 @@ public sealed class Issue2810ExplicitLambdaParameterConversionEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

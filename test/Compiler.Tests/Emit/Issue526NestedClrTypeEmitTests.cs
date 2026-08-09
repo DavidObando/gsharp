@@ -64,7 +64,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class Issue526NestedClrTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n5\n", output);
+        Assert.Equal($"hello{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -344,7 +344,7 @@ public class Issue526NestedClrTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -442,7 +442,7 @@ public class Issue526NestedClrTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -512,7 +512,7 @@ public class Issue526NestedClrTypeEmitTests
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

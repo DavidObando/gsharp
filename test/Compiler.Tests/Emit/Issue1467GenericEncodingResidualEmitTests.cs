@@ -72,7 +72,7 @@ public class Issue1467GenericEncodingResidualEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nokA\n", output);
+        Assert.Equal($"1{Environment.NewLine}okA{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1467GenericEncodingResidualEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("leaf dispose\ntransform dispose\nokB\n", output);
+        Assert.Equal($"leaf dispose{Environment.NewLine}transform dispose{Environment.NewLine}okB{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue1467GenericEncodingResidualEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("okC\n", output);
+        Assert.Equal($"okC{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class Issue1467GenericEncodingResidualEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("8\n", output);
+        Assert.Equal($"8{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -290,7 +290,7 @@ public class Issue1467GenericEncodingResidualEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

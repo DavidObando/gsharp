@@ -43,7 +43,7 @@ public class Issue2620VoidExpressionContextEmitTests
             trap(false)
             """;
 
-        Assert.Equal("restore\nrestore\n", CompileAndRun(source));
+        Assert.Equal($"restore{Environment.NewLine}restore{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue2620VoidExpressionContextEmitTests
             handler(false).GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("first\nsecond\n", CompileAndRun(source));
+        Assert.Equal($"first{Environment.NewLine}second{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue2620VoidExpressionContextEmitTests
             process.WaitForExit();
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}: {stderr}");
         });
-        return output?.Replace("\r\n", "\n");
+        return output?.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void WithCompilation(string source, Action<int, string, string> verify)

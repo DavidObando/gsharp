@@ -32,7 +32,7 @@ public class Issue2553RepeatedDiscardEmitTests
             run()
             """;
 
-        Assert.Equal("22\n", CompileAndRun(source));
+        Assert.Equal($"22{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -71,7 +71,7 @@ public class Issue2553RepeatedDiscardEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"dotnet exec failed:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

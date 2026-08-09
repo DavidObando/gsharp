@@ -48,7 +48,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\nTrue\n", output);
+        Assert.Equal($"0{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Theory]
@@ -205,7 +205,7 @@ public class Issue760PInvokeRefOutInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -375,7 +375,7 @@ public class Issue760PInvokeRefOutInEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

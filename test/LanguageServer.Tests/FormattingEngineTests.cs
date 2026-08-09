@@ -32,7 +32,7 @@ public class FormattingEngineTests
         const string input = "var x = 1";
         var result = FormattingEngine.Format(input);
 
-        Assert.EndsWith("\n", result);
+        Assert.EndsWith(Environment.NewLine, result);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class FormattingEngineTests
     {
         // Exact repro from issue #1660.
         const string input = "func foo() {\nvar x = 1\nvar y = 2\n}\n";
-        var expected = "func foo () {\n  var x = 1\n  var y = 2\n}\n";
+        var expected = $"func foo () {{{Environment.NewLine}  var x = 1{Environment.NewLine}  var y = 2{Environment.NewLine}}}{Environment.NewLine}";
 
         var result = FormattingEngine.Format(input);
 
@@ -92,7 +92,7 @@ public class FormattingEngineTests
         var result = FormattingEngine.Format(input);
 
         Assert.DoesNotContain("1}", result);
-        Assert.Contains("\n}\n", result);
+        Assert.Contains($"{Environment.NewLine}}}{Environment.NewLine}", result);
     }
 
     [Theory]

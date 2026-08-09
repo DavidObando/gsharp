@@ -98,7 +98,7 @@ Console.WriteLine(y)
 ";
 
         var (output, _) = CompileVerifyAndRun(source, "mixed");
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     private static (string Output, byte[] PeBody) CompileVerifyAndRun(string source, string tag)
@@ -170,7 +170,7 @@ Console.WriteLine(y)
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return (stdout.Replace("\r\n", "\n"), bodyBytes);
+            return (stdout.ReplaceLineEndings(Environment.NewLine), bodyBytes);
         }
         finally
         {

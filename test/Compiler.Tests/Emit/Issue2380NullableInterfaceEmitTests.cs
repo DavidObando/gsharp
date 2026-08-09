@@ -73,7 +73,7 @@ public class Issue2380NullableInterfaceEmitTests
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380a");
 
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380c");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380d");
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380e");
-        Assert.Equal("100\n\n", output);
+        Assert.Equal($"100{Environment.NewLine}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380f");
-        Assert.Equal("handled\n", output);
+        Assert.Equal($"handled{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -397,7 +397,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380h");
-        Assert.Equal("Retired\n", output);
+        Assert.Equal($"Retired{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -438,7 +438,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380i");
-        Assert.Equal("\n", output);
+        Assert.Equal(Environment.NewLine, output);
     }
 
     [Fact]
@@ -502,7 +502,7 @@ public class Issue2380NullableInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(csSource, gSource, "ProbeRef2380j");
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     private static (string DllPath, string SiblingDllPath) CompileLibraryWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -659,7 +659,7 @@ public class Issue2380NullableInterfaceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

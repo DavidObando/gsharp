@@ -579,7 +579,7 @@ public class Issue503ClosureCaptureRegressionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -600,7 +600,7 @@ public class Issue503ClosureCaptureRegressionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -622,7 +622,7 @@ public class Issue503ClosureCaptureRegressionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
-        Assert.Equal("15\n20\n", output);
+        Assert.Equal($"15{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -645,7 +645,7 @@ public class Issue503ClosureCaptureRegressionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(SiblingCsSource, gSource, "Probe.CSharp");
-        Assert.Equal("0\n1\n101\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}101{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -939,7 +939,7 @@ public class Issue503ClosureCaptureRegressionTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

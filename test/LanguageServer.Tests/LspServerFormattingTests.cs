@@ -42,7 +42,7 @@ public class LspServerFormattingTests
             });
 
             var edit = Assert.Single(edits);
-            Assert.Equal("func foo () {\n  var x = 1\n  var y = 2\n}\n", edit.NewText);
+            Assert.Equal($"func foo () {{{Environment.NewLine}  var x = 1{Environment.NewLine}  var y = 2{Environment.NewLine}}}{Environment.NewLine}", edit.NewText);
         }
         finally
         {

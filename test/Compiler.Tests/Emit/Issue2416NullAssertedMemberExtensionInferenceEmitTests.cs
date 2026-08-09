@@ -61,7 +61,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n", output);
+        Assert.Equal($"False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("has-nested\nempty\n", output);
+        Assert.Equal($"has-nested{Environment.NewLine}empty{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -242,7 +242,7 @@ public class Issue2416NullAssertedMemberExtensionInferenceEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

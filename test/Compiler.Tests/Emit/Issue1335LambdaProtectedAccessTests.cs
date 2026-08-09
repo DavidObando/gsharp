@@ -206,7 +206,7 @@ public class Issue1335LambdaProtectedAccessTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            Assert.Equal(expected, stdout.Replace("\r\n", "\n"));
+            Assert.Equal(expected, stdout.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

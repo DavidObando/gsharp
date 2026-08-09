@@ -62,7 +62,7 @@ public class Issue1107OutVarUserTypeErasureEmitTests
             Console.WriteLine(c.TryGet("missing"))
             """;
 
-        Assert.Equal("42\n-1\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue1107OutVarUserTypeErasureEmitTests
             Console.WriteLine(c.TryTotal("missing"))
             """;
 
-        Assert.Equal("42\n-1\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -156,7 +156,7 @@ public class Issue1107OutVarUserTypeErasureEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

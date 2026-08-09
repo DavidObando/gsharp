@@ -59,7 +59,7 @@ public class Issue1601GenericEnumTryParseForwardEmitTests
             Console.WriteLine(miss.ToString())
             """;
 
-        Assert.Equal("Friday\nMonday\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}Monday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1601GenericEnumTryParseForwardEmitTests
             Console.WriteLine(hit.ToString())
             """;
 
-        Assert.Equal("Friday\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1601GenericEnumTryParseForwardEmitTests
             Console.WriteLine(hit.ToString())
             """;
 
-        Assert.Equal("Friday\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -169,7 +169,7 @@ public class Issue1601GenericEnumTryParseForwardEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

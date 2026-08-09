@@ -36,7 +36,7 @@ public class CodeModelSurfaceTests
                 $"Wrote the generated snapshot to `{goldenPath}.actual`; review and move it into place.");
         }
 
-        string golden = File.ReadAllText(goldenPath).Replace("\r\n", "\n");
+        string golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
         if (!string.Equals(generated, golden, StringComparison.Ordinal))
         {
             string actualPath = goldenPath + ".actual";

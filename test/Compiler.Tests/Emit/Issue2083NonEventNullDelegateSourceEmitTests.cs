@@ -109,7 +109,7 @@ public class Issue2083NonEventNullDelegateSourceEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
 
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

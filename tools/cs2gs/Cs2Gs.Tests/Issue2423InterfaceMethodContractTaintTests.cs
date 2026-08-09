@@ -164,8 +164,8 @@ namespace Demo
 }");
 
         Assert.Contains("func Get() string?;", printed);
-        Assert.Contains("class Tainted : IFoo {\n    func Get() string? -> nil\n}", printed);
-        Assert.Contains("class Clean : IFoo {\n    func Get() string? -> \"x\"\n}", printed);
+        Assert.Contains($"class Tainted : IFoo {{{Environment.NewLine}    func Get() string? -> nil{Environment.NewLine}}}", printed);
+        Assert.Contains($"class Clean : IFoo {{{Environment.NewLine}    func Get() string? -> \"x\"{Environment.NewLine}}}", printed);
     }
 
     [Fact]

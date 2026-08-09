@@ -70,7 +70,7 @@ public class Issue2673SymbolicReceiverDelegateReturnTests
             Console.WriteLine(limiter.TryAcquire("key"))
             """;
 
-        Assert.Equal("True\nTrue\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue2673SymbolicReceiverDelegateReturnTests
             Console.WriteLine(item!!.Value)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class Issue2673SymbolicReceiverDelegateReturnTests
             var runtimeError = process.StandardError.ReadToEnd();
             process.WaitForExit();
             Assert.True(process.ExitCode == 0, runtimeError);
-            return result.Replace("\r\n", "\n");
+            return result.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

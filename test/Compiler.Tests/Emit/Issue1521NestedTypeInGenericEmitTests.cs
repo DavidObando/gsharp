@@ -63,7 +63,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\nhi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("pair\npair\n", output);
+        Assert.Equal($"pair{Environment.NewLine}pair{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("field\nret\n", output);
+        Assert.Equal($"field{Environment.NewLine}ret{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("B\n", output);
+        Assert.Equal($"B{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -236,7 +236,7 @@ public class Issue1521NestedTypeInGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ctl\nctl\n", output);
+        Assert.Equal($"ctl{Environment.NewLine}ctl{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -313,7 +313,7 @@ public class Issue1521NestedTypeInGenericEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

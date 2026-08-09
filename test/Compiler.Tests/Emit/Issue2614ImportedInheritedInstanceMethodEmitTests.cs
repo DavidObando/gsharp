@@ -32,7 +32,7 @@ public sealed class Issue2614ImportedInheritedInstanceMethodEmitTests
             }
             """;
 
-        Assert.Equal("2614\n", CompileAndRun(source));
+        Assert.Equal($"2614{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -71,7 +71,7 @@ public sealed class Issue2614ImportedInheritedInstanceMethodEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

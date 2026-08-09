@@ -107,7 +107,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("-1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"-1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source, HelpersLibrary, "i2876lib"));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
     private static string CompileAndRun(string source, string library, string libraryAssemblyName)
@@ -268,7 +268,7 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

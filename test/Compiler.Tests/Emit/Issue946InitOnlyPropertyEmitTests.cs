@@ -54,7 +54,7 @@ public class Issue946InitOnlyPropertyEmitTests
             Console.WriteLine(c.Port)
             """;
 
-        Assert.Equal("localhost\n8080\n", CompileAndRun(source));
+        Assert.Equal($"localhost{Environment.NewLine}8080{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue946InitOnlyPropertyEmitTests
             Console.WriteLine(a.Age)
             """;
 
-        Assert.Equal("ctor\n30\n", CompileAndRun(source));
+        Assert.Equal($"ctor{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue946InitOnlyPropertyEmitTests
             Console.WriteLine(x.Value)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue946InitOnlyPropertyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -33,7 +33,7 @@ public class Issue1263ConstructionGenericArityEmitTests
             }
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -102,7 +102,7 @@ public class Issue1263ConstructionGenericArityEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

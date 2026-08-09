@@ -53,7 +53,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("t7\ndone\n", output);
+        Assert.Equal($"t7{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("none\nint5\nstrx\n", output);
+        Assert.Equal($"none{Environment.NewLine}int5{Environment.NewLine}strx{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("origin\n", output);
+        Assert.Equal($"origin{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n7\n", output);
+        Assert.Equal($"7{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("f3\n", output);
+        Assert.Equal($"f3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -242,7 +242,7 @@ public class Issue1433InterfaceStaticMemberCallEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -39,7 +39,7 @@ public class Issue1159LambdaThisCaptureEmitTests
             c.Run()
             """;
 
-        Assert.Equal("15\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue1159LambdaThisCaptureEmitTests
             c.Run()
             """;
 
-        Assert.Equal("107\n", CompileAndRun(source));
+        Assert.Equal($"107{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1159LambdaThisCaptureEmitTests
             c.Run()
             """;
 
-        Assert.Equal("23\n", CompileAndRun(source));
+        Assert.Equal($"23{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -151,7 +151,7 @@ public class Issue1159LambdaThisCaptureEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

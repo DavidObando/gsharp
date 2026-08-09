@@ -53,7 +53,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("got:hello\n", CompileAndRun(source));
+        Assert.Equal($"got:hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("first,second\n", CompileAndRun(source));
+        Assert.Equal($"first,second{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("deep:nested\n", CompileAndRun(source));
+        Assert.Equal($"deep:nested{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("12\n", CompileAndRun(source, library, "i2861lib"));
+        Assert.Equal($"12{Environment.NewLine}", CompileAndRun(source, library, "i2861lib"));
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("p:value\n", CompileAndRun(source));
+        Assert.Equal($"p:value{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("x0,x1\n", CompileAndRun(source));
+        Assert.Equal($"x0,x1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -226,7 +226,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
             }
             """;
 
-        Assert.Equal("flat:value\n", CompileAndRun(source));
+        Assert.Equal($"flat:value{Environment.NewLine}", CompileAndRun(source));
     }
 
 
@@ -306,7 +306,7 @@ public class Issue2861AdapterNestedCaptureEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

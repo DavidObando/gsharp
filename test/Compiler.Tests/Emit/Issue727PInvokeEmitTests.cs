@@ -42,7 +42,7 @@ public class Issue727PInvokeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue727PInvokeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var lines = output.TrimEnd('\n').Split('\n');
+        var lines = output.TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
         Assert.Equal(2, lines.Length);
         Assert.Equal("-1", lines[0]);
         Assert.NotEqual("0", lines[1]);
@@ -174,7 +174,7 @@ public class Issue727PInvokeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

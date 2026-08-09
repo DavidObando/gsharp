@@ -44,7 +44,7 @@ public sealed class Issue2732AsyncNullablePatternConversionEmitTests
             }
             """;
 
-        Assert.Equal("42\n", CompileVerifyAndRun(Source, "Exact"));
+        Assert.Equal($"42{Environment.NewLine}", CompileVerifyAndRun(Source, "Exact"));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public sealed class Issue2732AsyncNullablePatternConversionEmitTests
             Console.WriteLine(Unwrap(nil).Result)
             """;
 
-        Assert.Equal("17\n-1\n", CompileVerifyAndRun(Source, "Generalized"));
+        Assert.Equal($"17{Environment.NewLine}-1{Environment.NewLine}", CompileVerifyAndRun(Source, "Generalized"));
     }
 
     [Fact]
@@ -150,6 +150,6 @@ public sealed class Issue2732AsyncNullablePatternConversionEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

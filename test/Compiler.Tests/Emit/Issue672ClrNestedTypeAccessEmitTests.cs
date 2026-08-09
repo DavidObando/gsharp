@@ -34,7 +34,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
 
         var output = CompileAndRun(source);
         // Environment.SpecialFolder.Desktop prints its enum name via ToString().
-        Assert.Equal("Desktop\n", output);
+        Assert.Equal($"Desktop{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("nested-value\n", output);
+        Assert.Equal($"nested-value{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("77\n", output);
+        Assert.Equal($"77{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("deep\n", output);
+        Assert.Equal($"deep{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("Auto\n", output);
+        Assert.Equal($"Auto{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("widget-ok\n", output);
+        Assert.Equal($"widget-ok{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -271,7 +271,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -367,7 +367,7 @@ public class Issue672ClrNestedTypeAccessEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

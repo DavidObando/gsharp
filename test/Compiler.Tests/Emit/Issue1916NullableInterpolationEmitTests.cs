@@ -53,7 +53,7 @@ public class Issue1916NullableInterpolationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=9\n", output);
+        Assert.Equal($"n=9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1916NullableInterpolationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=9\n", output);
+        Assert.Equal($"n=9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue1916NullableInterpolationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=[]\n", output);
+        Assert.Equal($"n=[]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue1916NullableInterpolationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("b=True\n", output);
+        Assert.Equal($"b=True{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -169,7 +169,7 @@ public class Issue1916NullableInterpolationEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(proc.ExitCode == 0, $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

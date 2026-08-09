@@ -42,7 +42,7 @@ public class Issue605AwaitUsingLetEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("inside\ndisposed-async\n", output);
+        Assert.Equal($"inside{Environment.NewLine}disposed-async{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue605AwaitUsingLetEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(source, csHelper);
-        Assert.Equal("inside-clr\nclr-disposed-async\n", output);
+        Assert.Equal($"inside-clr{Environment.NewLine}clr-disposed-async{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue605AwaitUsingLetEmitTests
 
         var output = CompileAndRun(source);
         // await using must call DisposeAsync, NOT Dispose.
-        Assert.Equal("body\nasync-dispose\n", output);
+        Assert.Equal($"body{Environment.NewLine}async-dispose{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue605AwaitUsingLetEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("before-throw\nsafe-dispose\ncaught\n", output);
+        Assert.Equal($"before-throw{Environment.NewLine}safe-dispose{Environment.NewLine}caught{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue605AwaitUsingLetEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("computing\ntrack-dispose\nresult=42\n", output);
+        Assert.Equal($"computing{Environment.NewLine}track-dispose{Environment.NewLine}result=42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue605AwaitUsingLetEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("sync-inside\nsync-disposed\n", output);
+        Assert.Equal($"sync-inside{Environment.NewLine}sync-disposed{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -316,7 +316,7 @@ public class Issue605AwaitUsingLetEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -416,7 +416,7 @@ public class Issue605AwaitUsingLetEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -501,7 +501,7 @@ public class Issue605AwaitUsingLetEmitTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

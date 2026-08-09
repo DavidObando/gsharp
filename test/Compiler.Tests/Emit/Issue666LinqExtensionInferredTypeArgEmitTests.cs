@@ -60,7 +60,7 @@ public class Issue666LinqExtensionInferredTypeArgEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("2\nalpha\nbeta\n", output);
+        Assert.Equal($"2{Environment.NewLine}alpha{Environment.NewLine}beta{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue666LinqExtensionInferredTypeArgEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue666LinqExtensionInferredTypeArgEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("1\nworld\n", output);
+        Assert.Equal($"1{Environment.NewLine}world{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -227,7 +227,7 @@ public class Issue666LinqExtensionInferredTypeArgEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

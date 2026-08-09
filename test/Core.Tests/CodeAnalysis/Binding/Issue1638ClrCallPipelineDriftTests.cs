@@ -51,7 +51,7 @@ Console.WriteLine(called)
 Console.WriteLine(x.Invoked)
 ";
         var output = CompileAndRun(Source, "Issue1638Ctor");
-        Assert.Equal("1\nTrue\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"1{Environment.NewLine}True{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ let s = r.Render(""n=${n:D3}"")
 Console.WriteLine(s)
 ";
         var output = CompileAndRun(Source, "Issue1638Inherited");
-        Assert.Equal("n=042\n", output.Replace("\r\n", "\n"));
+        Assert.Equal($"n=042{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static string CompileAndRun(string source, string contextName)

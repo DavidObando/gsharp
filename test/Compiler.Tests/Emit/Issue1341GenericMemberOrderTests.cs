@@ -89,7 +89,7 @@ public class Issue1341GenericMemberOrderTests
             """;
 
         // 7 (Value) + 7 (Count) + 7 (Get) == 21.
-        Assert.Equal("21\n", CompileAndRunExe(("m.gs", main), ("b.gs", BaseFile)));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRunExe(("m.gs", main), ("b.gs", BaseFile)));
     }
 
     private static (int Exit, string Output) CompileLibrary(params (string Name, string Content)[] files)
@@ -205,7 +205,7 @@ public class Issue1341GenericMemberOrderTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

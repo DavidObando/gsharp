@@ -39,7 +39,7 @@ public class ForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n100\n1\n200\n2\n300\n", output);
+        Assert.Equal($"0{Environment.NewLine}100{Environment.NewLine}1{Environment.NewLine}200{Environment.NewLine}2{Environment.NewLine}300{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class ForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n20\n30\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class ForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n10\n1\n20\n", output);
+        Assert.Equal($"0{Environment.NewLine}10{Environment.NewLine}1{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class ForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\n1\nb\n2\n", output);
+        Assert.Equal($"a{Environment.NewLine}1{Environment.NewLine}b{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -162,7 +162,7 @@ public class ForRangeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -252,7 +252,7 @@ public class ForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("alpha\nbeta\ngamma\n", output);
+        Assert.Equal($"alpha{Environment.NewLine}beta{Environment.NewLine}gamma{Environment.NewLine}", output);
 
         // If the for-range didn't dispose the StreamReader, the file handle
         // would still be held by the (now-orphaned) reader, and on Windows

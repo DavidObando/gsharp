@@ -32,7 +32,7 @@ public class Issue707WhileDoLabeledEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n2\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class Issue707WhileDoLabeledEmitTests
             } while i < 5
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue707WhileDoLabeledEmitTests
             } while i < 3
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n2\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue707WhileDoLabeledEmitTests
             Console.WriteLine("done")
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0,0\n0,1\n0,2\n1,0\nbreaking\ndone\n", output);
+        Assert.Equal($"0,0{Environment.NewLine}0,1{Environment.NewLine}0,2{Environment.NewLine}1,0{Environment.NewLine}breaking{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue707WhileDoLabeledEmitTests
             """;
         var output = CompileAndRun(source);
         // Each i iteration prints only j=0 before continuing the outer loop.
-        Assert.Equal("0,0\n1,0\n2,0\n", output);
+        Assert.Equal($"0,0{Environment.NewLine}1,0{Environment.NewLine}2,0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue707WhileDoLabeledEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0-0\n0-1\n", output);
+        Assert.Equal($"0-0{Environment.NewLine}0-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue707WhileDoLabeledEmitTests
             Console.WriteLine("after")
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0\n1\n2\nafter\n", output);
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}after{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public class Issue707WhileDoLabeledEmitTests
             """;
         var output = CompileAndRun(source);
         // For each i: j=0,1 before inner break. 2 i's.
-        Assert.Equal("0-0\n0-1\n1-0\n1-1\n", output);
+        Assert.Equal($"0-0{Environment.NewLine}0-1{Environment.NewLine}1-0{Environment.NewLine}1-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class Issue707WhileDoLabeledEmitTests
             """;
         var output = CompileAndRun(source);
         // Iterations: 000,001,002, 010,011 — then break a → end.
-        Assert.Equal("000\n001\n002\n010\n011\nend\n", output);
+        Assert.Equal($"000{Environment.NewLine}001{Environment.NewLine}002{Environment.NewLine}010{Environment.NewLine}011{Environment.NewLine}end{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -257,7 +257,7 @@ public class Issue707WhileDoLabeledEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -100,9 +100,9 @@ public sealed class Issue2773EagerEnumerableReturnEmitTests
             """;
 
         Assert.Equal(
-            "sync-call|user-call|async-call\n" +
-            "sync-call|user-call|async-call|sync-yield|sync-finally|user-yield|user-finally|async-yield|async-finally\n" +
-            "6\n",
+            $"sync-call|user-call|async-call{Environment.NewLine}" +
+            $"sync-call|user-call|async-call|sync-yield|sync-finally|user-yield|user-finally|async-yield|async-finally{Environment.NewLine}" +
+            $"6{Environment.NewLine}",
             CompileVerifyAndRun(source));
     }
 
@@ -164,7 +164,7 @@ public sealed class Issue2773EagerEnumerableReturnEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -58,7 +58,7 @@ public class PrimitiveOperatorEmitTests
     [InlineData("int64", "42L >> 0", "42")]
     public void Long_Operators_ProduceExpectedValue(string _, string expr, string expected)
     {
-        Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(BuildSource(expr)));
     }
 
     // Issue #1232: a narrower-order integer shift count is implicitly widened to
@@ -76,7 +76,7 @@ public class PrimitiveOperatorEmitTests
 
             Console.WriteLine(Shl(uint32(1), uint8(4)))
             """;
-        Assert.Equal("16\n", CompileAndRun(src));
+        Assert.Equal($"16{Environment.NewLine}", CompileAndRun(src));
     }
 
     // Issue #1232: a value-producing if whose arms are a uint32 and the literal
@@ -94,7 +94,7 @@ public class PrimitiveOperatorEmitTests
 
             Console.WriteLine(Pick(false, uint32(7)))
             """;
-        Assert.Equal("0\n", CompileAndRun(src));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Theory]
@@ -103,7 +103,7 @@ public class PrimitiveOperatorEmitTests
     [InlineData("uint64", "9000000000UL > 1UL", "True")]
     public void ULong_Operators_UseUnsignedOpcodes(string _, string expr, string expected)
     {
-        Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(BuildSource(expr)));
     }
 
     [Theory]
@@ -112,7 +112,7 @@ public class PrimitiveOperatorEmitTests
     [InlineData("float64", "1.5 < 2.0", "True")]
     public void Float64_Operators_ProduceExpectedValue(string _, string expr, string expected)
     {
-        Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(BuildSource(expr)));
     }
 
     [Theory]
@@ -126,7 +126,7 @@ public class PrimitiveOperatorEmitTests
     [InlineData("decimal", "2M != 3M", "True")]
     public void Decimal_Operators_RouteThroughOperatorMethods(string _, string expr, string expected)
     {
-        Assert.Equal(expected + "\n", CompileAndRun(BuildSource(expr)));
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(BuildSource(expr)));
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class PrimitiveOperatorEmitTests
             let b = 'A'
             Console.WriteLine(a == b)
             """;
-        Assert.Equal("True\n", CompileAndRun(src));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class PrimitiveOperatorEmitTests
             let b object = s
             Console.WriteLine(a == b)
             """;
-        Assert.Equal("True\n", CompileAndRun(src));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class PrimitiveOperatorEmitTests
             let x = 3.14M
             Console.WriteLine(-x)
             """;
-        Assert.Equal("-3.14\n", CompileAndRun(src));
+        Assert.Equal($"-3.14{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class PrimitiveOperatorEmitTests
             let x = 42L
             Console.WriteLine(-x)
             """;
-        Assert.Equal("-42\n", CompileAndRun(src));
+        Assert.Equal($"-42{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class PrimitiveOperatorEmitTests
             let y = uint8(254)
             Console.WriteLine(^x == y)
             """;
-        Assert.Equal("True\n", CompileAndRun(src));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(src));
     }
 
     private static string BuildSource(string expr)
@@ -269,7 +269,7 @@ public class PrimitiveOperatorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

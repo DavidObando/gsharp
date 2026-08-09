@@ -33,7 +33,7 @@ public class GenericMethodTypeArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class GenericMethodTypeArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class GenericMethodTypeArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("answer\n42\n", output);
+        Assert.Equal($"answer{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class GenericMethodTypeArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class GenericMethodTypeArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -163,7 +163,7 @@ public class GenericMethodTypeArgsEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -32,7 +32,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(label)
             """;
 
-        Assert.Equal("positive\n", CompileAndRun(source));
+        Assert.Equal($"positive{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(if n == 0 { "z" } else { "nz" })
             """;
 
-        Assert.Equal("z\n", CompileAndRun(source));
+        Assert.Equal($"z{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(Sign(0))
             """;
 
-        Assert.Equal("+\n-\n0\n", CompileAndRun(source));
+        Assert.Equal($"+{Environment.NewLine}-{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue711IfExpressionEmitTests
             }
             """;
 
-        Assert.Equal("hi\n", CompileAndRun(source));
+        Assert.Equal($"hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(Run(false))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(sink)
             """;
 
-        Assert.Equal("Admin\nside-effect\n", CompileAndRun(source));
+        Assert.Equal($"Admin{Environment.NewLine}side-effect{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(Grade(50))
             """;
 
-        Assert.Equal("A\nB\nC\nF\n", CompileAndRun(source));
+        Assert.Equal($"A{Environment.NewLine}B{Environment.NewLine}C{Environment.NewLine}F{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(v)
             """;
 
-        Assert.Equal("100\n", CompileAndRun(source));
+        Assert.Equal($"100{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -219,7 +219,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(Pick(false))
             """;
 
-        Assert.Equal("42\nhi\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue711IfExpressionEmitTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -304,7 +304,7 @@ public class Issue711IfExpressionEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

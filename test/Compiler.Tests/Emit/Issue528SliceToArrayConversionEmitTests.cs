@@ -51,7 +51,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("3\nbeta\n", output);
+        Assert.Equal($"3{Environment.NewLine}beta{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("3\n3\n3\n", output);
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("6\n4\n", output);
+        Assert.Equal($"6{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public class Issue528SliceToArrayConversionEmitTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -366,7 +366,7 @@ public class Issue528SliceToArrayConversionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -408,7 +408,7 @@ public class Issue528SliceToArrayConversionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{runOut}\nstderr:\n{runErr}");
 
-            return runOut.Replace("\r\n", "\n");
+            return runOut.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

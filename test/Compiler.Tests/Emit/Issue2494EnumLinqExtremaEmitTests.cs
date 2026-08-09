@@ -124,7 +124,7 @@ public sealed class Issue2494EnumLinqExtremaEmitTests
             """;
 
         Assert.Equal(
-            string.Concat(Enumerable.Repeat("True\n", 24)),
+            string.Concat(Enumerable.Repeat($"True{Environment.NewLine}", 24)),
             CompileAndRun(source));
     }
 
@@ -256,7 +256,7 @@ public sealed class Issue2494EnumLinqExtremaEmitTests
             """;
 
         Assert.Equal(
-            string.Concat(Enumerable.Repeat("Low\nHigh\n", 8)),
+            string.Concat(Enumerable.Repeat($"Low{Environment.NewLine}High{Environment.NewLine}", 8)),
             CompileAndRun(source, ImportedEnumsCSharpSource));
     }
 
@@ -286,7 +286,7 @@ public sealed class Issue2494EnumLinqExtremaEmitTests
             """;
 
         Assert.Equal(
-            "-2\n11\n-4\n12\n-1.25\n8\n-1.25\n8\n",
+            $"-2{Environment.NewLine}11{Environment.NewLine}-4{Environment.NewLine}12{Environment.NewLine}-1.25{Environment.NewLine}8{Environment.NewLine}-1.25{Environment.NewLine}8{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -347,7 +347,7 @@ public sealed class Issue2494EnumLinqExtremaEmitTests
             Console.WriteLine(TupleProbe.First(pair) == Choice2494.Low)
             """;
 
-        Assert.Equal("True\nobject\nnamed\nTrue\nTrue\n", CompileAndRun(source, importedSource));
+        Assert.Equal($"True{Environment.NewLine}object{Environment.NewLine}named{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source, importedSource));
     }
 
     private static MethodInfo GetMethod(Type type, string name)
@@ -389,7 +389,7 @@ public sealed class Issue2494EnumLinqExtremaEmitTests
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

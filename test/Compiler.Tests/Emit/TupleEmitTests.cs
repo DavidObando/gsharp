@@ -27,7 +27,7 @@ public class TupleEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\nhi\n", output);
+        Assert.Equal($"1{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class TupleEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\nanswer\nTrue\n", output);
+        Assert.Equal($"42{Environment.NewLine}answer{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class TupleEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n20\n30\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -121,7 +121,7 @@ public class TupleEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
