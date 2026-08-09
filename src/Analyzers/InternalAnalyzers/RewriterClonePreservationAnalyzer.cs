@@ -139,7 +139,7 @@ public sealed class RewriterClonePreservationAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(
             DiagnosticDescriptors.RewriterCloneDropsMember,
             declaration.Identifier.GetLocation(),
-            method.ContainingType!.Name + "." + method.Name,
+            (method.ContainingType?.Name ?? "<unknown>") + "." + method.Name,
             nodeType.Name,
             string.Join(", node.", dropped),
             root.Name));

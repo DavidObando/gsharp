@@ -5,6 +5,7 @@
     <RootNamespace>GSharp.InternalAnalyzers</RootNamespace>
     <IsPackable>false</IsPackable>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <Nullable>enable</Nullable>
     <NoWarn>$(NoWarn);RS1036</NoWarn>
   </PropertyGroup>
 
