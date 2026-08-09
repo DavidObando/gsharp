@@ -451,13 +451,17 @@ public sealed class AsyncMethodBuilderInfo
         if (kind == AsyncMethodBuilderKind.GenericTask
             || (kind == AsyncMethodBuilderKind.Custom && !resultType.IsSameAs(typeof(void))))
         {
-            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
-                builderType, "SetResult", new[] { resultType });
+            setResult = Invariant.Required(
+                MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                    builderType, "SetResult", new[] { resultType }),
+                "an async method builder has a matching SetResult method");
         }
         else
         {
-            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
-                builderType, "SetResult", Type.EmptyTypes);
+            setResult = Invariant.Required(
+                MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                    builderType, "SetResult", Type.EmptyTypes),
+                "an async method builder has a parameterless SetResult method");
         }
 
         var setException = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetException")

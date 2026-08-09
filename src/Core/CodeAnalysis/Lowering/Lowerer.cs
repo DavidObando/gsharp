@@ -1345,7 +1345,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // Dictionary<,>.GetEnumerator() (which returns a nested struct
         // Enumerator that complicates symbolic emit on every Current/Key/Value
         // read). The minor allocation cost is acceptable; correctness wins.
-        System.Type openElementClr;
+        System.Type? openElementClr;
         if (openDef.FullName == "System.Collections.Generic.IEnumerable`1")
         {
             openElementClr = openDef.GetGenericArguments()[0];
@@ -1355,7 +1355,10 @@ public sealed class Lowerer : BoundTreeRewriter
             return false;
         }
 
-        var elementSym = MemberLookup.MapOpenClrTypeToSymbolic(openElementClr, openDef, typeArguments);
+        var elementSym = MemberLookup.MapOpenClrTypeToSymbolic(
+            Invariant.Required(openElementClr, "an enumerable type has an element type"),
+            openDef,
+            typeArguments);
         if (elementSym == TypeSymbol.Error)
         {
             return false;

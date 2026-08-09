@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -636,9 +637,9 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the pattern-based shape matches.</returns>
     public static bool TryResolveClrPatternAsyncEnumerator(
         Type clrType,
-        out MethodInfo? getAsyncEnumerator,
-        out MethodInfo? moveNextAsync,
-        out MemberInfo? currentMember)
+        [NotNullWhen(true)] out MethodInfo? getAsyncEnumerator,
+        [NotNullWhen(true)] out MethodInfo? moveNextAsync,
+        [NotNullWhen(true)] out MemberInfo? currentMember)
     {
         getAsyncEnumerator = null;
         moveNextAsync = null;
@@ -712,7 +713,9 @@ internal sealed class MemberLookup
     /// <param name="enumeratorType">The duck-typed enumerator type.</param>
     /// <param name="currentMember">The resolved <c>Current</c> property or field, on success.</param>
     /// <returns><see langword="true"/> when a <c>Current</c> member exists.</returns>
-    public static bool TryGetClrCurrentMemberIncludingSelfAndInterfaces(Type enumeratorType, out MemberInfo? currentMember)
+    public static bool TryGetClrCurrentMemberIncludingSelfAndInterfaces(
+        Type enumeratorType,
+        [NotNullWhen(true)] out MemberInfo? currentMember)
     {
         var currentProperty = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
         if (currentProperty != null)
@@ -800,7 +803,9 @@ internal sealed class MemberLookup
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="elementType">The element CLR type, on success.</param>
     /// <returns><see langword="true"/> when the type is enumerable.</returns>
-    public static bool TryGetClrEnumerableElementType(Type clrType, out Type? elementType)
+    public static bool TryGetClrEnumerableElementType(
+        Type clrType,
+        [NotNullWhen(true)] out Type? elementType)
     {
         // Issue #2859: walk the interface closure transitively. `GetInterfaces()`
         // on a type projected through a MetadataLoadContext does not always
@@ -1845,7 +1850,9 @@ internal sealed class MemberLookup
     /// <param name="t">The argument's bound type.</param>
     /// <param name="erased">On success, an erased CLR projection.</param>
     /// <returns><see langword="true"/> when an erasure projection exists.</returns>
-    public static bool TryProjectErasedClrType(TypeSymbol t, out Type? erased)
+    public static bool TryProjectErasedClrType(
+        TypeSymbol t,
+        [NotNullWhen(true)] out Type? erased)
     {
         erased = null;
         if (t == null)
@@ -2105,7 +2112,9 @@ internal sealed class MemberLookup
     /// <param name="receiverType">The receiver's static type symbol.</param>
     /// <param name="view">The symbolic Dictionary view, on success.</param>
     /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
-    public static bool TryGetSymbolicOpenMapReceiverView(TypeSymbol receiverType, out ImportedTypeSymbol? view)
+    public static bool TryGetSymbolicOpenMapReceiverView(
+        TypeSymbol receiverType,
+        [NotNullWhen(true)] out ImportedTypeSymbol? view)
     {
         view = null;
         if (receiverType is not MapTypeSymbol map
@@ -2180,7 +2189,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate delegate-like target type.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when the type is delegate-like.</returns>
-    public static bool TryGetDelegateFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol? functionType)
+    public static bool TryGetDelegateFunctionTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         switch (type)
@@ -2378,7 +2389,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate lambda target type.</param>
     /// <param name="functionType">The effective function-type shape, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
-    public static bool TryGetLambdaTargetFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol? functionType)
+    public static bool TryGetLambdaTargetFunctionTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         if (TryGetDelegateFunctionTypeFromSymbol(type, out functionType))
         {
@@ -2401,7 +2414,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate lambda target CLR type.</param>
     /// <param name="functionType">The effective function-type shape, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
-    public static bool TryGetLambdaTargetFunctionType(Type type, out FunctionTypeSymbol? functionType)
+    public static bool TryGetLambdaTargetFunctionType(
+        Type type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         if (TryGetDelegateFunctionType(type, out functionType))
         {
@@ -2424,7 +2439,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate expression-tree target type.</param>
     /// <param name="delegateType">The delegate type argument, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
-    public static bool TryGetExpressionTreeDelegateTypeFromSymbol(TypeSymbol type, out TypeSymbol? delegateType)
+    public static bool TryGetExpressionTreeDelegateTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out TypeSymbol? delegateType)
     {
         delegateType = null;
         if (type == null)
@@ -2457,7 +2474,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate CLR expression-tree target type.</param>
     /// <param name="delegateType">The delegate type argument, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
-    public static bool TryGetExpressionTreeDelegateType(Type type, out Type? delegateType)
+    public static bool TryGetExpressionTreeDelegateType(
+        Type type,
+        [NotNullWhen(true)] out Type? delegateType)
     {
         delegateType = null;
         if (type == null || !type.IsGenericType)
@@ -2490,7 +2509,9 @@ internal sealed class MemberLookup
     /// <param name="delegateType">The candidate delegate CLR type.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when the type is a delegate shape.</returns>
-    public static bool TryGetDelegateFunctionType(Type delegateType, out FunctionTypeSymbol? functionType)
+    public static bool TryGetDelegateFunctionType(
+        Type delegateType,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         if (!ClrTypeUtilities.IsDelegateType(delegateType)
@@ -2737,7 +2758,7 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the interface is a symbolic constructed CLR generic.</returns>
     public static bool TryGetSymbolicClrGenericInterface(
         TypeSymbol ifaceSym,
-        out Type? openDefinition,
+        [NotNullWhen(true)] out Type? openDefinition,
         out ImmutableArray<TypeSymbol> symbolicArgs)
     {
         openDefinition = null;
@@ -4260,7 +4281,10 @@ internal sealed class MemberLookup
     /// <param name="typeArguments">The symbolic type arguments the delegate was constructed with.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when every Invoke parameter/return slot could be mapped symbolically.</returns>
-    private static bool TryGetDelegateFunctionTypeFromOpenDefinition(Type openDefinition, ImmutableArray<TypeSymbol> typeArguments, out FunctionTypeSymbol? functionType)
+    private static bool TryGetDelegateFunctionTypeFromOpenDefinition(
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         if (openDefinition == null
