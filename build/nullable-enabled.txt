@@ -220,3 +220,5 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.Operators.cs
 src/Core/CodeAnalysis/Binding/LambdaBinder.cs
 # Slice 42 -- asynchronous and event expression binding.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Async.cs
+# Slice 43 -- conditional statement binding and narrowing-frame propagation.
+src/Core/CodeAnalysis/Binding/StatementBinder.Conditionals.cs

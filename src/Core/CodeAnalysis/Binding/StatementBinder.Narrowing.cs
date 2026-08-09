@@ -862,7 +862,7 @@ internal sealed partial class StatementBinder
     /// bool call, and type-test), so the join analysis sees the same seeds the
     /// branches were bound under.
     /// </summary>
-    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ComputeConditionNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ComputeConditionNarrowing(BoundExpression condition)
     {
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
         if (thenNarrow == null && elseNarrow == null)

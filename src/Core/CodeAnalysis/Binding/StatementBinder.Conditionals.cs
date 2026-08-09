@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -138,12 +140,10 @@ internal sealed partial class StatementBinder
         // Build the nil-test condition: `_b0 != nil && _b1 != nil && …`.
         // Each variable expression carries its underlying narrowing type so
         // that read sites inside the then-branch see the non-null type.
-        BoundExpression nilCheck = BuildNilCheckChain(syntax, localsForFrame);
-
         // Build the narrowing frame so the then-block sees each binding at
         // its non-null underlying type. The else-block does NOT see the
         // narrowing — the bindings are not even in scope there.
-        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? thenFrame = null;
         if (localsForFrame.Count > 0)
         {
             thenFrame = new Dictionary<AccessPath, TypeSymbol>(localsForFrame.Count);
@@ -167,6 +167,10 @@ internal sealed partial class StatementBinder
         {
             return new BoundBlockStatement(syntax, declStatements.ToImmutable());
         }
+
+        var nilCheck = Invariant.Required(
+            BuildNilCheckChain(syntax, localsForFrame),
+            "a valid if-let binding always contributes a nil-check operand");
 
         BoundStatement core;
         if (syntax.ElseClause == null || localsForFrame.Count <= 1)
@@ -195,8 +199,15 @@ internal sealed partial class StatementBinder
             var combinedThen = new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(setFlag, thenStatement));
             var matchIf = new BoundIfStatement(syntax, nilCheck, combinedThen, elseStatement: null);
 
-            var notFlag = new BoundUnaryExpression(syntax, BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool), new BoundVariableExpression(syntax, flagVar));
-            var elseIf = new BoundIfStatement(syntax, notFlag, elseStatement, elseStatement: null);
+            var notOp = Invariant.Required(
+                BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                "a bool flag supports logical negation");
+            var notFlag = new BoundUnaryExpression(syntax, notOp, new BoundVariableExpression(syntax, flagVar));
+            var elseIf = new BoundIfStatement(
+                syntax,
+                notFlag,
+                Invariant.Required(elseStatement, "the multi-binding shape has an else clause"),
+                elseStatement: null);
 
             var sequenced = ImmutableArray.CreateBuilder<BoundStatement>(declStatements.Count + 3);
             sequenced.Add(flagDecl);
@@ -223,7 +234,7 @@ internal sealed partial class StatementBinder
     /// themselves live in <see cref="IfLetBindingSupport"/>, shared with the
     /// ADR-0151 <c>if let</c> EXPRESSION form.
     /// </summary>
-    private (VariableSymbol Variable, TypeSymbol Underlying, BoundStatement Declaration) BindIfLetBindingClause(IfLetBindingClauseSyntax binding)
+    private (VariableSymbol? Variable, TypeSymbol? Underlying, BoundStatement Declaration) BindIfLetBindingClause(IfLetBindingClauseSyntax binding)
     {
         var bound = IfLetBindingSupport.BindBindingClause(
             binding,
@@ -244,7 +255,7 @@ internal sealed partial class StatementBinder
     /// <c>variable != nil</c> tests for the given bindings. With a single
     /// binding this is just <c>variable != nil</c>.
     /// </summary>
-    private static BoundExpression BuildNilCheckChain(SyntaxNode syntax, List<(VariableSymbol Variable, TypeSymbol Underlying)> bindings)
+    private static BoundExpression? BuildNilCheckChain(SyntaxNode syntax, List<(VariableSymbol Variable, TypeSymbol Underlying)> bindings)
         => IfLetBindingSupport.BuildNilCheckChain(syntax, bindings.Select(b => b.Variable));
 
     /// <summary>
@@ -316,7 +327,9 @@ internal sealed partial class StatementBinder
             // Build `if <var> == nil { else }`.
             var read = new BoundVariableExpression(binding, variable);
             var nilLiteral = new BoundLiteralExpression(binding, null, TypeSymbol.Null);
-            var eqOp = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null);
+            var eqOp = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null),
+                "a guard-let variable supports nil equality");
             var condition = new BoundBinaryExpression(binding, read, eqOp, nilLiteral);
             var ifStmt = new BoundIfStatement(binding, condition, armElse, elseStatement: null);
 
@@ -344,9 +357,9 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static Dictionary<AccessPath, TypeSymbol> MergeNarrowingFrames(
-        Dictionary<AccessPath, TypeSymbol> a,
-        Dictionary<AccessPath, TypeSymbol> b)
+    private static Dictionary<AccessPath, TypeSymbol>? MergeNarrowingFrames(
+        Dictionary<AccessPath, TypeSymbol>? a,
+        Dictionary<AccessPath, TypeSymbol>? b)
     {
         if (a == null || a.Count == 0)
         {
@@ -379,7 +392,7 @@ internal sealed partial class StatementBinder
     /// <returns>A pair of narrowing frames — the first applies to the
     /// then-branch, the second to the else-branch. Either may be
     /// <c>null</c> if the corresponding branch has no narrowing.</returns>
-    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) TryClassifyTypeTestNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) TryClassifyTypeTestNarrowing(BoundExpression condition)
     {
         switch (condition)
         {
@@ -389,18 +402,25 @@ internal sealed partial class StatementBinder
                     TypeSymbol currentType;
                     if (IsNarrowableVariable(isExpr.Expression, out var target))
                     {
+                        target = Invariant.Required(target, "a successful variable narrowing identifies its target");
                         targetPath = target;
                         currentType = target.Type;
                     }
-                    else if (SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out targetPath, out currentType))
+                    else
                     {
+                        AccessPath? stablePath;
+                        TypeSymbol? stableType;
+                        if (!SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out stablePath, out stableType))
+                        {
+                            return (null, null);
+                        }
+
+                        targetPath = Invariant.Required(stablePath, "a successful stable-member lookup identifies its path");
+                        currentType = Invariant.Required(stableType, "a successful stable-member lookup identifies its type");
+
                         // ADR-0069 addendum / issue #1180: a stable immutable
                         // member path (`x.shape`, `this.box.lid`) narrows just
                         // like a local. Unstable members never reach here.
-                    }
-                    else
-                    {
-                        return (null, null);
                     }
 
                     var targetType = isExpr.TargetType;
@@ -477,16 +497,16 @@ internal sealed partial class StatementBinder
     /// survive. Used by the <c>||</c> then-frame classifier where a
     /// narrowing is only sound if both operands prove the same fact.
     /// </summary>
-    private static Dictionary<AccessPath, TypeSymbol> IntersectNarrowingFrames(
-        Dictionary<AccessPath, TypeSymbol> a,
-        Dictionary<AccessPath, TypeSymbol> b)
+    private static Dictionary<AccessPath, TypeSymbol>? IntersectNarrowingFrames(
+        Dictionary<AccessPath, TypeSymbol>? a,
+        Dictionary<AccessPath, TypeSymbol>? b)
     {
         if (a == null || a.Count == 0 || b == null || b.Count == 0)
         {
             return null;
         }
 
-        Dictionary<AccessPath, TypeSymbol> result = null;
+        Dictionary<AccessPath, TypeSymbol>? result = null;
         foreach (var kv in a)
         {
             if (b.TryGetValue(kv.Key, out var other) && other == kv.Value)
@@ -499,7 +519,7 @@ internal sealed partial class StatementBinder
         return result;
     }
 
-    private static bool IsNarrowableVariable(BoundExpression expr, out VariableSymbol variable)
+    private static bool IsNarrowableVariable(BoundExpression expr, out VariableSymbol? variable)
     {
         variable = null;
         if (expr is not BoundVariableExpression bve)
@@ -551,7 +571,7 @@ internal sealed partial class StatementBinder
         return SmartCastStability.IsTypeTestNarrowing(declared, candidate);
     }
 
-    private (Dictionary<AccessPath, TypeSymbol> NonNil, Dictionary<AccessPath, TypeSymbol> Nil) TryClassifyNilGuard(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol>? NonNil, Dictionary<AccessPath, TypeSymbol>? Nil) TryClassifyNilGuard(BoundExpression condition)
     {
         // ADR-0069 addendum / issue #712: compose nil-guard classification across
         // `!`, `&&`, and `||` so guards like `if a == nil || cond { ... } else { use(a) }`
@@ -604,8 +624,10 @@ internal sealed partial class StatementBinder
             return (null, null);
         }
 
-        Dictionary<AccessPath, TypeSymbol> nonNilFrame = null;
-        Dictionary<AccessPath, TypeSymbol> nilFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? nonNilFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? nilFrame = null;
+        target = Invariant.Required(target, "a classified nil guard identifies its target");
+        underlying = Invariant.Required(underlying, "a classified nil guard identifies its underlying type");
         if (nonNilWhenTrue)
         {
             nonNilFrame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
@@ -618,7 +640,7 @@ internal sealed partial class StatementBinder
         return (nonNilFrame, nilFrame);
     }
 
-    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) TryClassifyBoolCallNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) TryClassifyBoolCallNarrowing(BoundExpression condition)
     {
         var negate = false;
         var inner = condition;
@@ -663,8 +685,8 @@ internal sealed partial class StatementBinder
     private void MergeClrMemberNotNullWhenNarrowings(
         System.Reflection.MethodInfo method,
         bool negate,
-        ref Dictionary<AccessPath, TypeSymbol> thenFrame,
-        ref Dictionary<AccessPath, TypeSymbol> elseFrame)
+        ref Dictionary<AccessPath, TypeSymbol>? thenFrame,
+        ref Dictionary<AccessPath, TypeSymbol>? elseFrame)
     {
         if (!ClrNullability.TryGetMemberNotNullWhenData(method, out var returnValue, out var members))
         {
@@ -683,8 +705,8 @@ internal sealed partial class StatementBinder
     private void MergeUserMemberNotNullWhenNarrowings(
         ImmutableArray<BoundAttribute> attributes,
         bool negate,
-        ref Dictionary<AccessPath, TypeSymbol> thenFrame,
-        ref Dictionary<AccessPath, TypeSymbol> elseFrame)
+        ref Dictionary<AccessPath, TypeSymbol>? thenFrame,
+        ref Dictionary<AccessPath, TypeSymbol>? elseFrame)
     {
         if (attributes.IsDefaultOrEmpty)
         {
@@ -707,15 +729,15 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
+    private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
         => ClassifyImportedMethodBoolCallNarrowing(call.Function.Method.GetParameters(), call.Arguments, negate);
-    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyImportedMethodBoolCallNarrowing(
+    private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyImportedMethodBoolCallNarrowing(
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         bool negate)
     {
-        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
-        Dictionary<AccessPath, TypeSymbol> elseFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? elseFrame = null;
         var count = Math.Min(parameters.Length, arguments.Length);
         for (var i = 0; i < count; i++)
         {
@@ -758,15 +780,15 @@ internal sealed partial class StatementBinder
         return (thenFrame, elseFrame);
     }
 
-    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyUserBoolCallNarrowing(BoundCallExpression call, bool negate)
+    private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyUserBoolCallNarrowing(BoundCallExpression call, bool negate)
     {
         // Issue #178 / ADR-0047 §6: a user-declared function may carry the
         // same [NotNullWhen] / [MaybeNullWhen] postconditions C# uses.
         // Recognition is type-identity based via KnownAttributes so renaming
         // or shadowing the source name cannot bypass the narrowing rule.
         var parameters = call.Function.Parameters;
-        Dictionary<AccessPath, TypeSymbol> thenFrame = null;
-        Dictionary<AccessPath, TypeSymbol> elseFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? thenFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? elseFrame = null;
         var count = Math.Min(parameters.Length, call.Arguments.Length);
         for (var i = 0; i < count; i++)
         {
@@ -834,7 +856,7 @@ internal sealed partial class StatementBinder
         return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
     }
 
-    internal static Dictionary<AccessPath, TypeSymbol> TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern pattern)
+    internal static Dictionary<AccessPath, TypeSymbol>? TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern? pattern)
     {
         if (pattern == null)
         {
@@ -852,17 +874,19 @@ internal sealed partial class StatementBinder
         {
             discriminantPath = variableExpression.Variable;
         }
-        else if (SmartCastStability.TryGetStableMemberPath(discriminant, out var memberPath, out _))
-        {
-            discriminantPath = memberPath;
-        }
         else
         {
-            return null;
+            AccessPath? memberPath;
+            if (!SmartCastStability.TryGetStableMemberPath(discriminant, out memberPath, out _))
+            {
+                return null;
+            }
+
+            discriminantPath = Invariant.Required(memberPath, "a successful stable-member lookup identifies its path");
         }
 
         var discriminantType = discriminant.Type;
-        TypeSymbol narrowedType = null;
+        TypeSymbol? narrowedType = null;
         switch (pattern)
         {
             case BoundTypePattern typePattern:
@@ -904,10 +928,12 @@ internal sealed partial class StatementBinder
                 break;
         }
 
-        return narrowedType == null ? null : new Dictionary<AccessPath, TypeSymbol> { [discriminantPath] = narrowedType };
+        return narrowedType == null
+            ? null
+            : new Dictionary<AccessPath, TypeSymbol> { [discriminantPath] = narrowedType };
     }
 
-    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
+    private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
         if (frame == null)
         {
@@ -928,7 +954,7 @@ internal sealed partial class StatementBinder
     // Issue #991: bind a switch-arm `when` guard as a boolean expression under
     // the arm's pattern-narrowing frame. A non-bool guard surfaces the standard
     // conversion diagnostic.
-    private BoundExpression BindGuardExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
+    private BoundExpression BindGuardExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
         if (frame == null)
         {
