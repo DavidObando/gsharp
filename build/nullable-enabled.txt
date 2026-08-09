@@ -316,3 +316,6 @@ src/Core/CodeAnalysis/Symbols/ImplicitStaticPropertyVariableSymbol.cs
 # Slice 57 -- final generic parameter and symbol presentation contracts.
 src/Core/CodeAnalysis/Symbols/SymbolPrinter.cs
 src/Core/CodeAnalysis/Symbols/TypeParameterSymbol.cs
+
+# Slice 58 -- accessor expression binding contracts.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.Accessor.cs

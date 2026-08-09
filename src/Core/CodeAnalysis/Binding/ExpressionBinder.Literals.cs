@@ -13,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -534,7 +535,7 @@ internal sealed partial class ExpressionBinder
 
     private bool TryGetNaturalClrMethodGroupType(
         BoundClrMethodGroupExpression group,
-        out FunctionTypeSymbol? naturalType)
+        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
     {
         naturalType = null;
         var closesReceiver = group.Receiver != null && group.Candidates.All(candidate => candidate.IsStatic);

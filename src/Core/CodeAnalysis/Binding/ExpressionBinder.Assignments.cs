@@ -1843,7 +1843,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The ref-kind argument syntax.</param>
     /// <param name="parameter">The callee parameter this argument binds to (may be <see langword="null"/> when unresolved).</param>
     /// <returns>The bound address-of expression, or an error expression on failure.</returns>
-    internal BoundExpression BindRefArgumentExpression(RefArgumentExpressionSyntax syntax, ParameterSymbol parameter)
+    internal BoundExpression BindRefArgumentExpression(RefArgumentExpressionSyntax syntax, ParameterSymbol? parameter)
     {
         if (syntax.IsInlineDeclaration)
         {
@@ -2000,7 +2000,7 @@ internal sealed partial class ExpressionBinder
     /// caller keeps its normal conversion path.</returns>
     internal BoundExpression? TryRebindInlineOutVarPlaceholder(
         BoundExpression boundArg,
-        ExpressionSyntax slotSyntax,
+        ExpressionSyntax? slotSyntax,
         ParameterSymbol resolvedParameter,
         TypeSymbol substitutedPointeeType)
     {
@@ -2417,9 +2417,9 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindConstructedGenericStaticFieldWrite(
         MemberFieldAssignmentExpressionSyntax syntax,
-        StructSymbol constructedStruct,
-        InterfaceSymbol constructedInterface,
-        ImportedClassSymbol constructedImported)
+        StructSymbol? constructedStruct,
+        InterfaceSymbol? constructedInterface,
+        ImportedClassSymbol? constructedImported)
     {
         var fieldName = syntax.FieldIdentifier.Text;
         BoundExpression? value = null;
@@ -2489,7 +2489,8 @@ internal sealed partial class ExpressionBinder
         // Imported CLR generic → static field/property write via reflection on
         // the closed construction (mirrors the non-generic imported-class write
         // in BindFieldAssignmentExpression).
-        if (constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
+        if (constructedImported != null
+            && constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
             && TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _))
         {
             var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticTargetSymbol), staticTargetSymbol);

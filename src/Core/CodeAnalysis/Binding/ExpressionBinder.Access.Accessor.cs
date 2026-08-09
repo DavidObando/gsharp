@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -11,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -171,11 +174,11 @@ internal sealed partial class ExpressionBinder
         // be a chain of accessors (e.g. Guid.NewGuid().ToString()).
         var leftPart = syntax.LeftPart;
         var rightPart = syntax.RightPart;
-        BoundExpression receiver = null;
-        ImportedClassSymbol classSymbol = null;
-        EnumSymbol enumSymbol = null;
-        StructSymbol userStructSymbol = null;
-        InterfaceSymbol userInterfaceSymbol = null;
+        BoundExpression? receiver = null;
+        ImportedClassSymbol? classSymbol = null;
+        EnumSymbol? enumSymbol = null;
+        StructSymbol? userStructSymbol = null;
+        InterfaceSymbol? userInterfaceSymbol = null;
 
         if (leftPart is NameExpressionSyntax leftName)
         {
@@ -546,6 +549,11 @@ internal sealed partial class ExpressionBinder
             }
             else
             {
+                if (constructedImported is null)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 classSymbol = constructedImported;
             }
         }
@@ -573,6 +581,11 @@ internal sealed partial class ExpressionBinder
             }
             else
             {
+                if (genericConstructedImported is null)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 classSymbol = genericConstructedImported;
             }
         }
@@ -658,10 +671,10 @@ internal sealed partial class ExpressionBinder
 
     private bool TryResolveInheritedImportedNestedType(
         AccessorExpressionSyntax syntax,
-        out ImportedClassSymbol nestedClassSymbol)
+        [NotNullWhen(true)] out ImportedClassSymbol? nestedClassSymbol)
     {
         nestedClassSymbol = null;
-        StructSymbol sourceType = null;
+        StructSymbol? sourceType = null;
         if (syntax.LeftPart is NameExpressionSyntax sourceName
             && scope.TryLookupTypeAlias(sourceName.IdentifierToken.Text, out var sourceAlias)
             && sourceAlias is StructSymbol namedSourceType)
@@ -707,11 +720,11 @@ internal sealed partial class ExpressionBinder
         Type constructedOuter,
         ImportedClassSymbol nested,
         ExpressionSyntax syntax,
-        ImportedTypeSymbol symbolicOuter)
+        ImportedTypeSymbol? symbolicOuter)
     {
-        var nestedType = nested?.ClassType;
-        if (constructedOuter?.IsConstructedGenericType != true
-            || nestedType?.ContainsGenericParameters != true)
+        var nestedType = nested.ClassType;
+        if (!constructedOuter.IsConstructedGenericType
+            || !nestedType.ContainsGenericParameters)
         {
             return nested;
         }
@@ -725,7 +738,7 @@ internal sealed partial class ExpressionBinder
         try
         {
             var closedType = nestedType.MakeGenericType(outerArguments);
-            ImportedTypeSymbol symbolicNested = null;
+            ImportedTypeSymbol? symbolicNested = null;
             if (symbolicOuter?.HasTypeParameterArgument == true
                 && symbolicOuter.TypeArguments.Length == nestedType.GetGenericArguments().Length)
             {
@@ -748,7 +761,7 @@ internal sealed partial class ExpressionBinder
     /// nested type symbol, or <see langword="null"/> for a top-level type or a
     /// kind that cannot be nested.
     /// </summary>
-    private static TypeSymbol GetSymbolContainingType(TypeSymbol type) => type switch
+    private static TypeSymbol? GetSymbolContainingType(TypeSymbol type) => type switch
     {
         StructSymbol s => s.ContainingType,
         EnumSymbol e => e.ContainingType,
@@ -766,7 +779,7 @@ internal sealed partial class ExpressionBinder
     /// type was declared in, or <see langword="null"/> for a kind that has no
     /// package (or isn't a user aggregate type at all).
     /// </summary>
-    private static string GetSymbolPackageName(TypeSymbol type) => type switch
+    private static string? GetSymbolPackageName(TypeSymbol type) => type switch
     {
         StructSymbol s => s.PackageName,
         EnumSymbol e => e.PackageName,
@@ -825,7 +838,9 @@ internal sealed partial class ExpressionBinder
     /// (the head of a call, index, accessor, or bare name), used to detect when a
     /// qualified reference targets a nested type by its simple name.
     /// </summary>
-    private static bool TryGetHeadIdentifier(ExpressionSyntax expression, out string identifier)
+    private static bool TryGetHeadIdentifier(
+        ExpressionSyntax? expression,
+        [NotNullWhen(true)] out string? identifier)
     {
         switch (expression)
         {
@@ -858,7 +873,9 @@ internal sealed partial class ExpressionBinder
     /// resolved for the preceding segment. Returns <see langword="false"/> when
     /// the chain is not a pure user nested-type reference.
     /// </summary>
-    private bool TryResolveQualifiedUserNestedType(AccessorExpressionSyntax accessor, out TypeSymbol nestedType)
+    private bool TryResolveQualifiedUserNestedType(
+        AccessorExpressionSyntax accessor,
+        [NotNullWhen(true)] out TypeSymbol? nestedType)
         => TryResolveUserNestedTypeExpression(accessor, out nestedType);
 
     /// <summary>
@@ -875,7 +892,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="expr">The candidate type-naming expression.</param>
     /// <param name="headName">The resolved root identifier on success.</param>
     /// <returns>Whether a root identifier could be extracted.</returns>
-    private static bool TryGetUserTypeChainHead(ExpressionSyntax expr, out string headName)
+    private static bool TryGetUserTypeChainHead(
+        ExpressionSyntax expr,
+        [NotNullWhen(true)] out string? headName)
     {
         switch (expr)
         {
@@ -914,7 +933,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="expr">The type-naming expression (accessor or index chain).</param>
     /// <param name="nestedType">The resolved (possibly constructed) type symbol.</param>
     /// <returns>Whether the expression resolved to a user nested type.</returns>
-    private bool TryResolveUserNestedTypeExpression(ExpressionSyntax expr, out TypeSymbol nestedType)
+    private bool TryResolveUserNestedTypeExpression(
+        ExpressionSyntax expr,
+        [NotNullWhen(true)] out TypeSymbol? nestedType)
     {
         nestedType = null;
 
@@ -950,7 +971,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="expr">The type-naming expression (accessor or index chain).</param>
     /// <param name="nestedType">The resolved (possibly constructed) type symbol.</param>
     /// <returns>Whether the expression resolved to a user nested type.</returns>
-    private bool TryResolveUserNestedTypeExpressionCore(ExpressionSyntax expr, out TypeSymbol nestedType)
+    private bool TryResolveUserNestedTypeExpressionCore(
+        ExpressionSyntax expr,
+        [NotNullWhen(true)] out TypeSymbol? nestedType)
     {
         nestedType = null;
         var segments = new List<(string Name, ImmutableArray<TypeSymbol> Args)>();
@@ -1226,7 +1249,10 @@ internal sealed partial class ExpressionBinder
     /// <param name="declaration">The receiver name syntax (for symbol provenance).</param>
     /// <param name="classSymbol">The resolved CLR class symbol on success.</param>
     /// <returns><see langword="true"/> when <paramref name="name"/> is a predefined primitive alias with a backing CLR type.</returns>
-    private bool TryResolvePredefinedTypeReceiver(string name, ExpressionSyntax declaration, out ImportedClassSymbol classSymbol)
+    private bool TryResolvePredefinedTypeReceiver(
+        string name,
+        ExpressionSyntax declaration,
+        [NotNullWhen(true)] out ImportedClassSymbol? classSymbol)
     {
         classSymbol = null;
 
@@ -1368,7 +1394,7 @@ internal sealed partial class ExpressionBinder
         // IL (`StackUnexpected`/`PathStackUnexpected`). Routing through the
         // canonical symbol-level value-type predicate keeps BCL behaviour
         // identical while covering user value types.
-        LocalVariableSymbol resultSlot = null;
+        LocalVariableSymbol? resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
             && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
@@ -1379,7 +1405,10 @@ internal sealed partial class ExpressionBinder
         return new BoundNullConditionalAccessExpression(null, receiver, capture, whenNotNull, resultType, resultSlot);
     }
 
-    private bool TryBindImportAccessor(ImportSymbol import, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    private bool TryBindImportAccessor(
+        ImportSymbol import,
+        ref ExpressionSyntax rightPart,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
     {
         // Handle `<importName>.<Segment>(.<Segment>)*.<TypeName>(.<more>)*` where
         // <importName> is either an alias or the import's path. Walks the accessor
@@ -1421,7 +1450,10 @@ internal sealed partial class ExpressionBinder
     /// segment, so any referenced CLR type — regardless of namespace depth —
     /// resolves and its trailing member binds as a static access.
     /// </summary>
-    private bool TryBindFullyQualifiedClrStaticAccess(NameExpressionSyntax leftName, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    private bool TryBindFullyQualifiedClrStaticAccess(
+        NameExpressionSyntax leftName,
+        ref ExpressionSyntax rightPart,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
         => TryWalkQualifiedClrTypePath(leftName.IdentifierToken.Text, ref rightPart, out importedClass);
 
     /// <summary>
@@ -1434,7 +1466,10 @@ internal sealed partial class ExpressionBinder
     /// <see cref="TryBindFullyQualifiedClrStaticAccess"/> (which starts from a
     /// bare leading namespace name).
     /// </summary>
-    private bool TryWalkQualifiedClrTypePath(string startPath, ref ExpressionSyntax rightPart, out ImportedClassSymbol importedClass)
+    private bool TryWalkQualifiedClrTypePath(
+        string startPath,
+        ref ExpressionSyntax rightPart,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
     {
         importedClass = null;
 
@@ -1524,7 +1559,10 @@ internal sealed partial class ExpressionBinder
     /// or type-shaped arguments as a <see cref="GenericNameExpressionSyntax"/>
     /// (e.g. <c>Pair[int32, string]</c>, <c>Box[int32?]</c>).
     /// </summary>
-    private static bool TryGetGenericSegmentNameAndArity(ExpressionSyntax segment, out string name, out int arity)
+    private static bool TryGetGenericSegmentNameAndArity(
+        ExpressionSyntax segment,
+        [NotNullWhen(true)] out string? name,
+        out int arity)
     {
         switch (segment)
         {
@@ -1577,10 +1615,10 @@ internal sealed partial class ExpressionBinder
     private bool TryResolveColorColorType(
         string name,
         NameExpressionSyntax leftName,
-        out ImportedClassSymbol importedClassSymbol,
-        out StructSymbol userStructSymbol,
-        out InterfaceSymbol interfaceSymbol,
-        out EnumSymbol enumSymbol)
+        out ImportedClassSymbol? importedClassSymbol,
+        out StructSymbol? userStructSymbol,
+        out InterfaceSymbol? interfaceSymbol,
+        out EnumSymbol? enumSymbol)
     {
         importedClassSymbol = null;
         userStructSymbol = null;
@@ -1651,7 +1689,7 @@ internal sealed partial class ExpressionBinder
         StructSymbol structSym,
         NameExpressionSyntax leftName,
         CallExpressionSyntax ce,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var methodName = ce.Identifier.Text;
@@ -1724,10 +1762,10 @@ internal sealed partial class ExpressionBinder
     /// semantics continue to work unchanged.
     /// </summary>
     private bool RightPartLooksLikeStaticMember(
-        ImportedClassSymbol importedClassSymbol,
-        StructSymbol userStructSymbol,
-        InterfaceSymbol interfaceSymbol,
-        EnumSymbol enumSymbol,
+        ImportedClassSymbol? importedClassSymbol,
+        StructSymbol? userStructSymbol,
+        InterfaceSymbol? interfaceSymbol,
+        EnumSymbol? enumSymbol,
         ExpressionSyntax rightPart)
     {
         if (!TryGetAccessorChainHead(rightPart, out var headName, out var isCall))
@@ -1758,7 +1796,10 @@ internal sealed partial class ExpressionBinder
         return false;
     }
 
-    private static bool TryGetAccessorChainHead(ExpressionSyntax rightPart, out string headName, out bool isCall)
+    private static bool TryGetAccessorChainHead(
+        ExpressionSyntax? rightPart,
+        [NotNullWhen(true)] out string? headName,
+        out bool isCall)
     {
         switch (rightPart)
         {
@@ -1788,7 +1829,7 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private bool HasStaticMember(System.Type clrType, string headName, bool isCall)
+    private bool HasStaticMember(System.Type? clrType, string headName, bool isCall)
     {
         if (clrType == null)
         {
@@ -1846,7 +1887,7 @@ internal sealed partial class ExpressionBinder
         return false;
     }
 
-    private static bool HasUserTypeStaticMember(TypeSymbol type, string headName, bool isCall)
+    private static bool HasUserTypeStaticMember(TypeSymbol? type, string headName, bool isCall)
     {
         if (type == null)
         {
@@ -1949,9 +1990,14 @@ internal sealed partial class ExpressionBinder
                     out var innerStruct,
                     out var innerEnum))
                 {
-                    return innerEnum != null
-                        ? BindEnumAccessorStep(innerEnum, nested.RightPart)
-                        : BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart);
+                    if (innerEnum != null)
+                    {
+                        return BindEnumAccessorStep(innerEnum, nested.RightPart);
+                    }
+
+                    return innerStruct is not null
+                        ? BindUserTypeStaticAccessorStep(innerStruct, nested.RightPart)
+                        : new BoundErrorExpression(null);
                 }
 
                 if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)
@@ -2090,8 +2136,8 @@ internal sealed partial class ExpressionBinder
     private bool TryResolveNestedTypeChainUnderReceiver(
         StructSymbol receiver,
         ExpressionSyntax typeExpr,
-        out StructSymbol constructedStruct,
-        out EnumSymbol constructedEnum)
+        out StructSymbol? constructedStruct,
+        out EnumSymbol? constructedEnum)
     {
         constructedStruct = null;
         constructedEnum = null;
@@ -2324,7 +2370,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="index">The candidate <c>Target[Index]</c> receiver.</param>
     /// <param name="constructed">The constructed generic interface on success.</param>
     /// <returns>Whether a constructed generic interface receiver was resolved.</returns>
-    private bool TryResolveConstructedGenericInterfaceReceiver(IndexExpressionSyntax index, out InterfaceSymbol constructed)
+    private bool TryResolveConstructedGenericInterfaceReceiver(
+        IndexExpressionSyntax index,
+        [NotNullWhen(true)] out InterfaceSymbol? constructed)
     {
         constructed = null;
         if (index.Target is not NameExpressionSyntax targetName)
@@ -2374,9 +2422,9 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether a constructed generic type receiver was resolved.</returns>
     private bool TryResolveConstructedGenericTypeReceiver(
         IndexExpressionSyntax index,
-        out StructSymbol constructedStruct,
-        out InterfaceSymbol constructedInterface,
-        out ImportedClassSymbol constructedImported)
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported)
     {
         constructedStruct = null;
         constructedInterface = null;
@@ -2410,7 +2458,7 @@ internal sealed partial class ExpressionBinder
         var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
-        Type openClrType = null;
+        Type? openClrType = null;
         var clrGenericDef = !userGenericDef
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
 
@@ -2443,7 +2491,8 @@ internal sealed partial class ExpressionBinder
         // ArrayPool<byte>) and surface it as an imported class so the existing
         // static-member / static-call binding path resolves members against the
         // closed construction.
-        return TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, index, out constructedImported);
+        return openClrType is not null
+            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, index, out constructedImported);
     }
 
     /// <summary>
@@ -2464,9 +2513,9 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether a constructed generic type receiver was resolved.</returns>
     private bool TryResolveConstructedGenericTypeReceiver(
         GenericNameExpressionSyntax generic,
-        out StructSymbol constructedStruct,
-        out InterfaceSymbol constructedInterface,
-        out ImportedClassSymbol constructedImported)
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported)
     {
         constructedStruct = null;
         constructedInterface = null;
@@ -2490,7 +2539,7 @@ internal sealed partial class ExpressionBinder
         var userGenericDef = scope.TryLookupTypeAlias(name, preferredArity: arity, out var alias)
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
-        Type openClrType = null;
+        Type? openClrType = null;
         var clrGenericDef = !userGenericDef
             && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
 
@@ -2526,7 +2575,8 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        return TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
+        return openClrType is not null
+            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
     }
 
     /// <summary>
@@ -2549,9 +2599,9 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether a constructed generic type receiver was resolved.</returns>
     private bool TryResolveConstructedGenericTypeReceiver(
         ExpressionSyntax receiver,
-        out StructSymbol constructedStruct,
-        out InterfaceSymbol constructedInterface,
-        out ImportedClassSymbol constructedImported)
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported)
     {
         constructedStruct = null;
         constructedInterface = null;
@@ -2652,7 +2702,7 @@ internal sealed partial class ExpressionBinder
         Type openClrType,
         ImmutableArray<TypeSymbol> typeArgs,
         ExpressionSyntax receiverSyntax,
-        out ImportedClassSymbol constructedImported)
+        [NotNullWhen(true)] out ImportedClassSymbol? constructedImported)
     {
         constructedImported = null;
 
@@ -2765,7 +2815,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="expr">The candidate type expression.</param>
     /// <param name="typeClause">The synthesized type clause on success.</param>
     /// <returns>Whether the expression names a type.</returns>
-    private static bool TryBuildTypeClauseFromExpression(ExpressionSyntax expr, out TypeClauseSyntax typeClause)
+    private static bool TryBuildTypeClauseFromExpression(
+        ExpressionSyntax expr,
+        [NotNullWhen(true)] out TypeClauseSyntax? typeClause)
     {
         typeClause = null;
         if (expr is NameExpressionSyntax ne && !ne.IdentifierToken.IsMissing)
@@ -2790,12 +2842,14 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The bare-name reference being resolved.</param>
     /// <param name="result">The bound static-member access, when one is produced.</param>
     /// <returns><c>true</c> when an imported static member matched (or an ambiguity was reported).</returns>
-    private bool TryBindImportedStaticMember(NameExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindImportedStaticMember(
+        NameExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var name = syntax.IdentifierToken.Text;
 
-        StructSymbol match = null;
+        StructSymbol? match = null;
         var ambiguous = false;
         foreach (var importedType in binderCtx.GetStaticImportTypes())
         {
@@ -2832,7 +2886,7 @@ internal sealed partial class ExpressionBinder
         // into scope by a type import (`import System.Math` from C#'s
         // `using static System.Math`). Only consulted when no same-compilation
         // source class exposed the member above.
-        System.Type clrMatch = null;
+        System.Type? clrMatch = null;
         var clrAmbiguous = false;
         foreach (var clrType in scope.EnumerateStaticImportClrTypes())
         {
@@ -2881,7 +2935,9 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The identifier syntax naming the prospective submission member.</param>
     /// <param name="result">The bound submission-member access, when one is produced.</param>
     /// <returns><c>true</c> when a prior submission declared the member.</returns>
-    private bool TryBindSubmissionStaticMember(NameExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindSubmissionStaticMember(
+        NameExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
@@ -2892,6 +2948,11 @@ internal sealed partial class ExpressionBinder
 
         var name = syntax.IdentifierToken.Text;
         if (!submissionImports.TryFindMemberContainer(scope.References, name, out var programType))
+        {
+            return false;
+        }
+
+        if (programType is null)
         {
             return false;
         }
@@ -2947,7 +3008,7 @@ internal sealed partial class ExpressionBinder
     /// <c>public static</c> field, property, or method named <paramref name="name"/>
     /// — the imported-CLR analogue of <see cref="ImportedTypeExposesStaticMember"/>.
     /// </summary>
-    private static bool ClrTypeExposesStaticMember(System.Type type, string name)
+    private static bool ClrTypeExposesStaticMember(System.Type? type, string name)
     {
         if (type == null)
         {
@@ -3071,7 +3132,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();
-        List<int> deferredStaticLambdaIndices = null;
+        List<int>? deferredStaticLambdaIndices = null;
         var staticArgIndex = 0;
         foreach (var argument in ce.Arguments)
         {
@@ -3135,7 +3196,9 @@ internal sealed partial class ExpressionBinder
                 : ownerType;
             var effectiveStructOwner = effectiveOwnerType as StructSymbol;
             var effectiveInterfaceOwner = effectiveOwnerType as InterfaceSymbol;
-            var ownerDefinition = effectiveStructOwner?.Definition ?? (TypeSymbol)effectiveInterfaceOwner?.Definition;
+            TypeSymbol? ownerDefinition = effectiveStructOwner?.Definition is { } structDefinition
+                ? structDefinition
+                : effectiveInterfaceOwner?.Definition;
             var ownerDefTypeParameters = effectiveStructOwner?.Definition?.TypeParameters
                 ?? effectiveInterfaceOwner?.Definition?.TypeParameters
                 ?? ImmutableArray<TypeParameterSymbol>.Empty;
@@ -3237,7 +3300,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            ExpressionSyntax[] parameterSyntax;
+            ExpressionSyntax?[] parameterSyntax;
             if (!argumentNames.IsDefault && !isVariadic)
             {
                 if (!overloads.TryReorderUserCallArguments(
@@ -3281,7 +3344,7 @@ internal sealed partial class ExpressionBinder
             // conversion to the closed type, GS0155). This is the user-defined
             // counterpart of the imported-generic fix in issue #1216 and exercises
             // the binding receiver added in issue #1323.
-            Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+            Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null;
             if (ownerDefinition != null
                 && !ReferenceEquals(ownerDefinition, ownerType)
                 && !ownerTypeArguments.IsDefaultOrEmpty
@@ -3455,7 +3518,7 @@ internal sealed partial class ExpressionBinder
                 // method.Parameters[i] line up. This must run BEFORE the
                 // open-type-parameter shortcut so generic static out-parameters
                 // (`func G[T](out r T)`) are handled too.
-                var slotSyntax = i < parameterSyntax.Length ? parameterSyntax[i] : null;
+                ExpressionSyntax? slotSyntax = i < parameterSyntax.Length ? parameterSyntax[i] : null;
                 var substitutedPointeeType = substitution != null ? Binder.SubstituteType(paramType, substitution, scope.References.MapClrTypeToReferences) : paramType;
                 var reboundOutVar = TryRebindInlineOutVarPlaceholder(permutedArgs[i], slotSyntax, method.Parameters[i], substitutedPointeeType);
                 if (reboundOutVar != null)
@@ -3535,9 +3598,13 @@ internal sealed partial class ExpressionBinder
                 convertedArgs.ToImmutable(),
                 p => method.Parameters[p].Name);
 
-            BoundCallExpression MakeStaticGenericCall(TypeSymbol substitutedReturnOverride)
+            BoundCallExpression MakeStaticGenericCall(TypeSymbol? substitutedReturnOverride)
             {
-                var result = new BoundCallExpression(null, method, finalArguments, substitutedReturnOverride)
+                var result = new BoundCallExpression(
+                    null,
+                    method,
+                    finalArguments,
+                    substitutedReturnOverride ?? method.Type)
                 {
                     StaticGenericOwnerType = staticGenericOwner,
                     StaticGenericInterfaceOwnerType = staticGenericInterfaceOwner,
@@ -3595,9 +3662,9 @@ internal sealed partial class ExpressionBinder
     }
 
     private static ImmutableArray<FunctionSymbol> BuildConstructedStaticOverloadGroup(
-        StructSymbol lookupType,
+        StructSymbol? lookupType,
         ImmutableArray<FunctionSymbol> methods,
-        out Dictionary<FunctionSymbol, FunctionSymbol> originalMethods)
+        out Dictionary<FunctionSymbol, FunctionSymbol>? originalMethods)
     {
         originalMethods = null;
         if (lookupType == null || methods.Length <= 1)

@@ -427,7 +427,7 @@ internal sealed partial class ExpressionBinder
     }
 
     private bool TryBindUserDelegateMemberInvocation(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TypeSymbol receiverType,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
