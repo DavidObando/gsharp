@@ -1371,10 +1371,10 @@ internal sealed partial class ExpressionBinder
         BoundExpression? chainBase,
         ExpressionSyntax remainingChain,
         ExpressionSyntax indexSyntax,
-        ExpressionSyntax valueSyntax,
+        ExpressionSyntax? valueSyntax,
         BoundExpression? boundValueOverride,
-        SyntaxToken compoundOperatorToken,
-        ExpressionSyntax compoundRhsSyntax,
+        SyntaxToken? compoundOperatorToken,
+        ExpressionSyntax? compoundRhsSyntax,
         TextLocation diagnosticLocation,
         SyntaxNode outerSyntax)
     {
@@ -1524,7 +1524,12 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            var rhsBound = BindExpression(compoundRhsSyntax);
+            if (compoundRhsSyntax is not { } resolvedCompoundRhsSyntax)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            var rhsBound = BindExpression(resolvedCompoundRhsSyntax);
             if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
             {
                 return new BoundErrorExpression(null);
@@ -1535,7 +1540,7 @@ internal sealed partial class ExpressionBinder
             // `++`/`--`) participates in the SAME constant-integer-literal
             // adaptation and implicit numeric widening as the equivalent binary
             // `data[i] op v`, via the shared adaptation helper.
-            var combined = TryBindCompoundBinaryOperation(baseOpKind, indexRead, rhsBound, compoundRhsSyntax.Location);
+            var combined = TryBindCompoundBinaryOperation(baseOpKind, indexRead, rhsBound, resolvedCompoundRhsSyntax.Location);
             if (combined == null)
             {
                 Diagnostics.ReportUndefinedBinaryOperator(
@@ -1559,7 +1564,12 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            assignment = BindIndexedAssignmentToVariable(tempVar, indexSyntax, valueSyntax, diagnosticLocation);
+            if (valueSyntax is not { } resolvedValueSyntax)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            assignment = BindIndexedAssignmentToVariable(tempVar, indexSyntax, resolvedValueSyntax, diagnosticLocation);
         }
 
         if (assignment is BoundErrorExpression)

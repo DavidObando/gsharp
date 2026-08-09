@@ -245,3 +245,6 @@ src/Core/CodeAnalysis/Binding/DeclarationBinder.Structs.cs
 
 # Slice 49 -- structural projection planning contracts.
 src/Core/CodeAnalysis/Binding/StructuralProjectionPlan.cs
+
+# Slice 50 -- binding helper and expression binder state.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Assignments.cs

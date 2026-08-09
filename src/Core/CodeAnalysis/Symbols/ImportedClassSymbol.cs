@@ -88,7 +88,7 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="ne">The name expression (currently unused; reserved for diagnostics).</param>
     /// <param name="member">The resulting member when found.</param>
     /// <returns>Whether we found a matching public static field or property.</returns>
-    public bool TryLookupMember(string text, NameExpressionSyntax ne, out MemberInfo member)
+    public bool TryLookupMember(string text, NameExpressionSyntax? ne, out MemberInfo member)
     {
         _ = ne;
         var level = FindNearestNamedMemberLevel(text);

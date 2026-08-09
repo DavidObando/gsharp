@@ -34,7 +34,7 @@ internal sealed partial class ExpressionBinder
         // back to compound assignment semantics (`x += 1`).
         if (syntax.LeftHandSide is NameExpressionSyntax bareName)
         {
-            return BindBareEventOrCompoundAssignment(bareName, syntax);
+            return BindBareEventOrCompoundAssignment(bareName, syntax) ?? new BoundErrorExpression(null);
         }
 
         // Stream B′: `lhs.Event += handler` / `lhs.Event -= handler`.
@@ -112,9 +112,10 @@ internal sealed partial class ExpressionBinder
             // ADR-0053: `Type.StaticField op= rhs` / `Type.StaticProp op= rhs`.
             // The simple-assignment path is handled by BindFieldAssignmentExpression
             // (lines ~6586–6619); this is the compound counterpart.
-            if (TryBindUserTypeStaticCompoundAssignment(staticStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var compoundResult))
+            if (TryBindUserTypeStaticCompoundAssignment(staticStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var compoundResult)
+                && compoundResult is { } resolvedCompoundResult)
             {
-                return compoundResult;
+                return resolvedCompoundResult;
             }
 
             if (TypeMemberModel.GetNearestImportedBase(staticStruct)?.ClrType is Type importedBaseClr)
@@ -134,9 +135,10 @@ internal sealed partial class ExpressionBinder
         {
             // ADR-0089 / issue #1030: `IName.StaticField op= rhs` — compound
             // assignment to a (non-generic) interface static field.
-            if (TryBindInterfaceStaticCompoundAssignment(staticInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ifaceCompound))
+            if (TryBindInterfaceStaticCompoundAssignment(staticInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ifaceCompound)
+                && ifaceCompound is { } resolvedIfaceCompound)
             {
-                return ifaceCompound;
+                return resolvedIfaceCompound;
             }
 
             Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
@@ -178,15 +180,17 @@ internal sealed partial class ExpressionBinder
             }
 
             if (ctorStruct != null
-                && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorStructCompound))
+                && TryBindUserTypeStaticCompoundAssignment(ctorStruct, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorStructCompound)
+                && ctorStructCompound is { } resolvedCtorStructCompound)
             {
-                return ctorStructCompound;
+                return resolvedCtorStructCompound;
             }
 
             if (ctorInterface != null
-                && TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorCompound))
+                && TryBindInterfaceStaticCompoundAssignment(ctorInterface, eventNameSyntax, syntax, baseOpSyntaxKind, out var ctorCompound)
+                && ctorCompound is { } resolvedCtorCompound)
             {
-                return ctorCompound;
+                return resolvedCtorCompound;
             }
 
             if (ctorStruct != null
