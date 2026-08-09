@@ -187,3 +187,5 @@ src/Core/CodeAnalysis/Binding/DeclarationBinder.Attributes.cs
 src/Core/CodeAnalysis/Binding/DeclarationBinder.cs
 # Slice 27 -- function declaration binding and generic callable contracts.
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.cs
+# Slice 28 -- interface declaration binding and member contracts.
+src/Core/CodeAnalysis/Binding/DeclarationBinder.Interfaces.cs
