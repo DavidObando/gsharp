@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -179,6 +180,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// <param name="definition">The generic definition to instantiate. Returned unchanged when not an open generic definition.</param>
     /// <param name="typeArguments">The type arguments. Length must match <see cref="TypeParameters"/>.</param>
     /// <returns>A constructed <see cref="DelegateTypeSymbol"/> whose <see cref="Definition"/> is the original.</returns>
+    [return: NotNullIfNotNull(nameof(definition))]
     public static DelegateTypeSymbol Construct(DelegateTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
     {
         if (definition == null || !definition.IsGenericDefinition)

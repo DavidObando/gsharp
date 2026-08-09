@@ -5,6 +5,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -543,6 +544,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <see langword="null"/> (the default) for single-context callers.
     /// </param>
     /// <returns>A constructed <see cref="InterfaceSymbol"/> whose <see cref="Definition"/> is the original.</returns>
+    [return: NotNullIfNotNull(nameof(definition))]
     public static InterfaceSymbol Construct(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type> mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -119,6 +120,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="nestedDefinition">The open nested enum declaration.</param>
     /// <param name="enclosingTypeArguments">Flattened enclosing arguments in CLR order.</param>
     /// <returns>The interned constructed reference.</returns>
+    [return: NotNullIfNotNull(nameof(nestedDefinition))]
     public static EnumSymbol ConstructNested(
         EnumSymbol nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
@@ -187,6 +189,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="nested">The open nested enum.</param>
     /// <param name="typeParameters">Type parameters indexed by source name.</param>
     /// <returns>The constructed nested enum, or <paramref name="nested"/> when its enclosing parameters are not all in scope.</returns>
+    [return: NotNullIfNotNull(nameof(nested))]
     internal static EnumSymbol ConstructNestedFromTypeParameterScope(
         EnumSymbol nested,
         IReadOnlyDictionary<string, TypeParameterSymbol> typeParameters)

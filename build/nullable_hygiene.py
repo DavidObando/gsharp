@@ -450,8 +450,9 @@ NULLABILITY_NOISE = [
     re.compile(r"^\s*using\s+System\.Diagnostics\.CodeAnalysis;\s*$"),
 ]
 ATTR_RE = re.compile(
-    r"\[\s*(MaybeNull|NotNull|AllowNull|DisallowNull|MaybeNullWhen|NotNullWhen"
-    r"|MemberNotNull|MemberNotNullWhen|NotNullIfNotNull)\s*(\([^)]*\))?\s*\]\s*")
+    r"\[\s*(?:return\s*:\s*)?"
+    r"(MaybeNull|NotNull|AllowNull|DisallowNull|MaybeNullWhen|NotNullWhen"
+    r"|MemberNotNull|MemberNotNullWhen|NotNullIfNotNull)\s*(\([^]]*\))?\s*\]\s*")
 # `?` in type position: after an identifier/generic/array close, before a name,
 # `,`, `)`, `>` or `{`. Deliberately does not touch `?.`, `??` or `a ? b : c`.
 TYPE_Q_RE = re.compile(r"(?<=[A-Za-z0-9_>\]])\?(?=\s*[A-Za-z_,\)>\{\[])")

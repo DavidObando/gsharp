@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -1001,6 +1002,7 @@ public static class ClrTypeUtilities
         });
     }
 
+    [return: NotNullIfNotNull(nameof(type))]
     internal static Type RemapHostCoreTypeToContext(Type type, Type contextObject)
     {
         if (type == null

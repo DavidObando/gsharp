@@ -8,6 +8,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -865,6 +866,7 @@ public sealed class ReferenceResolver : IDisposable
     /// set's <see cref="MetadataLoadContext"/> (it is not resolvable by name and
     /// is not a recognised array/byref/pointer/generic shape).
     /// </exception>
+    [return: NotNullIfNotNull(nameof(hostType))]
     public Type MapClrTypeToReferences(Type hostType)
     {
         if (hostType == null)

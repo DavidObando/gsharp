@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -1336,6 +1337,7 @@ public sealed class StructSymbol : TypeSymbol
     /// Pass <see langword="null"/> (the default) for single-context callers.
     /// </param>
     /// <returns>A constructed <see cref="StructSymbol"/> whose <see cref="Definition"/> is the original.</returns>
+    [return: NotNullIfNotNull(nameof(definition))]
     public static StructSymbol Construct(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type> mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)
@@ -1365,6 +1367,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>.</param>
     /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested reference, or <paramref name="nestedDefinition"/> unchanged when no enclosing arguments apply.</returns>
+    [return: NotNullIfNotNull(nameof(nestedDefinition))]
     public static StructSymbol ConstructNested(StructSymbol nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type> mapClrType = null)
     {
         if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
@@ -1398,6 +1401,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="ownTypeArguments">The nested type's own type arguments.</param>
     /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested-generic reference, or <paramref name="nestedDefinition"/> unchanged when neither vector applies.</returns>
+    [return: NotNullIfNotNull(nameof(nestedDefinition))]
     public static StructSymbol ConstructNestedGeneric(
         StructSymbol nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
@@ -1641,6 +1645,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="substitution">The original → replacement type-parameter map.</param>
     /// <param name="eraseReferenceNullability">Whether reference-nullable wrappers are erased before substitution.</param>
     /// <returns>The substituted type, or <paramref name="type"/> when unchanged.</returns>
+    [return: NotNullIfNotNull(nameof(type))]
     internal static TypeSymbol SubstituteTypeParameters(
         TypeSymbol type,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution,
@@ -1735,6 +1740,7 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     /// <param name="type">The open member type to close.</param>
     /// <returns>The member type in this construction's context.</returns>
+    [return: NotNullIfNotNull(nameof(type))]
     internal TypeSymbol SubstituteMemberType(TypeSymbol type)
     {
         if (type == null || Definition == null || ReferenceEquals(Definition, this))
