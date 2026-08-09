@@ -3350,7 +3350,11 @@ internal sealed class MemberLookup
     /// <param name="methodName">The method name to match.</param>
     /// <param name="includeExtensions">Whether to append imported extension-method probes.</param>
     /// <returns>The imported method probe groups in existing lookup order.</returns>
-    public List<ImportedMethodProbe> CollectImportedMethodProbes(Type staticClassType, Type receiverClrType, string methodName, bool includeExtensions)
+    public List<ImportedMethodProbe> CollectImportedMethodProbes(
+        Type? staticClassType,
+        Type? receiverClrType,
+        string methodName,
+        bool includeExtensions)
     {
         var result = new List<ImportedMethodProbe>();
         if (staticClassType != null)
