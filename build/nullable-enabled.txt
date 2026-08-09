@@ -147,3 +147,6 @@ src/Core/CodeAnalysis/Binding/RefKind.cs
 # Slice 14 -- stable smart-cast access-path keys and their member discriminant.
 src/Core/CodeAnalysis/Binding/AccessPath.cs
 src/Core/CodeAnalysis/Binding/PathMember.cs
+
+# Slice 15 -- stable member-path rules shared by smart-cast classifiers.
+src/Core/CodeAnalysis/Binding/SmartCastStability.cs

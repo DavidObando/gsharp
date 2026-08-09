@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -99,7 +101,7 @@ internal static class SmartCastStability
     /// </summary>
     /// <param name="expr">The candidate access expression.</param>
     /// <returns>The stable access path, or <c>null</c>.</returns>
-    public static AccessPath TryGetStablePath(BoundExpression expr)
+    public static AccessPath? TryGetStablePath(BoundExpression expr)
     {
         switch (expr)
         {
@@ -140,7 +142,7 @@ internal static class SmartCastStability
     /// <param name="path">The resulting stable member path, when successful.</param>
     /// <param name="currentType">The current static type of the read.</param>
     /// <returns><c>true</c> when a stable member path was derived.</returns>
-    public static bool TryGetStableMemberPath(BoundExpression expr, out AccessPath path, out TypeSymbol currentType)
+    public static bool TryGetStableMemberPath(BoundExpression expr, out AccessPath? path, out TypeSymbol? currentType)
     {
         path = TryGetStablePath(expr);
         if (path != null && path.HasMembers)
@@ -192,7 +194,7 @@ internal static class SmartCastStability
     /// non-nil when the comparison is false).
     /// </param>
     /// <returns><c>true</c> when a nil-guard leaf was recognised.</returns>
-    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, out AccessPath target, out TypeSymbol underlying, out bool nonNilWhenTrue)
+    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, out AccessPath? target, out TypeSymbol? underlying, out bool nonNilWhenTrue)
     {
         target = null;
         underlying = null;
@@ -208,7 +210,7 @@ internal static class SmartCastStability
             return false;
         }
 
-        TypeSymbol targetType = null;
+        TypeSymbol? targetType = null;
         if (be.Left is BoundVariableExpression lv && IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(be.Right))
         {
             target = lv.Variable;
