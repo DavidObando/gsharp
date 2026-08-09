@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -42,10 +42,10 @@ public sealed class ConstructorSymbol
     public System.Collections.Immutable.ImmutableArray<ParameterSymbol> Parameters => Function.Parameters;
 
     /// <summary>Gets the owning class.</summary>
-    public StructSymbol DeclaringType => Function.ReceiverType as StructSymbol;
+    public StructSymbol? DeclaringType => Function.ReceiverType as StructSymbol;
 
     /// <summary>Gets the resolved explicit base-constructor initializer (<c>: base(args)</c>), or <c>null</c> when the constructor chains to a parameterless base constructor.</summary>
-    public BaseConstructorInitializer BaseInitializer { get; private set; }
+    public BaseConstructorInitializer? BaseInitializer { get; private set; }
 
     /// <summary>
     /// Gets a value indicating whether this constructor is a

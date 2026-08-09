@@ -3698,7 +3698,12 @@ internal sealed partial class ExpressionBinder
     {
         var fieldAccess = new BoundFieldAccessExpression(null, receiver, declaringType, field);
         var addressOf = new BoundAddressOfExpression(null, fieldAccess, unmanaged: true);
-        var elementPointer = PointerTypeSymbol.Get(field.FixedBufferElementType);
+        if (field.FixedBufferElementType is not { } elementType)
+        {
+            throw new InvalidOperationException("Fixed-buffer field is missing its element type.");
+        }
+
+        var elementPointer = PointerTypeSymbol.Get(elementType);
         return new BoundConversionExpression(null, elementPointer, addressOf);
     }
 }

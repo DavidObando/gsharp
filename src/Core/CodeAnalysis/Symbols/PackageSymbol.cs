@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -17,7 +17,7 @@ public sealed class PackageSymbol : Symbol
     /// Initializes a new instance of the <see cref="PackageSymbol"/> class.
     /// </summary>
     /// <param name="name">The name of the package.</param>
-    /// <param name="declaration">The declaration.</param>
+    /// <param name="declaration">The declaration, or <see langword="null"/> for synthesized package symbols.</param>
     public PackageSymbol(string name, PackageSyntax? declaration)
         : base(name)
     {
@@ -28,7 +28,7 @@ public sealed class PackageSymbol : Symbol
     public override SymbolKind Kind => SymbolKind.Package;
 
     /// <summary>
-    /// Gets the declaration of the package.
+    /// Gets the declaration of the package, or <see langword="null"/> for synthesized package symbols.
     /// </summary>
-    public PackageSyntax Declaration { get; }
+    public PackageSyntax? Declaration { get; }
 }

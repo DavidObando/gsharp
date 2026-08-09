@@ -2071,7 +2071,12 @@ internal sealed class TypeDefEmitter
     {
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteSerializedString(field.FixedBufferElementType.ClrType?.FullName ?? field.FixedBufferElementType.Name);
+        if (field.FixedBufferElementType is not { } elementType)
+        {
+            throw new InvalidOperationException("Fixed-buffer field is missing its element type.");
+        }
+
+        valueBlob.WriteSerializedString(elementType.ClrType?.FullName ?? elementType.Name);
         valueBlob.WriteInt32(field.FixedBufferLength);
         valueBlob.WriteUInt16(0);
 

@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -93,7 +93,7 @@ public sealed class FieldSymbol : Symbol
     public bool IsFixedBuffer { get; private set; }
 
     /// <summary>Gets the fixed-size buffer element type <c>T</c> (ADR-0122 §10 / issue #1035), or <c>null</c> for non-buffer fields.</summary>
-    public TypeSymbol FixedBufferElementType { get; private set; }
+    public TypeSymbol? FixedBufferElementType { get; private set; }
 
     /// <summary>Gets the fixed-size buffer element count <c>N</c> (ADR-0122 §10 / issue #1035), or 0 for non-buffer fields.</summary>
     public int FixedBufferLength { get; private set; }

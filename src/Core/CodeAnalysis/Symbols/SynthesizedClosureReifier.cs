@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -136,10 +136,12 @@ internal static class SynthesizedClosureReifier
                     ?? src.InterfaceConstraint;
             }
 
-            clone.ClrInterfaceConstraint =
-                StructSymbol.SubstituteTypeParameters(src.ClrInterfaceConstraint, subst);
-            clone.ClassConstraint =
-                StructSymbol.SubstituteTypeParameters(src.ClassConstraint, subst);
+            clone.ClrInterfaceConstraint = src.ClrInterfaceConstraint is { } clrInterfaceConstraint
+                ? StructSymbol.SubstituteTypeParameters(clrInterfaceConstraint, subst)
+                : null;
+            clone.ClassConstraint = src.ClassConstraint is { } classConstraint
+                ? StructSymbol.SubstituteTypeParameters(classConstraint, subst)
+                : null;
         }
 
         return ImmutableArray.Create(clones);
@@ -184,6 +186,9 @@ internal static class SynthesizedClosureReifier
             args.Add(tp);
         }
 
-        return StructSymbol.Construct(definition, args.MoveToImmutable(), mapClrType);
+        var typeArguments = args.MoveToImmutable();
+        return mapClrType is null
+            ? StructSymbol.Construct(definition, typeArguments)
+            : StructSymbol.Construct(definition, typeArguments, mapClrType);
     }
 }

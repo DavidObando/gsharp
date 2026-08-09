@@ -319,3 +319,9 @@ src/Core/CodeAnalysis/Symbols/TypeParameterSymbol.cs
 
 # Slice 58 -- accessor expression binding contracts.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.Accessor.cs
+
+# Slice 59 -- remaining symbol identity/member contracts.
+src/Core/CodeAnalysis/Symbols/ConstructorSymbol.cs
+src/Core/CodeAnalysis/Symbols/PackageSymbol.cs
+src/Core/CodeAnalysis/Symbols/FieldSymbol.cs
+src/Core/CodeAnalysis/Symbols/SynthesizedClosureReifier.cs
