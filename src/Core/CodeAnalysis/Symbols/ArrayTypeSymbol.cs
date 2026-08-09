@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 
@@ -21,7 +23,10 @@ public sealed class ArrayTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<(TypeSymbol Element, int Length), ArrayTypeSymbol> Cache = new();
 
     private ArrayTypeSymbol(TypeSymbol elementType, int length)
-        : base($"[{length}]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType())
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation element types.
+        : base($"[{length}]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType()!)
     {
         ElementType = elementType;
         Length = length;

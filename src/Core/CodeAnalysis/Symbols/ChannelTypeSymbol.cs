@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
@@ -22,7 +24,10 @@ public sealed class ChannelTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, ChannelTypeSymbol> Cache = new();
 
     private ChannelTypeSymbol(TypeSymbol elementType)
-        : base($"chan {elementType.Name}", MakeClrType(elementType))
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation element types.
+        : base($"chan {elementType.Name}", MakeClrType(elementType)!)
     {
         ElementType = elementType;
     }
@@ -53,7 +58,7 @@ public sealed class ChannelTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol elementType)
+    private static Type? MakeClrType(TypeSymbol elementType)
     {
         if (elementType.ClrType == null)
         {

@@ -248,3 +248,15 @@ src/Core/CodeAnalysis/Binding/StructuralProjectionPlan.cs
 
 # Slice 50 -- binding helper and expression binder state.
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Assignments.cs
+
+# Slice 51 -- composite type-symbol infrastructure: interned arrays, pointers,
+# collections, tuples, sequences, and function pointers.
+src/Core/CodeAnalysis/Symbols/ArrayTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/ByRefTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/ChannelTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/FunctionPointerTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/MapTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/PointerTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/SequenceTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/SliceTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.cs

@@ -2079,7 +2079,7 @@ internal sealed class MemberLookup
                     }
 
                     erased = TupleTypeSymbol.BuildClrType(erasedElements);
-                    return true;
+                    return erased != null;
                 }
 
             case StructSymbol:

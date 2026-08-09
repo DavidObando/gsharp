@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
@@ -111,7 +113,7 @@ public sealed class FunctionPointerTypeSymbol : TypeSymbol
     /// same-named parameter type loaded from different compilations) never
     /// alias in this process-wide cache.
     /// </summary>
-    private static string BuildIdentityKey(string kindTag, string callingConventionTag, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    private static string BuildIdentityKey(string kindTag, string? callingConventionTag, ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append('!').Append(kindTag);
