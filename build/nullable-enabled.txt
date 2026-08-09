@@ -168,3 +168,6 @@ src/Core/CodeAnalysis/Binding/BoundBinaryOperator.cs
 src/Core/CodeAnalysis/Binding/BlittableDetector.cs
 src/Core/CodeAnalysis/Binding/DelegateRefKindUtilities.cs
 src/Core/CodeAnalysis/Binding/EnumOperatorTable.cs
+# Slice 22 -- CLR metadata binding helpers.
+src/Core/CodeAnalysis/Binding/ExternalClrOverrideResolver.cs
+src/Core/CodeAnalysis/Binding/InterpolatedStringHandlerInfo.cs
