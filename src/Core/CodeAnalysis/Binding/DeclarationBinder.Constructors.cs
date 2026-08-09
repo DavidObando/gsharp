@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -34,8 +36,8 @@ internal sealed partial class DeclarationBinder
     private void BindBaseConstructorInitializer(
         StructDeclarationSyntax syntax,
         StructSymbol structSymbol,
-        StructSymbol baseClassSymbol,
-        TypeSymbol importedBaseType,
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType,
         ImmutableArray<ParameterSymbol> primaryCtorParameters)
     {
         if (!syntax.HasBaseConstructorArguments)
@@ -72,11 +74,13 @@ internal sealed partial class DeclarationBinder
     private void BindBaseConstructorInitializerCore(
         StructDeclarationSyntax syntax,
         StructSymbol structSymbol,
-        StructSymbol baseClassSymbol,
-        TypeSymbol importedBaseType,
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType,
         ImmutableArray<ParameterSymbol> primaryCtorParameters)
     {
-        var location = syntax.BaseConstructorOpenParenthesisToken.Location;
+        var location = Invariant.Required(
+            syntax.BaseConstructorOpenParenthesisToken,
+            "a base-constructor argument list has an opening parenthesis").Location;
 
         if (baseClassSymbol == null && importedBaseType == null)
         {
@@ -102,8 +106,8 @@ internal sealed partial class DeclarationBinder
         }
 
         ImmutableArray<BoundExpression>.Builder boundArguments;
-        BaseConstructorInitializer clrInit = null;
-        BaseConstructorInitializer gsharpInit = null;
+        BaseConstructorInitializer? clrInit = null;
+        BaseConstructorInitializer? gsharpInit = null;
         using (PushStaticMemberScope(structSymbol))
         {
             var staticScope = scope;
@@ -116,10 +120,13 @@ internal sealed partial class DeclarationBinder
                 }
             }
 
-            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.BaseConstructorArguments.Count);
-            for (var i = 0; i < syntax.BaseConstructorArguments.Count; i++)
+            var baseArguments = syntax.BaseConstructorArguments
+                ?? throw new InvalidOperationException(
+                    "Invariant violated: a base-constructor argument list has an opening parenthesis.");
+            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(baseArguments.Count);
+            for (var i = 0; i < baseArguments.Count; i++)
             {
-                boundArguments.Add(bindExpression(syntax.BaseConstructorArguments[i]));
+                boundArguments.Add(bindExpression(baseArguments[i]));
             }
 
             // Issue #1812: resolve (and, when needed, interpolation-rebind)
@@ -131,11 +138,16 @@ internal sealed partial class DeclarationBinder
             // See the matching comment in BindConstructorBaseInitializerCore.
             if (importedBaseType?.ClrType is System.Type clrBase)
             {
-                clrInit = ResolveClrBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, clrBase, boundArguments, location, i => syntax.BaseConstructorArguments[i]);
+                clrInit = ResolveClrBaseConstructor(i => baseArguments[i].Location, clrBase, boundArguments, location, i => baseArguments[i]);
             }
             else
             {
-                gsharpInit = ResolveGSharpBaseConstructor(i => syntax.BaseConstructorArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
+                gsharpInit = ResolveGSharpBaseConstructor(
+                    i => baseArguments[i].Location,
+                    structSymbol.Name,
+                    Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
+                    boundArguments,
+                    location);
             }
 
             scope = staticScope;
@@ -155,18 +167,18 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>Resolves a base-constructor initializer against an imported CLR base type's constructors (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no accessible constructor matches.</summary>
-    private BaseConstructorInitializer ResolveClrBaseConstructor(
+    private BaseConstructorInitializer? ResolveClrBaseConstructor(
         System.Func<int, TextLocation> argLocation,
         System.Type clrBase,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         TextLocation location,
-        System.Func<int, ExpressionSyntax> argSyntax = null)
+        System.Func<int, ExpressionSyntax>? argSyntax = null)
     {
         var ctors = ClrTypeUtilities.SafeGetConstructors(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
             .ToArray();
 
-        var argTypes = new System.Type[boundArguments.Count];
+        var argTypes = new System.Type?[boundArguments.Count];
         var argsAllTyped = true;
         for (var i = 0; i < boundArguments.Count; i++)
         {
@@ -182,7 +194,7 @@ internal sealed partial class DeclarationBinder
             argTypes[i] = t;
         }
 
-        ConstructorInfo bestCtor = null;
+        ConstructorInfo? bestCtor = null;
         var isExpanded = false;
         if (argsAllTyped)
         {
@@ -357,14 +369,14 @@ internal sealed partial class DeclarationBinder
     /// ordinary calls). Returns <see langword="null"/> when no argument
     /// qualifies or <paramref name="argSyntax"/> is unavailable.
     /// </summary>
-    private static System.Collections.Generic.IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(System.Func<int, ExpressionSyntax> argSyntax, int count)
+    private static System.Collections.Generic.IReadOnlyList<bool>? ComputeInterpolatedStringArgFlags(System.Func<int, ExpressionSyntax>? argSyntax, int count)
     {
         if (argSyntax == null)
         {
             return null;
         }
 
-        bool[] flags = null;
+        bool[]? flags = null;
         for (var i = 0; i < count; i++)
         {
             if (argSyntax(i) is InterpolatedStringExpressionSyntax)
@@ -378,10 +390,10 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>Resolves a base-constructor initializer against a GSharp base class's constructors (issue #306). Returns <c>null</c> (after reporting a diagnostic) when no match.</summary>
-    private BaseConstructorInitializer ResolveGSharpBaseConstructor(
+    private BaseConstructorInitializer? ResolveGSharpBaseConstructor(
         System.Func<int, TextLocation> argLocation,
         string derivedNameForDiag,
-        StructSymbol baseClassSymbol,
+        StructSymbol? baseClassSymbol,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         TextLocation location)
     {
@@ -443,13 +455,13 @@ internal sealed partial class DeclarationBinder
     /// selecting the best overload by argument types. Returns <c>null</c> (after
     /// reporting a diagnostic) when no accessible base constructor matches.
     /// </summary>
-    private BaseConstructorInitializer ResolveGSharpExplicitBaseConstructor(
+    private BaseConstructorInitializer? ResolveGSharpExplicitBaseConstructor(
         System.Func<int, TextLocation> argLocation,
         StructSymbol baseClassSymbol,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         TextLocation location)
     {
-        ConstructorSymbol best = null;
+        ConstructorSymbol? best = null;
         ImmutableArray<TypeSymbol> bestParamTypes = default;
         var bestExactMatches = -1;
         var ambiguous = false;
@@ -560,8 +572,8 @@ internal sealed partial class DeclarationBinder
         StructDeclarationSyntax syntax,
         StructSymbol structSymbol,
         PackageSymbol package,
-        StructSymbol baseClassSymbol,
-        TypeSymbol importedBaseType)
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType)
     {
         // ADR-0065 §5: a class with a primary-constructor parameter list and
         // no explicit `init(...)` body still needs ExplicitConstructors set up
@@ -584,7 +596,7 @@ internal sealed partial class DeclarationBinder
         // the overload set alongside the explicit bodies. Duplicate signatures
         // are diagnosed below by the same overload-equality check that catches
         // collisions between two user-declared init overloads.
-        ConstructorSymbol synthesizedPrimary = null;
+        ConstructorSymbol? synthesizedPrimary = null;
         if (structSymbol.IsClass && structSymbol.HasPrimaryConstructor)
         {
             synthesizedPrimary = SynthesizePrimaryConstructor(structSymbol, package);
@@ -614,7 +626,9 @@ internal sealed partial class DeclarationBinder
             // resolved BaseInitializer symbol.
             if (ctor.IsConvenience && ctorSyntax.HasBaseInitializer)
             {
-                Diagnostics.ReportConvenienceInitMayNotCallBase(ctorSyntax.BaseKeyword.Location, structSymbol.Name);
+                Diagnostics.ReportConvenienceInitMayNotCallBase(
+                    Invariant.Required(ctorSyntax.BaseKeyword, "a constructor with a base initializer has a base keyword").Location,
+                    structSymbol.Name);
             }
 
             var duplicate = false;
@@ -738,15 +752,17 @@ internal sealed partial class DeclarationBinder
         ConstructorDeclarationSyntax ctorSyntax,
         StructSymbol structSymbol,
         PackageSymbol package,
-        StructSymbol baseClassSymbol,
-        TypeSymbol importedBaseType)
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType)
     {
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
         var seenParameterNames = new HashSet<string>();
         foreach (var parameterSyntax in ctorSyntax.Parameters)
         {
             var parameterName = parameterSyntax.Identifier.Text;
-            var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+            var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                : TypeSymbol.Error;
 
             // ADR-0101 follow-up / issue #812: variadic parameters are now
             // accepted on explicit `init(...)` constructors. The body sees
@@ -851,10 +867,12 @@ internal sealed partial class DeclarationBinder
         ConstructorSymbol constructorSymbol,
         FunctionSymbol ctorFunction,
         StructSymbol structSymbol,
-        StructSymbol baseClassSymbol,
-        TypeSymbol importedBaseType)
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType)
     {
-        var location = ctorSyntax.BaseKeyword.Location;
+        var location = Invariant.Required(
+            ctorSyntax.BaseKeyword,
+            "a constructor base initializer has a base keyword").Location;
 
         // Issue #1194: expose the enclosing type's static members (consts, static
         // fields/properties, static methods) and — because this runs after all
@@ -872,7 +890,7 @@ internal sealed partial class DeclarationBinder
         }
 
         ImmutableArray<BoundExpression>.Builder boundArguments;
-        BaseConstructorInitializer init = null;
+        BaseConstructorInitializer? init = null;
         using (PushStaticMemberScope(structSymbol))
         {
             var staticScope = scope;
@@ -911,7 +929,12 @@ internal sealed partial class DeclarationBinder
             }
             else
             {
-                init = ResolveGSharpBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, structSymbol.Name, baseClassSymbol, boundArguments, location);
+                init = ResolveGSharpBaseConstructor(
+                    i => ctorSyntax.BaseArguments[i].Location,
+                    structSymbol.Name,
+                    Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
+                    boundArguments,
+                    location);
             }
 
             scope = staticScope;

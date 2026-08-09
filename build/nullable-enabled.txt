@@ -189,3 +189,5 @@ src/Core/CodeAnalysis/Binding/DeclarationBinder.cs
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.cs
 # Slice 28 -- interface declaration binding and member contracts.
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Interfaces.cs
+# Slice 29 -- constructor and destructor declaration binding.
+src/Core/CodeAnalysis/Binding/DeclarationBinder.Constructors.cs
