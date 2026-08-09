@@ -253,7 +253,11 @@ internal sealed partial class ExpressionBinder
                 terminalCall, typeSimpleName, noApplicableOverload, ref result);
         if (handled && terminalObjectCreation != null)
         {
-            result = BindObjectInitializerSuffix(terminalObjectCreation, result);
+            result = BindObjectInitializerSuffix(
+                terminalObjectCreation,
+                Invariant.Required(
+                    result,
+                    "a successful qualified constructor binding produces a bound target"));
         }
 
         return handled;
