@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -320,8 +322,8 @@ internal sealed partial class DeclarationBinder
             // with the same name; pick the one whose signature matches
             // this specific interface overload exactly.
             var implCandidates = structSymbol.GetMethodsIncludingInherited(imethod.Name);
-            FunctionSymbol impl = null;
-            FunctionSymbol signatureMatch = null;
+            FunctionSymbol? impl = null;
+            FunctionSymbol? signatureMatch = null;
             foreach (var candidate in implCandidates)
             {
                 impl ??= candidate;
@@ -676,7 +678,7 @@ internal sealed partial class DeclarationBinder
         TypeSymbol implementationType,
         TypeSymbol interfaceType,
         bool hasSetter,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
             GetInterfacePropertySlotType(interfaceType, typeParameterMap),
@@ -695,15 +697,17 @@ internal sealed partial class DeclarationBinder
 
     internal static TypeSymbol GetInterfacePropertySlotType(
         TypeSymbol type,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
-        => StructSymbol.SubstituteTypeParameters(
-            type,
-            typeParameterMap,
-            eraseReferenceNullability: true);
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
+        => typeParameterMap == null
+            ? type
+            : StructSymbol.SubstituteTypeParameters(
+                type,
+                typeParameterMap,
+                eraseReferenceNullability: true);
 
     private static TypeSymbol SubstituteInterfacePropertyType(
         TypeSymbol interfaceType,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         if (typeParameterMap == null)
         {
@@ -715,7 +719,7 @@ internal sealed partial class DeclarationBinder
 
     internal static TypeSymbol GetInterfacePropertyExpectedType(
         TypeSymbol interfaceType,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         var substituted = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
         if (interfaceType is NullableTypeSymbol { UnderlyingType: TypeParameterSymbol declaredTypeParameter }
@@ -734,12 +738,12 @@ internal sealed partial class DeclarationBinder
     private static bool TryGetConstructedInterfacePropertyImplementation(
         StructSymbol structSymbol,
         PropertySymbol interfaceProperty,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap,
-        out PropertySymbol implementation,
-        out PropertySymbol typeMismatch)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap,
+        out PropertySymbol? implementation,
+        out PropertySymbol? typeMismatch)
     {
         typeMismatch = null;
-        for (var current = structSymbol; current != null; current = current.BaseClass)
+        for (StructSymbol? current = structSymbol; current != null; current = current.BaseClass)
         {
             foreach (var candidate in current.Properties)
             {
@@ -792,7 +796,7 @@ internal sealed partial class DeclarationBinder
     private static bool HasMatchingImportedBaseProperty(
         StructSymbol structSymbol,
         PropertySymbol interfaceProperty,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         var importedBase = TypeMemberModel.GetNearestImportedBase(structSymbol);
         if (importedBase?.ClrType == null)
@@ -916,7 +920,7 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            EventSymbol implementation = null;
+            EventSymbol? implementation = null;
             for (var type = structSymbol; type != null && implementation == null; type = type.BaseClass)
             {
                 foreach (var candidate in type.Events)
@@ -1037,12 +1041,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var slot = (method.ExplicitInterfaceClauseTarget, method.Name);
+                var target = method.ExplicitInterfaceClauseTarget;
+                var slot = (target, method.Name);
                 if (seenSlots.ContainsKey(slot))
                 {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
-                        method.Declaration.Identifier.Location,
-                        method.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(method.Declaration, "an explicit interface method has a declaration").Identifier.Location,
+                        target.Name,
                         method.Name);
                     continue;
                 }
@@ -1052,8 +1057,8 @@ internal sealed partial class DeclarationBinder
                 if (method.ExplicitInterfaceMember == null && method.ExplicitInterfaceSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
-                        method.Declaration.Identifier.Location,
-                        method.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(method.Declaration, "an explicit interface method has a declaration").Identifier.Location,
+                        target.Name,
                         method.Name);
                 }
             }
@@ -1068,12 +1073,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var slot = (prop.ExplicitInterfaceClauseTarget, prop.Name);
+                var target = prop.ExplicitInterfaceClauseTarget;
+                var slot = (target, prop.Name);
                 if (seenSlots.ContainsKey(slot))
                 {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
-                        prop.Declaration.Identifier.Location,
-                        prop.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(prop.Declaration, "an explicit interface property has a declaration").Identifier.Location,
+                        target.Name,
                         prop.Name);
                     continue;
                 }
@@ -1085,8 +1091,8 @@ internal sealed partial class DeclarationBinder
                     && prop.ExplicitInterfaceSetterSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
-                        prop.Declaration.Identifier.Location,
-                        prop.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(prop.Declaration, "an explicit interface property has a declaration").Identifier.Location,
+                        target.Name,
                         prop.Name);
                 }
             }
@@ -1105,12 +1111,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var slot = (evt.ExplicitInterfaceClauseTarget, evt.Name);
+                var target = evt.ExplicitInterfaceClauseTarget;
+                var slot = (target, evt.Name);
                 if (seenSlots.ContainsKey(slot))
                 {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
-                        evt.Declaration.Identifier.Location,
-                        evt.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(evt.Declaration, "an explicit interface event has a declaration").Identifier.Location,
+                        target.Name,
                         evt.Name);
                     continue;
                 }
@@ -1122,8 +1129,8 @@ internal sealed partial class DeclarationBinder
                     && evt.ExplicitInterfaceRemoveSlot == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
-                        evt.Declaration.Identifier.Location,
-                        evt.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(evt.Declaration, "an explicit interface event has a declaration").Identifier.Location,
+                        target.Name,
                         evt.Name);
                 }
             }
@@ -1147,12 +1154,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var slot = (method.ExplicitInterfaceClauseTarget, method.Name);
+                var target = method.ExplicitInterfaceClauseTarget;
+                var slot = (target, method.Name);
                 if (seenStaticSlots.ContainsKey(slot))
                 {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
-                        method.Declaration.Identifier.Location,
-                        method.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(method.Declaration, "an explicit interface method has a declaration").Identifier.Location,
+                        target.Name,
                         method.Name);
                     continue;
                 }
@@ -1162,8 +1170,8 @@ internal sealed partial class DeclarationBinder
                 if (method.ExplicitInterfaceMember == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
-                        method.Declaration.Identifier.Location,
-                        method.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(method.Declaration, "an explicit interface method has a declaration").Identifier.Location,
+                        target.Name,
                         method.Name);
                 }
             }
@@ -1178,12 +1186,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var slot = (prop.ExplicitInterfaceClauseTarget, prop.Name);
+                var target = prop.ExplicitInterfaceClauseTarget;
+                var slot = (target, prop.Name);
                 if (seenStaticSlots.ContainsKey(slot))
                 {
                     Diagnostics.ReportDuplicateExplicitInterfaceImplementation(
-                        prop.Declaration.Identifier.Location,
-                        prop.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(prop.Declaration, "an explicit interface property has a declaration").Identifier.Location,
+                        target.Name,
                         prop.Name);
                     continue;
                 }
@@ -1193,8 +1202,8 @@ internal sealed partial class DeclarationBinder
                 if (prop.ExplicitInterfaceMember == null)
                 {
                     Diagnostics.ReportExplicitInterfaceClauseMemberNotFound(
-                        prop.Declaration.Identifier.Location,
-                        prop.ExplicitInterfaceClauseTarget.Name,
+                        Invariant.Required(prop.Declaration, "an explicit interface property has a declaration").Identifier.Location,
+                        target.Name,
                         prop.Name);
                 }
             }
@@ -1422,7 +1431,7 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                PropertySymbol match = null;
+                PropertySymbol? match = null;
                 var typeParameterMap = BuildInterfaceTypeParameterMap(iface);
                 foreach (var candidate in structSymbol.StaticProperties)
                 {
@@ -1731,7 +1740,7 @@ internal sealed partial class DeclarationBinder
                         structSymbol,
                         interfaceName,
                         clrProp.Name,
-                        clrProp.SetMethod,
+                        Invariant.Required(clrProp.SetMethod, "an interface property requiring a setter has a setter"),
                         implProp);
                 }
             }
@@ -1965,7 +1974,7 @@ internal sealed partial class DeclarationBinder
     private static bool TryFindInstanceMemberReference(
         SyntaxNode node,
         HashSet<string> forbiddenNames,
-        out string offendingName,
+        out string? offendingName,
         out TextLocation offendingLocation) =>
         TryFindInstanceMemberReference(node, forbiddenNames, new HashSet<string>(StringComparer.Ordinal), out offendingName, out offendingLocation);
 
@@ -1990,7 +1999,7 @@ internal sealed partial class DeclarationBinder
         SyntaxNode node,
         HashSet<string> forbiddenNames,
         HashSet<string> shadowedNames,
-        out string offendingName,
+        out string? offendingName,
         out TextLocation offendingLocation)
     {
         switch (node)
@@ -2147,7 +2156,7 @@ internal sealed partial class DeclarationBinder
     /// precise flow-sensitive scoping. Returns <c>null</c> when the node
     /// introduces no such bindings.
     /// </summary>
-    private static IEnumerable<string> GetSequentiallyDeclaredNames(SyntaxNode node)
+    private static IEnumerable<string>? GetSequentiallyDeclaredNames(SyntaxNode node)
     {
         switch (node)
         {
@@ -2205,7 +2214,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="fieldType">The declared const field type.</param>
     /// <param name="value">The folded constant value on success.</param>
     /// <returns>True when a compile-time constant was produced.</returns>
-    private static bool TryFoldConstantFieldValue(BoundExpression bound, TypeSymbol fieldType, out object value)
+    private static bool TryFoldConstantFieldValue(BoundExpression bound, TypeSymbol fieldType, out object? value)
     {
         value = null;
         if (!TryEvaluateConstant(bound, out var raw))
@@ -2253,7 +2262,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="bound">The bound expression.</param>
     /// <param name="value">The constant value on success.</param>
     /// <returns>True when the expression is a compile-time constant.</returns>
-    private static bool TryEvaluateConstant(BoundExpression bound, out object value)
+    private static bool TryEvaluateConstant(BoundExpression bound, out object? value)
     {
         switch (bound)
         {
@@ -2303,7 +2312,7 @@ internal sealed partial class DeclarationBinder
     /// const-field feature commonly needs: numeric arithmetic and string
     /// concatenation. Returns <c>null</c> for unsupported shapes.
     /// </summary>
-    private static object FoldBinary(BoundBinaryOperatorKind kind, object left, object right)
+    private static object? FoldBinary(BoundBinaryOperatorKind kind, object left, object right)
     {
         if (left is string || right is string)
         {
@@ -2323,7 +2332,7 @@ internal sealed partial class DeclarationBinder
                 BoundBinaryOperatorKind.Difference => ld - rd,
                 BoundBinaryOperatorKind.Product => ld * rd,
                 BoundBinaryOperatorKind.Quotient when rd != 0 => ld / rd,
-                _ => (object)null,
+                _ => null,
             };
         }
 
@@ -2337,7 +2346,7 @@ internal sealed partial class DeclarationBinder
                 BoundBinaryOperatorKind.Difference => ld - rd,
                 BoundBinaryOperatorKind.Product => ld * rd,
                 BoundBinaryOperatorKind.Quotient when rd != 0 => ld / rd,
-                _ => (object)null,
+                _ => null,
             };
         }
 
@@ -2366,7 +2375,7 @@ internal sealed partial class DeclarationBinder
             BoundBinaryOperatorKind.BitwiseAnd => li & ri,
             BoundBinaryOperatorKind.BitwiseOr => li | ri,
             BoundBinaryOperatorKind.BitwiseXor => li ^ ri,
-            _ => (object)null,
+            _ => null,
         };
     }
 
@@ -2382,7 +2391,7 @@ internal sealed partial class DeclarationBinder
     /// other folded arithmetic ops use; 64-bit results keep their CLR type so
     /// downstream narrowing to the declared const field type stays correct.
     /// </summary>
-    private static object FoldShift(BoundBinaryOperatorKind kind, object left, object right)
+    private static object? FoldShift(BoundBinaryOperatorKind kind, object left, object right)
     {
         if (!TryToInt64(right, out var rawCount))
         {
@@ -2440,7 +2449,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static object NegateIfNeeded(object operand, bool negate)
+    private static object? NegateIfNeeded(object operand, bool negate)
     {
         if (!negate)
         {
@@ -2460,7 +2469,7 @@ internal sealed partial class DeclarationBinder
         };
     }
 
-    private static string GetBaseClauseTypeDisplayName(TypeClauseSyntax typeClause)
+    private static string GetBaseClauseTypeDisplayName(TypeClauseSyntax? typeClause)
     {
         if (typeClause == null)
         {
@@ -2473,10 +2482,11 @@ internal sealed partial class DeclarationBinder
             return dotted;
         }
 
-        var args = new string[typeClause.TypeArguments.Count];
-        for (var i = 0; i < typeClause.TypeArguments.Count; i++)
+        var typeArguments = Invariant.Required(typeClause.TypeArguments, "a type clause with type arguments has an argument list");
+        var args = new string[typeArguments.Count];
+        for (var i = 0; i < typeArguments.Count; i++)
         {
-            args[i] = GetBaseClauseTypeDisplayName(typeClause.TypeArguments[i]);
+            args[i] = GetBaseClauseTypeDisplayName(typeArguments[i]);
         }
 
         return $"{dotted}[{string.Join(", ", args)}]";

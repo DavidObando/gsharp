@@ -225,3 +225,5 @@ src/Core/CodeAnalysis/Binding/StatementBinder.Conditionals.cs
 # Slice 44 -- statement binder dispatch and loop/control-flow binding.
 src/Core/CodeAnalysis/Binding/StatementBinder.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Loops.cs
+# Slice 45 -- declaration binder interface implementation verification.
+src/Core/CodeAnalysis/Binding/DeclarationBinder.InterfaceVerification.cs

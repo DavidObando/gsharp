@@ -70,7 +70,7 @@ public sealed class FieldSymbol : Symbol
     /// field initializer to a literal and writes it here; the emitter uses it
     /// to add the <c>Constant</c> metadata row and to inline const-field reads.
     /// </summary>
-    public object ConstantValue { get; private set; }
+    public object? ConstantValue { get; private set; }
 
     /// <summary>
     /// Gets the explicit byte offset declared via <c>@FieldOffset(N)</c>
@@ -103,7 +103,7 @@ public sealed class FieldSymbol : Symbol
     /// called once by the binder after folding the initializer to a literal.
     /// </summary>
     /// <param name="value">The compile-time constant value.</param>
-    public void SetConstantValue(object value)
+    public void SetConstantValue(object? value)
     {
         ConstantValue = value;
     }
