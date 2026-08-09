@@ -48,6 +48,6 @@ internal readonly record struct PendingGenericParameter(
     GenericParameterAttributes Attributes,
     string Name,
     ushort Index,
-    GSharp.Core.CodeAnalysis.Symbols.TypeSymbol InterfaceConstraintType,
+    GSharp.Core.CodeAnalysis.Symbols.TypeSymbol? InterfaceConstraintType,
     bool HasUnmanagedConstraint = false,
     EntityHandle? PreResolvedConstraintHandle = null);

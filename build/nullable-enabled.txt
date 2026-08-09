@@ -312,3 +312,7 @@ src/Core/CodeAnalysis/Symbols/ImplicitFieldVariableSymbol.cs
 src/Core/CodeAnalysis/Symbols/ImplicitPropertyVariableSymbol.cs
 src/Core/CodeAnalysis/Symbols/ImplicitStaticFieldVariableSymbol.cs
 src/Core/CodeAnalysis/Symbols/ImplicitStaticPropertyVariableSymbol.cs
+
+# Slice 57 -- final generic parameter and symbol presentation contracts.
+src/Core/CodeAnalysis/Symbols/SymbolPrinter.cs
+src/Core/CodeAnalysis/Symbols/TypeParameterSymbol.cs

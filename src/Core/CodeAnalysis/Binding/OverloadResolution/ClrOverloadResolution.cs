@@ -4291,7 +4291,7 @@ internal static class ClrOverloadResolution
                 || UserInterfaceSatisfies(typeParameter.InterfaceConstraint, constraint));
     }
 
-    private static bool UserInterfaceSatisfies(InterfaceSymbol userInterface, Type constraint)
+    private static bool UserInterfaceSatisfies(InterfaceSymbol? userInterface, Type constraint)
     {
         if (userInterface == null)
         {
