@@ -1496,7 +1496,8 @@ internal sealed partial class ExpressionBinder
             strict: false,
             explicitNames,
             out var plan,
-            out _))
+            out _)
+            || plan is not { } resolvedPlan)
         {
             var failedValues = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
             var failedOrder = ImmutableArray.CreateBuilder<string>(syntax.Initializers.Count);
@@ -1515,6 +1516,7 @@ internal sealed partial class ExpressionBinder
                 explicitOrder: failedOrder.ToImmutable());
         }
 
+        plan = resolvedPlan;
         var slotTypes = new Dictionary<string, TypeSymbol>(StringComparer.Ordinal);
         foreach (var slot in plan.ConstructorSlots.Concat(plan.InitializerSlots))
         {

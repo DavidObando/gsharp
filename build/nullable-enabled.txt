@@ -242,3 +242,6 @@ src/Core/CodeAnalysis/Binding/RefStructAsyncLivenessAnalyzer.cs
 src/Core/CodeAnalysis/Binding/SubmissionImports.cs
 # Slice 48 -- struct and class declaration body binding.
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Structs.cs
+
+# Slice 49 -- structural projection planning contracts.
+src/Core/CodeAnalysis/Binding/StructuralProjectionPlan.cs

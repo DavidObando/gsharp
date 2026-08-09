@@ -3081,7 +3081,8 @@ internal sealed class ConversionClassifier
             strict,
             explicitNames,
             out var plan,
-            out var failure))
+            out var failure)
+            || plan is not { } resolvedPlan)
         {
             if (expression.Type != TypeSymbol.Error && targetType != TypeSymbol.Error)
             {
@@ -3102,6 +3103,7 @@ internal sealed class ConversionClassifier
             return new BoundErrorExpression(expression.Syntax);
         }
 
+        plan = resolvedPlan;
         var sourceTemp = new LocalVariableSymbol(
             $"<projectionSource{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             isReadOnly: true,
@@ -3141,7 +3143,7 @@ internal sealed class ConversionClassifier
         }
 
         if (plan.Construction.Kind == StructuralProjectionConstructionKind.UserDefault
-            && !plan.Construction.UserType.IsClass)
+            && plan.Construction.UserType is { IsClass: false } userType)
         {
             var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>(plan.InitializerSlots.Length);
             var initializedFields = new HashSet<FieldSymbol>();
@@ -3168,7 +3170,7 @@ internal sealed class ConversionClassifier
                 }
             }
 
-            foreach (var field in plan.Construction.UserType.Fields)
+            foreach (var field in userType.Fields)
             {
                 if (initializedFields.Contains(field))
                 {
@@ -3190,7 +3192,7 @@ internal sealed class ConversionClassifier
                 }
             }
 
-            var literal = new BoundStructLiteralExpression(expression.Syntax, plan.Construction.UserType, initializers.ToImmutable());
+            var literal = new BoundStructLiteralExpression(expression.Syntax, userType, initializers.ToImmutable());
             return new BoundBlockExpression(expression.Syntax, statements.ToImmutable(), literal);
         }
 
@@ -3198,21 +3200,21 @@ internal sealed class ConversionClassifier
         {
             StructuralProjectionConstructionKind.UserDefault => new BoundConstructorCallExpression(
                 expression.Syntax,
-                plan.Construction.UserType,
+                Invariant.Required(plan.Construction.UserType, "a user default projection has a target type"),
                 ImmutableArray<BoundExpression>.Empty),
             StructuralProjectionConstructionKind.UserPrimary => new BoundConstructorCallExpression(
                 expression.Syntax,
-                plan.Construction.UserType,
+                Invariant.Required(plan.Construction.UserType, "a user primary projection has a target type"),
                 constructorArguments.ToImmutable()),
             StructuralProjectionConstructionKind.UserExplicit => new BoundConstructorCallExpression(
                 expression.Syntax,
-                plan.Construction.UserType,
+                Invariant.Required(plan.Construction.UserType, "a user explicit projection has a target type"),
                 constructorArguments.ToImmutable(),
                 plan.Construction.UserConstructor),
             StructuralProjectionConstructionKind.ClrConstructor => new BoundClrConstructorCallExpression(
                 expression.Syntax,
-                targetType.ClrType,
-                plan.Construction.ClrConstructor,
+                Invariant.Required(targetType.ClrType, "a CLR projection has a CLR target type"),
+                Invariant.Required(plan.Construction.ClrConstructor, "a CLR constructor projection has a constructor"),
                 constructorArguments.ToImmutable(),
                 targetType),
             StructuralProjectionConstructionKind.ClrDefaultValue => new BoundDefaultExpression(expression.Syntax, targetType),
@@ -3244,7 +3246,7 @@ internal sealed class ConversionClassifier
                 assignment = new BoundFieldAssignmentExpression(
                     expression.Syntax,
                     targetTemp,
-                    slot.TargetDeclaringType,
+                    Invariant.Required(slot.TargetDeclaringType, "a user field projection has a declaring type"),
                     slot.TargetField,
                     value);
             }
@@ -3253,7 +3255,7 @@ internal sealed class ConversionClassifier
                 assignment = new BoundPropertyAssignmentExpression(
                     expression.Syntax,
                     receiver,
-                    slot.TargetDeclaringType,
+                    Invariant.Required(slot.TargetDeclaringType, "a user property projection has a declaring type"),
                     slot.TargetProperty,
                     value);
             }
@@ -3262,7 +3264,7 @@ internal sealed class ConversionClassifier
                 assignment = new BoundClrPropertyAssignmentExpression(
                     expression.Syntax,
                     receiver,
-                    slot.TargetClrMember,
+                    Invariant.Required(slot.TargetClrMember, "a CLR projection has a target member"),
                     value,
                     slot.TargetType,
                     staticContainerType: null);
@@ -3335,15 +3337,27 @@ internal sealed class ConversionClassifier
         BoundExpression read;
         if (source.Field != null)
         {
-            read = new BoundFieldAccessExpression(syntax, receiver, source.DeclaringType, source.Field);
+            read = new BoundFieldAccessExpression(
+                syntax,
+                receiver,
+                Invariant.Required(source.DeclaringType, "a user projection field has a declaring type"),
+                source.Field);
         }
         else if (source.Property != null)
         {
-            read = new BoundPropertyAccessExpression(syntax, receiver, source.DeclaringType, source.Property);
+            read = new BoundPropertyAccessExpression(
+                syntax,
+                receiver,
+                Invariant.Required(source.DeclaringType, "a user projection property has a declaring type"),
+                source.Property);
         }
         else
         {
-            read = new BoundClrPropertyAccessExpression(syntax, receiver, source.ClrMember, source.Type);
+            read = new BoundClrPropertyAccessExpression(
+                syntax,
+                receiver,
+                Invariant.Required(source.ClrMember, "a CLR projection source has a member"),
+                source.Type);
         }
 
         return BindConversion(diagnosticLocation, read, slot.TargetType);

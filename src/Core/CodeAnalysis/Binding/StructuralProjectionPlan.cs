@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -66,9 +66,9 @@ internal sealed class StructuralProjectionConstruction
 {
     public StructuralProjectionConstruction(
         StructuralProjectionConstructionKind kind,
-        StructSymbol userType = null,
-        ConstructorSymbol userConstructor = null,
-        ConstructorInfo clrConstructor = null)
+        StructSymbol? userType = null,
+        ConstructorSymbol? userConstructor = null,
+        ConstructorInfo? clrConstructor = null)
     {
         Kind = kind;
         UserType = userType;
@@ -78,11 +78,11 @@ internal sealed class StructuralProjectionConstruction
 
     public StructuralProjectionConstructionKind Kind { get; }
 
-    public StructSymbol UserType { get; }
+    public StructSymbol? UserType { get; }
 
-    public ConstructorSymbol UserConstructor { get; }
+    public ConstructorSymbol? UserConstructor { get; }
 
-    public ConstructorInfo ClrConstructor { get; }
+    public ConstructorInfo? ClrConstructor { get; }
 }
 
 internal sealed class StructuralProjectionSlot
@@ -90,13 +90,13 @@ internal sealed class StructuralProjectionSlot
     public StructuralProjectionSlot(
         string name,
         TypeSymbol targetType,
-        StructuralProjectionSourceMember source,
-        FieldSymbol targetField = null,
-        StructSymbol targetDeclaringType = null,
-        PropertySymbol targetProperty = null,
-        MemberInfo targetClrMember = null,
-        ParameterSymbol userDefaultParameter = null,
-        ParameterInfo clrDefaultParameter = null)
+        StructuralProjectionSourceMember? source,
+        FieldSymbol? targetField = null,
+        StructSymbol? targetDeclaringType = null,
+        PropertySymbol? targetProperty = null,
+        MemberInfo? targetClrMember = null,
+        ParameterSymbol? userDefaultParameter = null,
+        ParameterInfo? clrDefaultParameter = null)
     {
         Name = name;
         TargetType = targetType;
@@ -117,19 +117,19 @@ internal sealed class StructuralProjectionSlot
     /// Gets the selected source member, or <see langword="null"/> when an
     /// explicit target-literal initializer supplies this slot.
     /// </summary>
-    public StructuralProjectionSourceMember Source { get; }
+    public StructuralProjectionSourceMember? Source { get; }
 
-    public FieldSymbol TargetField { get; }
+    public FieldSymbol? TargetField { get; }
 
-    public StructSymbol TargetDeclaringType { get; }
+    public StructSymbol? TargetDeclaringType { get; }
 
-    public PropertySymbol TargetProperty { get; }
+    public PropertySymbol? TargetProperty { get; }
 
-    public MemberInfo TargetClrMember { get; }
+    public MemberInfo? TargetClrMember { get; }
 
-    public ParameterSymbol UserDefaultParameter { get; }
+    public ParameterSymbol? UserDefaultParameter { get; }
 
-    public ParameterInfo ClrDefaultParameter { get; }
+    public ParameterInfo? ClrDefaultParameter { get; }
 }
 
 internal sealed class StructuralProjectionSourceMember
@@ -137,10 +137,10 @@ internal sealed class StructuralProjectionSourceMember
     public StructuralProjectionSourceMember(
         string name,
         TypeSymbol type,
-        FieldSymbol field = null,
-        StructSymbol declaringType = null,
-        PropertySymbol property = null,
-        MemberInfo clrMember = null)
+        FieldSymbol? field = null,
+        StructSymbol? declaringType = null,
+        PropertySymbol? property = null,
+        MemberInfo? clrMember = null)
     {
         Name = name;
         Type = type;
@@ -154,13 +154,13 @@ internal sealed class StructuralProjectionSourceMember
 
     public TypeSymbol Type { get; }
 
-    public FieldSymbol Field { get; }
+    public FieldSymbol? Field { get; }
 
-    public StructSymbol DeclaringType { get; }
+    public StructSymbol? DeclaringType { get; }
 
-    public PropertySymbol Property { get; }
+    public PropertySymbol? Property { get; }
 
-    public MemberInfo ClrMember { get; }
+    public MemberInfo? ClrMember { get; }
 }
 
 internal static class StructuralProjectionPlanner
@@ -175,8 +175,8 @@ internal static class StructuralProjectionPlanner
         TypeSymbol? target,
         bool strict,
         ISet<string>? explicitMemberNames,
-        out StructuralProjectionPlan plan,
-        out string failure)
+        out StructuralProjectionPlan? plan,
+        out string? failure)
     {
         plan = null;
         failure = null;
@@ -214,9 +214,9 @@ internal static class StructuralProjectionPlanner
         StructSymbol target,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
         bool strict,
-        ISet<string> explicitNames,
-        out StructuralProjectionPlan plan,
-        out string failure)
+        ISet<string>? explicitNames,
+        out StructuralProjectionPlan? plan,
+        out string? failure)
     {
         plan = null;
         failure = null;
@@ -248,12 +248,13 @@ internal static class StructuralProjectionPlanner
                 continue;
             }
 
-            if (!TryCreateSlot(parameter.Name, parameterType, sourceMembers, explicitNames, required: true, out var slot, out failure))
+            if (!TryCreateSlot(parameter.Name, parameterType, sourceMembers, explicitNames, required: true, out var slot, out failure)
+                || slot is not { } resolvedSlot)
             {
                 return false;
             }
 
-            constructorSlots.Add(slot);
+            constructorSlots.Add(resolvedSlot);
         }
 
         var initializerSlots = ImmutableArray.CreateBuilder<StructuralProjectionSlot>();
@@ -320,12 +321,12 @@ internal static class StructuralProjectionPlanner
         return HasMappedSlot(plan, explicitNames);
     }
 
-    private static StructuralProjectionConstruction SelectUserConstruction(
+    private static StructuralProjectionConstruction? SelectUserConstruction(
         StructSymbol target,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
-        ISet<string> explicitNames,
+        ISet<string>? explicitNames,
         out ImmutableArray<(ParameterSymbol Parameter, TypeSymbol Type)> parameters,
-        out string failure)
+        out string? failure)
     {
         failure = null;
         if (target.HasPrimaryConstructor)
@@ -339,7 +340,7 @@ internal static class StructuralProjectionPlanner
         var explicitConstructors = target.EffectiveExplicitConstructors;
         if (!explicitConstructors.IsDefaultOrEmpty)
         {
-            ConstructorSymbol selected = null;
+            ConstructorSymbol? selected = null;
             foreach (var candidate in explicitConstructors)
             {
                 if (candidate.Function.Accessibility != Accessibility.Public
@@ -392,9 +393,9 @@ internal static class StructuralProjectionPlanner
         TypeSymbol target,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
         bool strict,
-        ISet<string> explicitNames,
-        out StructuralProjectionPlan plan,
-        out string failure)
+        ISet<string>? explicitNames,
+        out StructuralProjectionPlan? plan,
+        out string? failure)
     {
         plan = null;
         failure = null;
@@ -404,7 +405,7 @@ internal static class StructuralProjectionPlanner
             return false;
         }
 
-        ConstructorInfo constructor = null;
+        ConstructorInfo? constructor = null;
         ParameterInfo[] constructorParameters = Array.Empty<ParameterInfo>();
         var constructors = ClrTypeUtilities.SafeGetConstructors(clrType, PublicInstance);
         if (!clrType.IsValueType)
@@ -472,6 +473,12 @@ internal static class StructuralProjectionPlanner
         foreach (var parameter in constructorParameters)
         {
             var parameterName = parameter.Name;
+            if (string.IsNullOrEmpty(parameterName))
+            {
+                failure = $"Type '{target}' has a constructor parameter without a name.";
+                return false;
+            }
+
             var parameterType = TypeSymbol.FromClrType(parameter.ParameterType);
             targetNames.Add(parameterName);
             if (explicitNames?.Contains(parameterName) != true
@@ -486,12 +493,13 @@ internal static class StructuralProjectionPlanner
                 continue;
             }
 
-            if (!TryCreateSlot(parameterName, parameterType, sourceMembers, explicitNames, required: true, out var slot, out failure))
+            if (!TryCreateSlot(parameterName, parameterType, sourceMembers, explicitNames, required: true, out var slot, out failure)
+                || slot is not { } resolvedSlot)
             {
                 return false;
             }
 
-            constructorSlots.Add(slot);
+            constructorSlots.Add(resolvedSlot);
         }
 
         var initializerSlots = ImmutableArray.CreateBuilder<StructuralProjectionSlot>();
@@ -558,10 +566,10 @@ internal static class StructuralProjectionPlanner
         string name,
         TypeSymbol targetType,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
-        ISet<string> explicitNames,
+        ISet<string>? explicitNames,
         bool required,
-        out StructuralProjectionSlot slot,
-        out string failure)
+        out StructuralProjectionSlot? slot,
+        out string? failure)
     {
         failure = null;
         if (explicitNames?.Contains(name) == true)
@@ -597,7 +605,7 @@ internal static class StructuralProjectionPlanner
         ImmutableArray<ParameterSymbol> parameters,
         ImmutableArray<TypeSymbol> parameterTypes,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
-        ISet<string> explicitNames)
+        ISet<string>? explicitNames)
     {
         for (var i = 0; i < parameters.Length; i++)
         {
@@ -628,7 +636,7 @@ internal static class StructuralProjectionPlanner
     private static bool ParametersCanBeSupplied(
         ParameterInfo[] parameters,
         Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
-        ISet<string> explicitNames)
+        ISet<string>? explicitNames)
     {
         foreach (var parameter in parameters)
         {
@@ -663,7 +671,7 @@ internal static class StructuralProjectionPlanner
             || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(source, target);
     }
 
-    private static bool HasMappedSlot(StructuralProjectionPlan plan, ISet<string> explicitNames)
+    private static bool HasMappedSlot(StructuralProjectionPlan plan, ISet<string>? explicitNames)
     {
         foreach (var slot in plan.ConstructorSlots.Concat(plan.InitializerSlots))
         {
@@ -705,7 +713,7 @@ internal static class StructuralProjectionPlanner
         var result = new Dictionary<string, StructuralProjectionSourceMember>(StringComparer.Ordinal);
         if (source is StructSymbol structSource)
         {
-            for (var current = structSource; current != null; current = current.BaseClass)
+            for (StructSymbol? current = structSource; current != null; current = current.BaseClass)
             {
                 foreach (var property in current.Properties)
                 {
