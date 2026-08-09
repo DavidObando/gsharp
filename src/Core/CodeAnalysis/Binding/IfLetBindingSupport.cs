@@ -156,7 +156,9 @@ internal static class IfLetBindingSupport
         {
             var read = new BoundVariableExpression(syntax, variable);
             var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
-            var neqOp = BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null);
+            var neqOp = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null),
+                "a nullable binding variable supports nil inequality");
             BoundExpression test = new BoundBinaryExpression(syntax, read, neqOp, nilLiteral);
             if (result == null)
             {
@@ -164,7 +166,9 @@ internal static class IfLetBindingSupport
             }
             else
             {
-                var andOp = BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool);
+                var andOp = Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                    "boolean nil checks support logical conjunction");
                 result = new BoundBinaryExpression(syntax, result, andOp, test);
             }
         }

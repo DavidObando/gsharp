@@ -202,7 +202,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         stateRead,
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            "int32 equality operator exists for async iterator state dispatch"),
                         Literal(state)),
                     jumpIfTrue: true));
             }
@@ -217,7 +219,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         ReadField(stateField),
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            "int32 equality operator exists for async iterator state dispatch"),
                         Literal(state)),
                     jumpIfTrue: true));
             }
@@ -242,10 +246,12 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var completingDispose = new BoundBinaryExpression(
                 null,
                 ReadField(disposeModeField),
-                BoundBinaryOperator.Bind(
-                    SyntaxKind.AmpersandAmpersandToken,
-                    TypeSymbol.Bool,
-                    TypeSymbol.Bool),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(
+                        SyntaxKind.AmpersandAmpersandToken,
+                        TypeSymbol.Bool,
+                        TypeSymbol.Bool),
+                    "boolean conjunction operator exists for async iterator disposal"),
                 isDisposeException);
 
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
@@ -552,20 +558,24 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var equalsState = new BoundBinaryExpression(
                     null,
                     ctx.ReadField(ctx.stateField),
-                    BoundBinaryOperator.Bind(
-                        SyntaxKind.EqualsEqualsToken,
-                        TypeSymbol.Int32,
-                        TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            SyntaxKind.EqualsEqualsToken,
+                            TypeSymbol.Int32,
+                            TypeSymbol.Int32),
+                        "int32 equality operator exists for async iterator state dispatch"),
                     Literal(state));
                 return condition == null
                     ? equalsState
                     : new BoundBinaryExpression(
                         null,
                         condition,
-                        BoundBinaryOperator.Bind(
-                            SyntaxKind.PipePipeToken,
-                            TypeSymbol.Bool,
-                            TypeSymbol.Bool),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                SyntaxKind.PipePipeToken,
+                                TypeSymbol.Bool,
+                                TypeSymbol.Bool),
+                            "boolean disjunction operator exists for async iterator state dispatch"),
                         equalsState);
             }
 
@@ -574,7 +584,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var condition = new BoundBinaryExpression(
                     null,
                     ctx.ReadField(ctx.stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for async iterator state dispatch"),
                     Literal(state));
                 return new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true);
             }

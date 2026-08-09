@@ -1470,7 +1470,9 @@ public static class SpillSequenceSpiller
             // selected arm's (possibly awaiting) result.
             var resultLocal = MakeSpillTemp(switchExpr.Type);
             var endLabel = MakeLabel();
-            var eqOperator = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
+            var eqOperator = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 equality operator exists for spill dispatch");
             var firstArmResultDeclared = false;
 
             for (var i = 0; i < switchExpr.Arms.Length; i++)

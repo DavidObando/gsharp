@@ -363,7 +363,9 @@ public sealed class Lowerer : BoundTreeRewriter
         var ifLowerIsGreaterThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for range lowering"),
             right: upperBoundExpression);
         var stepBoundAssingment = new BoundExpressionStatement(
             null,
@@ -400,44 +402,60 @@ public sealed class Lowerer : BoundTreeRewriter
                 expression: new BoundBinaryExpression(
                     null,
                     left: variableExpression,
-                    op: BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    op: Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 addition operator exists for range lowering"),
                     right: stepBoundExpression)));
         var startLabelStatement = new BoundLabelStatement(null, startLabel);
         var zeroLiteralExpression = new BoundLiteralExpression(null, 0);
         var stepGreaterThanZeroExpression = new BoundBinaryExpression(
             null,
             left: stepBoundExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for range lowering"),
             right: zeroLiteralExpression);
         var lowerLessThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for range lowering"),
             right: upperBoundExpression);
         var positiveStepAndLowerLessThanUpper = new BoundBinaryExpression(
             null,
             left: stepGreaterThanZeroExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                "boolean conjunction operator exists for range lowering"),
             right: lowerLessThanUpperExpression);
         var stepLessThanZeroExpression = new BoundBinaryExpression(
             null,
             left: stepBoundExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for range lowering"),
             right: zeroLiteralExpression);
         var lowerGreaterThanUpperExpression = new BoundBinaryExpression(
             null,
             left: variableExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.GreaterToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for range lowering"),
             right: upperBoundExpression);
         var negativeStepAndLowerGreaterThanUpper = new BoundBinaryExpression(
             null,
             left: stepLessThanZeroExpression,
-            op: BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+            op: Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                "boolean conjunction operator exists for range lowering"),
             right: lowerGreaterThanUpperExpression);
         var condition = new BoundBinaryExpression(
             null,
             positiveStepAndLowerLessThanUpper,
-            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+            Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                "boolean disjunction operator exists for range lowering"),
             negativeStepAndLowerGreaterThanUpper);
         var gotoTrue = new BoundConditionalGotoStatement(null, bodyLabel, condition, jumpIfTrue: true);
         var breakLabelStatement = new BoundLabelStatement(null, node.BreakLabel);
@@ -929,13 +947,17 @@ public sealed class Lowerer : BoundTreeRewriter
                 new BoundBinaryExpression(
                     null,
                     indexExpr,
-                    BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 addition operator exists for collection lowering"),
                     new BoundLiteralExpression(null, 1))));
 
         var hasMore = new BoundBinaryExpression(
             null,
             indexExpr,
-            BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.LessToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 comparison operator exists for collection lowering"),
             new BoundLenExpression(null, collectionExpr));
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -1084,7 +1106,9 @@ public sealed class Lowerer : BoundTreeRewriter
                     new BoundBinaryExpression(
                         node.Syntax,
                         indexExpr,
-                        BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            "int32 addition operator exists for enumerator lowering"),
                         new BoundLiteralExpression(node.Syntax, 1)))));
         }
 

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -91,7 +93,7 @@ public sealed record BoundBinaryOperator
     /// <param name="leftType">The left type symbol.</param>
     /// <param name="rightType">The right type symbol.</param>
     /// <returns>A bound unary operator.</returns>
-    public static BoundBinaryOperator Bind(SyntaxKind syntaxKind, TypeSymbol leftType, TypeSymbol rightType)
+    public static BoundBinaryOperator? Bind(SyntaxKind syntaxKind, TypeSymbol leftType, TypeSymbol rightType)
     {
         foreach (var op in supportedOperators)
         {
@@ -258,7 +260,7 @@ public sealed record BoundBinaryOperator
                 && leftType != TypeSymbol.Error
                 && rightType != TypeSymbol.Error)
             {
-                TypeSymbol common = null;
+                TypeSymbol? common = null;
                 var rightToLeft = Conversion.Classify(rightUnderlying, leftUnderlying);
                 if (rightToLeft.Exists && rightToLeft.IsImplicit)
                 {

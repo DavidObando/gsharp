@@ -334,10 +334,12 @@ public static class AsyncExceptionHandlerRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     captureRef,
-                    BoundBinaryOperator.Bind(
-                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        captureLocal.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                            captureLocal.Type,
+                            TypeSymbol.Null),
+                        "captured exception locals support nil equality"),
                     nullLit);
 
                 statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
@@ -486,10 +488,12 @@ public static class AsyncExceptionHandlerRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     captureRef,
-                    BoundBinaryOperator.Bind(
-                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        captureLocal.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                            captureLocal.Type,
+                            TypeSymbol.Null),
+                        "captured exception locals support nil equality"),
                     nullLit);
 
                 liftedHandlerStatements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
@@ -575,10 +579,12 @@ public static class AsyncExceptionHandlerRewriter
             var rethrowCondition = new BoundBinaryExpression(
                 null,
                 pendingRef,
-                BoundBinaryOperator.Bind(
-                    CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                    pendingExLocal.Type,
-                    TypeSymbol.Null),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(
+                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                        pendingExLocal.Type,
+                        TypeSymbol.Null),
+                    "pending exception locals support nil equality"),
                 nullLitFinal);
 
             statements.Add(new BoundConditionalGotoStatement(null, rethrowEndLabel, rethrowCondition, jumpIfTrue: true));
@@ -606,10 +612,12 @@ public static class AsyncExceptionHandlerRewriter
                         new BoundVariableExpression(
                     null,
                     Invariant.Required(funneler.PendingBranchLocal, "funneler.HasCapturedExits is true, and EnsureFinallyTail creates this alongside the first captured exit")),
-                        BoundBinaryOperator.Bind(
-                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                            TypeSymbol.Int32,
-                            TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                                TypeSymbol.Int32,
+                                TypeSymbol.Int32),
+                            "int32 equality operator exists for captured-exit dispatch"),
                         new BoundLiteralExpression(null, arm.Discriminator));
 
                     // if (pendingBranch != value) goto skip; <exit>; skip:

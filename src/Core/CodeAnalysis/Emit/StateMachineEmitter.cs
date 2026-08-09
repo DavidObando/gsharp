@@ -1106,7 +1106,9 @@ internal sealed class StateMachineEmitter
             new BoundBinaryExpression(
                 null,
                 new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
-                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    "int32 equality operator exists for state-machine completion"),
                 new BoundLiteralExpression(null, StateMachineStates.FinishedState)),
             jumpIfTrue: false));
 
@@ -1174,7 +1176,9 @@ internal sealed class StateMachineEmitter
         var finishedCheck = new BoundBinaryExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, stateField),
-            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+            Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 equality operator exists for state-machine disposal"),
             new BoundLiteralExpression(null, StateMachineStates.FinishedState));
         var earlyReturn = new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
         stmts.Add(new BoundIfStatement(null, finishedCheck, earlyReturn, null));

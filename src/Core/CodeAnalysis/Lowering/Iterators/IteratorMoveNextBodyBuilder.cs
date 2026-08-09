@@ -102,7 +102,9 @@ public static class IteratorMoveNextBodyBuilder
             new BoundBinaryExpression(
                 null,
                 FieldRead(stateField),
-                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    "int32 equality operator exists for iterator state dispatch"),
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
@@ -125,7 +127,9 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundBinaryExpression(
                     null,
                     FieldRead(stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for iterator state dispatch"),
                     new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }
@@ -227,7 +231,9 @@ public static class IteratorMoveNextBodyBuilder
                 BoundExpression SavedStateIs(int state) => new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, savedStateLocal),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for iterator finally dispatch"),
                     new BoundLiteralExpression(null, state));
 
                 var condition = SavedStateIs(insideStates[0]);
@@ -236,7 +242,9 @@ public static class IteratorMoveNextBodyBuilder
                     condition = new BoundBinaryExpression(
                         null,
                         condition,
-                        BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                            "boolean disjunction operator exists for iterator state dispatch"),
                         SavedStateIs(insideStates[i]));
                 }
 
@@ -356,7 +364,9 @@ public static class IteratorMoveNextBodyBuilder
                         new BoundBinaryExpression(
                             null,
                             this.FieldRead(this.stateField),
-                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            Invariant.Required(
+                                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                                "int32 equality operator exists for iterator finally dispatch"),
                             new BoundLiteralExpression(null, entry.State)),
                         jumpIfTrue: true));
                 }
@@ -389,7 +399,9 @@ public static class IteratorMoveNextBodyBuilder
                 BoundExpression StateIs(int state) => new BoundBinaryExpression(
                     null,
                     this.FieldRead(this.stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for iterator state dispatch"),
                     new BoundLiteralExpression(null, state));
 
                 var suspendedAtOwnYield = StateIs(statesInside[0]);
@@ -398,7 +410,9 @@ public static class IteratorMoveNextBodyBuilder
                     suspendedAtOwnYield = new BoundBinaryExpression(
                         null,
                         suspendedAtOwnYield,
-                        BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                            "boolean disjunction operator exists for iterator state dispatch"),
                         StateIs(statesInside[i]));
                 }
 

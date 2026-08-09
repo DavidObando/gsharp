@@ -162,3 +162,5 @@ src/Core/CodeAnalysis/Binding/FriendAssemblyDeclarations.cs
 
 # Slice 19 -- per-pass anonymous object shape cache.
 src/Core/CodeAnalysis/Binding/AnonymousTypeCache.cs
+# Slice 20 -- binary operator binding.
+src/Core/CodeAnalysis/Binding/BoundBinaryOperator.cs

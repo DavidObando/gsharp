@@ -205,7 +205,9 @@ public static class MoveNextBodyRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, cachedStateLocal),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for await-state dispatch"),
                     Literal(rp.State));
                 statements.Add(new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true));
             }
@@ -713,7 +715,9 @@ public static class MoveNextBodyRewriter
                         var cond = new BoundBinaryExpression(
                             null,
                             new BoundVariableExpression(null, ctx.cachedStateLocal),
-                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            Invariant.Required(
+                                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                                "int32 equality operator exists for await-state dispatch"),
                             Literal(entry.State));
                         newTryBodyStmts.Add(new BoundConditionalGotoStatement(null, entry.Target, cond, jumpIfTrue: true));
                     }

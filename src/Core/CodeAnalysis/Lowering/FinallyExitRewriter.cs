@@ -212,10 +212,12 @@ internal static class FinallyExitRewriter
                 new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, pendingException),
-                    BoundBinaryOperator.Bind(
-                        SyntaxKind.EqualsEqualsToken,
-                        pendingException.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            SyntaxKind.EqualsEqualsToken,
+                            pendingException.Type,
+                            TypeSymbol.Null),
+                        "pending exception locals support nil equality"),
                     new BoundLiteralExpression(null, null, TypeSymbol.Null)),
                 jumpIfTrue: true));
             statements.Add(BuildExceptionDispatchThrow(
@@ -231,10 +233,12 @@ internal static class FinallyExitRewriter
                     new BoundBinaryExpression(
                         null,
                         new BoundVariableExpression(null, plan.PendingBranch),
-                        BoundBinaryOperator.Bind(
-                            SyntaxKind.EqualsEqualsToken,
-                            TypeSymbol.Int32,
-                            TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                SyntaxKind.EqualsEqualsToken,
+                                TypeSymbol.Int32,
+                                TypeSymbol.Int32),
+                            "int32 equality operator exists for finally dispatch"),
                         new BoundLiteralExpression(null, arm.Discriminator)),
                     jumpIfTrue: false));
                 statements.Add(new BoundGotoStatement(null, arm.Target));
