@@ -30,12 +30,12 @@ public static class DocumentSyncHandler
         return ComputeDiagnostics(text, skipBinding, project, filePath: null, workspace: null);
     }
 
-    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath)
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string? filePath)
     {
         return ComputeDiagnostics(text, skipBinding, project, filePath, workspace: null);
     }
 
-    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState project, string filePath, WorkspaceState workspace)
+    public static DiagnosticComputationResult ComputeDiagnostics(string text, bool skipBinding, ProjectState? project, string? filePath, WorkspaceState? workspace)
     {
         // Mutating path: only safe to call while holding the write gate (didOpen/didChange/
         // didSave). UpdateFile overwrites the project's shared per-file SyntaxTree with no lock
@@ -44,8 +44,8 @@ public static class DocumentSyncHandler
         // <see cref="ComputeDiagnosticsForSnapshot"/> instead.
         Compilation compilation;
         SyntaxTree syntaxTree;
-        bool useProject = project != null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
-        if (useProject)
+        bool useProject = project is not null && filePath is not null && project.ContainsFile(filePath);
+        if (useProject && project is not null && filePath is not null)
         {
             syntaxTree = project.UpdateFile(filePath, text);
             compilation = project.GetCompilation();
@@ -74,17 +74,23 @@ public static class DocumentSyncHandler
     /// <param name="filePath">Absolute path to the <c>.gs</c> file the snapshot belongs to.</param>
     /// <param name="workspace">The current workspace state, used to resolve cross-file symbols during binding.</param>
     /// <returns>The computed diagnostics and binding metadata for <paramref name="syntaxTree"/>.</returns>
-    public static DiagnosticComputationResult ComputeDiagnosticsForSnapshot(SyntaxTree syntaxTree, bool skipBinding, ProjectState project, string filePath, WorkspaceState workspace)
+    public static DiagnosticComputationResult ComputeDiagnosticsForSnapshot(SyntaxTree syntaxTree, bool skipBinding, ProjectState? project, string filePath, WorkspaceState? workspace)
     {
-        bool useProject = project != null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
-        Compilation compilation = useProject
-            ? project.GetCompilationForSnapshot(filePath, syntaxTree)
-            : new Compilation(syntaxTree);
+        bool useProject = project is not null && !string.IsNullOrEmpty(filePath) && project.ContainsFile(filePath);
+        Compilation compilation;
+        if (useProject && project is not null)
+        {
+            compilation = project.GetCompilationForSnapshot(filePath, syntaxTree);
+        }
+        else
+        {
+            compilation = new Compilation(syntaxTree);
+        }
 
         return BuildResult(syntaxTree, compilation, useProject, skipBinding, project, workspace);
     }
 
-    private static DiagnosticComputationResult BuildResult(SyntaxTree syntaxTree, Compilation compilation, bool useProject, bool skipBinding, ProjectState project, WorkspaceState workspace)
+    private static DiagnosticComputationResult BuildResult(SyntaxTree syntaxTree, Compilation compilation, bool useProject, bool skipBinding, ProjectState? project, WorkspaceState? workspace)
     {
         var text = syntaxTree.Text.ToString();
         var newLines = new List<int>();

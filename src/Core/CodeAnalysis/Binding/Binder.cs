@@ -2454,7 +2454,7 @@ public sealed class Binder
     public static TypeSymbol TryInferExpressionType(
         BoundGlobalScope globalScope,
         ReferenceResolver references,
-        FunctionSymbol containingFunction,
+        FunctionSymbol? containingFunction,
         IEnumerable<VariableSymbol> additionalLocals,
         ExpressionSyntax expression)
     {

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 
@@ -22,7 +23,7 @@ public class WorkspaceState
     /// <summary>
     /// Gets or sets the workspace root path.
     /// </summary>
-    public string RootPath { get; set; }
+    public string? RootPath { get; set; }
 
     /// <summary>
     /// Gets all projects in the workspace.
@@ -68,7 +69,7 @@ public class WorkspaceState
     /// </summary>
     /// <param name="filePath">Absolute path to a <c>.gs</c> file.</param>
     /// <returns>The owning <see cref="ProjectState"/>, or null if not found.</returns>
-    public ProjectState GetProjectForFile(string filePath)
+    public ProjectState? GetProjectForFile(string filePath)
     {
         var normalized = Path.GetFullPath(filePath);
 
@@ -95,7 +96,7 @@ public class WorkspaceState
     /// </summary>
     /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
     /// <returns>The <see cref="ProjectState"/>, or null if not found.</returns>
-    public ProjectState GetProject(string projectFilePath)
+    public ProjectState? GetProject(string projectFilePath)
     {
         var normalized = Path.GetFullPath(projectFilePath);
         return projects.TryGetValue(normalized, out var project) ? project : null;
@@ -150,7 +151,7 @@ public class WorkspaceState
     /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
     /// <param name="text">The buffer text, if present.</param>
     /// <returns>True if the file is currently open with a recorded buffer.</returns>
-    public bool TryGetOpenBuffer(string filePath, out string text)
+    public bool TryGetOpenBuffer(string filePath, out string? text)
     {
         return openBuffers.TryGetValue(Path.GetFullPath(filePath), out text);
     }
@@ -160,7 +161,7 @@ public class WorkspaceState
     /// Creates an implicit project if needed when no <c>.gsproj</c> exists.
     /// </summary>
     /// <returns>An implicit project for loose files, or null if real projects exist.</returns>
-    public ProjectState GetOrCreateImplicitProject()
+    public ProjectState? GetOrCreateImplicitProject()
     {
         const string implicitKey = "<implicit>";
         if (projects.TryGetValue(implicitKey, out var existing))
@@ -183,7 +184,7 @@ public class WorkspaceState
     /// </summary>
     /// <param name="project">The project to get references for.</param>
     /// <returns>The list of referenced <see cref="ProjectState"/> instances.</returns>
-    public IReadOnlyList<ProjectState> GetReferencedProjects(ProjectState project)
+    public IReadOnlyList<ProjectState> GetReferencedProjects(ProjectState? project)
     {
         if (project?.ProjectReferences == null || project.ProjectReferences.Count == 0)
         {
@@ -226,7 +227,7 @@ public class WorkspaceState
     /// reference list.</param>
     /// <param name="project">The matching sibling project on success.</param>
     /// <returns><see langword="true"/> when a sibling G# project matched.</returns>
-    public bool TryGetProjectByOutputAssembly(string assemblyFilePath, out ProjectState project)
+    public bool TryGetProjectByOutputAssembly(string assemblyFilePath, [NotNullWhen(true)] out ProjectState? project)
     {
         project = null;
         if (string.IsNullOrEmpty(assemblyFilePath))

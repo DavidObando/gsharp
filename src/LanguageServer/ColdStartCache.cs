@@ -141,13 +141,13 @@ internal static class ColdStartCache
     /// <param name="sourceFingerprint">A hash over the project's current source set (path + content), or null/empty when unavailable.</param>
     /// <param name="targetFramework">The project's target framework moniker, or null/empty when unknown.</param>
     /// <returns>A validated index, or <see langword="null"/> for a cache miss.</returns>
-    internal static ReferenceMetadataIndex TryLoad(
+    internal static ReferenceMetadataIndex? TryLoad(
         string projectFilePath,
         string assemblyName,
         IReadOnlyList<string> references,
-        string rspPath,
-        string sourceFingerprint,
-        string targetFramework)
+        string? rspPath,
+        string? sourceFingerprint,
+        string? targetFramework)
     {
         if (Disabled || string.IsNullOrEmpty(projectFilePath))
         {
@@ -177,7 +177,8 @@ internal static class ColdStartCache
                 return null;
             }
 
-            if (!ReferenceMetadataIndex.TryReadTextSection(lines, out var index))
+            if (!ReferenceMetadataIndex.TryReadTextSection(lines, out var index)
+                || index is null)
             {
                 return null;
             }
@@ -211,7 +212,7 @@ internal static class ColdStartCache
     /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
     /// <param name="assemblyName">The project's effective assembly name (cache basename).</param>
     /// <returns>The validated, ordered reference paths, or <see langword="null"/> for a miss.</returns>
-    internal static IReadOnlyList<string> TryBootstrapReferences(string projectFilePath, string assemblyName)
+    internal static IReadOnlyList<string>? TryBootstrapReferences(string projectFilePath, string assemblyName)
     {
         if (Disabled || string.IsNullOrEmpty(projectFilePath))
         {
@@ -279,9 +280,9 @@ internal static class ColdStartCache
         string projectFilePath,
         string assemblyName,
         IReadOnlyList<string> references,
-        string rspPath,
-        string sourceFingerprint,
-        string targetFramework,
+        string? rspPath,
+        string? sourceFingerprint,
+        string? targetFramework,
         ReferenceMetadataIndex index)
     {
         if (Disabled || index is null || string.IsNullOrEmpty(projectFilePath))
@@ -318,7 +319,7 @@ internal static class ColdStartCache
     /// <returns>The descriptor file path.</returns>
     internal static string DescriptorPath(string projectFilePath, string assemblyName)
     {
-        var dir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
+        var dir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath)) ?? string.Empty;
         return Path.Combine(dir, CacheBaseName(projectFilePath, assemblyName) + DescriptorSuffix);
     }
 
@@ -340,8 +341,8 @@ internal static class ColdStartCache
     // upgrade flips the hash.
     private static string ComputeFingerprint(
         IReadOnlyList<string> references,
-        string sourceFingerprint,
-        string targetFramework)
+        string? sourceFingerprint,
+        string? targetFramework)
     {
         var sb = new StringBuilder();
         sb.Append("descriptor=").Append(DescriptorVersion).Append('\n');
@@ -378,7 +379,7 @@ internal static class ColdStartCache
     // "<sizeBytes>:<lastWriteUtcTicks>" for an existing file, or "missing" when
     // the path is null/absent/unreadable. Stamps are cheap and conservative; a
     // restore that only touches mtimes still (correctly) invalidates.
-    private static string FileStamp(string path)
+    private static string FileStamp(string? path)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -408,9 +409,9 @@ internal static class ColdStartCache
         string fingerprint,
         string indexSha256,
         IReadOnlyList<string> references,
-        string rspPath,
-        string sourceFingerprint,
-        string targetFramework,
+        string? rspPath,
+        string? sourceFingerprint,
+        string? targetFramework,
         ReferenceMetadataIndex index)
     {
         var sb = new StringBuilder();

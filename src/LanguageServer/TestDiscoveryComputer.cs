@@ -45,7 +45,7 @@ public static class TestDiscoveryComputer
     /// <param name="uri">The document URI (used on every emitted item).</param>
     /// <param name="syntaxTree">The parsed syntax tree to scan.</param>
     /// <returns>The discovered top-level test items (class groups and free test functions).</returns>
-    public static IReadOnlyList<TestDiscoveryItem> ComputeTests(string uri, SyntaxTree syntaxTree)
+    public static IReadOnlyList<TestDiscoveryItem> ComputeTests(string uri, SyntaxTree? syntaxTree)
     {
         var items = new List<TestDiscoveryItem>();
         if (syntaxTree?.Root == null)

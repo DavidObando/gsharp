@@ -30,11 +30,11 @@ public sealed class DiscoveredProject
         string projectFilePath,
         IReadOnlyList<string> sourceFiles,
         IReadOnlyList<string> projectReferences,
-        IReadOnlyList<string> references = null,
-        string referenceSourcePath = null,
-        string assemblyName = null,
-        string targetFramework = null,
-        string rootNamespace = null)
+        IReadOnlyList<string>? references = null,
+        string? referenceSourcePath = null,
+        string? assemblyName = null,
+        string? targetFramework = null,
+        string? rootNamespace = null)
     {
         ProjectFilePath = projectFilePath;
         SourceFiles = sourceFiles;
@@ -75,7 +75,7 @@ public sealed class DiscoveredProject
     /// <see cref="ProjectState"/> to invalidate cached resolvers when the file is
     /// rewritten by a subsequent build.
     /// </summary>
-    public string ReferenceSourcePath { get; }
+    public string? ReferenceSourcePath { get; }
 
     /// <summary>
     /// Gets the project's effective <c>AssemblyName</c> — the basename of the
@@ -86,7 +86,7 @@ public sealed class DiscoveredProject
     /// parsed; in that case the consumer typically falls back to the project
     /// file's basename.
     /// </summary>
-    public string AssemblyName { get; }
+    public string? AssemblyName { get; }
 
     /// <summary>
     /// Gets the project's target framework moniker (e.g. <c>net10.0</c>), parsed
@@ -95,7 +95,7 @@ public sealed class DiscoveredProject
     /// neither is declared or the file could not be parsed. Surfaced to the VS Code
     /// Test Explorer so test groups can be labelled <c>&lt;project&gt; (&lt;tfm&gt;)</c>.
     /// </summary>
-    public string TargetFramework { get; }
+    public string? TargetFramework { get; }
 
     /// <summary>
     /// Gets the project's effective <c>RootNamespace</c> (ADR-0142, issue #2200) —
@@ -104,5 +104,5 @@ public sealed class DiscoveredProject
     /// <see cref="AssemblyName"/> when the <c>.gsproj</c> declares no
     /// <c>&lt;RootNamespace&gt;</c>, matching MSBuild's own default.
     /// </summary>
-    public string RootNamespace { get; }
+    public string? RootNamespace { get; }
 }

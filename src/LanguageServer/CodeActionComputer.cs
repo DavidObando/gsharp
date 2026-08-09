@@ -66,7 +66,7 @@ public static class CodeActionComputer
         return new CommandOrCodeActionContainer(actions);
     }
 
-    private static CodeAction TryCreateSortImports(DocumentUri uri, DocumentContent content)
+    private static CodeAction? TryCreateSortImports(DocumentUri uri, DocumentContent content)
     {
         var imports = content.SyntaxTree.Root.Members.OfType<ImportSyntax>().ToList();
         if (imports.Count < 2)
