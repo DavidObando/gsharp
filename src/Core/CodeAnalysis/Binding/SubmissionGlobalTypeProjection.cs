@@ -2,7 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -47,7 +50,7 @@ internal static class SubmissionGlobalTypeProjection
     /// <param name="declaredType">The declaring submission's source-side type for the global (may be <see langword="null"/>).</param>
     /// <param name="references">The current compilation's reference resolver.</param>
     /// <returns>The reverse-projected type, or <paramref name="projected"/> when no arm applies.</returns>
-    internal static TypeSymbol ReverseProject(TypeSymbol projected, Type clrFieldType, TypeSymbol declaredType, ReferenceResolver references)
+    internal static TypeSymbol ReverseProject(TypeSymbol projected, Type clrFieldType, TypeSymbol? declaredType, ReferenceResolver references)
     {
         switch (declaredType)
         {
@@ -88,7 +91,11 @@ internal static class SubmissionGlobalTypeProjection
     // Projects one component (element) type of a magic wrapper through the
     // current resolver's metadata view, recursing so nested magic kinds
     // (e.g. `chan []int32`) keep their identity too.
-    private static bool TryProjectComponent(Type clrType, TypeSymbol declaredComponent, ReferenceResolver references, out TypeSymbol component)
+    private static bool TryProjectComponent(
+        Type? clrType,
+        TypeSymbol declaredComponent,
+        ReferenceResolver references,
+        [NotNullWhen(true)] out TypeSymbol? component)
     {
         component = null;
         if (clrType == null)
@@ -109,7 +116,7 @@ internal static class SubmissionGlobalTypeProjection
     // Matches the emitted backing shape of `chan T` — a closed
     // `System.Threading.Channels.Channel<T>` — by open-definition full name,
     // so types seen through a MetadataLoadContext still match.
-    private static bool TryGetChannelElement(Type clrFieldType, out Type elementClr)
+    private static bool TryGetChannelElement(Type clrFieldType, [NotNullWhen(true)] out Type? elementClr)
     {
         elementClr = null;
         if (clrFieldType is not { IsGenericType: true }
