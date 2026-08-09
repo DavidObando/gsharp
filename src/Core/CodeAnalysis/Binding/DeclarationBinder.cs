@@ -223,7 +223,7 @@ internal sealed partial class DeclarationBinder
             "a type alias declaration",
             System.AttributeTargets.Class);
 
-        if (!scope.TryDeclareTypeAlias(name, aliasedType, package?.Name))
+        if (!scope.TryDeclareTypeAlias(name, aliasedType, package is null ? null : package.Name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }

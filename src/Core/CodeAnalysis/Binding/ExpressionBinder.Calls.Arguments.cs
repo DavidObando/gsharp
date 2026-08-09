@@ -466,18 +466,30 @@ internal sealed partial class ExpressionBinder
         PropertySymbol? matchedProperty = null;
         if (matchedField == null)
         {
-            var foundProperty = isStatic
-                ? TypeMemberModel.TryGetStaticPropertyIncludingInherited(
-                    receiverStruct,
-                    methodName,
-                    out var property,
-                    out var propertyDeclaringType)
-                : TypeMemberModel.TryGetProperty(
+            PropertySymbol? property = null;
+            StructSymbol? propertyDeclaringType = null;
+            var foundProperty = false;
+            if (isStatic)
+            {
+                if (receiverStruct != null)
+                {
+                    foundProperty = TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                        receiverStruct,
+                        methodName,
+                        out property,
+                        out propertyDeclaringType);
+                }
+            }
+            else
+            {
+                foundProperty = TypeMemberModel.TryGetProperty(
                     receiverType,
                     methodName,
                     out property,
                     out propertyDeclaringType);
-            if (foundProperty && property.HasGetter)
+            }
+
+            if (foundProperty && property is { HasGetter: true })
             {
                 matchedProperty = property;
                 declaringType = propertyDeclaringType;

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -147,7 +149,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="clrType">The CLR type to map.</param>
     /// <returns>The corresponding <see cref="TypeSymbol"/>.</returns>
-    public static TypeSymbol FromClrType(Type clrType)
+    public static TypeSymbol FromClrType(Type? clrType)
     {
         if (clrType == null)
         {
@@ -498,7 +500,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="type">The type to inspect (may be <see langword="null"/>).</param>
     /// <param name="sink">The ordered set to add referenced type parameters to.</param>
-    public static void CollectReferencedTypeParameters(TypeSymbol type, List<TypeParameterSymbol> sink)
+    public static void CollectReferencedTypeParameters(TypeSymbol? type, List<TypeParameterSymbol> sink)
     {
         switch (type)
         {

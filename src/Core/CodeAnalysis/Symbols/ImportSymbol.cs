@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -17,7 +19,7 @@ public sealed class ImportSymbol : Symbol
     /// <param name="name">The local name used to reference this import (the alias when one is declared, otherwise the import path).</param>
     /// <param name="target">The fully-qualified target path used for type resolution (e.g. <c>System</c> or <c>System.IO</c>).</param>
     /// <param name="declaration">The declaration, or <c>null</c> for compiler-synthesized imports (e.g. the implicit <c>System</c> import).</param>
-    public ImportSymbol(string name, string target, ImportSyntax declaration)
+    public ImportSymbol(string name, string target, ImportSyntax? declaration)
         : base(name)
     {
         Target = target;
@@ -45,5 +47,5 @@ public sealed class ImportSymbol : Symbol
     /// <summary>
     /// Gets the declaration of the import, or <c>null</c> for compiler-synthesized imports.
     /// </summary>
-    public ImportSyntax Declaration { get; }
+    public ImportSyntax? Declaration { get; }
 }

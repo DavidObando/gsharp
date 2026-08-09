@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -97,7 +99,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// and the constant has passed all ADR-0063 §3 restrictions.
     /// </summary>
     /// <param name="value">The encoded constant default. May be <see langword="null"/> to represent the source-level <c>nil</c> default or a value-type <c>default(T)</c> / <c>T()</c> all-zero default (issue #1182).</param>
-    public void SetExplicitDefaultValue(object value)
+    public void SetExplicitDefaultValue(object? value)
     {
         HasExplicitDefaultValue = true;
         ExplicitDefaultValue = value;

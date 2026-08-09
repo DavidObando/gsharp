@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -70,7 +72,7 @@ internal sealed partial class ExpressionBinder
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList;
+    private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList;
 
     // ADR-0151: declares the local a value-position `if let` binding
     // introduces, routed through the same
@@ -103,7 +105,7 @@ internal sealed partial class ExpressionBinder
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>, ImmutableArray<BoundStatement>> bindStatementList = null,
+        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList = null,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -181,7 +183,7 @@ internal sealed partial class ExpressionBinder
             && ReferenceEquals(bve.Variable, effThis);
     }
 
-    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
+    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
         if (frame == null)
         {
@@ -203,7 +205,7 @@ internal sealed partial class ExpressionBinder
     // guard sees the same pattern narrowing / smart-cast frame as the arm body
     // (so `case x is T when …` observes `x` as `T`). A non-bool guard is
     // reported through the standard conversion diagnostic (GS0017).
-    private BoundExpression BindGuardExpression(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol> frame)
+    private BoundExpression BindGuardExpression(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
         if (frame == null)
         {
@@ -1069,7 +1071,7 @@ internal sealed partial class ExpressionBinder
         return fnRetClr == invoke.ReturnType;
     }
 
-    private static bool TryGetWritableClrMember(MemberInfo member, out Type targetType, out TypeSymbol targetTypeSymbol, out bool writable)
+    private static bool TryGetWritableClrMember(MemberInfo? member, out Type targetType, out TypeSymbol targetTypeSymbol, out bool writable)
     {
         switch (member)
         {
@@ -1794,8 +1796,8 @@ internal sealed partial class ExpressionBinder
 
     internal static bool TryCloseMethodGroupCandidate(
         FunctionSymbol candidate,
-        BoundExpression receiver,
-        StructSymbol candidateOwner,
+        BoundExpression? receiver,
+        StructSymbol? candidateOwner,
         IReadOnlyList<TypeSymbol> targetParameterTypes,
         out TypeSymbol[] closedParameters,
         out TypeSymbol closedReturn,

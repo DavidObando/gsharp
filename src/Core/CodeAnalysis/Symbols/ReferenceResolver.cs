@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 #pragma warning disable SA1201 // a struct should not follow a class — ReferenceInfo is paired with ReferenceResolver by design
 
 using System;
@@ -318,7 +320,7 @@ public sealed class ReferenceResolver : IDisposable
     /// </summary>
     /// <param name="assembly">The referenced assembly to inspect.</param>
     /// <returns><see langword="true"/> when internal members are visible.</returns>
-    public bool CanAccessInternalMembers(Assembly assembly)
+    public bool CanAccessInternalMembers(Assembly? assembly)
         => ImportedAssemblySemantics.GrantsInternalAccessTo(assembly, CurrentAssemblyName);
 
     /// <summary>

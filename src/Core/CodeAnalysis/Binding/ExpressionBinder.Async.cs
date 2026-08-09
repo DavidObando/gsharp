@@ -386,7 +386,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var handlerType = eventInfo.EventHandlerType;
+        var handlerType = Invariant.Required(eventInfo.EventHandlerType, "a CLR event has an event-handler type");
         var handlerTypeSymbol = importedEventTarget != null
             ? MemberLookup.GetClrEventHandlerTypeSymbol(importedEventTarget, eventInfo)
             : TypeSymbol.FromClrType(handlerType);

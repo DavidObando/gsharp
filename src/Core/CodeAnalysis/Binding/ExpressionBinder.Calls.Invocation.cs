@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -985,10 +987,10 @@ internal sealed partial class ExpressionBinder
     /// same-compilation user type.
     /// </summary>
     private static bool TryBuildSymbolicDelegateTargetForMethodParam(
-        MethodInfo closedMethod,
+        MethodInfo? closedMethod,
         int paramIndex,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs,
-        TypeSymbol receiverType,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs,
+        TypeSymbol? receiverType,
         out FunctionTypeSymbol target)
     {
         target = null;
@@ -997,9 +999,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var nonNullSymbolicMethodTypeArgs = symbolicMethodTypeArgs.IsDefault
+            ? default
+            : symbolicMethodTypeArgs.Select(static symbol => symbol ?? TypeSymbol.Error).ToImmutableArray();
         var methodHasSymbolicArgs = closedMethod.IsGenericMethod
-            && !symbolicMethodTypeArgs.IsDefaultOrEmpty
-            && symbolicMethodTypeArgs.Any(TypeSymbol.RequiresSymbolicProjection);
+            && !nonNullSymbolicMethodTypeArgs.IsDefaultOrEmpty
+            && nonNullSymbolicMethodTypeArgs.Any(TypeSymbol.RequiresSymbolicProjection);
 
         Type receiverOpenDef = null;
         ImmutableArray<TypeSymbol> receiverTypeArgs = default;
@@ -1077,12 +1082,12 @@ internal sealed partial class ExpressionBinder
         foreach (var parameter in invokeParameters)
         {
             parameterTypes.Add(MemberLookup.MapOpenClrParameterTypeToSymbolic(
-                parameter.ParameterType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs));
+                parameter.ParameterType, receiverOpenDef, receiverTypeArgs, openMethod, nonNullSymbolicMethodTypeArgs));
         }
 
         var returnType = invoke.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
-            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, receiverOpenDef, receiverTypeArgs, openMethod, nonNullSymbolicMethodTypeArgs);
 
         var candidate = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
 
@@ -2169,10 +2174,10 @@ internal sealed partial class ExpressionBinder
     }
 
     internal BoundExpression BindAccessorCall(
-        BoundExpression receiver,
-        ImportedClassSymbol classSymbol,
+        BoundExpression? receiver,
+        ImportedClassSymbol? classSymbol,
         CallExpressionSyntax ce,
-        ExpressionSyntax receiverSyntax = null,
+        ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
     {
         var methodName = ce.Identifier.Text;

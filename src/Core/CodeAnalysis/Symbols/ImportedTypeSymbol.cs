@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
@@ -219,7 +221,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type) ?? base.GetDocumentation();
     }
 
-    internal static bool TryCreateSemanticAggregate(Type type, ReferenceResolver references, out StructSymbol aggregate)
+    internal static bool TryCreateSemanticAggregate(Type? type, ReferenceResolver references, out StructSymbol aggregate)
     {
         aggregate = null;
         if (type == null
@@ -295,7 +297,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return aggregate != null;
     }
 
-    internal static TypeSymbol NormalizeSemanticAggregate(TypeSymbol type, Type clrType, ReferenceResolver references)
+    internal static TypeSymbol NormalizeSemanticAggregate(TypeSymbol type, Type? clrType, ReferenceResolver references)
     {
         var nullable = type is NullableTypeSymbol;
         var unwrapped = nullable ? ((NullableTypeSymbol)type).UnderlyingType : type;

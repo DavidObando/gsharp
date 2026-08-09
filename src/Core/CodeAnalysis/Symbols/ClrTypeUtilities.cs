@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -45,7 +47,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The method name to resolve.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
     /// <exception cref="AmbiguousMatchException"><paramref name="name"/> identifies multiple methods.</exception>
-    public static MethodInfo GetMethodSafe(this Type type, string name)
+    public static MethodInfo GetMethodSafe(this Type? type, string? name)
     {
         if (type is null || name is null)
         {
@@ -79,7 +81,7 @@ public static class ClrTypeUtilities
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
     /// <exception cref="AmbiguousMatchException">More than one method matches the supplied signature.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="types"/> contains a <see langword="null"/> element.</exception>
-    public static MethodInfo GetMethodSafe(this Type type, string name, Type[] types)
+    public static MethodInfo GetMethodSafe(this Type? type, string? name, Type[]? types)
     {
         if (type is null || name is null || types is null)
         {
@@ -193,7 +195,7 @@ public static class ClrTypeUtilities
     /// <param name="a">First type.</param>
     /// <param name="b">Second type.</param>
     /// <returns><c>true</c> when both types are non-null and denote the same logical CLR type.</returns>
-    public static bool AreSame(Type a, Type b) => IsSameAs(a, b);
+    public static bool AreSame(Type? a, Type? b) => IsSameAs(a, b);
 
     /// <summary>
     /// Extension-method companion to <see cref="AreSame(Type, Type)"/>. Reads more
@@ -209,7 +211,7 @@ public static class ClrTypeUtilities
     /// <param name="other">The expected canonical type, typically a host
     /// <c>typeof(...)</c> literal.</param>
     /// <returns><c>true</c> when both types denote the same logical CLR type.</returns>
-    public static bool IsSameAs(this Type self, Type other)
+    public static bool IsSameAs(this Type? self, Type? other)
     {
         if (self is null || other is null)
         {
@@ -288,7 +290,7 @@ public static class ClrTypeUtilities
     /// <param name="target">Target parameter type.</param>
     /// <param name="source">Source argument type.</param>
     /// <returns><c>true</c> when an assignment is permissible.</returns>
-    public static bool IsAssignableByName(Type target, Type source)
+    public static bool IsAssignableByName(Type? target, Type? source)
     {
         if (target is null || source is null)
         {
@@ -407,7 +409,7 @@ public static class ClrTypeUtilities
     /// </summary>
     /// <param name="type">The candidate type.</param>
     /// <returns><c>true</c> when the type is a delegate type.</returns>
-    public static bool IsDelegateType(Type type)
+    public static bool IsDelegateType(Type? type)
     {
         for (var t = type; t != null; t = t.BaseType)
         {
@@ -610,7 +612,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The field name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching field, or <c>null</c> when none is usable.</returns>
-    public static FieldInfo SafeGetField(Type type, string name, BindingFlags flags)
+    public static FieldInfo SafeGetField(Type? type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetField(name, f), SafeGetFields);
 
     /// <summary>

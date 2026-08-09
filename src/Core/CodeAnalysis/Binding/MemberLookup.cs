@@ -1473,7 +1473,8 @@ internal sealed class MemberLookup
             // recovered from a `List[Check]` receiver) does too — the closed
             // CLR method erased it to `object`, so without the symbolic vector
             // the call's return type / lambda parameter type would be `object`.
-            if (TypeSymbol.RequiresSymbolicProjection(inferred[i]))
+            if (inferred[i] is { } inferredType
+                && TypeSymbol.RequiresSymbolicProjection(inferredType))
             {
                 anySymbolic = true;
                 break;
@@ -5322,7 +5323,9 @@ internal sealed class MemberLookup
             if (DeclarationBinder.TypeSignaturesEquivalent(existingUnderlying, incomingUnderlying))
             {
                 return NullableTypeSymbol.Get(
-                    MergeRecoveredTypeArgument(existingUnderlying, incomingUnderlying));
+                    Invariant.Required(
+                        MergeRecoveredTypeArgument(existingUnderlying, incomingUnderlying),
+                        "equivalent nullable type arguments merge to a type"));
             }
         }
 
@@ -5368,7 +5371,9 @@ internal sealed class MemberLookup
             && DeclarationBinder.TypeSignaturesEquivalent(existingSlice.ElementType, incomingSlice.ElementType))
         {
             return SliceTypeSymbol.Get(
-                MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType));
+                Invariant.Required(
+                    MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType),
+                    "equivalent slice type arguments merge to an element type"));
         }
 
         if (existing is ArrayTypeSymbol existingArray
@@ -5377,7 +5382,9 @@ internal sealed class MemberLookup
             && DeclarationBinder.TypeSignaturesEquivalent(existingArray.ElementType, incomingArray.ElementType))
         {
             return ArrayTypeSymbol.Get(
-                MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
+                Invariant.Required(
+                    MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
+                    "equivalent array type arguments merge to an element type"),
                 existingArray.Length);
         }
 

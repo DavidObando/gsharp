@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -24,7 +26,7 @@ public sealed class ConstructorSymbol
     /// <summary>Initializes a new instance of the <see cref="ConstructorSymbol"/> class.</summary>
     /// <param name="function">The underlying instance-method-shaped function symbol used as the bind/emit/interpret key.</param>
     /// <param name="declaration">The declaring syntax. May be <see langword="null"/> for compiler-synthesized constructors (e.g. ADR-0065 §5 primary-ctor synthesis).</param>
-    public ConstructorSymbol(FunctionSymbol function, ConstructorDeclarationSyntax declaration)
+    public ConstructorSymbol(FunctionSymbol function, ConstructorDeclarationSyntax? declaration)
     {
         Function = function;
         Declaration = declaration;
@@ -34,7 +36,7 @@ public sealed class ConstructorSymbol
     public FunctionSymbol Function { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> when this is a compiler-synthesized constructor (ADR-0065 §5).</summary>
-    public ConstructorDeclarationSyntax Declaration { get; private set; }
+    public ConstructorDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>Gets the constructor parameters (excluding the implicit <c>this</c>).</summary>
     public System.Collections.Immutable.ImmutableArray<ParameterSymbol> Parameters => Function.Parameters;

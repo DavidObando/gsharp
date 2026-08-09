@@ -943,7 +943,7 @@ internal sealed partial class ExpressionBinder
             // (declared-type-wins, like `let x Type = expr`); when absent the
             // member type is inferred from the initializer expression exactly
             // like an ordinary `let x = expr` local declaration.
-            var memberType = bindTypeClause(member.TypeClause);
+            var memberType = member.TypeClause == null ? null : bindTypeClause(member.TypeClause);
             var value = BindExpression(member.Value);
             if (value is BoundErrorExpression)
             {
@@ -1340,7 +1340,7 @@ internal sealed partial class ExpressionBinder
             var memberDeclaringType = hasField ? fieldDeclaringType : propertyDeclaringType;
             if (!AccessibilityChecker.IsAccessible(
                 memberAccessibility,
-                memberDeclaringType,
+                Invariant.Required(memberDeclaringType, "a resolved member has a declaring type"),
                 this.function))
             {
                 Diagnostics.ReportMemberInaccessible(
@@ -1758,7 +1758,11 @@ internal sealed partial class ExpressionBinder
                     ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(fieldInfo, kind)
                     : null;
                 if (zeroValue == null
-                    || !TryGetWritableClrMember(fieldInfo, out _, out var fieldTargetSymbol, out var fieldWritable)
+                    || !TryGetWritableClrMember(
+                        Invariant.Required(fieldInfo, "a magic collection marker has a backing field"),
+                        out _,
+                        out var fieldTargetSymbol,
+                        out var fieldWritable)
                     || !fieldWritable)
                 {
                     continue;
@@ -2182,7 +2186,8 @@ internal sealed partial class ExpressionBinder
         {
             // Issue #1046: jagged-array literal — the element is a nested type
             // clause (`[][]int32{ … }`), resolved recursively.
-            elementType = bindTypeClause(syntax.ElementTypeClause);
+            elementType = bindTypeClause(
+                Invariant.Required(syntax.ElementTypeClause, "a nested array element has a type clause"));
             if (elementType == null)
             {
                 return new BoundErrorExpression(null);

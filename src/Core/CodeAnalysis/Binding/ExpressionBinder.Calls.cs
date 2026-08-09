@@ -170,7 +170,8 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)
     {
-        var target = BindExpression(syntax.Target);
+        var target = BindExpression(
+            Invariant.Required(syntax.Target, "an object creation has a target expression"));
         return BindObjectInitializerSuffix(syntax, target);
     }
 

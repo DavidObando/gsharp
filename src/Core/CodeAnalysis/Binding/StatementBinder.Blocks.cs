@@ -932,7 +932,9 @@ internal sealed partial class StatementBinder
             if (pinKind == FixedPinKind.PinnableReference)
             {
                 sourceVariable = new LocalVariableSymbol(
-                    $"$pinsrc${pointerVariable.Name}", isReadOnly: false, source.Type);
+                    $"$pinsrc${pointerVariable.Name}",
+                    isReadOnly: false,
+                    Invariant.Required(source.Type, "a fixed source has a type"));
             }
 
             var body = Invariant.Required(BindStatement(syntax.Body), "a fixed statement has a bound body");

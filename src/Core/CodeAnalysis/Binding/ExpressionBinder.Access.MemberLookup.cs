@@ -685,7 +685,12 @@ internal sealed partial class ExpressionBinder
                     // this receiver. In a delegate-conversion context it captures
                     // the receiver as the delegate target over the selected
                     // overload.
-                    if (TryBindClrMethodGroup(receiver, clrReceiverType, wantStatic: false, memberName, out var instanceGroup))
+                    if (TryBindClrMethodGroup(
+                        Invariant.Required(receiver, "an instance member lookup has a receiver"),
+                        clrReceiverType,
+                        wantStatic: false,
+                        memberName,
+                        out var instanceGroup))
                     {
                         return instanceGroup;
                     }

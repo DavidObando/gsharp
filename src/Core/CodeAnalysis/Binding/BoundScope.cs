@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -668,7 +670,7 @@ public sealed class BoundScope
     /// <param name="declaration">The declaration.</param>
     /// <param name="importedClass">The result, if found.</param>
     /// <returns>Whether a class was found or not.</returns>
-    public bool TryLookupImportedClass(string name, ExpressionSyntax declaration, out ImportedClassSymbol importedClass)
+    public bool TryLookupImportedClass(string name, ExpressionSyntax? declaration, out ImportedClassSymbol importedClass)
     {
         importedClass = null;
 
@@ -851,7 +853,7 @@ public sealed class BoundScope
     /// carries accurate, stable package identity intrinsically.
     /// </param>
     /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
-    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string declaringPackageName)
+    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string? declaringPackageName)
     {
         if (name == null)
         {

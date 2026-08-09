@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -165,14 +167,14 @@ internal static class StructuralProjectionPlanner
 {
     private const BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
 
-    public static bool CanProject(TypeSymbol source, TypeSymbol target)
+    public static bool CanProject(TypeSymbol? source, TypeSymbol? target)
         => TryCreate(source, target, strict: true, explicitMemberNames: null, out _, out _);
 
     public static bool TryCreate(
-        TypeSymbol source,
-        TypeSymbol target,
+        TypeSymbol? source,
+        TypeSymbol? target,
         bool strict,
-        ISet<string> explicitMemberNames,
+        ISet<string>? explicitMemberNames,
         out StructuralProjectionPlan plan,
         out string failure)
     {

@@ -814,7 +814,10 @@ internal sealed partial class DeclarationBinder
                 || (interfaceProperty.HasSetter && candidate.GetSetMethod(nonPublic: false) == null)
                 || (interfaceProperty.HasSetter
                     && interfaceProperty.IsInitOnly
-                        != ImportedTypeSymbol.IsInitOnlySetter(candidate.GetSetMethod(nonPublic: false))))
+                        != ImportedTypeSymbol.IsInitOnlySetter(
+                            Invariant.Required(
+                                candidate.GetSetMethod(nonPublic: false),
+                                "a property reported as having a setter exposes its setter"))))
             {
                 continue;
             }
@@ -1692,7 +1695,8 @@ internal sealed partial class DeclarationBinder
                         // path handles it via the existing auto-property machinery.
                         bool contractHasSetter = requiresSetter;
                         bool contractIsInitOnly = contractHasSetter
-                            && ImportedTypeSymbol.IsInitOnlySetter(clrProp.SetMethod);
+                            && ImportedTypeSymbol.IsInitOnlySetter(
+                                Invariant.Required(clrProp.SetMethod, "a property requiring a setter exposes its setter"));
                         var synthesized = new PropertySymbol(
                             name: clrProp.Name,
                             type: matchingField.Type,
