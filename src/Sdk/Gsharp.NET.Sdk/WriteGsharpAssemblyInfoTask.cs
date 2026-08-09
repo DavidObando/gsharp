@@ -55,7 +55,7 @@ public class WriteGsharpAssemblyInfoTask : Microsoft.Build.Utilities.Task
     /// <c>Inputs</c>/<c>Outputs</c> check) does not see a spurious edit.
     /// </summary>
     [Required]
-    public string OutputFile { get; set; }
+    public string? OutputFile { get; set; }
 
     /// <summary>
     /// Renders <paramref name="attributes"/> as a G# compilation unit of
@@ -181,7 +181,7 @@ public class WriteGsharpAssemblyInfoTask : Microsoft.Build.Utilities.Task
 
         foreach (DictionaryEntry entry in attribute.CloneCustomMetadata())
         {
-            metadata[(string)entry.Key] = (string)entry.Value ?? string.Empty;
+            metadata[(string)entry.Key] = entry.Value as string ?? string.Empty;
         }
 
         foreach (KeyValuePair<string, string> entry in metadata)

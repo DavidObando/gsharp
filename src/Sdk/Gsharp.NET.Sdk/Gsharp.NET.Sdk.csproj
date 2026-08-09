@@ -4,6 +4,7 @@
     <!-- MSBuild tasks loaded by both legacy MSBuild and the dotnet build host need
          to target netstandard2.0. -->
     <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
     <RootNamespace>Gsharp.NET.Sdk</RootNamespace>
     <AssemblyName>Gsharp.NET.Sdk</AssemblyName>
     <PackageId>Gsharp.NET.Sdk</PackageId>

@@ -39,6 +39,7 @@
          AssemblyName below to match ADR-0082's promised on-disk name
          (Gsharp.Extensions.dll, not GSharp.Gsharp.Extensions.dll). -->
     <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
     <RootNamespace>Gsharp.Extensions</RootNamespace>
     <AssemblyName>Gsharp.Extensions</AssemblyName>
 
