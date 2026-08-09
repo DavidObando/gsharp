@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -27,7 +29,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax)
         => BindSwitchExpression(syntax, targetType: null);
 
-    private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax, TypeSymbol targetType)
+    private BoundExpression BindSwitchExpression(SwitchExpressionSyntax syntax, TypeSymbol? targetType)
     {
         // Issue #1238: when this switch-expression is an eagerly-bound call
         // argument with no target type yet, defer a no-common-type unification
@@ -65,11 +67,11 @@ internal sealed partial class ExpressionBinder
         }
 
         var hasDefault = false;
-        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Guard, BoundExpression Result)>();
+        var boundArmBuilders = ImmutableArray.CreateBuilder<(SwitchExpressionArmSyntax Syntax, BoundPattern? Pattern, BoundExpression? Guard, BoundExpression Result)>();
 
         foreach (var armSyntax in syntax.Arms)
         {
-            BoundPattern pattern = null;
+            BoundPattern? pattern = null;
             if (armSyntax.IsDefault)
             {
                 if (hasDefault)
@@ -84,7 +86,10 @@ internal sealed partial class ExpressionBinder
             }
 
             scope = new BoundScope(scope);
-            pattern = patterns.BindPattern(armSyntax.Value, switchType);
+            var patternSyntax = Invariant.Required(
+                armSyntax.Value,
+                "a non-default switch arm has a pattern value");
+            pattern = patterns.BindPattern(patternSyntax, switchType);
 
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so it never contributes to exhaustiveness — in
@@ -95,17 +100,19 @@ internal sealed partial class ExpressionBinder
             {
                 if (hasDefault)
                 {
-                    Diagnostics.ReportDuplicateSwitchDefault(armSyntax.Value.Location);
+                    Diagnostics.ReportDuplicateSwitchDefault(patternSyntax.Location);
                 }
 
                 hasDefault = true;
             }
 
             var frame = StatementBinder.TryClassifyPatternNarrowing(discriminant, pattern);
-            BoundExpression guard = null;
+            BoundExpression? guard = null;
             if (hasGuard)
             {
-                guard = BindGuardExpression(armSyntax.Guard, frame);
+                guard = BindGuardExpression(
+                    Invariant.Required(armSyntax.Guard, "a guarded switch arm has a guard expression"),
+                    frame);
             }
 
             var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame);
@@ -202,8 +209,8 @@ internal sealed partial class ExpressionBinder
     /// the existing GS0179 arm-mismatch diagnostic fires for the offending arms.
     /// </summary>
     private static TypeSymbol ComputeSwitchExpressionResultType(
-        IReadOnlyList<(SwitchExpressionArmSyntax Syntax, BoundPattern Pattern, BoundExpression Guard, BoundExpression Result)> arms,
-        TypeSymbol targetType)
+        IReadOnlyList<(SwitchExpressionArmSyntax Syntax, BoundPattern? Pattern, BoundExpression? Guard, BoundExpression Result)> arms,
+        TypeSymbol? targetType)
     {
         var armTypes = new List<TypeSymbol>(arms.Count);
         foreach (var arm in arms)
@@ -255,7 +262,7 @@ internal sealed partial class ExpressionBinder
     /// arm is implicitly convertible is returned. Returns <see langword="null"/>
     /// when no common type can be found.
     /// </summary>
-    private static TypeSymbol ComputeBestCommonType(IReadOnlyList<TypeSymbol> armTypes)
+    private static TypeSymbol? ComputeBestCommonType(IReadOnlyList<TypeSymbol> armTypes)
     {
         // Any error arm short-circuits to Error so callers suppress further
         // diagnostics.
@@ -316,7 +323,7 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        TypeSymbol common;
+        TypeSymbol? common;
         if (allSame)
         {
             common = first;

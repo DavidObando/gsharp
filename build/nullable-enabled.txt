@@ -210,3 +210,6 @@ src/Core/CodeAnalysis/Symbols/NullableLifting.cs
 src/Core/CodeAnalysis/Binding/Conversion.cs
 # Slice 38 -- CLR operator and user-defined conversion resolution.
 src/Core/CodeAnalysis/Binding/ClrOperatorResolution.cs
+# Slice 39 -- conditional expression binding.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.IfLet.cs
+src/Core/CodeAnalysis/Binding/ExpressionBinder.SwitchExpr.cs
