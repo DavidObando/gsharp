@@ -947,11 +947,11 @@ internal sealed partial class MethodBodyEmitter
         {
             setterHandle = handles.Setter.Value;
         }
-        else if ((assn.StructType as StructSymbol)?.ClrType != null)
+        else if (assn.StructType is StructSymbol structType && structType.ClrType != null)
         {
             // Issue #2291: mirrors the getter fallback above for IMPORTED
             // properties with no planned PropertyAccessorHandles entry.
-            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(assn.StructType as StructSymbol, assn.Property, wantSetter: true);
+            setterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(structType, assn.Property, wantSetter: true);
         }
         else
         {

@@ -21,7 +21,7 @@ public sealed class BoundMakeChannelExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="channelType">The constructed channel type.</param>
     /// <param name="capacity">The optional bounded-channel capacity expression.</param>
-    public BoundMakeChannelExpression(SyntaxNode? syntax, ChannelTypeSymbol channelType, BoundExpression capacity)
+    public BoundMakeChannelExpression(SyntaxNode? syntax, ChannelTypeSymbol channelType, BoundExpression? capacity)
         : base(syntax)
     {
         ChannelType = channelType;
@@ -38,5 +38,5 @@ public sealed class BoundMakeChannelExpression : BoundExpression
     public ChannelTypeSymbol ChannelType { get; }
 
     /// <summary>Gets the optional capacity expression (bounded channel) or <c>null</c> (unbounded).</summary>
-    public BoundExpression Capacity { get; }
+    public BoundExpression? Capacity { get; }
 }

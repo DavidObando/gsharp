@@ -633,6 +633,11 @@ public static class SpillSequenceSpiller
                 case BoundStructLiteralExpression structLiteral:
                     return SpillStructLiteral(structLiteral);
                 case BoundMakeChannelExpression makeChannel:
+                    if (makeChannel.Capacity == null)
+                    {
+                        return Trivial(makeChannel);
+                    }
+
                     return SpillOneOperand(
                         makeChannel,
                         makeChannel.Capacity,

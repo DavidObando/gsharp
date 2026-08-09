@@ -179,6 +179,7 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.MemberLookup.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Access.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Arguments.cs
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Literals.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Jumps.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Blocks.cs

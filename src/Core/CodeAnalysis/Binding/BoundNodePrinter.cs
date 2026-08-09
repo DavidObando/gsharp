@@ -1723,7 +1723,7 @@ public static class BoundNodePrinter
         }
         else
         {
-            writer.WriteIdentifier(node.StructType.Name);
+            writer.WriteIdentifier(Invariant.Required(node.StructType, "a static property assignment has a declaring type").Name);
             writer.WritePunctuation(SyntaxKind.DotToken);
         }
 

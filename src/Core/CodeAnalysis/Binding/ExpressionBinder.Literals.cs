@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -39,7 +41,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        BoundExpression capacity = null;
+        BoundExpression? capacity = null;
         if (syntax.Capacity != null)
         {
             capacity = conversions.BindConversion(syntax.Capacity, TypeSymbol.Int32);
@@ -73,16 +75,17 @@ internal sealed partial class ExpressionBinder
         // falls back to a same-named non-generic type (`typeof(Action[_])`
         // can never silently become non-generic `Action`).
         var typeClause = syntax.TypeClause;
-        TypeSymbol typeSymbol = null;
+        var typeClauseIdentifier = Invariant.Required(typeClause.Identifier, "a type clause has an identifier");
+        TypeSymbol? typeSymbol = null;
         if (!typeClause.HasQualifier && !typeClause.IsArray && !typeClause.IsNullable)
         {
             if (!typeClause.HasTypeArguments)
             {
-                TryResolveOpenGenericImportedType(typeClause.Identifier.Text, out typeSymbol);
+                TryResolveOpenGenericImportedType(typeClauseIdentifier.Text, out typeSymbol);
             }
             else if (TryGetUnboundGenericArity(typeClause, out var arity))
             {
-                if (!TryResolveOpenGenericImportedTypeWithArity(typeClause.Identifier.Text, arity, out typeSymbol, out var isAmbiguous))
+                if (!TryResolveOpenGenericImportedTypeWithArity(typeClauseIdentifier.Text, arity, out typeSymbol, out var isAmbiguous))
                 {
                     // Issue #2012 (N3): "ambiguous across imports" and "no
                     // match at all" are different failure modes and deserve
@@ -90,11 +93,11 @@ internal sealed partial class ExpressionBinder
                     // candidates matched, not that the type is undefined.
                     if (isAmbiguous)
                     {
-                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                        Diagnostics.ReportAmbiguousImportedType(typeClause.Location, typeClauseIdentifier.Text + "`" + arity);
                     }
                     else
                     {
-                        Diagnostics.ReportUndefinedType(typeClause.Location, typeClause.Identifier.Text + "`" + arity);
+                        Diagnostics.ReportUndefinedType(typeClause.Location, typeClauseIdentifier.Text + "`" + arity);
                     }
 
                     return new BoundErrorExpression(null);
@@ -124,7 +127,7 @@ internal sealed partial class ExpressionBinder
     /// back to the ordinary "type doesn't exist" diagnostic rather than
     /// guessing).
     /// </summary>
-    private bool TryResolveOpenGenericImportedType(string name, out TypeSymbol type)
+    private bool TryResolveOpenGenericImportedType(string name, out TypeSymbol? type)
     {
         type = null;
         if (string.IsNullOrEmpty(name) || lookupType(name) != null)
@@ -147,7 +150,7 @@ internal sealed partial class ExpressionBinder
         // back to the ordinary "type doesn't exist" diagnostic (GS0113),
         // never a silent wrong resolution. If a real gapped family ever
         // needs support, bump <see cref="MaxConsecutiveArityMisses"/>.
-        Type match = null;
+        Type? match = null;
         var missStreak = 0;
         for (var arity = 1; missStreak < MaxConsecutiveArityMisses; arity++)
         {
@@ -218,7 +221,7 @@ internal sealed partial class ExpressionBinder
     private bool TryGetUnboundGenericArity(TypeClauseSyntax typeClause, out int arity)
     {
         arity = 0;
-        var args = typeClause.TypeArguments;
+        var args = Invariant.Required(typeClause.TypeArguments, "an unbound generic has type arguments");
         if (args.Count == 0)
         {
             return false;
@@ -235,7 +238,7 @@ internal sealed partial class ExpressionBinder
 
         foreach (var arg in args)
         {
-            if (arg.Identifier.Text != "_" || arg.HasQualifier || arg.HasTypeArguments || arg.IsArray || arg.IsNullable)
+            if (arg.Identifier?.Text != "_" || arg.HasQualifier || arg.HasTypeArguments || arg.IsArray || arg.IsNullable)
             {
                 return false;
             }
@@ -264,7 +267,7 @@ internal sealed partial class ExpressionBinder
     /// the "no match at all" case — so the caller can raise the correct
     /// ambiguity diagnostic instead of the misleading "type doesn't exist".
     /// </param>
-    private bool TryResolveOpenGenericImportedTypeWithArity(string name, int arity, out TypeSymbol type, out bool isAmbiguous)
+    private bool TryResolveOpenGenericImportedTypeWithArity(string name, int arity, out TypeSymbol? type, out bool isAmbiguous)
     {
         type = null;
         isAmbiguous = false;
@@ -273,7 +276,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        Type match = null;
+        Type? match = null;
         foreach (var import in scope.GetDeclaredImports())
         {
             var candidateName = import.Target + "." + name + "`" + arity;
@@ -374,7 +377,7 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
-    private static bool TryExtractNameOfName(ExpressionSyntax argument, out string name)
+    private static bool TryExtractNameOfName(ExpressionSyntax argument, out string? name)
     {
         switch (argument)
         {
@@ -425,7 +428,7 @@ internal sealed partial class ExpressionBinder
         // literal — preserve null so BoundLiteralExpression picks the Null
         // sentinel type. All other literals default missing values to 0
         // for legacy parser robustness.
-        var value = syntax.Value;
+        object? value = syntax.Value;
         if (value == null && syntax.LiteralToken.Kind != SyntaxKind.NilKeyword)
         {
             value = 0;
@@ -449,8 +452,9 @@ internal sealed partial class ExpressionBinder
         {
             if (segment.IsExpression)
             {
-                var bound = BindExpression(segment.Expression);
-                bound = BindNaturalMethodGroupValue(bound, segment.Expression.Location);
+                var segmentExpression = Invariant.Required(segment.Expression, "an interpolation segment has an expression");
+                var bound = BindExpression(segmentExpression);
+                bound = BindNaturalMethodGroupValue(bound, segmentExpression.Location);
                 if (bound is BoundErrorExpression)
                 {
                     return bound;
@@ -458,7 +462,7 @@ internal sealed partial class ExpressionBinder
 
                 if (bound.Type == null || bound.Type == TypeSymbol.Void)
                 {
-                    Diagnostics.ReportCannotConvert(segment.Expression.Location, bound.Type, TypeSymbol.String);
+                    Diagnostics.ReportCannotConvert(segmentExpression.Location, bound.Type ?? TypeSymbol.Error, TypeSymbol.String);
                     return new BoundErrorExpression(null);
                 }
 
@@ -469,7 +473,7 @@ internal sealed partial class ExpressionBinder
                     var toString = BindAccessorCall(
                         bound,
                         classSymbol: null,
-                        SynthesizeInstanceCall(segment.Expression, "ToString", ImmutableArray<ExpressionSyntax>.Empty));
+                        SynthesizeInstanceCall(segmentExpression, "ToString", ImmutableArray<ExpressionSyntax>.Empty));
                     if (toString is BoundUserInstanceCallExpression { Type: var returnType }
                         && returnType == TypeSymbol.String)
                     {
@@ -498,7 +502,10 @@ internal sealed partial class ExpressionBinder
         {
             if (TryGetNaturalClrMethodGroupType(clrGroup, out var naturalType))
             {
-                return conversions.BindConversion(location, clrGroup, naturalType);
+                return conversions.BindConversion(
+                    location,
+                    clrGroup,
+                    Invariant.Required(naturalType, "a natural CLR method group has a function type"));
             }
 
             Diagnostics.ReportCannotConvertMethodGroup(location, clrGroup.MethodName, TypeSymbol.Error);
@@ -509,7 +516,10 @@ internal sealed partial class ExpressionBinder
         {
             if (TryGetNaturalUserMethodGroupType(userGroup, out var naturalType))
             {
-                return conversions.BindConversion(location, userGroup, naturalType);
+                return conversions.BindConversion(
+                    location,
+                    userGroup,
+                    Invariant.Required(naturalType, "a natural user method group has a function type"));
             }
 
             Diagnostics.ReportCannotConvertMethodGroup(
@@ -524,12 +534,12 @@ internal sealed partial class ExpressionBinder
 
     private bool TryGetNaturalClrMethodGroupType(
         BoundClrMethodGroupExpression group,
-        out FunctionTypeSymbol naturalType)
+        out FunctionTypeSymbol? naturalType)
     {
         naturalType = null;
         var closesReceiver = group.Receiver != null && group.Candidates.All(candidate => candidate.IsStatic);
         var receiverClr = closesReceiver
-            ? NullableTypeSymbol.GetEffectiveClrType(group.Receiver.Type)
+            ? NullableTypeSymbol.GetEffectiveClrType(Invariant.Required(group.Receiver, "a closed method group has a receiver").Type)
             : null;
         var matches = new List<(MethodInfo Method, ClrOverloadResolution.ImplicitConversionKind ReceiverConversion)>();
 
@@ -586,7 +596,7 @@ internal sealed partial class ExpressionBinder
 
     private bool TryGetNaturalUserMethodGroupType(
         BoundMethodGroupExpression group,
-        out FunctionTypeSymbol naturalType)
+        out FunctionTypeSymbol? naturalType)
     {
         naturalType = null;
         if (group.Candidates.Length != 1
@@ -623,7 +633,7 @@ internal sealed partial class ExpressionBinder
     /// is a <see cref="System.FormattableString"/> value, which is reference-
     /// compatible with an <see cref="System.IFormattable"/> target.
     /// </summary>
-    internal BoundExpression BindInterpolatedStringAsFormattable(InterpolatedStringExpressionSyntax syntax, TypeSymbol targetType)
+    internal BoundExpression BindInterpolatedStringAsFormattable(InterpolatedStringExpressionSyntax syntax, TypeSymbol? targetType)
     {
         _ = targetType;
         if (!TryBuildInterpolationFormat(syntax, out var composite, out var holeValues))
@@ -631,11 +641,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var formatLiteral = new BoundLiteralExpression(null, composite);
+        var formatLiteral = new BoundLiteralExpression(
+            null,
+            Invariant.Required(composite, "a successful interpolation format has a composite string"));
         var argArray = BuildObjectArgumentArray(holeValues);
 
         var factoryType = typeof(System.Runtime.CompilerServices.FormattableStringFactory);
-        var createMethod = factoryType.GetMethod("Create", new[] { typeof(string), typeof(object[]) });
+        var createMethod = Invariant.Required(
+            factoryType.GetMethod("Create", new[] { typeof(string), typeof(object[]) }),
+            "FormattableStringFactory.Create has the expected signature");
         var importedClass = new ImportedClassSymbol(factoryType, declaration: null);
         var importedFn = new ImportedFunctionSymbol(createMethod.Name, importedClass, createMethod, declaration: null);
         return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
@@ -673,9 +687,9 @@ internal sealed partial class ExpressionBinder
     /// receiverArgCount]. Mirrors the offset already threaded through
     /// <see cref="RebindFormattableInterpolationArguments"/> for the same shape.
     /// </param>
-    private static IReadOnlyList<bool> ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count, int receiverArgCount = 0)
+    private static IReadOnlyList<bool>? ComputeInterpolatedStringArgFlags(SeparatedSyntaxList<ExpressionSyntax> argumentSyntax, int count, int receiverArgCount = 0)
     {
-        bool[] flags = null;
+        bool[]? flags = null;
         var limit = Math.Min(count - receiverArgCount, argumentSyntax.Count);
         for (var i = 0; i < limit; i++)
         {
@@ -714,7 +728,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<int> parameterMapping = default,
         int receiverArgCount = 0)
     {
-        ImmutableArray<BoundExpression>.Builder builder = null;
+        ImmutableArray<BoundExpression>.Builder? builder = null;
         var limit = Math.Min(arguments.Length, argumentSyntax.Count + receiverArgCount);
         for (var i = receiverArgCount; i < limit; i++)
         {
@@ -743,7 +757,7 @@ internal sealed partial class ExpressionBinder
     /// <c>{{</c>) so they survive <c>String.Format</c>/<c>FormattableString</c>
     /// formatting. Returns <c>false</c> if any hole fails to bind.
     /// </summary>
-    private bool TryBuildInterpolationFormat(InterpolatedStringExpressionSyntax syntax, out string composite, out ImmutableArray<BoundExpression> holeValues)
+    private bool TryBuildInterpolationFormat(InterpolatedStringExpressionSyntax syntax, out string? composite, out ImmutableArray<BoundExpression> holeValues)
     {
         composite = null;
         holeValues = default;
@@ -758,7 +772,8 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var bound = BindExpression(segment.Expression);
+            var segmentExpression = Invariant.Required(segment.Expression, "an interpolation segment has an expression");
+            var bound = BindExpression(segmentExpression);
             if (bound is BoundErrorExpression)
             {
                 return false;
@@ -824,7 +839,9 @@ internal sealed partial class ExpressionBinder
         var argArray = BuildObjectArgumentArray(holeValues);
 
         var stringType = typeof(string);
-        var formatMethod = stringType.GetMethod("Format", new[] { typeof(string), typeof(object[]) });
+        var formatMethod = Invariant.Required(
+        stringType.GetMethod("Format", new[] { typeof(string), typeof(object[]) }),
+        "string.Format has the expected signature");
         var importedClass = new ImportedClassSymbol(stringType, declaration: null);
         var importedFn = new ImportedFunctionSymbol(formatMethod.Name, importedClass, formatMethod, declaration: null);
         return new BoundImportedCallExpression(null, importedFn, ImmutableArray.Create<BoundExpression>(formatLiteral, argArray));
@@ -840,7 +857,7 @@ internal sealed partial class ExpressionBinder
         var clrType = expression.Type?.ClrType;
         if (clrType == null)
         {
-            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type ?? TypeSymbol.Error, TypeSymbol.String);
             return new BoundErrorExpression(null);
         }
 
@@ -853,7 +870,7 @@ internal sealed partial class ExpressionBinder
             ?? convertType.GetMethod("ToString", new[] { typeof(object) });
         if (method == null)
         {
-            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, TypeSymbol.String);
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type ?? TypeSymbol.Error, TypeSymbol.String);
             return new BoundErrorExpression(null);
         }
 
@@ -864,7 +881,9 @@ internal sealed partial class ExpressionBinder
 
     private static BoundExpression Concat(BoundExpression left, BoundExpression right)
     {
-        var op = BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String);
+        var op = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.PlusToken, TypeSymbol.String, TypeSymbol.String),
+            "string concatenation has a binary operator");
         return new BoundBinaryExpression(null, left, op, right);
     }
 
@@ -1047,7 +1066,7 @@ internal sealed partial class ExpressionBinder
     /// </param>
     private BoundExpression BindStructLiteralExpression(
         StructLiteralExpressionSyntax syntax,
-        StructSymbol resolvedDefinition,
+        StructSymbol? resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
         if (syntax.SpreadExpression != null)
@@ -1057,7 +1076,7 @@ internal sealed partial class ExpressionBinder
 
         var typeName = syntax.TypeIdentifier.Text;
 
-        StructSymbol structSymbol = null;
+        StructSymbol? structSymbol = null;
         if (resolvedDefinition != null)
         {
             structSymbol = resolvedDefinition;
@@ -1170,6 +1189,8 @@ internal sealed partial class ExpressionBinder
                 structSymbol = resolvedStruct;
             }
         }
+
+        structSymbol = Invariant.Required(structSymbol, "a valid struct literal resolves to a struct symbol");
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
         // use of the named type.
@@ -1286,7 +1307,7 @@ internal sealed partial class ExpressionBinder
 
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        List<(string Name, TypeSymbol MemberType, CollectionInitializerExpressionSyntax Braced, SyntaxToken Anchor)> bracedCollectionMembers = null;
+        List<(string Name, TypeSymbol MemberType, CollectionInitializerExpressionSyntax Braced, SyntaxToken Anchor)>? bracedCollectionMembers = null;
         foreach (var initSyntax in syntax.Initializers)
         {
             var fieldName = initSyntax.FieldIdentifier.Text;
@@ -1297,8 +1318,8 @@ internal sealed partial class ExpressionBinder
             // both `class C { var X int32 }` and `class C { prop X int32 { get;
             // init; } }` accept `C{X: ...}`.
             var hasField = TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, fieldName, MemberQuery.Instance(MemberKinds.Field), out var field, out var fieldDeclaringType);
-            PropertySymbol property = null;
-            StructSymbol propertyDeclaringType = null;
+            PropertySymbol? property = null;
+            StructSymbol? propertyDeclaringType = null;
             if (!hasField)
             {
                 if (!TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property, out propertyDeclaringType))
@@ -1315,16 +1336,18 @@ internal sealed partial class ExpressionBinder
             // This is independent of the get-only/init "is it writable at all"
             // check below; an inaccessible member is rejected here even when it
             // otherwise has a setter.
+            var memberAccessibility = hasField ? field.Accessibility : Invariant.Required(property, "a resolved property has a symbol").Accessibility;
+            var memberDeclaringType = hasField ? fieldDeclaringType : propertyDeclaringType;
             if (!AccessibilityChecker.IsAccessible(
-                hasField ? field.Accessibility : property.Accessibility,
-                hasField ? fieldDeclaringType : propertyDeclaringType,
+                memberAccessibility,
+                memberDeclaringType,
                 this.function))
             {
                 Diagnostics.ReportMemberInaccessible(
                     initSyntax.FieldIdentifier.Location,
                     fieldName,
-                    (hasField ? fieldDeclaringType : propertyDeclaringType).Name,
-                    hasField ? field.Accessibility : property.Accessibility);
+                    Invariant.Required(memberDeclaringType, "a resolved member has a declaring type").Name,
+                    memberAccessibility);
             }
 
             // Issue #1567: a braced member value `Member: { a, b }` populates the
@@ -1344,13 +1367,13 @@ internal sealed partial class ExpressionBinder
                 }
 
                 bracedCollectionMembers ??= new List<(string, TypeSymbol, CollectionInitializerExpressionSyntax, SyntaxToken)>();
-                bracedCollectionMembers.Add((fieldName, hasField ? field.Type : property.Type, bracedMemberInit, initSyntax.FieldIdentifier));
+                bracedCollectionMembers.Add((fieldName, hasField ? field.Type : Invariant.Required(property, "a resolved property has a type").Type, bracedMemberInit, initSyntax.FieldIdentifier));
                 continue;
             }
 
             // A get-only property (no `set` and no `init` accessor) cannot be
             // assigned in a composite literal — keep it diagnosed.
-            if (!hasField && !property.HasSetter)
+            if (!hasField && !Invariant.Required(property, "a resolved property is present").HasSetter)
             {
                 Diagnostics.ReportCannotAssign(initSyntax.FieldIdentifier.Location, fieldName);
                 continue;
@@ -1362,7 +1385,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var memberType = hasField ? field.Type : property.Type;
+            var memberType = hasField ? field.Type : Invariant.Required(property, "a resolved property has a type").Type;
             var valueExpr = BindExpression(initSyntax.Value);
             valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
             inits.Add(hasField
@@ -1370,7 +1393,7 @@ internal sealed partial class ExpressionBinder
                     field,
                     valueExpr,
                     ReferenceEquals(fieldDeclaringType, structSymbol) ? null : fieldDeclaringType)
-                : new BoundFieldInitializer(property, valueExpr));
+                : new BoundFieldInitializer(Invariant.Required(property, "a resolved property has an initializer"), valueExpr));
         }
 
         // Issue #948: a value-type (struct / data struct) composite literal
@@ -1432,7 +1455,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindStructuralSpreadLiteral(
         StructLiteralExpressionSyntax syntax,
-        StructSymbol resolvedDefinition,
+        StructSymbol? resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
     {
         var emptyTargetSyntax = new StructLiteralExpressionSyntax(
@@ -1449,7 +1472,8 @@ internal sealed partial class ExpressionBinder
         };
 
         var boundTarget = BindStructLiteralExpression(emptyTargetSyntax, resolvedDefinition, enclosingTypeArguments);
-        var source = BindExpression(syntax.SpreadExpression);
+        var spreadExpression = Invariant.Required(syntax.SpreadExpression, "a structural spread has a source expression");
+        var source = BindExpression(spreadExpression);
         if (boundTarget is BoundErrorExpression)
         {
             foreach (var initializer in syntax.Initializers)
@@ -1483,7 +1507,7 @@ internal sealed partial class ExpressionBinder
             }
 
             return conversions.BindStructuralProjection(
-                syntax.SpreadExpression.Location,
+                spreadExpression.Location,
                 source,
                 boundTarget.Type,
                 strict: false,
@@ -1537,7 +1561,7 @@ internal sealed partial class ExpressionBinder
         }
 
         return conversions.BindStructuralProjection(
-            syntax.SpreadExpression.Location,
+            spreadExpression.Location,
             source,
             boundTarget.Type,
             strict: false,
@@ -1660,7 +1684,7 @@ internal sealed partial class ExpressionBinder
             // Resolve a public instance property (non-indexer) or field on the
             // imported CLR type. A settable member binds to a CLR property/field
             // assignment; a get-only/read-only member stays diagnosed (GS0127).
-            MemberInfo member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
             if (member is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 member = null;
@@ -1744,7 +1768,7 @@ internal sealed partial class ExpressionBinder
                 var zeroReceiverExpr = new BoundVariableExpression(syntax, tempVar);
                 statements.Add(new BoundExpressionStatement(
                     syntax,
-                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, fieldInfo, convertedZero, fieldTargetSymbol, staticContainerType: null)));
+                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, Invariant.Required(fieldInfo, "a magic collection field has metadata"), convertedZero, fieldTargetSymbol, staticContainerType: null)));
             }
         }
 
@@ -1929,7 +1953,7 @@ internal sealed partial class ExpressionBinder
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TextLocation location,
         ImmutableArray<int> parameterMapping = default)
     {
@@ -1949,11 +1973,11 @@ internal sealed partial class ExpressionBinder
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TextLocation location,
         ImmutableArray<int> parameterMapping,
         out ImmutableArray<BoundStatement> preludeStatements,
-        out BoundExpression updatedReceiver)
+        out BoundExpression? updatedReceiver)
     {
         preludeStatements = ImmutableArray<BoundStatement>.Empty;
         updatedReceiver = receiver;
@@ -1963,7 +1987,7 @@ internal sealed partial class ExpressionBinder
             return arguments;
         }
 
-        ImmutableArray<BoundExpression>.Builder argBuilder = null;
+        ImmutableArray<BoundExpression>.Builder? argBuilder = null;
 
         // Pass 1: build the handler info for each interpolated-string
         // argument that targets a [InterpolatedStringHandler] parameter.
@@ -1988,7 +2012,9 @@ internal sealed partial class ExpressionBinder
             // testing the attribute and let InterpolatedStringHandlerInfo
             // remember the RefKind so the lowerer can feed the constructed
             // handler local by-ref/in/out.
-            var peeled = parameterType.IsByRef ? parameterType.GetElementType() : parameterType;
+            var peeled = parameterType.IsByRef
+                ? Invariant.Required(parameterType.GetElementType(), "a by-ref handler parameter has an element type")
+                : parameterType;
             if (!InterpolatedStringHandlerInfo.IsHandlerType(peeled))
             {
                 continue;
@@ -2004,7 +2030,9 @@ internal sealed partial class ExpressionBinder
                 out var failure);
             if (handler == null)
             {
-                Diagnostics.ReportInterpolatedStringHandlerArgument(location, failure);
+                Diagnostics.ReportInterpolatedStringHandlerArgument(
+                    location,
+                    failure ?? "unable to create the interpolated string handler");
                 continue;
             }
 
@@ -2162,10 +2190,13 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            elementType = lookupType(syntax.ElementTypeIdentifier.Text);
+            var elementTypeIdentifier = Invariant.Required(
+                syntax.ElementTypeIdentifier,
+                "a non-nested array literal has an element type identifier");
+            elementType = lookupType(elementTypeIdentifier.Text);
             if (elementType == null)
             {
-                Diagnostics.ReportUndefinedType(syntax.ElementTypeIdentifier.Location, syntax.ElementTypeIdentifier.Text);
+                Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.Text);
                 return new BoundErrorExpression(null);
             }
         }
@@ -2180,7 +2211,9 @@ internal sealed partial class ExpressionBinder
             return BindSpreadArrayCreationExpression(syntax, elementType);
         }
 
-        var elements = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements?.Count ?? 0);
+        var elementSyntaxes = syntax.Elements
+            ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
+        var elements = ImmutableArray.CreateBuilder<BoundExpression>(elementSyntaxes.Count);
 
         // Issue #1272: the runtime/zero-initialised allocation form `[n]T`
         // (and the empty-initializer spelling `[n]T{}`). The length is an
@@ -2193,7 +2226,7 @@ internal sealed partial class ExpressionBinder
             return new BoundArrayCreationExpression(syntax, SliceTypeSymbol.Get(elementType), boundLength);
         }
 
-        foreach (var elementSyntax in syntax.Elements)
+        foreach (var elementSyntax in elementSyntaxes)
         {
             elements.Add(conversions.BindConversion(elementSyntax, elementType));
         }
@@ -2209,9 +2242,9 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (syntax.Elements.Count != length)
+        if (elementSyntaxes.Count != length)
         {
-            Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, syntax.Elements.Count);
+            Diagnostics.ReportArrayLiteralLengthMismatch(syntax.Location, length, elementSyntaxes.Count);
         }
 
         return new BoundArrayCreationExpression(null, ArrayTypeSymbol.Get(elementType, length), elements.ToImmutable());
@@ -2236,7 +2269,8 @@ internal sealed partial class ExpressionBinder
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, temp, construction));
-        foreach (var element in syntax.Elements)
+        foreach (var element in syntax.Elements
+            ?? new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty))
         {
             if (element is SpreadElementExpressionSyntax spread)
             {
@@ -2317,7 +2351,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The stackalloc syntax.</param>
     /// <param name="targetType">The contextual target type, or <see langword="null"/>.</param>
     /// <returns>The bound stackalloc expression.</returns>
-    internal BoundExpression BindStackAllocExpression(StackAllocExpressionSyntax syntax, TypeSymbol targetType = null)
+    internal BoundExpression BindStackAllocExpression(StackAllocExpressionSyntax syntax, TypeSymbol? targetType = null)
     {
         var elementType = lookupType(syntax.ElementTypeIdentifier.Text);
         if (elementType == null)
@@ -2343,8 +2377,9 @@ internal sealed partial class ExpressionBinder
         var initializerElements = ImmutableArray<BoundExpression>.Empty;
         if (syntax.HasInitializer)
         {
-            var builder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Elements.Count);
-            foreach (var elementSyntax in syntax.Elements)
+            var initializerSyntaxes = Invariant.Required(syntax.Elements, "a stackalloc initializer has elements");
+            var builder = ImmutableArray.CreateBuilder<BoundExpression>(initializerSyntaxes.Count);
+            foreach (var elementSyntax in initializerSyntaxes)
             {
                 builder.Add(conversions.BindConversion(elementSyntax, elementType));
             }
@@ -2368,7 +2403,9 @@ internal sealed partial class ExpressionBinder
         else if (syntax.HasInitializer)
         {
             // Explicit count with an initializer: the two must agree, as in C#.
-            var boundCount = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+            var boundCount = conversions.BindConversion(
+                Invariant.Required(syntax.CountExpression, "an explicit stackalloc count has an expression"),
+                TypeSymbol.Int32);
             if (TryGetConstantInt32(boundCount, out var explicitCount) && explicitCount != initializerElements.Length)
             {
                 Diagnostics.ReportStackAllocInitializerLengthMismatch(syntax.Location, explicitCount, initializerElements.Length);
@@ -2380,7 +2417,9 @@ internal sealed partial class ExpressionBinder
         else
         {
             // Count-only `stackalloc [n]T`: a full (possibly runtime) expression.
-            count = conversions.BindConversion(syntax.CountExpression, TypeSymbol.Int32);
+            count = conversions.BindConversion(
+                Invariant.Required(syntax.CountExpression, "a stackalloc count has an expression"),
+                TypeSymbol.Int32);
         }
 
         // Unsafe pointer form: only when the declaration target is an unmanaged

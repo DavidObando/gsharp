@@ -602,12 +602,12 @@ public sealed class Lowerer : BoundTreeRewriter
             // Issue #263: static auto-property assignment — lower to static field assignment.
             if (node.Receiver == null)
             {
-                return new BoundFieldAssignmentExpression(null, receiver: null, node.StructType, node.Property.BackingField, value);
+                return new BoundFieldAssignmentExpression(null, receiver: null, Invariant.Required(node.StructType, "an auto-property assignment has a declaring type"), node.Property.BackingField, value);
             }
 
             if (node.Receiver is BoundVariableExpression varExpr)
             {
-                return new BoundFieldAssignmentExpression(null, varExpr.Variable, node.StructType, node.Property.BackingField, value);
+                return new BoundFieldAssignmentExpression(null, varExpr.Variable, Invariant.Required(node.StructType, "an auto-property assignment has a declaring type"), node.Property.BackingField, value);
             }
         }
 

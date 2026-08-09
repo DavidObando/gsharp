@@ -1074,7 +1074,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     ExpressionBindMethod,
                     TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
                     ImmutableArray.Create<BoundExpression>(
-                        BuildUserPropertyInfoLookup(property.StructType, property.Property.Name),
+                        BuildUserPropertyInfoLookup(
+                            Invariant.Required(
+                                property.StructType ?? property.Receiver?.Type,
+                                "a property assignment has an expression-tree owner type"),
+                            property.Property.Name),
                         UpcastToExpression(this.TranslateExpression(property.Value, parameterMap)))),
             BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver) =>
                 new BoundClrStaticCallExpression(
