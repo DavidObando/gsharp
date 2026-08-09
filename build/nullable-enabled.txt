@@ -159,3 +159,6 @@ src/Core/CodeAnalysis/Binding/IteratorDetection.cs
 
 # Slice 18 -- early friend-assembly declaration collector.
 src/Core/CodeAnalysis/Binding/FriendAssemblyDeclarations.cs
+
+# Slice 19 -- per-pass anonymous object shape cache.
+src/Core/CodeAnalysis/Binding/AnonymousTypeCache.cs
