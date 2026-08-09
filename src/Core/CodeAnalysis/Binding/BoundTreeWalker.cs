@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 
@@ -408,7 +410,10 @@ public abstract class BoundTreeWalker
 
     protected virtual void VisitVariableDeclaration(BoundVariableDeclaration node)
     {
-        VisitExpression(node.Initializer);
+        if (node.Initializer is { } initializer)
+        {
+            VisitExpression(initializer);
+        }
     }
 
     /// <summary>Visits a generic local-function declaration (issue #1886) by descending into its function literal, mirroring <see cref="VisitVariableDeclaration"/>.</summary>

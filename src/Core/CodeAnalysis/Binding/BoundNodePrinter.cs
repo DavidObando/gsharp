@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.CodeDom.Compiler;
 using System.IO;
@@ -419,7 +421,7 @@ public static class BoundNodePrinter
         }
 
         writer.WriteSpace();
-        node.Initializer.WriteTo(writer);
+        node.Initializer?.WriteTo(writer);
         writer.WriteLine();
     }
 
@@ -622,11 +624,11 @@ public static class BoundNodePrinter
             return;
         }
 
-        var value = node.Value.ToString();
+        var value = node.Value?.ToString() ?? string.Empty;
 
         if (node.Type == TypeSymbol.Bool)
         {
-            writer.WriteKeyword((bool)node.Value ? SyntaxKind.TrueKeyword : SyntaxKind.FalseKeyword);
+            writer.WriteKeyword(node.Value is true ? SyntaxKind.TrueKeyword : SyntaxKind.FalseKeyword);
         }
         else if (node.Type == TypeSymbol.String)
         {
@@ -933,26 +935,26 @@ public static class BoundNodePrinter
                     writer.WriteKeyword(SyntaxKind.CaseKeyword);
                     writer.WriteSpace();
                     writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-                    arm.Channel.WriteTo(writer);
+                    arm.Channel?.WriteTo(writer);
                     break;
                 case SelectCaseKind.ReceiveBind:
                     writer.WriteKeyword(SyntaxKind.CaseKeyword);
                     writer.WriteSpace();
-                    writer.WriteIdentifier(arm.Variable.Name);
+                    writer.WriteIdentifier(arm.Variable?.Name ?? string.Empty);
                     writer.WriteSpace();
                     writer.WritePunctuation(SyntaxKind.ColonEqualsToken);
                     writer.WriteSpace();
                     writer.WritePunctuation(SyntaxKind.LeftArrowToken);
-                    arm.Channel.WriteTo(writer);
+                    arm.Channel?.WriteTo(writer);
                     break;
                 case SelectCaseKind.Send:
                     writer.WriteKeyword(SyntaxKind.CaseKeyword);
                     writer.WriteSpace();
-                    arm.Channel.WriteTo(writer);
+                    arm.Channel?.WriteTo(writer);
                     writer.WriteSpace();
                     writer.WritePunctuation(SyntaxKind.LeftArrowToken);
                     writer.WriteSpace();
-                    arm.Value.WriteTo(writer);
+                    arm.Value?.WriteTo(writer);
                     break;
             }
 
@@ -1206,7 +1208,7 @@ public static class BoundNodePrinter
         }
         else
         {
-            writer.WriteIdentifier(node.Target.Name);
+            writer.WriteIdentifier(node.Target?.Name ?? string.Empty);
         }
 
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
@@ -1546,7 +1548,7 @@ public static class BoundNodePrinter
         }
         else
         {
-            writer.WriteIdentifier(node.Target.Name);
+            writer.WriteIdentifier(node.Target?.Name ?? string.Empty);
         }
 
         writer.WritePunctuation(SyntaxKind.OpenSquareBracketToken);
@@ -1853,12 +1855,12 @@ public static class BoundNodePrinter
         {
             if (part.IsLiteral)
             {
-                writer.WriteString(part.Literal.Replace("\"", "\\\""));
+                writer.WriteString((part.Literal ?? string.Empty).Replace("\"", "\\\""));
                 continue;
             }
 
             writer.WritePunctuation(SyntaxKind.OpenBraceToken);
-            part.Value.WriteTo(writer);
+            part.Value?.WriteTo(writer);
             if (part.Alignment.HasValue)
             {
                 writer.WritePunctuation(SyntaxKind.CommaToken);

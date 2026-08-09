@@ -124,3 +124,6 @@ src/Core/CodeAnalysis/Symbols/EventSymbol.cs
 src/Core/CodeAnalysis/Symbols/FunctionSymbol.cs
 src/Core/CodeAnalysis/Symbols/PropertySymbol.cs
 src/Core/CodeAnalysis/Symbols/BaseConstructorInitializer.cs
+# Slice 11 -- Bound-tree logic and overload resolution.
+src/Core/CodeAnalysis/Binding/BoundTreeWalker.cs
+src/Core/CodeAnalysis/Binding/BoundNodePrinter.cs
