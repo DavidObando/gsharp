@@ -25,7 +25,7 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
     public BoundClrPropertyAccessExpression(
         SyntaxNode? syntax,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         MemberInfo member,
         TypeSymbol resultType,
         TypeSymbol? staticContainerType = null,
@@ -45,7 +45,7 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
         IsReadOnlySubmissionGlobal = isReadOnlySubmissionGlobal;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     public MemberInfo Member { get; }
 

@@ -17,7 +17,12 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundFieldAccessExpression : BoundExpression
 {
-    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field)
+    /// <summary>Initializes a new instance of the <see cref="BoundFieldAccessExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax, or <see langword="null"/> for synthesized nodes.</param>
+    /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static field.</param>
+    /// <param name="structType">The declaring struct/class type, or <see langword="null"/> for an interface static field.</param>
+    /// <param name="field">The field to read.</param>
+    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, FieldSymbol field)
         : this(syntax, receiver, structType, field, narrowedType: null)
     {
     }
@@ -53,11 +58,11 @@ public sealed class BoundFieldAccessExpression : BoundExpression
     /// field handle).
     /// </summary>
     /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
-    /// <param name="receiver">The expression that produces the struct/class instance.</param>
-    /// <param name="structType">The declaring struct/class type.</param>
+    /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static field.</param>
+    /// <param name="structType">The declaring struct/class type, or <see langword="null"/> for an interface static field.</param>
     /// <param name="field">The field to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="field"/>'s declared type.</param>
-    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, FieldSymbol field, TypeSymbol? narrowedType)
+    public BoundFieldAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, FieldSymbol field, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;

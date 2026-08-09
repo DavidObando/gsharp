@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundPropertyAccessExpression : BoundExpression
 {
-    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol structType, PropertySymbol property)
         : this(syntax, receiver, structType, property, narrowedType: null)
     {
     }
@@ -31,11 +31,11 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// same getter).
     /// </summary>
     /// <param name="syntax">The originating syntax, or <c>null</c> for synthesized nodes.</param>
-    /// <param name="receiver">The expression that produces the instance.</param>
+    /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static property.</param>
     /// <param name="structType">The declaring struct/class type.</param>
     /// <param name="property">The property to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="property"/>'s declared type.</param>
-    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression receiver, StructSymbol structType, PropertySymbol property, TypeSymbol? narrowedType)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol structType, PropertySymbol property, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -44,7 +44,8 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
         NarrowedType = narrowedType;
     }
 
-    public BoundExpression Receiver { get; }
+    /// <summary>Gets the instance receiver, or <see langword="null"/> for a static property.</summary>
+    public BoundExpression? Receiver { get; }
 
     public StructSymbol StructType { get; }
 

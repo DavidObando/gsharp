@@ -579,11 +579,29 @@ public static class SpillSequenceSpiller
                 case BoundFieldAccessExpression fieldAccess:
                     return SpillFieldAccess(fieldAccess);
                 case BoundPropertyAccessExpression propAccess:
+                    if (propAccess.Receiver == null)
+                    {
+                        return Trivial(propAccess);
+                    }
+
                     return SpillOneOperand(
                         propAccess,
                         propAccess.Receiver,
                         recv => new BoundPropertyAccessExpression(null, recv, propAccess.StructType, propAccess.Property, propAccess.NarrowedType));
                 case BoundPropertyAssignmentExpression propAssign:
+                    if (propAssign.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            propAssign,
+                            propAssign.Value,
+                            value => new BoundPropertyAssignmentExpression(
+                                null,
+                                receiver: null,
+                                propAssign.StructType,
+                                propAssign.Property,
+                                value));
+                    }
+
                     return SpillTwoOperand(
                         propAssign,
                         propAssign.Receiver,

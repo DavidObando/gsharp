@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -149,8 +151,8 @@ internal sealed partial class StatementBinder
         out BoundLabel breakLabel,
         out BoundLabel continueLabel,
         int inheritedNarrowingFrameCount = -1,
-        BoundStatement backEdgeTail = null,
-        BoundExpression backEdgeCondition = null)
+        BoundStatement? backEdgeTail = null,
+        BoundExpression? backEdgeCondition = null)
     {
         inheritedNarrowingFrameCount = inheritedNarrowingFrameCount < 0
             ? binderCtx.NarrowedVariables.Count
@@ -233,6 +235,7 @@ internal sealed partial class StatementBinder
         static void RestoreDictionary<TKey, TValue>(
             Dictionary<TKey, TValue> destination,
             KeyValuePair<TKey, TValue>[] snapshot)
+            where TKey : notnull
         {
             destination.Clear();
             foreach (var entry in snapshot)
@@ -326,7 +329,7 @@ internal sealed partial class StatementBinder
         // GS0362 still fires there — the user must write the explicit
         // `default(T)` form when the lambda's return type is being
         // inferred.
-        BoundExpression expression;
+        BoundExpression? expression;
         if (syntax.Expression is DefaultExpressionSyntax bareReturnDefault
             && bareReturnDefault.TypeClause == null
             && function != null
@@ -370,7 +373,7 @@ internal sealed partial class StatementBinder
             if (syntax.IsRefReturn && !fnIsRefReturning)
             {
                 Diagnostics.ReportRefReturnInNonRefReturningFunction(
-                    syntax.RefKeyword.Location,
+                    Invariant.Required(syntax.RefKeyword, "a ref return has a ref keyword").Location,
                     function.Name);
             }
             else if (!syntax.IsRefReturn && fnIsRefReturning && syntax.Expression != null)
@@ -407,7 +410,9 @@ internal sealed partial class StatementBinder
             {
                 if (expression != null)
                 {
-                    Diagnostics.ReportInvalidReturnExpression(syntax.Expression.Location, function.Name);
+                    Diagnostics.ReportInvalidReturnExpression(
+                        Invariant.Required(syntax.Expression, "a return expression is present").Location,
+                        function.Name);
                 }
             }
             else
@@ -418,7 +423,10 @@ internal sealed partial class StatementBinder
                 }
                 else
                 {
-                    expression = conversions.BindConversion(syntax.Expression.Location, expression, function.Type);
+                    expression = conversions.BindConversion(
+                        Invariant.Required(syntax.Expression, "a return expression is present").Location,
+                        expression,
+                        function.Type);
                 }
             }
         }
@@ -433,7 +441,7 @@ internal sealed partial class StatementBinder
             if (expression.Type is ByRefTypeSymbol && !isRefReturn)
             {
                 Diagnostics.ReportByRefCannotEscape(
-                    syntax.Expression.Location,
+                    Invariant.Required(syntax.Expression, "a by-ref return expression is present").Location,
                     "a managed pointer (*T) cannot be returned from a function; managed references must not outlive their declaring scope");
             }
 
@@ -444,7 +452,7 @@ internal sealed partial class StatementBinder
             if (TypeSymbol.IsByRefLike(expression.Type) && HasFunctionLocalEscapeScope(expression))
             {
                 Diagnostics.ReportByRefLikeEscape(
-                    syntax.Expression.Location,
+                    Invariant.Required(syntax.Expression, "a by-ref-like return expression is present").Location,
                     expression.Type,
                     "be returned from a function (value has function-local safe-to-escape scope due to a `scoped` source)");
             }
@@ -457,11 +465,13 @@ internal sealed partial class StatementBinder
         {
             if (!IsLvalueForRefReturn(expression))
             {
-                Diagnostics.ReportRefReturnRequiresLvalue(syntax.Expression.Location);
+                Diagnostics.ReportRefReturnRequiresLvalue(
+                    Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
             }
             else if (HasFunctionLocalRefScope(expression))
             {
-                Diagnostics.ReportRefReturnEscapesLocalScope(syntax.Expression.Location);
+                Diagnostics.ReportRefReturnEscapesLocalScope(
+                    Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
             }
 
             expression = expression is BoundBlockExpression block
@@ -526,7 +536,7 @@ internal sealed partial class StatementBinder
                 return v.Variable is LocalVariableSymbol;
             case BoundFieldAccessExpression fa:
                 // Reference type fields live in a heap object — safe regardless of receiver scope.
-                if (fa.Receiver.Type is StructSymbol s && s.IsClass)
+                if (fa.Receiver is { Type: StructSymbol s } && s.IsClass)
                 {
                     return false;
                 }
@@ -725,7 +735,9 @@ internal sealed partial class StatementBinder
         // operator so any value-type Nullable<T> lowering is handled in the
         // same code path as `x == nil` elsewhere.
         var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
-        var eqOp = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, read.Type, TypeSymbol.Null);
+        var eqOp = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, read.Type, TypeSymbol.Null),
+            "a nullable coalescing assignment target supports nil comparison");
         BoundExpression condition = new BoundBinaryExpression(syntax, read, eqOp, nilLiteral);
 
         var thenStmt = new BoundExpressionStatement(syntax, write);
@@ -749,7 +761,7 @@ internal sealed partial class StatementBinder
     /// <c>(null, null)</c> with a diagnostic when the target shape is
     /// not assignable or the target is read-only.
     /// </summary>
-    private (BoundExpression Read, BoundExpression Write) TryBuildNullCoalescingReadWrite(
+    private (BoundExpression? Read, BoundExpression? Write) TryBuildNullCoalescingReadWrite(
         NullCoalescingAssignmentStatementSyntax syntax,
         BoundExpression boundRead,
         BoundExpression boundRhs,
@@ -771,6 +783,26 @@ internal sealed partial class StatementBinder
 
             case BoundFieldAccessExpression fieldAccess:
             {
+                if (fieldAccess.InterfaceType != null)
+                {
+                    if (fieldAccess.Field.IsReadOnly)
+                    {
+                        Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, fieldAccess.Field.Name);
+                        return (null, null);
+                    }
+
+                    var interfaceRead = new BoundFieldAccessExpression(
+                        syntax,
+                        fieldAccess.Field,
+                        fieldAccess.InterfaceType);
+                    var interfaceWrite = new BoundFieldAssignmentExpression(
+                        syntax,
+                        fieldAccess.Field,
+                        fieldAccess.InterfaceType,
+                        boundRhs);
+                    return (interfaceRead, interfaceWrite);
+                }
+
                 // Issue #947: a read-only (`let`) instance field may be written
                 // by a compound assignment inside the declaring type's
                 // constructor when the receiver is `this`; everywhere else the
@@ -801,7 +833,11 @@ internal sealed partial class StatementBinder
                 var receiver = fieldAccess.Receiver == null
                     ? null
                     : CaptureReceiver(syntax, fieldAccess.Receiver, preStatements);
-                var read = new BoundFieldAccessExpression(syntax, receiver, fieldAccess.StructType, fieldAccess.Field);
+                var read = new BoundFieldAccessExpression(
+                    syntax,
+                    receiver,
+                    Invariant.Required(fieldAccess.StructType, "a user field access has a declaring struct type"),
+                    fieldAccess.Field);
 
                 // Use the VariableSymbol-based constructor: every receiver
                 // captured by CaptureReceiver is a BoundVariableExpression
@@ -810,7 +846,12 @@ internal sealed partial class StatementBinder
                 // existing rewriters all assume this shape for the simple
                 // receiver path; routing through ReceiverExpression bypasses
                 // the interpreter's class-field write logic (issue #709).
-                var write = new BoundFieldAssignmentExpression(syntax, receiver?.Variable, fieldAccess.StructType, fieldAccess.Field, boundRhs);
+                var write = new BoundFieldAssignmentExpression(
+                    syntax,
+                    receiver?.Variable,
+                    Invariant.Required(fieldAccess.StructType, "a user field assignment has a declaring struct type"),
+                    fieldAccess.Field,
+                    boundRhs);
                 return (read, write);
             }
 

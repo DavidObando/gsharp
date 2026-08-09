@@ -233,7 +233,8 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         // the write at the element address (`ldelema`), so only the
         // side-effecting collection/index sub-expressions are spilled (see
         // SpillElementChainParts), never the element value itself.
-        var spillReceiver = SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
+        var spillReceiver = rewritten.Receiver != null
+            && SideEffectAnalyzer.HasObservableSideEffect(rewritten.Receiver)
             && !BoundClrPropertyAccessExpression.IsAddressableSubmissionFieldChain(rewritten.Receiver)
             && !IsInPlaceElementWriteReceiver(rewritten.Receiver);
         var value = rewritten.Value;
@@ -242,7 +243,11 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
         var receiver = rewritten.Receiver;
         if (spillReceiver)
         {
-            receiver = this.MaybeSpill(rewritten.Receiver, true, "recv", statements);
+            receiver = this.MaybeSpill(
+                Invariant.Required(rewritten.Receiver, "a spilled property assignment has a receiver"),
+                true,
+                "recv",
+                statements);
 
             // Issue #1688: a compound assignment (`getObj().P += x`) lowers
             // to `assign(receiver, get(receiver) OP rhs)` — the SAME
@@ -253,16 +258,21 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             // evaluate it a second time. Substitute every occurrence of
             // the shared receiver inside `value` with the freshly spilled
             // temp so both sides observe exactly one evaluation.
-            value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);
+            value = ReceiverSubstitutionRewriter.Replace(
+                value,
+                Invariant.Required(rewritten.Receiver, "a spilled property assignment has a receiver"),
+                Invariant.Required(receiver, "a spilled property assignment produces a receiver"));
         }
-        else if (IsInPlaceElementWriteReceiver(rewritten.Receiver))
+        else if (rewritten.Receiver != null && IsInPlaceElementWriteReceiver(rewritten.Receiver))
         {
             // Issue #3292: once-only evaluation for the element chain — the
             // emitter re-emits the collection/index pair on both the read
             // and write sides of a compound write, so any side-effecting
             // sub-expression is hoisted into a temp first and the rebuilt
             // (pure) chain is substituted into both sides.
-            receiver = this.SpillElementChainParts(rewritten.Receiver, statements);
+            receiver = this.SpillElementChainParts(
+                Invariant.Required(rewritten.Receiver, "an element write has a receiver"),
+                statements);
             if (!ReferenceEquals(receiver, rewritten.Receiver))
             {
                 value = ReceiverSubstitutionRewriter.Replace(value, rewritten.Receiver, receiver);

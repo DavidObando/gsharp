@@ -17,9 +17,15 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundPropertyAssignmentExpression : BoundExpression
 {
+    /// <summary>Initializes a new instance of the <see cref="BoundPropertyAssignmentExpression"/> class.</summary>
+    /// <param name="syntax">The originating syntax, or <see langword="null"/> for synthesized nodes.</param>
+    /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static property.</param>
+    /// <param name="structType">The declaring struct/class type.</param>
+    /// <param name="property">The property to write.</param>
+    /// <param name="value">The value to assign.</param>
     public BoundPropertyAssignmentExpression(
         SyntaxNode? syntax,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         StructSymbol structType,
         PropertySymbol property,
         BoundExpression value)
@@ -31,7 +37,8 @@ public sealed class BoundPropertyAssignmentExpression : BoundExpression
         Value = value;
     }
 
-    public BoundExpression Receiver { get; }
+    /// <summary>Gets the instance receiver, or <see langword="null"/> for a static property.</summary>
+    public BoundExpression? Receiver { get; }
 
     public StructSymbol StructType { get; }
 

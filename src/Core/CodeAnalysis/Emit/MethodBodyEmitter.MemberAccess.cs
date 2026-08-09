@@ -1039,7 +1039,8 @@ internal sealed partial class MethodBodyEmitter
                 wantSetter: false)
                 ?? throw new InvalidOperationException(
                     $"Property '{constrainedProperty.DeclaringType?.FullName}.{constrainedProperty.Name}' has no public getter.");
-            this.EmitConstrainedTypeParameterReceiver(access.Receiver);
+            this.EmitConstrainedTypeParameterReceiver(
+                Invariant.Required(access.Receiver, "a constrained property access has a receiver"));
             this.il.OpCode(ILOpCode.Constrained);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(access.ConstrainedReceiverTypeParameter));
             this.il.OpCode(ILOpCode.Callvirt);
@@ -1091,7 +1092,9 @@ internal sealed partial class MethodBodyEmitter
                     ? (access.StaticContainerType != null
                         ? this.outer.memberRefs.GetMethodEntityHandle(getter, access.StaticContainerType)
                         : (EntityHandle)this.outer.memberRefs.GetMethodReference(getter))
-                    : this.outer.memberRefs.GetMethodEntityHandle(getter, access.Receiver.Type);
+                    : this.outer.memberRefs.GetMethodEntityHandle(
+                        getter,
+                        Invariant.Required(receiver, "an instance property access has a receiver").Type);
                 this.il.OpCode(isStatic || receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
                 this.il.Token(getterRef);
 
@@ -1114,7 +1117,10 @@ internal sealed partial class MethodBodyEmitter
                 // a verifier-breaking `unbox.any T` against a value type T
                 // (the stack already holds the substituted `!!0`).
                 if (!isStatic
-                    && this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(access.Receiver.Type, property, out _))
+                    && this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(
+                        Invariant.Required(receiver, "an instance property access has a receiver").Type,
+                        property,
+                        out _))
                 {
                     break;
                 }
@@ -1836,8 +1842,8 @@ internal sealed partial class MethodBodyEmitter
             {
                 case BoundClrPropertyAccessExpression clr when clr.Receiver == null:
                     return clr.IsAddressableStaticField;
-                case BoundClrPropertyAccessExpression clr:
-                    node = clr.Receiver;
+                case BoundClrPropertyAccessExpression { Receiver: { } receiver }:
+                    node = receiver;
                     continue;
                 case BoundFieldAccessExpression fieldAccess when fieldAccess.Receiver != null:
                     node = fieldAccess.Receiver;
