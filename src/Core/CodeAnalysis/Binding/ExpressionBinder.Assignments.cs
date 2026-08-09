@@ -539,6 +539,7 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
@@ -953,6 +954,7 @@ internal sealed partial class ExpressionBinder
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
@@ -1544,6 +1546,8 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
+            propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
+
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the property's *value* in place, so it needs only a getter — no
             // setter, no accessibility-of-setter check, and no write-back. This
@@ -2232,6 +2236,7 @@ internal sealed partial class ExpressionBinder
             // ADR-0051: check properties before reporting "unable to find member".
             if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
@@ -2341,7 +2346,7 @@ internal sealed partial class ExpressionBinder
         // CLR receiver → property/field write via reflection.
         if (CanBindClrInstanceMember(receiver))
         {
-            var clrReceiverType = receiverType.ClrType;
+            var clrReceiverType = Invariant.Required(receiverType.ClrType, "a CLR member receiver has a CLR type");
             MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
             {

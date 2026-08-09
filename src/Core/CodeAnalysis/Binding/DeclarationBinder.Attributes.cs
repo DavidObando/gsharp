@@ -606,7 +606,7 @@ internal sealed partial class DeclarationBinder
         // helper (generalizing the #1100/#2135 pattern established in
         // Conversion.IsEnumLikeType / IsInterfaceLikeType) rather than
         // probing `ClrType.IsEnum` directly.
-        return type?.ClrType.IsEnumSafe() == true;
+        return type?.ClrType is { } clrType && clrType.IsEnumSafe();
     }
 
     // Issue #2831: the CLR custom-attribute blob (ECMA-335 II.23.3) can carry

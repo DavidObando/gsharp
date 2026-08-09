@@ -2027,14 +2027,16 @@ internal sealed partial class MethodBodyEmitter
     {
         return NullableLifting.IsUserValueTypeNullable(nullable)
             ? this.outer.memberRefs.GetNullableGetHasValueMemberRefForUserValueType(nullable)
-            : this.outer.wellKnown.GetNullableGetHasValueReference(nullable.UnderlyingType.ClrType);
+            : this.outer.wellKnown.GetNullableGetHasValueReference(
+                Invariant.Required(nullable.UnderlyingType.ClrType, "a runtime nullable type has a CLR underlying type"));
     }
 
     private MemberReferenceHandle GetNullableValueRef(NullableTypeSymbol nullable)
     {
         return NullableLifting.IsUserValueTypeNullable(nullable)
             ? this.outer.memberRefs.GetNullableGetValueMemberRefForUserValueType(nullable)
-            : this.outer.wellKnown.GetNullableGetValueReference(nullable.UnderlyingType.ClrType);
+            : this.outer.wellKnown.GetNullableGetValueReference(
+                Invariant.Required(nullable.UnderlyingType.ClrType, "a runtime nullable type has a CLR underlying type"));
     }
 
     private void EmitUnwrappedNullableValue(int slot, NullableTypeSymbol nullable)

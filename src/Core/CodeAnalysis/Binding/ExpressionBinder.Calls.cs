@@ -113,6 +113,7 @@ internal sealed partial class ExpressionBinder
             // accessor instead of failing to find a field at all.
             if (TypeMemberModel.TryGetProperty(structType, memberName, out var property, out var propertyDeclaringType) && property.HasSetter)
             {
+                propertyDeclaringType = Invariant.Required(propertyDeclaringType, "a user-defined struct property has a declaring type");
                 if (!AccessibilityChecker.IsAccessible(property.SetterAccessibility, propertyDeclaringType, this.function))
                 {
                     Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.SetterAccessibility);

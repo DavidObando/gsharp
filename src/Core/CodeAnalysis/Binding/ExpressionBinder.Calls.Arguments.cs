@@ -2707,6 +2707,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        declaringType = Invariant.Required(declaringType, "a base-class property has a declaring type");
         if (!prop.HasGetter)
         {
             Diagnostics.ReportCannotAssign(member.IdentifierToken.Location, memberName);
@@ -2800,6 +2801,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        declaringType = Invariant.Required(declaringType, "a base-class property has a declaring type");
         if (!prop.HasSetter)
         {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName);

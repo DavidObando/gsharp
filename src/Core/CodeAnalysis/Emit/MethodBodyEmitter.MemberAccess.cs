@@ -385,7 +385,11 @@ internal sealed partial class MethodBodyEmitter
         {
             var tryGet = dictType.GetMethod(
                 "TryGetValue",
-                new[] { mapType.KeyType.ClrType, mapType.ValueType.ClrType.MakeByRefType() })
+                new[]
+                {
+                    Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation"),
+                    Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation").MakeByRefType(),
+                })
                 ?? throw new InvalidOperationException(
                     $"Dictionary type '{dictType.FullName}' has no TryGetValue(K, out V) method.");
             tryGetRef = this.outer.memberRefs.GetMethodReference(tryGet);

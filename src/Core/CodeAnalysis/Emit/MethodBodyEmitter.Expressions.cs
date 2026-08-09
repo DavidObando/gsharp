@@ -1134,7 +1134,9 @@ internal sealed partial class MethodBodyEmitter
         var removeRef = dictType == null
             ? this.outer.memberRefs.GetMapRemoveReference(mapType)
             : this.outer.memberRefs.GetMethodReference(
-                dictType.GetMethod("Remove", new[] { mapType.KeyType.ClrType })
+                dictType.GetMethod(
+                    "Remove",
+                    new[] { Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation") })
                 ?? throw new InvalidOperationException(
                     $"Dictionary type '{dictType.FullName}' has no Remove(K) method."));
 

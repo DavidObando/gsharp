@@ -577,7 +577,11 @@ internal sealed partial class DeclarationBinder
             : null;
         specialized.IsSpecialName = function.IsSpecialName;
         specialized.SetAttributes(function.Attributes);
-        specialized.SetDocumentation(function.GetDocumentation());
+        if (function.GetDocumentation() is { } documentation)
+        {
+            specialized.SetDocumentation(documentation);
+        }
+
         specialized.NullableSequenceSpecialization = isValueType
             ? NullableSequenceSpecializationKind.ValueType
             : NullableSequenceSpecializationKind.ReferenceType;

@@ -1336,7 +1336,9 @@ internal sealed partial class ExpressionBinder
             // This is independent of the get-only/init "is it writable at all"
             // check below; an inaccessible member is rejected here even when it
             // otherwise has a setter.
-            var memberAccessibility = hasField ? field.Accessibility : Invariant.Required(property, "a resolved property has a symbol").Accessibility;
+            var memberAccessibility = hasField
+                ? Invariant.Required(field, "a resolved field has a symbol").Accessibility
+                : Invariant.Required(property, "a resolved property has a symbol").Accessibility;
             var memberDeclaringType = hasField ? fieldDeclaringType : propertyDeclaringType;
             if (!AccessibilityChecker.IsAccessible(
                 memberAccessibility,
@@ -1367,7 +1369,13 @@ internal sealed partial class ExpressionBinder
                 }
 
                 bracedCollectionMembers ??= new List<(string, TypeSymbol, CollectionInitializerExpressionSyntax, SyntaxToken)>();
-                bracedCollectionMembers.Add((fieldName, hasField ? field.Type : Invariant.Required(property, "a resolved property has a type").Type, bracedMemberInit, initSyntax.FieldIdentifier));
+                bracedCollectionMembers.Add((
+                    fieldName,
+                    hasField
+                        ? Invariant.Required(field, "a resolved field has a type").Type
+                        : Invariant.Required(property, "a resolved property has a type").Type,
+                    bracedMemberInit,
+                    initSyntax.FieldIdentifier));
                 continue;
             }
 
@@ -1385,12 +1393,14 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var memberType = hasField ? field.Type : Invariant.Required(property, "a resolved property has a type").Type;
+            var memberType = hasField
+                ? Invariant.Required(field, "a resolved field has a type").Type
+                : Invariant.Required(property, "a resolved property has a type").Type;
             var valueExpr = BindExpression(initSyntax.Value);
             valueExpr = conversions.BindConversion(initSyntax.Value.Location, valueExpr, memberType);
             inits.Add(hasField
                 ? new BoundFieldInitializer(
-                    field,
+                    Invariant.Required(field, "a resolved field has an initializer"),
                     valueExpr,
                     ReferenceEquals(fieldDeclaringType, structSymbol) ? null : fieldDeclaringType)
                 : new BoundFieldInitializer(Invariant.Required(property, "a resolved property has an initializer"), valueExpr));

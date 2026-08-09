@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Immutable;
 using System.IO;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -14,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public abstract class Symbol
 {
-    private DocumentationComment authoredDocumentation;
+    private DocumentationComment? authoredDocumentation;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Symbol"/> class.
@@ -70,7 +72,7 @@ public abstract class Symbol
     /// override this to resolve documentation from the ingested <c>.xml</c> on demand.
     /// </summary>
     /// <returns>The documentation comment, or <see langword="null"/> when undocumented.</returns>
-    public virtual DocumentationComment GetDocumentation()
+    public virtual DocumentationComment? GetDocumentation()
     {
         return this.authoredDocumentation;
     }

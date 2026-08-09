@@ -29,7 +29,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
 
         // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
         // same-compilation element types.
-        : base(BuildName(elementTypes), BuildClrType(elementTypes)!)
+        : base(BuildName(elementTypes), BuildClrType(elementTypes))
     {
         ElementTypes = elementTypes;
     }
@@ -125,7 +125,9 @@ public sealed class TupleTypeSymbol : TypeSymbol
             return null;
         }
 
-        var clrTypes = elementTypes.Select(t => t.ClrType).ToArray();
+        var clrTypes = elementTypes
+            .Select(t => Invariant.Required(t.ClrType, "a CLR-backed tuple element has a CLR type"))
+            .ToArray();
         return BuildClrType(clrTypes);
     }
 

@@ -260,3 +260,12 @@ src/Core/CodeAnalysis/Symbols/PointerTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/SequenceTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/SliceTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/TupleTypeSymbol.cs
+
+# Slice 52 -- foundational symbol, variable, parameter, and member contracts.
+src/Core/CodeAnalysis/Symbols/Symbol.cs
+src/Core/CodeAnalysis/Symbols/TypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/VariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/LocalVariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/ParameterSymbol.cs
+src/Core/CodeAnalysis/Symbols/MemberQuery.cs
+src/Core/CodeAnalysis/Symbols/TypeMemberModel.cs

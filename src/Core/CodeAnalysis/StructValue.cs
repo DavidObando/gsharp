@@ -420,7 +420,8 @@ public sealed class StructValue
 
             if (type is EnumSymbol enumType)
             {
-                return enumType.ClrType ?? enumType.UnderlyingType.ClrType;
+                return enumType.ClrType
+                    ?? Invariant.Required(enumType.UnderlyingType.ClrType, "an enum has a CLR underlying type");
             }
 
             return NullableTypeSymbol.GetEffectiveClrType(type) ?? typeof(object);
@@ -462,7 +463,10 @@ public sealed class StructValue
 
             if (type is EnumSymbol enumType && enumType.ClrType != null && value != null)
             {
-                return Convert.ChangeType(value, enumType.UnderlyingType.ClrType, CultureInfo.InvariantCulture);
+                return Convert.ChangeType(
+                    value,
+                    Invariant.Required(enumType.UnderlyingType.ClrType, "an enum has a CLR underlying type"),
+                    CultureInfo.InvariantCulture);
             }
 
             return value;

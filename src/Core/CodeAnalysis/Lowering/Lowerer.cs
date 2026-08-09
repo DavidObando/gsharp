@@ -1046,7 +1046,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 // both report `object`. Honour the symbolic arguments so the
                 // synthesised key/value declarations carry the user's `K`/`V`.
                 var kvpType = currentAccess.Type;
-                var kvpClr = kvpType.ClrType;
+                var kvpClr = Invariant.Required(kvpType.ClrType, "a KeyValuePair has a CLR representation");
                 var keyProp = Invariant.Required(
                     kvpClr.GetProperty("Key"),
                     "KeyValuePair<K, V> declares a public Key property");

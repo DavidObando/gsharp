@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -24,7 +26,7 @@ public class LocalVariableSymbol : VariableSymbol
     /// lowering temporaries, awaiter cache slots, etc.). Used by the Portable
     /// PDB emitter to map IL local slots back to source per ADR-0027 §7.7a.
     /// </param>
-    public LocalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, SyntaxNode declaringSyntax = null)
+    public LocalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, SyntaxNode? declaringSyntax = null)
         : base(name, isReadOnly, type, declaringSyntax)
     {
     }

@@ -1587,7 +1587,8 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                if (MemberLookup.TryGetLambdaTargetFunctionType(paramType.ClrType ?? expectedType.ClrType, out var targetDelegateFunctionType)
+                if ((paramType.ClrType ?? expectedType.ClrType) is { } targetClrType
+                    && MemberLookup.TryGetLambdaTargetFunctionType(targetClrType, out var targetDelegateFunctionType)
                     && functionLiteralArgument.FunctionType != targetDelegateFunctionType)
                 {
                     convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));

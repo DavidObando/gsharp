@@ -200,7 +200,9 @@ internal static class EnumOperatorTable
         // (generalizing the #1100/#2135 pattern) instead of probing
         // `ClrType.IsEnum` directly; a throw means "definitely not an enum",
         // so IsUnsignedOrChar correctly falls through to its signed default.
-        var underlying = type.ClrType.GetEnumUnderlyingTypeSafe();
+        var underlying = type.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (underlying != null)
         {
             var underlyingName = underlying.FullName;
@@ -237,7 +239,7 @@ internal static class EnumOperatorTable
         // Issue #2327: guard against NotSupportedException from a
         // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
         // above for the full rationale).
-        return type?.ClrType.IsEnumSafe() == true;
+        return type?.ClrType is { } clrType && clrType.IsEnumSafe();
     }
 
     /// <summary>
@@ -257,7 +259,9 @@ internal static class EnumOperatorTable
         // Issue #2327: guard against NotSupportedException from a
         // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
         // above for the full rationale).
-        var clrUnderlying = enumType?.ClrType.GetEnumUnderlyingTypeSafe();
+        var clrUnderlying = enumType?.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (clrUnderlying != null)
         {
             return TypeSymbol.FromClrType(clrUnderlying);

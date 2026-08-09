@@ -354,6 +354,7 @@ internal sealed partial class ExpressionBinder
 
                         // Issue #950 / #2044: enforce `protected`/`private`
                         // property access.
+                        propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                         if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propDeclaringType, this.function))
                         {
                             Diagnostics.ReportMemberInaccessible(ne.IdentifierToken.Location, prop.Name, propDeclaringType.Name, prop.GetterAccessibility);
@@ -617,7 +618,7 @@ internal sealed partial class ExpressionBinder
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
                     // re-projection, exactly as on `Dictionary[K, V]`.
-                    var clrReceiverType = clrInstanceReceiverType.ClrType;
+                    var clrReceiverType = Invariant.Required(clrInstanceReceiverType.ClrType, "a CLR member receiver has a CLR type");
                     var memberName = ne.IdentifierToken.Text;
 
                     // Issue #529: use interface-aware lookup so that members
@@ -3423,6 +3424,7 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.TryGetProperty(classConstraint, memberName, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a constrained property has a declaring type");
                 if (!prop.HasGetter)
                 {
                     Diagnostics.ReportCannotAssign(ne.Location, memberName);

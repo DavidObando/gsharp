@@ -1882,7 +1882,8 @@ internal sealed class TypeDefEmitter
                 this.emitCtx.Metadata.GetOrAddBlob(signature));
         }
 
-        return this.getImportedTypeHandle(importedBaseType.ClrType);
+        return this.getImportedTypeHandle(
+            Invariant.Required(importedBaseType.ClrType, "an imported base type has a CLR representation"));
     }
 
     /// <summary>
@@ -1894,7 +1895,7 @@ internal sealed class TypeDefEmitter
     /// </summary>
     private EntityHandle GetImportedBaseDefaultCtorReference(TypeSymbol importedBaseType)
     {
-        var importedBaseClr = importedBaseType.ClrType;
+        var importedBaseClr = Invariant.Required(importedBaseType.ClrType, "an imported base type has a CLR representation");
         ConstructorInfo? parameterless = null;
         foreach (var ctor in importedBaseClr.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))

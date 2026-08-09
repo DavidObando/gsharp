@@ -25,7 +25,7 @@ public static class ExhaustivenessAnalyzer
     /// <returns>True for enum types, sealed interfaces, and sealed-hierarchy classes; otherwise false.</returns>
     public static bool IsExhaustiveDiscriminant(TypeSymbol type)
         => type is EnumSymbol
-        || type?.ClrType.IsEnumSafe() == true
+        || (type.ClrType is { } clrType && clrType.IsEnumSafe())
         || type is InterfaceSymbol { IsSealed: true }
         || type is StructSymbol { IsSealedHierarchy: true };
 

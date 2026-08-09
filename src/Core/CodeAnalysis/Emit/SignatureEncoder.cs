@@ -1058,7 +1058,8 @@ internal sealed class SignatureEncoder
         var args = new Type[arity + 1];
         for (int i = 0; i < arity; i++)
         {
-            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType) ?? fnType.ParameterTypes[i].ClrType;
+            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType)
+                ?? Invariant.Required(fnType.ParameterTypes[i].ClrType, "a function parameter has a CLR representation");
         }
 
         args[arity] = this.MapToReferenceClrType(taskClrType) ?? taskClrType;

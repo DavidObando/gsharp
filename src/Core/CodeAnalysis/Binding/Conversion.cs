@@ -1219,7 +1219,8 @@ public sealed class Conversion
             {
                 SliceTypeSymbol targetSlice => targetSlice.ElementType,
                 ArrayTypeSymbol targetArray => targetArray.ElementType,
-                _ => TypeSymbol.FromClrType(to.ClrType.GetElementType()),
+                _ => TypeSymbol.FromClrType(
+                    Invariant.Required(to.ClrType, "an imported array target has a CLR representation").GetElementType()),
             };
 
             return AreTypeArgumentsEquivalent(sourceElement, importedTargetElement)
@@ -2631,7 +2632,9 @@ public sealed class Conversion
             return false;
         }
 
-        if (WidensNumerically(fromReturn.ClrType, toReturn.ClrType))
+        if (fromReturn.ClrType is { } fromClr
+            && toReturn.ClrType is { } toClr
+            && WidensNumerically(fromClr, toClr))
         {
             return true;
         }
@@ -2687,7 +2690,7 @@ public sealed class Conversion
         // treat a throw as a definite "not enum-like". Routed through the
         // shared ClrTypeUtilities.IsEnumSafe helper so every enum-reflection
         // call site in the binder/emitter shares one guard.
-        return type?.ClrType.IsEnumSafe() == true;
+        return type?.ClrType is { } clrType && clrType.IsEnumSafe();
     }
 
     /// <summary>
@@ -2938,7 +2941,9 @@ public sealed class Conversion
         // Cheap path: the target's CLR generic arguments are already the
         // properly substituted closed form. Defer to the existing
         // by-name interface walk.
-        if (ClrTypeUtilities.ImplementsInterfaceByName(slice.ClrType, targetInterface.ClrType))
+        if (slice.ClrType is { } sliceClrType
+            && targetInterface.ClrType is { } targetClrType
+            && ClrTypeUtilities.ImplementsInterfaceByName(sliceClrType, targetClrType))
         {
             return true;
         }
@@ -2956,7 +2961,12 @@ public sealed class Conversion
         // free for leaf types (System.Int32, System.String, …) and so
         // compares correctly across reflection contexts.
         var openDef = imported.OpenDefinition;
-        foreach (var iface in slice.ClrType.GetInterfaces())
+        if (slice.ClrType is not { } fallbackSliceClrType)
+        {
+            return false;
+        }
+
+        foreach (var iface in fallbackSliceClrType.GetInterfaces())
         {
             if (!iface.IsGenericType)
             {

@@ -604,7 +604,9 @@ internal sealed partial class MethodBodyEmitter
         // (generalizing the #1100/#2135 pattern) rather than probing
         // `ClrType.IsEnum` directly — a throw means the type is definitely
         // not an enum, matching the guard used by EnumOperatorTable.
-        var underlying = type?.ClrType.GetEnumUnderlyingTypeSafe();
+        var underlying = type?.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (underlying != null)
         {
             // Loaded via a MetadataLoadContext or normal load: map the CLR

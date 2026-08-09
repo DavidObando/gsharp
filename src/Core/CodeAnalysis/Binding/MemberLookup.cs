@@ -4026,7 +4026,7 @@ internal sealed class MemberLookup
     private static bool TryGetClrEnumeratorElementType(TypeSymbol enumeratorType, out TypeSymbol? elementType)
     {
         elementType = null;
-        Type enumeratorClr = enumeratorType.ClrType;
+        Type? enumeratorClr = enumeratorType.ClrType;
         if (enumeratorClr == null)
         {
             return false;
@@ -5360,7 +5360,7 @@ internal sealed class MemberLookup
             if (changed)
             {
                 return ImportedTypeSymbol.GetConstructed(
-                    existingImported.ClrType,
+                    Invariant.Required(existingImported.ClrType, "a constructed imported type has a CLR representation"),
                     existingImported.OpenDefinition,
                     merged.MoveToImmutable());
             }

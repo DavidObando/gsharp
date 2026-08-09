@@ -81,7 +81,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitFunctionToDelegateConversion(
                 conv.Expression,
                 constructedDelegateSource,
-                constructedDelegateTarget.ClrType,
+                Invariant.Required(constructedDelegateTarget.ClrType, "a constructed delegate has a CLR representation"),
                 this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget));
             return;
         }

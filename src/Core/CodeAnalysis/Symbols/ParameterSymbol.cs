@@ -2,7 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -37,7 +37,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// type is the managed pointer <c>T&amp;</c>; inside the body the symbol's <see cref="Type"/> remains the
     /// pointee type <c>T</c> and reads/writes are implicitly indirected.
     /// </param>
-    public ParameterSymbol(string name, TypeSymbol type, bool isVariadic = false, SyntaxNode declaringSyntax = null, bool isScoped = false, RefKind refKind = RefKind.None)
+    public ParameterSymbol(string name, TypeSymbol type, bool isVariadic = false, SyntaxNode? declaringSyntax = null, bool isScoped = false, RefKind refKind = RefKind.None)
         : base(name, isReadOnly: refKind == RefKind.None || refKind == RefKind.In, type, declaringSyntax)
     {
         IsVariadic = isVariadic;
@@ -79,7 +79,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// <c>default(T)</c> / <c>T()</c> default (issue #1182), whose all-zero value is
     /// materialized at the call site via a <see cref="Binding.BoundDefaultExpression"/>.
     /// </summary>
-    public object ExplicitDefaultValue { get; private set; }
+    public object? ExplicitDefaultValue { get; private set; }
 
     /// <summary>
     /// Gets the resolved <c>@MarshalAs(UnmanagedType.…)</c> override for
@@ -91,7 +91,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// <see cref="System.Reflection.ParameterAttributes.HasFieldMarshal"/>
     /// on the Param row.
     /// </summary>
-    public MarshalAsMetadata MarshalAsMetadata { get; private set; }
+    public MarshalAsMetadata? MarshalAsMetadata { get; private set; }
 
     /// <summary>
     /// Records the constant default value for this parameter (ADR-0063). Called exactly

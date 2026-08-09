@@ -2,11 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
+#nullable enable
 
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -129,7 +130,7 @@ public class TypeSymbol : Symbol
     {
     }
 
-    private protected TypeSymbol(string name, Type clrType)
+    private protected TypeSymbol(string name, Type? clrType)
         : base(name)
     {
         ClrType = clrType;
@@ -141,7 +142,7 @@ public class TypeSymbol : Symbol
     /// <summary>
     /// Gets the underlying CLR type for this symbol, if any.
     /// </summary>
-    public Type ClrType { get; }
+    public Type? ClrType { get; }
 
     /// <summary>
     /// Maps a CLR <see cref="Type"/> to the corresponding built-in <see cref="TypeSymbol"/>,
@@ -268,7 +269,7 @@ public class TypeSymbol : Symbol
     /// <param name="type">The candidate pointer type.</param>
     /// <param name="pointee">The pointee type when the method returns <c>true</c>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a managed or unmanaged pointer.</returns>
-    public static bool TryGetPointeeType(TypeSymbol type, out TypeSymbol pointee)
+    public static bool TryGetPointeeType(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? pointee)
     {
         switch (type)
         {
@@ -1025,7 +1026,7 @@ public class TypeSymbol : Symbol
     /// <param name="clrType">The candidate CLR type.</param>
     /// <param name="tupleTypeSymbol">The resulting tuple symbol, if matched.</param>
     /// <returns><see langword="true"/> if <paramref name="clrType"/> is a supported tuple shape.</returns>
-    private static bool TryGetTupleTypeSymbol(Type clrType, out TupleTypeSymbol tupleTypeSymbol)
+    private static bool TryGetTupleTypeSymbol(Type clrType, [NotNullWhen(true)] out TupleTypeSymbol? tupleTypeSymbol)
     {
         tupleTypeSymbol = null;
         if (!clrType.IsGenericType || clrType.IsGenericTypeDefinition)
