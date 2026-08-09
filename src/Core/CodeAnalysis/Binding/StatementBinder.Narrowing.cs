@@ -31,7 +31,7 @@ internal sealed partial class StatementBinder
     /// named field (via its <see cref="ImplicitFieldVariableSymbol"/>) to its
     /// underlying non-nullable type in <paramref name="frame"/>.
     /// </summary>
-    private void ApplyMemberNotNullNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> frame)
+    private void ApplyMemberNotNullNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> frame)
     {
         BoundExpression? callExpr = null;
         if (statement is BoundExpressionStatement exprStmt)
@@ -392,7 +392,7 @@ internal sealed partial class StatementBinder
     /// <paramref name="persistentFrame"/> so subsequent statements in the
     /// enclosing block see the narrowing.
     /// </summary>
-    private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundIfStatement ifStmt)
         {
@@ -448,7 +448,7 @@ internal sealed partial class StatementBinder
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
     /// </summary>
-    private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
@@ -647,7 +647,7 @@ internal sealed partial class StatementBinder
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
     /// </summary>
-    private void ApplyIfJoinNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyIfJoinNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is not BoundIfStatement ifStmt)
         {
@@ -1153,10 +1153,13 @@ internal sealed partial class StatementBinder
     /// counts when its last statement does any of those; an
     /// <see cref="BoundIfStatement"/> counts only if both arms do.
     /// </summary>
-    private static bool EndsInUnconditionalExit(BoundStatement statement)
+    private static bool EndsInUnconditionalExit(BoundStatement? statement)
     {
         switch (statement)
         {
+            case null:
+                return false;
+
             case BoundReturnStatement:
             case BoundThrowStatement:
                 return true;
@@ -1252,7 +1255,9 @@ internal sealed partial class StatementBinder
 
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
             || syntax.Keyword?.Kind == SyntaxKind.LetKeyword;
-        var type = bindTypeClause(syntax.TypeClause);
+        var type = syntax.TypeClause is { } typeClause
+            ? bindTypeClause(typeClause)
+            : null;
 
         BoundExpression convertedInitializer;
         TypeSymbol variableType;
@@ -1549,7 +1554,9 @@ internal sealed partial class StatementBinder
         var refModifierLoc = Invariant.Required(
             syntax.RefKindModifier,
             "a ref-alias declaration has a ref modifier").Location;
-        var declaredType = bindTypeClause(syntax.TypeClause);
+        var declaredType = syntax.TypeClause is { } declaredTypeClause
+            ? bindTypeClause(declaredTypeClause)
+            : null;
 
         // `const ref` is rejected: a `const` binding is a compile-time constant,
         // not a runtime storage slot, so there is no storage to alias.

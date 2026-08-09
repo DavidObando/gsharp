@@ -716,7 +716,12 @@ internal sealed partial class StatementBinder
 
                 sawDefault = true;
                 var defaultBody = BindStatement(caseSyntax.Body);
-                bound.Add(new BoundSelectCase(SelectCaseKind.Default, channel: null, value: null, variable: null, defaultBody));
+                bound.Add(new BoundSelectCase(
+                    SelectCaseKind.Default,
+                    channel: null,
+                    value: null,
+                    variable: null,
+                    Invariant.Required(defaultBody, "a select case has a bound body")));
                 continue;
             }
 
@@ -741,7 +746,12 @@ internal sealed partial class StatementBinder
                 // Best-effort recover: bind the body anyway so further
                 // diagnostics surface.
                 var recoveredBody = BindStatement(caseSyntax.Body);
-                bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, value: null, variable: null, recoveredBody));
+                bound.Add(new BoundSelectCase(
+                    caseSyntax.CaseKind,
+                    channelExpr,
+                    value: null,
+                    variable: null,
+                    Invariant.Required(recoveredBody, "a recovered select case has a bound body")));
                 continue;
             }
 
@@ -754,7 +764,7 @@ internal sealed partial class StatementBinder
                 valueExpr = conversions.BindConversion(
                     Invariant.Required(caseSyntax.Value, "send select cases have a value expression"),
                     chan.ElementType);
-                body = BindStatement(caseSyntax.Body);
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a send select case has a bound body");
             }
             else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
             {
@@ -768,13 +778,13 @@ internal sealed partial class StatementBinder
                     Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.Text);
                 }
 
-                body = BindStatement(caseSyntax.Body);
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-bind select case has a bound body");
                 scope = scope.Parent;
             }
             else
             {
                 // ReceiveDiscard
-                body = BindStatement(caseSyntax.Body);
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-discard select case has a bound body");
             }
 
             bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
@@ -791,7 +801,7 @@ internal sealed partial class StatementBinder
         // future implicit binding (e.g. `ctx`) can be introduced without
         // leaking into the enclosing function.
         scope = new BoundScope(scope);
-        var body = BindStatement(syntax.Body);
+        var body = Invariant.Required(BindStatement(syntax.Body), "a scope statement has a bound body");
         scope = scope.Parent;
         return new BoundScopeStatement(syntax, body);
     }
@@ -876,7 +886,7 @@ internal sealed partial class StatementBinder
                     ? pointerType
                     : PointerTypeSymbol.Get(TypeSymbol.UInt8);
                 var errorPointer = bindLocalVariable(syntax.Identifier, isReadOnly: true, errorPointerType);
-                var errorBody = BindStatement(syntax.Body);
+                var errorBody = Invariant.Required(BindStatement(syntax.Body), "a fixed statement has a bound body");
                 return new BoundFixedStatement(
                     syntax,
                     FixedPinKind.Array,
@@ -925,7 +935,7 @@ internal sealed partial class StatementBinder
                     $"$pinsrc${pointerVariable.Name}", isReadOnly: false, source.Type);
             }
 
-            var body = BindStatement(syntax.Body);
+            var body = Invariant.Required(BindStatement(syntax.Body), "a fixed statement has a bound body");
 
             return new BoundFixedStatement(syntax, pinKind, pinnedVariable, pointerVariable, source, body, sourceVariable);
         }
@@ -1074,12 +1084,15 @@ internal sealed partial class StatementBinder
 
         if (!MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
-            Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
+            Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type ?? TypeSymbol.Error);
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
-        var variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: elementType);
+        var variable = bindLocalVariable(
+            syntax.Identifier,
+            isReadOnly: false,
+            type: Invariant.Required(elementType, "an async enumerable has an element type"));
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
         scope = scope.Parent;
 

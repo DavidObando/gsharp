@@ -222,3 +222,6 @@ src/Core/CodeAnalysis/Binding/LambdaBinder.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Async.cs
 # Slice 43 -- conditional statement binding and narrowing-frame propagation.
 src/Core/CodeAnalysis/Binding/StatementBinder.Conditionals.cs
+# Slice 44 -- statement binder dispatch and loop/control-flow binding.
+src/Core/CodeAnalysis/Binding/StatementBinder.cs
+src/Core/CodeAnalysis/Binding/StatementBinder.Loops.cs

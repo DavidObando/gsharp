@@ -94,7 +94,11 @@ internal sealed partial class StatementBinder
             binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow;
         }
 
-        return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(initStatement, inner));
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                Invariant.Required(initStatement, "an if initializer has a bound statement"),
+                inner));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -331,7 +335,11 @@ internal sealed partial class StatementBinder
                 BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, variable.Type, TypeSymbol.Null),
                 "a guard-let variable supports nil equality");
             var condition = new BoundBinaryExpression(binding, read, eqOp, nilLiteral);
-            var ifStmt = new BoundIfStatement(binding, condition, armElse, elseStatement: null);
+            var ifStmt = new BoundIfStatement(
+                binding,
+                condition,
+                Invariant.Required(armElse, "a guard-let else arm has a bound statement"),
+                elseStatement: null);
 
             // Manually thread the persistent-frame narrowing for this
             // binding. We *cannot* round-trip through
@@ -937,13 +945,13 @@ internal sealed partial class StatementBinder
     {
         if (frame == null)
         {
-            return BindStatement(syntax);
+            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
         }
 
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
-            return BindStatement(syntax);
+            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
         }
         finally
         {

@@ -224,7 +224,7 @@ internal sealed partial class StatementBinder
             binderCtx.LoopStack.Push((labelName, localBreakLabel, localContinueLabel));
             try
             {
-                return BindStatement(body);
+                return Invariant.Required(BindStatement(body), "a loop body has a bound statement");
             }
             finally
             {
@@ -354,7 +354,9 @@ internal sealed partial class StatementBinder
                 && function.Type != TypeSymbol.Void
                 && function.Type != TypeSymbol.Error)
             {
-                expression = bindExpressionWithTargetType(syntax.Expression, function.Type);
+                expression = bindExpressionWithTargetType(
+                    Invariant.Required(syntax.Expression, "a target-typed return has an expression"),
+                    function.Type);
             }
             else
             {

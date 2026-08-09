@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -86,7 +88,7 @@ internal sealed partial class StatementBinder
         return TypeSymbol.FromClrType(typeof(object));
     }
 
-    private TypeSymbol ResolveExceptionType()
+    private TypeSymbol? ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
         {
@@ -108,7 +110,7 @@ internal sealed partial class StatementBinder
     /// <param name="bodySyntax">The loop body.</param>
     /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
     /// <returns>The bound for-infinite statement.</returns>
-    private BoundStatement BindForInfiniteStatementCore(SyntaxNode originatingSyntax, StatementSyntax bodySyntax, string labelName)
+    private BoundStatement BindForInfiniteStatementCore(SyntaxNode originatingSyntax, StatementSyntax bodySyntax, string? labelName)
     {
         scope = new BoundScope(scope);
 
@@ -124,7 +126,7 @@ internal sealed partial class StatementBinder
         return BindForEllipsisStatementCore(syntax, syntax, labelName: null);
     }
 
-    private BoundStatement BindForEllipsisStatementCore(ForEllipsisStatementSyntax syntax, SyntaxNode originatingSyntax, string labelName)
+    private BoundStatement BindForEllipsisStatementCore(ForEllipsisStatementSyntax syntax, SyntaxNode originatingSyntax, string? labelName)
     {
         var lowerBound = bindExpressionWithTargetType(syntax.LowerBound, TypeSymbol.Int32);
         var upperBound = bindExpressionWithTargetType(syntax.UpperBound, TypeSymbol.Int32);
@@ -162,7 +164,7 @@ internal sealed partial class StatementBinder
     /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
     /// <param name="originatingSyntax">Syntax node used for the resulting bound node.</param>
     /// <returns>The bound for-range statement.</returns>
-    private BoundStatement BindForTupleRangeStatementCore(ForTupleRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
+    private BoundStatement BindForTupleRangeStatementCore(ForTupleRangeStatementSyntax syntax, string? labelName, SyntaxNode originatingSyntax)
     {
         var tempName = $"<fortuple{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
         var tempIdentifier = new SyntaxToken(syntax.SyntaxTree, SyntaxKind.IdentifierToken, syntax.OpenParenToken.Position, tempName, null);
@@ -209,9 +211,9 @@ internal sealed partial class StatementBinder
     /// <returns>The bound for-range statement.</returns>
     private BoundStatement BindForRangeStatementCore(
         ForRangeStatementSyntax syntax,
-        string labelName,
+        string? labelName,
         SyntaxNode originatingSyntax,
-        Func<VariableSymbol, ImmutableArray<BoundStatement>> bindLoopPrelude = null)
+        Func<VariableSymbol, ImmutableArray<BoundStatement>>? bindLoopPrelude = null)
     {
         var collection = bindExpression(syntax.Collection);
 
@@ -262,7 +264,8 @@ internal sealed partial class StatementBinder
                 {
                     iterationKind = ForRangeKind.Indexed;
                     keyType = TypeSymbol.Int32;
-                    valueType = annotated.GetTypeArgumentSymbolForClrType(annotated.ClrType.GetElementType());
+                    valueType = annotated.GetTypeArgumentSymbolForClrType(
+                        Invariant.Required(annotated.ClrType.GetElementType(), "a single-dimensional CLR array has an element type"));
                 }
                 else if (MemberLookup.TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
                 {
@@ -284,7 +287,7 @@ internal sealed partial class StatementBinder
                 }
                 else
                 {
-                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error);
                     return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
                 }
 
@@ -310,24 +313,32 @@ internal sealed partial class StatementBinder
                 if (MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition, out var openDKey, out var openDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
-                    keyType = MapOpenClrTypeToSymbolic(openDKey, openImp);
-                    valueType = MapOpenClrTypeToSymbolic(openDVal, openImp);
+                    keyType = MapOpenClrTypeToSymbolic(
+                        Invariant.Required(openDKey, "a dictionary definition has a key type"),
+                        openImp);
+                    valueType = MapOpenClrTypeToSymbolic(
+                        Invariant.Required(openDVal, "a dictionary definition has a value type"),
+                        openImp);
                 }
                 else if (MemberLookup.TryGetClrEnumerableElementType(openImp.OpenDefinition, out var openElemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
-                    valueType = MapOpenClrTypeToSymbolic(openElemType, openImp);
+                    valueType = MapOpenClrTypeToSymbolic(
+                        Invariant.Required(openElemType, "an enumerable definition has an element type"),
+                        openImp);
                 }
                 else if (MemberLookup.TryGetClrPatternEnumerableElementType(openImp.OpenDefinition, out var openPatternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
-                    valueType = MapOpenClrTypeToSymbolic(openPatternElemType, openImp);
+                    valueType = MapOpenClrTypeToSymbolic(
+                        Invariant.Required(openPatternElemType, "a pattern enumerable definition has an element type"),
+                        openImp);
                 }
                 else
                 {
-                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error);
                     return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
                 }
 
@@ -341,7 +352,8 @@ internal sealed partial class StatementBinder
                 {
                     iterationKind = ForRangeKind.Indexed;
                     keyType = TypeSymbol.Int32;
-                    valueType = TypeSymbol.FromClrType(imp.ClrType.GetElementType());
+                    valueType = TypeSymbol.FromClrType(
+                        Invariant.Required(imp.ClrType.GetElementType(), "a single-dimensional CLR array has an element type"));
                 }
                 else if (MemberLookup.TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
                 {
@@ -363,7 +375,7 @@ internal sealed partial class StatementBinder
                 }
                 else
                 {
-                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error);
                     return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
                 }
 
@@ -371,7 +383,7 @@ internal sealed partial class StatementBinder
             case StructSymbol userType when MemberLookup.TryGetUserPatternEnumerableElementType(userType, out var userElemType):
                 iterationKind = ForRangeKind.PatternEnumerator;
                 keyType = TypeSymbol.Int32;
-                valueType = userElemType;
+                valueType = Invariant.Required(userElemType, "a pattern enumerable has an element type");
                 break;
             case SequenceTypeSymbol seq:
                 // ADR-0040: sequence[T] is IEnumerable[T] — iterate via Enumerable strategy.
@@ -414,7 +426,7 @@ internal sealed partial class StatementBinder
 
                 if (collection.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type);
+                    Diagnostics.ReportTypeNotIndexable(syntax.Collection.Location, collection.Type ?? TypeSymbol.Error);
                 }
 
                 return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
@@ -422,12 +434,18 @@ internal sealed partial class StatementBinder
 
         scope = new BoundScope(scope);
 
-        VariableSymbol keyVariable = null;
+        VariableSymbol? keyVariable = null;
         VariableSymbol valueVariable;
         if (syntax.SecondIdentifier != null)
         {
-            keyVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: keyType);
-            valueVariable = bindLocalVariable(syntax.SecondIdentifier, isReadOnly: false, type: valueType);
+            keyVariable = bindLocalVariable(
+                syntax.FirstIdentifier,
+                isReadOnly: false,
+                type: Invariant.Required(keyType, "a range iteration has a key type"));
+            valueVariable = bindLocalVariable(
+                syntax.SecondIdentifier,
+                isReadOnly: false,
+                type: Invariant.Required(valueType, "a range iteration has a value type"));
         }
         else
         {
@@ -441,8 +459,10 @@ internal sealed partial class StatementBinder
             // The symbolic `[K, V]` arguments are preserved so `kv.Key`/`kv.Value`
             // expose the user element types rather than erasing to `object`.
             var singleVarType = iterationKind == ForRangeKind.Dictionary
-                ? BuildKeyValuePairType(keyType, valueType)
-                : valueType;
+                ? BuildKeyValuePairType(
+                    Invariant.Required(keyType, "a dictionary iteration has a key type"),
+                    Invariant.Required(valueType, "a dictionary iteration has a value type"))
+                : Invariant.Required(valueType, "a range iteration has a value type");
             valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: singleVarType);
         }
 
@@ -535,7 +555,7 @@ internal sealed partial class StatementBinder
         SyntaxNode originatingSyntax,
         ExpressionSyntax conditionSyntax,
         StatementSyntax bodySyntax,
-        string labelName)
+        string? labelName)
     {
         // Lowers to:
         //   {
@@ -589,7 +609,7 @@ internal sealed partial class StatementBinder
     /// <param name="originatingSyntax">Syntax used for bound-node diagnostics.</param>
     /// <param name="labelName">The ADR-0070 label, or <see langword="null"/>.</param>
     /// <returns>The lowered bound block.</returns>
-    private BoundStatement BindForClauseStatementCore(ForClauseStatementSyntax syntax, SyntaxNode originatingSyntax, string labelName)
+    private BoundStatement BindForClauseStatementCore(ForClauseStatementSyntax syntax, SyntaxNode originatingSyntax, string? labelName)
     {
         // Lowers to:
         //   {
@@ -608,7 +628,9 @@ internal sealed partial class StatementBinder
         var init = syntax.Initializer == null ? null : BindStatement(syntax.Initializer);
         if (init != null)
         {
-            InvalidateNarrowingsForAssignedVariables(syntax.Initializer, init);
+            InvalidateNarrowingsForAssignedVariables(
+                Invariant.Required(syntax.Initializer, "a bound for-clause initializer has initializer syntax"),
+                init);
             if (binderCtx.NarrowedVariables.Count > 0)
             {
                 ApplyAssignmentNarrowing(
@@ -664,13 +686,13 @@ internal sealed partial class StatementBinder
     }
 
     private BoundStatement BindConditionedLoopBody(
-        BoundExpression condition,
+        BoundExpression? condition,
         StatementSyntax bodySyntax,
-        string labelName,
+        string? labelName,
         out BoundLabel breakLabel,
         out BoundLabel continueLabel,
-        BoundStatement backEdgeTail,
-        BoundExpression backEdgeCondition)
+        BoundStatement? backEdgeTail,
+        BoundExpression? backEdgeCondition)
     {
         var inheritedNarrowingFrameCount = binderCtx.NarrowedVariables.Count;
         var loopNarrow = condition == null
@@ -746,8 +768,12 @@ internal sealed partial class StatementBinder
 
         var monitorType = typeof(System.Threading.Monitor);
         var importedClass = new ImportedClassSymbol(monitorType, declaration: null);
-        var enterMethod = monitorType.GetMethod("Enter", new[] { typeof(object) });
-        var exitMethod = monitorType.GetMethod("Exit", new[] { typeof(object) });
+        var enterMethod = Invariant.Required(
+            monitorType.GetMethod("Enter", new[] { typeof(object) }),
+            "Monitor.Enter(object) exists");
+        var exitMethod = Invariant.Required(
+            monitorType.GetMethod("Exit", new[] { typeof(object) }),
+            "Monitor.Exit(object) exists");
         var enterFn = new ImportedFunctionSymbol(enterMethod.Name, importedClass, enterMethod, declaration: null);
         var exitFn = new ImportedFunctionSymbol(exitMethod.Name, importedClass, exitMethod, declaration: null);
 
@@ -757,7 +783,9 @@ internal sealed partial class StatementBinder
 
         var body = BindStatement(syntax.Body);
         var exitCall = new BoundImportedCallExpression(syntax, exitFn, ImmutableArray.Create(TempAsObject()));
-        var tryStmt = BuildCleanupTryStatement(ImmutableArray.Create(body), exitCall);
+        var tryStmt = BuildCleanupTryStatement(
+            ImmutableArray.Create(Invariant.Required(body, "a lock statement has a bound body")),
+            exitCall);
 
         return new BoundBlockStatement(syntax, ImmutableArray.Create<BoundStatement>(tempDecl, enterStmt, tryStmt));
     }
@@ -817,7 +845,7 @@ internal sealed partial class StatementBinder
         SyntaxNode originatingSyntax,
         StatementSyntax bodySyntax,
         ExpressionSyntax conditionSyntax,
-        string labelName)
+        string? labelName)
     {
         // Lowers to:
         //   {
@@ -870,7 +898,9 @@ internal sealed partial class StatementBinder
             var boundInner = BindStatement(inner);
             return new BoundBlockStatement(
                 syntax,
-                ImmutableArray.Create(new BoundLabelStatement(syntax, userLabel), boundInner));
+                ImmutableArray.Create(
+                    new BoundLabelStatement(syntax, userLabel),
+                    Invariant.Required(boundInner, "a labeled statement has a bound inner statement")));
         }
 
         // ADR-0070: a label that shadows an enclosing live loop's label is a
@@ -904,7 +934,7 @@ internal sealed partial class StatementBinder
                 BindForTupleRangeStatementCore((ForTupleRangeStatementSyntax)inner, labelName, syntax),
             SyntaxKind.AwaitForRangeStatement =>
                 BindAwaitForRangeStatementCore((AwaitForRangeStatementSyntax)inner, labelName, syntax),
-            _ => BindStatement(inner),
+            _ => Invariant.Required(BindStatement(inner), "a labeled statement has a bound inner statement"),
         };
     }
 
@@ -925,7 +955,7 @@ internal sealed partial class StatementBinder
         };
     }
 
-    private BoundStatement BindLabeledForRange(LabeledStatementSyntax labelSyntax, ForRangeStatementSyntax inner, string labelName)
+    private BoundStatement BindLabeledForRange(LabeledStatementSyntax labelSyntax, ForRangeStatementSyntax inner, string? labelName)
     {
         return BindForRangeStatementCore(inner, labelName, labelSyntax);
     }

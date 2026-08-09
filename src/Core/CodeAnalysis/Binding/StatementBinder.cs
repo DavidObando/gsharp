@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -85,12 +87,12 @@ internal sealed partial class StatementBinder
     private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
     private readonly Func<BoundExpression, bool> isLvalue;
     private readonly Func<TypeSymbol, bool> isIteratorReturnType;
-    private readonly Func<SyntaxToken, Accessibility> resolveAccessibility;
+    private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
     private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
-    private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
-    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType;
+    private readonly Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration;
+    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
@@ -112,12 +114,12 @@ internal sealed partial class StatementBinder
         Func<TypeSymbol, bool> isFormattableStringTargetType,
         Func<BoundExpression, bool> isLvalue,
         Func<TypeSymbol, bool> isIteratorReturnType,
-        Func<SyntaxToken, Accessibility> resolveAccessibility,
+        Func<SyntaxToken?, Accessibility> resolveAccessibility,
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null,
-        Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration = null,
-        Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
+        Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration = null,
+        Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -159,7 +161,7 @@ internal sealed partial class StatementBinder
         return new BoundExpressionStatement(null, new BoundErrorExpression(null));
     }
 
-    internal BoundStatement BindStatement(StatementSyntax syntax)
+    internal BoundStatement? BindStatement(StatementSyntax syntax)
     {
         switch (syntax.Kind)
         {
@@ -276,8 +278,8 @@ internal sealed partial class StatementBinder
 
     internal ImmutableArray<BoundStatement> BindStatementList(
         ImmutableArray<StatementSyntax> statementSyntaxes,
-        Action<StatementSyntax> beforeBind = null,
-        Func<BoundStatement> trailingStatement = null)
+        Action<StatementSyntax>? beforeBind = null,
+        Func<BoundStatement>? trailingStatement = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
@@ -288,8 +290,8 @@ internal sealed partial class StatementBinder
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
         ImmutableArray<BoundStatement>.Builder statements,
-        Action<StatementSyntax> beforeBind = null,
-        Func<BoundStatement> trailingStatement = null)
+        Action<StatementSyntax>? beforeBind = null,
+        Func<BoundStatement>? trailingStatement = null)
     {
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
@@ -310,7 +312,7 @@ internal sealed partial class StatementBinder
                     statements.AddRange(defer.PrefixStatements);
                     if (defer.Cleanup == null)
                     {
-                        statements.Add(defer.ErrorStatement);
+                        statements.Add(Invariant.Required(defer.ErrorStatement, "an invalid defer lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
@@ -337,12 +339,13 @@ internal sealed partial class StatementBinder
 
                     if (usingLowering.Cleanup == null)
                     {
-                        statements.Add(usingLowering.ErrorStatement);
+                        statements.Add(Invariant.Required(usingLowering.ErrorStatement, "an invalid using lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
 
-                    statements.Add(BuildInitializedAssignment(usingLowering.Initialized));
+                    statements.Add(BuildInitializedAssignment(
+                        Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
@@ -368,12 +371,13 @@ internal sealed partial class StatementBinder
 
                     if (awaitUsingLowering.Cleanup == null)
                     {
-                        statements.Add(awaitUsingLowering.ErrorStatement);
+                        statements.Add(Invariant.Required(awaitUsingLowering.ErrorStatement, "an invalid await using lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
 
-                    statements.Add(BuildInitializedAssignment(awaitUsingLowering.Initialized));
+                    statements.Add(BuildInitializedAssignment(
+                        Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
@@ -398,6 +402,11 @@ internal sealed partial class StatementBinder
                 }
 
                 var statement = BindStatement(statementSyntax);
+                if (statement == null)
+                {
+                    continue;
+                }
+
                 statements.Add(statement);
 
                 // Issue #208: after binding a call statement, apply any
@@ -459,7 +468,7 @@ internal sealed partial class StatementBinder
     private BoundTryStatement BuildCleanupTryStatement(
         ImmutableArray<BoundStatement> protectedStatements,
         BoundExpression cleanup,
-        VariableSymbol initialized = null)
+        VariableSymbol? initialized = null)
     {
         var tryBlock = new BoundBlockStatement(null, protectedStatements);
         BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);

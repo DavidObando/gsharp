@@ -2950,7 +2950,7 @@ public sealed class Binder
         }
     }
 
-    private static Accessibility ResolveAccessibility(SyntaxToken modifier)
+    private static Accessibility ResolveAccessibility(SyntaxToken? modifier)
     {
         if (modifier == null)
         {
