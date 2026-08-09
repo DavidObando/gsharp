@@ -218,3 +218,5 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.SwitchExpr.cs
 src/Core/CodeAnalysis/Binding/ExpressionBinder.Operators.cs
 # Slice 41 -- lambda and function-literal binding contracts.
 src/Core/CodeAnalysis/Binding/LambdaBinder.cs
+# Slice 42 -- asynchronous and event expression binding.
+src/Core/CodeAnalysis/Binding/ExpressionBinder.Async.cs

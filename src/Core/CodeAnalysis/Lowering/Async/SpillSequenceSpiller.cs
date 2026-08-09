@@ -556,6 +556,22 @@ public static class SpillSequenceSpiller
                         clrConv.Source,
                         src => new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type));
                 case BoundClrEventSubscriptionExpression clrEventSub:
+                    if (clrEventSub.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            clrEventSub,
+                            clrEventSub.Handler,
+                            handler => new BoundClrEventSubscriptionExpression(
+                                null,
+                                receiver: null,
+                                clrEventSub.Event,
+                                handler,
+                                clrEventSub.IsAdd,
+                                clrEventSub.ConstrainedReceiverTypeParameter,
+                                clrEventSub.ConstrainedInterfaceType,
+                                clrEventSub.EventContainingType));
+                    }
+
                     return SpillTwoOperand(
                         clrEventSub,
                         clrEventSub.Receiver,
@@ -570,6 +586,20 @@ public static class SpillSequenceSpiller
                             clrEventSub.ConstrainedInterfaceType,
                             clrEventSub.EventContainingType));
                 case BoundEventSubscriptionExpression eventSub:
+                    if (eventSub.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            eventSub,
+                            eventSub.Handler,
+                            handler => new BoundEventSubscriptionExpression(
+                                null,
+                                receiver: null,
+                                eventSub.StructType,
+                                eventSub.Event,
+                                handler,
+                                eventSub.IsAdd));
+                    }
+
                     return SpillTwoOperand(
                         eventSub,
                         eventSub.Receiver,

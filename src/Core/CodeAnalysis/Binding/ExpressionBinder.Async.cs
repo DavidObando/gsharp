@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -71,9 +73,9 @@ internal sealed partial class ExpressionBinder
 
         // Resolve receiver: either an ImportedClassSymbol (static event) or
         // any value-producing expression with a CLR-backed type (instance event).
-        BoundExpression boundReceiver = null;
-        Type receiverClrType = null;
-        TypeSymbol importedEventTarget = null;
+        BoundExpression? boundReceiver = null;
+        Type? receiverClrType = null;
+        TypeSymbol? importedEventTarget = null;
         BindingFlags flags;
 
         // Issue #2394: check the same-compilation SOURCE type (struct/
@@ -276,7 +278,9 @@ internal sealed partial class ExpressionBinder
                     BindingFlags.Public | BindingFlags.Instance);
                 if (constrainedEvent != null)
                 {
-                    var constrainedHandlerType = constrainedEvent.EventHandlerType;
+                    var constrainedHandlerType = Invariant.Required(
+                        constrainedEvent.EventHandlerType,
+                        "a reflected event has a handler type");
                     var constrainedHandlerTypeSymbol = MemberLookup.GetClrEventHandlerTypeSymbol(
                         clrInterfaceConstraint,
                         constrainedEvent);
@@ -614,7 +618,7 @@ internal sealed partial class ExpressionBinder
     /// <returns>The bound conditional address expression, or a <see cref="BoundErrorExpression"/> on failure.</returns>
     private BoundExpression BindConditionalAddressFromGeneral(
         ConditionalExpressionSyntax syntax,
-        SyntaxToken outerModifier)
+        SyntaxToken? outerModifier)
     {
         // Condition must be bool.
         var condition = BindExpression(syntax.Condition, TypeSymbol.Bool);
@@ -668,7 +672,12 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+        return new BoundConditionalAddressExpression(
+            null,
+            condition,
+            whenTrue,
+            whenFalse,
+            Invariant.Required(whenTrue.Type, "a bound lvalue has a type"));
     }
 
     private BoundExpression BindAwaitExpression(AwaitExpressionSyntax syntax)
@@ -711,7 +720,7 @@ internal sealed partial class ExpressionBinder
     private static bool IsAwaiterTypeArgumentCandidate(TypeSymbol a)
         => TypeSymbol.RequiresSymbolicProjection(a);
 
-    private static TypeSymbol TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
+    private static TypeSymbol? TryGetAwaiterTypeSymbol(TypeSymbol awaitableType)
     {
         if (awaitableType is not ImportedTypeSymbol importedAwaitable
             || importedAwaitable.OpenDefinition == null

@@ -24,7 +24,7 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 {
     public BoundClrEventSubscriptionExpression(
         SyntaxNode? syntax,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         EventInfo eventInfo,
         BoundExpression handler,
         bool isAdd,
@@ -42,7 +42,7 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
         EventContainingType = eventContainingType;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     public EventInfo Event { get; }
 

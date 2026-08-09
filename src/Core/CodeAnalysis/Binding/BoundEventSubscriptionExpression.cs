@@ -19,7 +19,7 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
 {
     public BoundEventSubscriptionExpression(
         SyntaxNode? syntax,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TypeSymbol structType,
         EventSymbol eventSymbol,
         BoundExpression handler,
@@ -35,7 +35,7 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
         EventType = eventType ?? eventSymbol.Type;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     /// <summary>
     /// Gets the event's static owner type: a <see cref="StructSymbol"/> for

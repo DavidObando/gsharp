@@ -1704,7 +1704,7 @@ public abstract class BoundTreeRewriter
 
         return new BoundClrEventSubscriptionExpression(
             null,
-            Invariant.Required(receiver, "a CLR event subscription has a receiver when rewritten"),
+            receiver,
             node.Event,
             handler,
             node.IsAdd,
@@ -1725,7 +1725,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundEventSubscriptionExpression(null, Invariant.Required(receiver, "an event subscription has a receiver when rewritten"), node.StructType, node.Event, handler, node.IsAdd, node.EventType);
+        return new BoundEventSubscriptionExpression(null, receiver, node.StructType, node.Event, handler, node.IsAdd, node.EventType);
     }
 
     /// <summary>Rewrites a CLR binary operator call (Stream C).</summary>
