@@ -2,7 +2,10 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -45,7 +48,7 @@ internal static class AsyncReturnTypeNormalizer
     /// <param name="type">The (declared) return type symbol to unwrap.</param>
     /// <param name="awaited">The unwrapped awaited result type, when this returns <c>true</c>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a Task / ValueTask shape.</returns>
-    public static bool TryUnwrapTaskReturnType(TypeSymbol type, out TypeSymbol awaited)
+    public static bool TryUnwrapTaskReturnType(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? awaited)
         => TryUnwrapTaskReturnType(type, out awaited, out _);
 
     /// <summary>
@@ -59,7 +62,7 @@ internal static class AsyncReturnTypeNormalizer
     /// <param name="awaited">The unwrapped awaited result type, when this returns <c>true</c>.</param>
     /// <param name="isValueTask"><c>true</c> when the unwrapped shape was <c>ValueTask</c> / <c>ValueTask[T]</c>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a Task / ValueTask shape.</returns>
-    public static bool TryUnwrapTaskReturnType(TypeSymbol type, out TypeSymbol awaited, out bool isValueTask)
+    public static bool TryUnwrapTaskReturnType(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? awaited, out bool isValueTask)
     {
         awaited = null;
         isValueTask = false;
@@ -124,7 +127,7 @@ internal static class AsyncReturnTypeNormalizer
     /// <param name="type">The CLR return type to unwrap.</param>
     /// <param name="awaited">The unwrapped awaited CLR result type, when this returns <c>true</c>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a Task / ValueTask shape.</returns>
-    public static bool TryUnwrapTaskClrType(Type type, out Type awaited)
+    public static bool TryUnwrapTaskClrType(Type type, [NotNullWhen(true)] out Type? awaited)
     {
         awaited = null;
         if (type == null)

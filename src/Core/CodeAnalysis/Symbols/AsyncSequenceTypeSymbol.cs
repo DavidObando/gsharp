@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -52,7 +54,7 @@ public sealed class AsyncSequenceTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol elementType)
+    private static Type? MakeClrType(TypeSymbol elementType)
     {
         var elementClrType = NullableTypeSymbol.GetEffectiveClrType(elementType);
         if (elementClrType == null)

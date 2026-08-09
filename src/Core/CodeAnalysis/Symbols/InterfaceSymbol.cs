@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -27,7 +29,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     // can close constructed-generic member types in the right reflection
     // context. Null for definitions and for constructed instances built
     // without a projector (single-context callers; unchanged behavior).
-    private readonly System.Func<System.Type, System.Type> mapClrType;
+    private readonly System.Func<System.Type, System.Type>? mapClrType;
 
     private ImmutableArray<FunctionSymbol> methods;
     private ImmutableArray<FunctionSymbol> staticMethods = ImmutableArray<FunctionSymbol>.Empty;
@@ -63,7 +65,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         Definition = this;
     }
 
-    private InterfaceSymbol(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, string constructedName, System.Func<System.Type, System.Type> mapClrType)
+    private InterfaceSymbol(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, string constructedName, System.Func<System.Type, System.Type>? mapClrType)
         : base(constructedName)
     {
         Accessibility = definition.Accessibility;
@@ -211,7 +213,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// Gets the enclosing user-defined type when this interface is a nested
     /// type declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
     /// </summary>
-    public TypeSymbol ContainingType { get; private set; }
+    public TypeSymbol? ContainingType { get; private set; }
 
     /// <summary>Gets the type parameters when this is a generic definition (Phase 4.3c / ADR-0020).</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
@@ -367,7 +369,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetStaticMethod(string name, out FunctionSymbol method)
+    public bool TryGetStaticMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         EnsureMembersResolved();
         if (!StaticMethods.IsDefaultOrEmpty)
@@ -450,7 +452,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// </summary>
     /// <param name="name">The field name.</param>
     /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
-    public FieldSymbol GetStaticField(string name)
+    public FieldSymbol? GetStaticField(string name)
     {
         if (!StaticFields.IsDefaultOrEmpty)
         {
@@ -488,7 +490,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetMethod(string name, out FunctionSymbol method)
+    public bool TryGetMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         EnsureMembersResolved();
         foreach (var m in Methods)
@@ -545,7 +547,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// </param>
     /// <returns>A constructed <see cref="InterfaceSymbol"/> whose <see cref="Definition"/> is the original.</returns>
     [return: NotNullIfNotNull(nameof(definition))]
-    public static InterfaceSymbol Construct(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type> mapClrType = null)
+    public static InterfaceSymbol? Construct(InterfaceSymbol? definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type>? mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)
         {
@@ -613,7 +615,7 @@ public sealed class InterfaceSymbol : TypeSymbol
 
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
-    private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type> mapClrType)
+    private static InterfaceSymbol CreateConstructed(InterfaceSymbol definition, ImmutableArray<TypeSymbol> typeArguments, System.Func<System.Type, System.Type>? mapClrType)
     {
         var argParts = new string[typeArguments.Length];
         for (var i = 0; i < typeArguments.Length; i++)
@@ -688,7 +690,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         InterfaceSymbol instance,
         bool isStatic,
         bool isPrivate,
-        System.Func<System.Type, System.Type> mapClrType)
+        System.Func<System.Type, System.Type>? mapClrType)
     {
         var substParams = ImmutableArray.CreateBuilder<ParameterSymbol>(m.Parameters.Length);
         foreach (var p in m.Parameters)
@@ -812,7 +814,7 @@ public sealed class InterfaceSymbol : TypeSymbol
         membersResolved = true;
     }
 
-    private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst, System.Func<System.Type, System.Type> mapClrType)
+    private static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> subst, System.Func<System.Type, System.Type>? mapClrType)
     {
         if (type is TypeParameterSymbol tp && subst.TryGetValue(tp, out var concrete))
         {
@@ -873,7 +875,9 @@ public sealed class InterfaceSymbol : TypeSymbol
             }
 
             return changed
-                ? StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
+                ? mapClrType is null
+                    ? StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable())
+                    : StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
                 : structType;
         }
 

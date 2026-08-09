@@ -280,3 +280,12 @@ src/Core/CodeAnalysis/Symbols/ImportedTypeSymbol.cs
 src/Core/CodeAnalysis/Symbols/ClrNullability.cs
 src/Core/CodeAnalysis/Symbols/ClrTypeUtilities.cs
 src/Core/CodeAnalysis/Symbols/NullabilityAnnotatedTypeSymbol.cs
+
+# Slice 54 -- remaining function, interface, delegate, and async type symbols.
+src/Core/CodeAnalysis/Symbols/AsyncReturnTypeNormalizer.cs
+src/Core/CodeAnalysis/Symbols/AsyncSequenceTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/DelegateTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/FunctionTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/InterfaceSymbol.cs
+src/Core/CodeAnalysis/Symbols/NullableTypeSymbol.cs
+src/Core/CodeAnalysis/Symbols/PinnedTypeSymbol.cs
