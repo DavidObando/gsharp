@@ -1733,7 +1733,7 @@ internal sealed class ConversionClassifier
     /// <returns>The shaped bound expression.</returns>
     public BoundExpression BindConditionalRefArgument(
         ConditionalRefArgumentExpressionSyntax syntax,
-        SyntaxToken outerModifier)
+        SyntaxToken? outerModifier)
     {
         // Condition must be bool.
         var condition = bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);

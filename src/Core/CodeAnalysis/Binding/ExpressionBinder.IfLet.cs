@@ -57,7 +57,7 @@ internal sealed partial class ExpressionBinder
     /// </remarks>
     private BoundExpression BindIfLetExpression(
         IfLetExpressionSyntax syntax,
-        TypeSymbol targetType,
+        TypeSymbol? targetType,
         bool canBeVoid = false)
     {
         // Issue #1238 parity with BindIfExpression: a bare branchy argument
