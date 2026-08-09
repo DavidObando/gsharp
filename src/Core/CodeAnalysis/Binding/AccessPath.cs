@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Immutable;
 using System.Reflection;
@@ -71,9 +73,12 @@ public sealed class AccessPath : IEquatable<AccessPath>
 
     /// <summary>Creates a plain variable access path.</summary>
     /// <param name="variable">The root variable.</param>
-    /// <returns>The access path, or <c>null</c> when <paramref name="variable"/> is <c>null</c>.</returns>
+    /// <returns>The access path.</returns>
     public static AccessPath ForVariable(VariableSymbol variable)
-        => variable == null ? null : new AccessPath(variable, ImmutableArray<PathMember>.Empty);
+    {
+        ArgumentNullException.ThrowIfNull(variable);
+        return new AccessPath(variable, ImmutableArray<PathMember>.Empty);
+    }
 
     /// <summary>Returns a new path that appends <paramref name="member"/> to this one.</summary>
     /// <param name="member">The immutable source member read after this path.</param>
@@ -100,7 +105,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
     /// </summary>
     /// <param name="other">The candidate prefix.</param>
     /// <returns><c>true</c> when this path starts with <paramref name="other"/>.</returns>
-    public bool StartsWith(AccessPath other)
+    public bool StartsWith(AccessPath? other)
     {
         if (other == null || !ReferenceEquals(Root, other.Root))
         {
@@ -126,7 +131,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
     }
 
     /// <inheritdoc/>
-    public bool Equals(AccessPath other)
+    public bool Equals(AccessPath? other)
     {
         if (other == null || !ReferenceEquals(Root, other.Root))
         {
@@ -152,7 +157,7 @@ public sealed class AccessPath : IEquatable<AccessPath>
     }
 
     /// <inheritdoc/>
-    public override bool Equals(object obj) => Equals(obj as AccessPath);
+    public override bool Equals(object? obj) => Equals(obj as AccessPath);
 
     /// <inheritdoc/>
     public override int GetHashCode()

@@ -143,3 +143,7 @@ src/Core/CodeAnalysis/Binding/NumericWideningLattice.cs
 # Slice 13 -- binding discriminants used by attribute and CLR-call contracts.
 src/Core/CodeAnalysis/Binding/AttributeTargetKind.cs
 src/Core/CodeAnalysis/Binding/RefKind.cs
+
+# Slice 14 -- stable smart-cast access-path keys and their member discriminant.
+src/Core/CodeAnalysis/Binding/AccessPath.cs
+src/Core/CodeAnalysis/Binding/PathMember.cs
