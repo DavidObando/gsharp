@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1117 // parameters on same line
 #pragma warning disable SA1116 // parameters begin on line after declaration
 #pragma warning disable SA1124 // do not use regions
@@ -298,7 +300,7 @@ internal sealed class StateMachineEmitter
         /// <see langword="null"/> when none are in scope. Used by
         /// <see cref="GenericRemapState.ActiveIteratorStateMachineRemap"/>.
         /// </summary>
-        public Dictionary<TypeParameterSymbol, int> BuildRemap()
+        public Dictionary<TypeParameterSymbol, int>? BuildRemap()
         {
             if (this.SourceTypeParameters.IsDefaultOrEmpty)
             {
@@ -342,7 +344,7 @@ internal sealed class StateMachineEmitter
         /// parameter to its class-type-parameter ordinal on the synthesized
         /// state machine, or <see langword="null"/> when none are in scope.
         /// </summary>
-        public Dictionary<TypeParameterSymbol, int> BuildRemap()
+        public Dictionary<TypeParameterSymbol, int>? BuildRemap()
         {
             if (this.SourceTypeParameters.IsDefaultOrEmpty)
             {
@@ -368,8 +370,8 @@ internal sealed class StateMachineEmitter
     {
         public IteratorEmitContext(
             StructSymbol smClass,
-            FieldSymbol builderField,
-            AsyncMethodBuilderInfo builderInfo,
+            FieldSymbol? builderField,
+            AsyncMethodBuilderInfo? builderInfo,
             Dictionary<VariableSymbol, FieldSymbol> fieldMap)
         {
             this.SmClass = smClass;
@@ -380,9 +382,18 @@ internal sealed class StateMachineEmitter
 
         public StructSymbol SmClass { get; }
 
-        public FieldSymbol BuilderField { get; }
+        /// <summary>
+        /// Gets the async-iterator builder field, or <see langword="null"/>
+        /// for the synchronous-iterator form, which has no builder at all.
+        /// </summary>
+        public FieldSymbol? BuilderField { get; }
 
-        public AsyncMethodBuilderInfo BuilderInfo { get; }
+        /// <summary>
+        /// Gets the resolved builder members, or <see langword="null"/> for
+        /// the synchronous-iterator form. Set together with
+        /// <see cref="BuilderField"/>.
+        /// </summary>
+        public AsyncMethodBuilderInfo? BuilderInfo { get; }
 
         public Dictionary<VariableSymbol, FieldSymbol> FieldMap { get; }
     }
@@ -398,9 +409,9 @@ internal sealed class StateMachineEmitter
     {
         public MoveNextBodyResult(
             int bodyOffset,
-            IReadOnlyList<SequencePoint> sequencePoints,
-            IReadOnlyList<LocalInfo> locals,
-            IReadOnlyList<LocalConstantInfo> constants,
+            IReadOnlyList<SequencePoint>? sequencePoints,
+            IReadOnlyList<LocalInfo>? locals,
+            IReadOnlyList<LocalConstantInfo>? constants,
             int codeSize,
             StandaloneSignatureHandle localsSignature)
         {
@@ -414,11 +425,14 @@ internal sealed class StateMachineEmitter
 
         public int BodyOffset { get; }
 
-        public IReadOnlyList<SequencePoint> SequencePoints { get; }
+        /// <summary>Gets the sequence points, or <see langword="null"/> for a metadata-only emit, which builds no body at all.</summary>
+        public IReadOnlyList<SequencePoint>? SequencePoints { get; }
 
-        public IReadOnlyList<LocalInfo> Locals { get; }
+        /// <summary>Gets the locals, or <see langword="null"/> for a metadata-only emit, which builds no body at all.</summary>
+        public IReadOnlyList<LocalInfo>? Locals { get; }
 
-        public IReadOnlyList<LocalConstantInfo> Constants { get; }
+        /// <summary>Gets the local constants, or <see langword="null"/> for a metadata-only emit, which builds no body at all.</summary>
+        public IReadOnlyList<LocalConstantInfo>? Constants { get; }
 
         public int CodeSize { get; }
 
@@ -535,7 +549,7 @@ internal sealed class StateMachineEmitter
             // Issue #641: hoist `this` (the user-class receiver) into a field
             // so the MoveNext body can access instance members of the enclosing
             // class across yield suspension points.
-            FieldSymbol thisProxyField = null;
+            FieldSymbol? thisProxyField = null;
             if (plan.Function.ThisParameter != null && plan.Function.ReceiverType != null)
             {
                 thisProxyField = new FieldSymbol("<>4__this", plan.Function.ReceiverType, Accessibility.Public);
@@ -597,7 +611,7 @@ internal sealed class StateMachineEmitter
             // strongly typed as `IEnumerator<Shape>`.
             var elementNeedsSymbolicEnumerator =
                 TypeSymbol.ContainsOuterMethodTypeParameter(plan.ElementType, scopeTPs)
-                || plan.ElementType?.ClrType == null
+                || plan.ElementType.ClrType == null
                 || plan.ElementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
             var getEnumeratorType = elementNeedsSymbolicEnumerator
                 ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
@@ -681,8 +695,8 @@ internal sealed class StateMachineEmitter
         Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
         ImmutableArray<ParameterSymbol> parameters,
         Func<ParameterSymbol, BoundExpression> parameterValueFactory,
-        FieldSymbol thisProxyField = null,
-        BoundExpression thisProxyValue = null)
+        FieldSymbol? thisProxyField = null,
+        BoundExpression? thisProxyValue = null)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
         initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, 0)));
@@ -795,7 +809,7 @@ internal sealed class StateMachineEmitter
             // Issue #641: hoist `this` (the user-class receiver) into a field
             // so the MoveNext body can access instance members of the enclosing
             // class across yield/await suspension points.
-            FieldSymbol thisProxyField = null;
+            FieldSymbol? thisProxyField = null;
             if (plan.Function.ThisParameter != null && plan.Function.ReceiverType != null)
             {
                 thisProxyField = new FieldSymbol("<>4__this", plan.Function.ReceiverType, Accessibility.Public);
@@ -866,7 +880,7 @@ internal sealed class StateMachineEmitter
             methods.Add(moveNextAsync);
             methods.Add(disposeAsync);
 
-            FunctionSymbol getAsyncEnumerator = null;
+            FunctionSymbol? getAsyncEnumerator = null;
             if (plan.IsEnumerable)
             {
                 // Issue #1002 (parallel to #990 sync iterators): a user-declared
@@ -880,7 +894,7 @@ internal sealed class StateMachineEmitter
                 // `ImportedTypeSymbol.GetConstructed` so the encoder emits a
                 // strongly-typed `IAsyncEnumerator<Shape>` GENERICINST blob
                 // referencing the user TypeDef.
-                TypeSymbol enumeratorType = elementType?.ClrType == null
+                TypeSymbol enumeratorType = elementType.ClrType == null
                     || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
                     ? (TypeSymbol)ImportedTypeSymbol.GetConstructed(
                         typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
@@ -1036,7 +1050,7 @@ internal sealed class StateMachineEmitter
 
         // promise.Reset();
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var resetMethod = promiseType.GetMethod("Reset");
+        var resetMethod = BclMember.Method(promiseType, "Reset");
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1049,8 +1063,7 @@ internal sealed class StateMachineEmitter
         stmts.Add(new BoundExpressionStatement(null, new BoundStateMachineBuilderMoveNext(null, builderField, thisParam, smClass)));
 
         // short version = promise.Version;
-        var versionProp = promiseType.GetProperty("Version");
-        var versionGetter = versionProp.GetGetMethod();
+        var versionGetter = BclMember.Getter(promiseType, "Version");
         var promiseAddr2 = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1062,8 +1075,10 @@ internal sealed class StateMachineEmitter
 
         // return new ValueTask<bool>(this, version);
         // The ValueTask<bool>(IValueTaskSource<bool>, short) constructor
-        var vtCtor = typeof(System.Threading.Tasks.ValueTask<bool>).GetConstructor(
-            new[] { typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>), typeof(short) });
+        var vtCtor = BclMember.Ctor(
+            typeof(System.Threading.Tasks.ValueTask<bool>),
+            typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>),
+            typeof(short));
         var vtConstruct = new BoundClrConstructorCallExpression(
             null,
             typeof(System.Threading.Tasks.ValueTask<bool>),
@@ -1105,7 +1120,7 @@ internal sealed class StateMachineEmitter
 
         // promise.Reset();
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var resetMethod = promiseType.GetMethod("Reset");
+        var resetMethod = BclMember.Method(promiseType, "Reset");
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1117,7 +1132,7 @@ internal sealed class StateMachineEmitter
         // builder.MoveNext(ref this); — uses marker node for MethodSpec emission
         stmts.Add(new BoundExpressionStatement(null, new BoundStateMachineBuilderMoveNext(null, builderField, thisParam, smClass)));
 
-        var versionGetter = promiseType.GetProperty("Version").GetGetMethod();
+        var versionGetter = BclMember.Getter(promiseType, "Version");
         var versionCall = new BoundImportedInstanceCallExpression(
             null,
             new BoundAddressOfExpression(
@@ -1140,8 +1155,10 @@ internal sealed class StateMachineEmitter
         var valueTaskBool = new BoundClrConstructorCallExpression(
             null,
             typeof(System.Threading.Tasks.ValueTask<bool>),
-            typeof(System.Threading.Tasks.ValueTask<bool>).GetConstructor(
-                new[] { typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>), typeof(short) }),
+            BclMember.Ctor(
+                typeof(System.Threading.Tasks.ValueTask<bool>),
+                typeof(System.Threading.Tasks.Sources.IValueTaskSource<bool>),
+                typeof(short)),
             ImmutableArray.Create<BoundExpression>(
                 new BoundVariableExpression(null, thisParam),
                 new BoundVariableExpression(null, versionLocal)),
@@ -1157,14 +1174,15 @@ internal sealed class StateMachineEmitter
             new BoundAddressOfExpression(
                 null,
                 new BoundVariableExpression(null, valueTaskBoolLocal)),
-            typeof(System.Threading.Tasks.ValueTask<bool>).GetMethod("AsTask", Type.EmptyTypes),
+            BclMember.Method(typeof(System.Threading.Tasks.ValueTask<bool>), "AsTask", Type.EmptyTypes),
             TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<bool>)),
             ImmutableArray<BoundExpression>.Empty);
         var valueTask = new BoundClrConstructorCallExpression(
             null,
             typeof(System.Threading.Tasks.ValueTask),
-            typeof(System.Threading.Tasks.ValueTask).GetConstructor(
-                new[] { typeof(System.Threading.Tasks.Task) }),
+            BclMember.Ctor(
+                typeof(System.Threading.Tasks.ValueTask),
+                typeof(System.Threading.Tasks.Task)),
             ImmutableArray.Create<BoundExpression>(asTask),
             TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
         stmts.Add(new BoundReturnStatement(null, valueTask));
@@ -1229,9 +1247,9 @@ internal sealed class StateMachineEmitter
                     continue;
                 }
 
-                var canBeCanceledGetter = typeof(System.Threading.CancellationToken)
-                    .GetProperty(nameof(System.Threading.CancellationToken.CanBeCanceled))
-                    .GetGetMethod();
+                var canBeCanceledGetter = BclMember.Getter(
+                    typeof(System.Threading.CancellationToken),
+                    nameof(System.Threading.CancellationToken.CanBeCanceled));
                 var canBeCanceledCall = new BoundImportedInstanceCallExpression(
                     null,
                     new BoundAddressOfExpression(null, new BoundVariableExpression(null, ctParam)),
@@ -1271,7 +1289,7 @@ internal sealed class StateMachineEmitter
         var thisParam = func.ThisParameter;
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var method = promiseType.GetMethod("GetStatus", new[] { typeof(short) });
+        var method = BclMember.Method(promiseType, "GetStatus", typeof(short));
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1288,7 +1306,7 @@ internal sealed class StateMachineEmitter
         var thisParam = func.ThisParameter;
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
+        var method = BclMember.Method(promiseType, "GetResult", typeof(short));
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1304,7 +1322,7 @@ internal sealed class StateMachineEmitter
         // promise.OnCompleted(continuation, state, token, flags);
         var thisParam = func.ThisParameter;
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var method = promiseType.GetMethod("OnCompleted");
+        var method = BclMember.Method(promiseType, "OnCompleted");
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1326,7 +1344,7 @@ internal sealed class StateMachineEmitter
         var thisParam = func.ThisParameter;
         var tokenParam = func.Parameters[0];
         var promiseType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
-        var method = promiseType.GetMethod("GetResult", new[] { typeof(short) });
+        var method = BclMember.Method(promiseType, "GetResult", typeof(short));
         var promiseAddr = new BoundAddressOfExpression(
             null,
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
@@ -1346,15 +1364,15 @@ internal sealed class StateMachineEmitter
         FieldSymbol builderField,
         Dictionary<ParameterSymbol, FieldSymbol> parameterFields,
         ImmutableArray<ParameterSymbol> parameters,
-        FieldSymbol thisProxyField,
+        FieldSymbol? thisProxyField,
         FunctionSymbol kickoffFunction)
     {
         var initializers = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
         initializers.Add(new BoundFieldInitializer(stateField, new BoundLiteralExpression(null, StateMachineStates.InitialAsyncIteratorState)));
 
         // Builder: AsyncIteratorMethodBuilder.Create()
-        var createMethod = typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)
-            .GetMethod("Create", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null, Type.EmptyTypes, null);
+        var createMethod = BclMember.Method(
+            typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder), "Create", Type.EmptyTypes);
         initializers.Add(new BoundFieldInitializer(builderField,
             new BoundClrStaticCallExpression(null, createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
 
@@ -1396,7 +1414,7 @@ internal sealed class StateMachineEmitter
             }
 
             FunctionSymbol kickoffFunction;
-            BoundBlockStatement body;
+            BoundBlockStatement? body;
 
             if (this.closures.ClosureInfos.TryGetValue(literal, out var closure))
             {
@@ -1572,7 +1590,11 @@ internal sealed class StateMachineEmitter
 
         // sm.<>t__builder = AsyncTaskMethodBuilder[<T>].Create()
         il.LoadLocalAddress(0);
-        var createRef = this.getMethodEntityHandleForContainingType(builderInfo.CreateMethod, plan.FieldMap.BuilderField.Type);
+        var createRef = this.getMethodEntityHandleForContainingType(
+            Invariant.Required(
+                builderInfo.CreateMethod,
+                "a state machine is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, which requires Create"),
+            plan.FieldMap.BuilderField.Type);
         il.OpCode(ILOpCode.Call);
         il.Token(createRef);
         il.OpCode(ILOpCode.Stfld);
@@ -1625,20 +1647,27 @@ internal sealed class StateMachineEmitter
 
         // Start is generic: Start<TStateMachine>(ref TStateMachine).
         // We need a MethodSpec for Start<SM>.
-        var startMethodSpec = this.GetStateMachineStartMethodSpec(builderInfo.StartMethod, kickoffSmStruct, plan.FieldMap.BuilderField.Type);
+        var startMethodSpec = this.GetStateMachineStartMethodSpec(
+            Invariant.Required(
+                builderInfo.StartMethod,
+                "a state machine is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, which requires Start"),
+            kickoffSmStruct,
+            plan.FieldMap.BuilderField.Type);
         il.OpCode(ILOpCode.Call);
         il.Token(startMethodSpec);
 
         // Return builder.Task or void
-        Type awaiterClrType = null;
-        MethodInfo getResultMethod = null;
+        Type? awaiterClrType = null;
+        MethodInfo? getResultMethod = null;
         if (builderInfo.TaskProperty != null)
         {
             // ldloca 0, ldflda builder, call get_Task
             il.LoadLocalAddress(0);
             il.OpCode(ILOpCode.Ldflda);
             il.Token(builderFieldHandle);
-            var getTaskMethod = builderInfo.TaskProperty.GetGetMethod();
+            var getTaskMethod = Invariant.Required(
+                builderInfo.TaskProperty.GetGetMethod(),
+                "the builder's Task property is a public instance property of a BCL builder type, so it declares a public getter");
             var getTaskRef = this.getMethodEntityHandleForContainingType(getTaskMethod, plan.FieldMap.BuilderField.Type);
             il.OpCode(ILOpCode.Call);
             il.Token(getTaskRef);
@@ -1651,9 +1680,9 @@ internal sealed class StateMachineEmitter
             if (driveSynchronously)
             {
                 var taskClrType = builderInfo.TaskProperty.PropertyType;
-                var getAwaiterMethod = taskClrType.GetMethod("GetAwaiter", Type.EmptyTypes);
+                var getAwaiterMethod = BclMember.Method(taskClrType, "GetAwaiter", Type.EmptyTypes);
                 awaiterClrType = getAwaiterMethod.ReturnType;
-                getResultMethod = awaiterClrType.GetMethod("GetResult", Type.EmptyTypes);
+                getResultMethod = BclMember.Method(awaiterClrType, "GetResult", Type.EmptyTypes);
 
                 il.OpCode(ILOpCode.Callvirt);
                 il.Token(this.getMethodEntityHandle(getAwaiterMethod));
@@ -1723,8 +1752,8 @@ internal sealed class StateMachineEmitter
         Dictionary<VariableSymbol, int> locals,
         Dictionary<ParameterSymbol, int> parameters,
         BoundStateMachineAwaitOnCompleted node,
-        AsyncStateMachinePlan currentPlan = null,
-        IteratorEmitContext iteratorCtx = null)
+        AsyncStateMachinePlan? currentPlan = null,
+        IteratorEmitContext? iteratorCtx = null)
     {
         // Use the explicitly-passed plan when available; fall back to the
         // legacy search for backward compatibility with top-level async.
@@ -1750,9 +1779,16 @@ internal sealed class StateMachineEmitter
 
         if (iteratorCtx != null)
         {
-            builderField = iteratorCtx.BuilderField;
+            // Only the synchronous-iterator form leaves the builder members
+            // unset, and a synchronous iterator has no await to complete, so
+            // it never reaches this emitter.
+            builderField = Invariant.Required(
+                iteratorCtx.BuilderField,
+                "an await inside an iterator means the async-iterator form, which carries a builder field");
             smStruct = iteratorCtx.SmClass;
-            builderInfo = iteratorCtx.BuilderInfo;
+            builderInfo = Invariant.Required(
+                iteratorCtx.BuilderInfo,
+                "an await inside an iterator means the async-iterator form, which carries resolved builder members");
             smIsValueType = false; // async iterator SM is a class
         }
         else if (currentPlan != null)
@@ -1792,9 +1828,13 @@ internal sealed class StateMachineEmitter
         }
 
         // Build MethodSpec for AwaitUnsafeOnCompleted<TAwaiter, TSM> or AwaitOnCompleted<TAwaiter, TSM>
-        var openMethod = node.UseCritical
-            ? builderInfo.AwaitUnsafeOnCompletedMethod
-            : builderInfo.AwaitOnCompletedMethod;
+        // AwaitOnCompleted / AwaitUnsafeOnCompleted are among the four members
+        // AsyncMethodBuilderInfo.IsValid requires, and a state machine is only
+        // built for a builder that passed it -- the same establisher
+        // KickoffBodyBuilder cites for Create/Start.
+        var openMethod = Invariant.Required(
+            node.UseCritical ? builderInfo.AwaitUnsafeOnCompletedMethod : builderInfo.AwaitOnCompletedMethod,
+            "a state machine is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, which requires both await-completion members");
 
         var openRef = this.getMethodEntityHandleForContainingType(
             openMethod.IsGenericMethod

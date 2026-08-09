@@ -112,3 +112,10 @@ src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Statements.cs
 src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs
 src/Core/CodeAnalysis/Emit/MethodBodyPlanner.cs
 src/Core/CodeAnalysis/Emit/SlotPlanner.cs
+
+# Slice 9d -- the last two Emit files: the root metadata emitter and the
+# state-machine emitter. Taken together because the root's sub-emitter wiring
+# and the state-machine plans reference each other's shapes.
+src/Core/CodeAnalysis/Emit/BclMember.cs
+src/Core/CodeAnalysis/Emit/ReflectionMetadataEmitter.cs
+src/Core/CodeAnalysis/Emit/StateMachineEmitter.cs

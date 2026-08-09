@@ -246,7 +246,7 @@ internal sealed class MethodBodyPlanner
     /// Resolves the package that a state-machine type's kickoff belongs to,
     /// for determining which <c>&lt;Program&gt;</c> TypeDef it nests inside.
     /// </summary>
-    public PackageSymbol? GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol entryPointPackage)
+    public PackageSymbol? GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol? entryPointPackage)
     {
         // Try the SM's packageName to find the matching package.
         if (smSym.PackageName != null)
@@ -332,7 +332,7 @@ internal sealed class MethodBodyPlanner
 
     public void CollectLocalsAndLabels(
         BoundBlockStatement body,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
@@ -1028,7 +1028,7 @@ internal sealed class MethodBodyPlanner
 
     private void CollectStatements(
         ImmutableArray<BoundStatement> statements,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
@@ -1227,7 +1227,7 @@ internal sealed class MethodBodyPlanner
     /// </summary>
     private void CollectArmBody(
         BoundStatement armBody,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
@@ -1294,7 +1294,7 @@ internal sealed class MethodBodyPlanner
 
     private IEnumerable<BoundExpression> CollectReceiverSpills(
         BoundNode root,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         var sink = new List<BoundExpression>();

@@ -146,7 +146,7 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             const string Message = "Unmatched switch expression value.";
-            var constructor = BclCtor(typeof(InvalidOperationException), typeof(string));
+            var constructor = BclMember.Ctor(typeof(InvalidOperationException), typeof(string));
             this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));

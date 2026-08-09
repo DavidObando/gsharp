@@ -59,7 +59,7 @@ internal sealed class EmitContext
     /// metadata-only reference assembly (no method bodies, marked with
     /// <c>System.Runtime.CompilerServices.ReferenceAssemblyAttribute</c>).
     /// </param>
-    public EmitContext(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly)
+    public EmitContext(BoundProgram program, ReferenceResolver? references, string? assemblyName, bool metadataOnly)
     {
         this.Program = program;
         this.References = references ?? ReferenceResolver.Default();
@@ -109,7 +109,7 @@ internal sealed class EmitContext
     /// MSBuild's <c>AssemblyName</c>). <see langword="null"/> means "fall
     /// back to the entry-point package's name".
     /// </summary>
-    public string AssemblyNameOverride { get; }
+    public string? AssemblyNameOverride { get; }
 
     /// <summary>
     /// Gets a value indicating whether this is a metadata-only reference-

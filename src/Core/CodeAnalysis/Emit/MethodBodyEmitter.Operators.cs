@@ -229,7 +229,7 @@ internal sealed partial class MethodBodyEmitter
             case BoundUnaryOperatorKind.Negation:
                 if (u.Op.OperandType == TypeSymbol.Decimal)
                 {
-                    var neg = BclMethod(typeof(decimal), "op_UnaryNegation", typeof(decimal));
+                    var neg = BclMember.Method(typeof(decimal), "op_UnaryNegation", typeof(decimal));
                     this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
                 }
                 else
@@ -317,7 +317,7 @@ internal sealed partial class MethodBodyEmitter
                 case BoundUnaryOperatorKind.Negation:
                     if (underlying == TypeSymbol.Decimal)
                     {
-                        var neg = BclMethod(typeof(decimal), "op_UnaryNegation", typeof(decimal));
+                        var neg = BclMember.Method(typeof(decimal), "op_UnaryNegation", typeof(decimal));
                         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
                     }
                     else

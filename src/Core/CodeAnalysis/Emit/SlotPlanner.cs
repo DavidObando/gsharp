@@ -65,12 +65,12 @@ internal sealed class SlotPlanner
 {
     private readonly EmitContext emitCtx;
     private readonly MetadataTokenCache cache;
-    private readonly Func<BoundExpression, FunctionSymbol, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill;
+    private readonly Func<BoundExpression, FunctionSymbol?, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill;
 
     public SlotPlanner(
         EmitContext emitCtx,
         MetadataTokenCache cache,
-        Func<BoundExpression, FunctionSymbol, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill)
+        Func<BoundExpression, FunctionSymbol?, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -202,7 +202,7 @@ internal sealed class SlotPlanner
 
     public void CollectReceiverSpills(
         BoundStatement root,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         IReadOnlyDictionary<VariableSymbol, int> locals,
         List<BoundExpression> sink)
         => new ReceiverSpillCollector(this.needsRvalueReceiverSpill, function, locals, sink).Visit(root);
@@ -1050,14 +1050,14 @@ internal sealed class SlotPlanner
 
     private sealed class ReceiverSpillCollector : BoundTreeWalker
     {
-        private readonly Func<BoundExpression, FunctionSymbol, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill;
-        private readonly FunctionSymbol function;
+        private readonly Func<BoundExpression, FunctionSymbol?, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill;
+        private readonly FunctionSymbol? function;
         private readonly IReadOnlyDictionary<VariableSymbol, int> locals;
         private readonly List<BoundExpression> sink;
 
         public ReceiverSpillCollector(
-            Func<BoundExpression, FunctionSymbol, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill,
-            FunctionSymbol function,
+            Func<BoundExpression, FunctionSymbol?, IReadOnlyDictionary<VariableSymbol, int>, bool> needsRvalueReceiverSpill,
+            FunctionSymbol? function,
             IReadOnlyDictionary<VariableSymbol, int> locals,
             List<BoundExpression> sink)
         {

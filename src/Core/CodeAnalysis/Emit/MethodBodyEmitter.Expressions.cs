@@ -745,7 +745,7 @@ internal sealed partial class MethodBodyEmitter
         {
             var asInt = (int)value;
             this.il.LoadConstantI4(asInt);
-            var ctor = BclCtor(typeof(decimal), typeof(int));
+            var ctor = BclMember.Ctor(typeof(decimal), typeof(int));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
@@ -756,7 +756,7 @@ internal sealed partial class MethodBodyEmitter
         {
             var asLong = (long)value;
             this.il.LoadConstantI8(asLong);
-            var ctor = BclCtor(typeof(decimal), typeof(long));
+            var ctor = BclMember.Ctor(typeof(decimal), typeof(long));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
@@ -777,7 +777,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadConstantI4(isNegative ? 1 : 0);
         this.il.LoadConstantI4(scale);
 
-        var bigCtor = BclCtor(
+        var bigCtor = BclMember.Ctor(
             typeof(decimal),
             typeof(int),
             typeof(int),
@@ -790,7 +790,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitDecimalStaticField(string name)
     {
-        var field = BclField(typeof(decimal), name);
+        var field = BclMember.Field(typeof(decimal), name);
         this.il.OpCode(ILOpCode.Ldsfld);
         this.il.Token(this.outer.memberRefs.GetFieldReference(field));
     }

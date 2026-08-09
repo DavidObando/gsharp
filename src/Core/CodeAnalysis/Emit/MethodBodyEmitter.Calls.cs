@@ -500,7 +500,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        var optionsCtor = BclCtor(
+        var optionsCtor = BclMember.Ctor(
             typeof(System.Threading.Channels.BoundedChannelOptions), typeof(int));
         this.EmitExpression(node.Capacity);
         this.il.OpCode(ILOpCode.Newobj);
@@ -554,20 +554,20 @@ internal sealed partial class MethodBodyEmitter
                 "Channel<T> declares the Reader property").GetGetMethod(),
             "Channel<T>.Reader declares a public getter");
         var readAsync = Invariant.Required(
-            BclMethod(readerClr, "ReadAsync", typeof(System.Threading.CancellationToken)),
+            BclMember.Method(readerClr, "ReadAsync", typeof(System.Threading.CancellationToken)),
             "ChannelReader<T> declares ReadAsync(CancellationToken)");
 
         var valueTaskGeneric = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
         var asTaskGeneric = Invariant.Required(
-            BclMethod(valueTaskGeneric, "AsTask"),
+            BclMember.Method(valueTaskGeneric, "AsTask", Type.EmptyTypes),
             "ValueTask<T> declares AsTask()");
         var taskGeneric = typeof(System.Threading.Tasks.Task<>).MakeGenericType(elementClr);
         var taskGetAwaiter = Invariant.Required(
-            BclMethod(taskGeneric, "GetAwaiter"),
+            BclMember.Method(taskGeneric, "GetAwaiter", Type.EmptyTypes),
             "Task<T> declares GetAwaiter()");
         var taskAwaiterGeneric = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
         var taskGetResult = Invariant.Required(
-            BclMethod(taskAwaiterGeneric, "GetResult"),
+            BclMember.Method(taskAwaiterGeneric, "GetResult", Type.EmptyTypes),
             "TaskAwaiter<T> declares GetResult()");
         var ccExceptionClr = typeof(System.Threading.Channels.ChannelClosedException);
 
@@ -621,8 +621,8 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = BclGetter(channelClr, "Writer");
-        var complete = BclMethod(writerClr, "Complete", typeof(Exception));
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var complete = BclMember.Method(writerClr, "Complete", typeof(Exception));
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -637,7 +637,7 @@ internal sealed partial class MethodBodyEmitter
         // ldc.i4.0; newobj CancellationToken(bool) — the canonical
         // "default" CancellationToken IL pattern. Avoids needing a
         // dedicated local for `default(CancellationToken)`.
-        var ctCtor = BclCtor(typeof(System.Threading.CancellationToken), typeof(bool));
+        var ctCtor = BclMember.Ctor(typeof(System.Threading.CancellationToken), typeof(bool));
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(ctCtor));

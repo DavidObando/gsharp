@@ -376,14 +376,14 @@ internal sealed partial class MethodBodyEmitter
         MethodInfo run;
         if (isAsync)
         {
-            run = BclMethod(
+            run = BclMember.Method(
                 typeof(System.Threading.Tasks.Task),
                 nameof(System.Threading.Tasks.Task.Run),
                 typeof(Func<System.Threading.Tasks.Task>));
         }
         else
         {
-            run = BclMethod(
+            run = BclMember.Method(
                 typeof(System.Threading.Tasks.Task),
                 nameof(System.Threading.Tasks.Task.Run),
                 typeof(Action));
@@ -394,7 +394,7 @@ internal sealed partial class MethodBodyEmitter
         if (enclosingScope != null)
         {
             var listType = typeof(List<System.Threading.Tasks.Task>);
-            var add = BclMethod(listType, nameof(List<System.Threading.Tasks.Task>.Add), typeof(System.Threading.Tasks.Task));
+            var add = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.Add), typeof(System.Threading.Tasks.Task));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.memberRefs.GetMethodReference(add));
         }
@@ -462,7 +462,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (isAsync)
         {
-            var funcTaskCtor = BclCtor(typeof(Func<System.Threading.Tasks.Task>), typeof(object), typeof(nint));
+            var funcTaskCtor = BclMember.Ctor(typeof(Func<System.Threading.Tasks.Task>), typeof(object), typeof(nint));
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
@@ -470,7 +470,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            var actionCtor = BclCtor(typeof(Action), typeof(object), typeof(nint));
+            var actionCtor = BclMember.Ctor(typeof(Action), typeof(object), typeof(nint));
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
@@ -482,8 +482,8 @@ internal sealed partial class MethodBodyEmitter
     {
         var slots = this.scopeFrameSlots[node];
         var listType = typeof(List<System.Threading.Tasks.Task>);
-        var listCtor = BclCtor(listType);
-        var ctsCtor = BclCtor(typeof(System.Threading.CancellationTokenSource));
+        var listCtor = BclMember.Ctor(listType);
+        var ctsCtor = BclMember.Ctor(typeof(System.Threading.CancellationTokenSource));
 
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(listCtor));
@@ -535,9 +535,10 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.MarkLabel(catchStart);
         this.il.OpCode(ILOpCode.Pop);
-        var cancel = BclMethod(
+        var cancel = BclMember.Method(
             typeof(System.Threading.CancellationTokenSource),
-            nameof(System.Threading.CancellationTokenSource.Cancel));
+            nameof(System.Threading.CancellationTokenSource.Cancel),
+            Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.outer.memberRefs.GetMethodReference(cancel));
@@ -545,9 +546,10 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(catchEnd);
 
         this.il.MarkLabel(disposeStart);
-        var dispose = BclMethod(
+        var dispose = BclMember.Method(
             typeof(System.Threading.CancellationTokenSource),
-            nameof(System.Threading.CancellationTokenSource.Dispose));
+            nameof(System.Threading.CancellationTokenSource.Dispose),
+            Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
         this.il.OpCode(ILOpCode.Callvirt);
         this.il.Token(this.outer.memberRefs.GetMethodReference(dispose));
@@ -567,17 +569,19 @@ internal sealed partial class MethodBodyEmitter
     private void EmitScopeWait((int Tasks, int Cts, int Awaiter) slots)
     {
         var listType = typeof(List<System.Threading.Tasks.Task>);
-        var toArray = BclMethod(listType, nameof(List<System.Threading.Tasks.Task>.ToArray));
-        var whenAll = BclMethod(
+        var toArray = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.ToArray), Type.EmptyTypes);
+        var whenAll = BclMember.Method(
             typeof(System.Threading.Tasks.Task),
             nameof(System.Threading.Tasks.Task.WhenAll),
             typeof(System.Threading.Tasks.Task[]));
-        var getAwaiter = BclMethod(
+        var getAwaiter = BclMember.Method(
             typeof(System.Threading.Tasks.Task),
-            nameof(System.Threading.Tasks.Task.GetAwaiter));
-        var getResult = BclMethod(
+            nameof(System.Threading.Tasks.Task.GetAwaiter),
+            Type.EmptyTypes);
+        var getResult = BclMember.Method(
             typeof(System.Runtime.CompilerServices.TaskAwaiter),
-            nameof(System.Runtime.CompilerServices.TaskAwaiter.GetResult));
+            nameof(System.Runtime.CompilerServices.TaskAwaiter.GetResult),
+            Type.EmptyTypes);
 
         this.il.LoadLocal(slots.Tasks);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -660,10 +664,10 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
-        var getReader = BclGetter(channelClr, "Reader");
-        var tryRead = BclMethod(readerClr, "TryRead", elementClr.MakeByRefType());
-        var completion = BclGetter(readerClr, "Completion");
-        var isCompleted = BclGetter(typeof(System.Threading.Tasks.Task), "IsCompleted");
+        var getReader = BclMember.Getter(channelClr, "Reader");
+        var tryRead = BclMember.Method(readerClr, "TryRead", elementClr.MakeByRefType());
+        var completion = BclMember.Getter(readerClr, "Completion");
+        var isCompleted = BclMember.Getter(typeof(System.Threading.Tasks.Task), "IsCompleted");
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -719,8 +723,8 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = BclGetter(channelClr, "Writer");
-        var tryWrite = BclMethod(writerClr, "TryWrite", elementClr);
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var tryWrite = BclMember.Method(writerClr, "TryWrite", elementClr);
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -737,14 +741,14 @@ internal sealed partial class MethodBodyEmitter
     private void EmitSelectWait(BoundSelectStatement node, SelectSlots slots)
     {
         var taskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task));
-        var whenAny = BclMethod(
+        var whenAny = BclMember.Method(
             typeof(System.Threading.Tasks.Task),
             nameof(System.Threading.Tasks.Task.WhenAny),
             typeof(System.Threading.Tasks.Task[]));
         var taskOfTask = typeof(System.Threading.Tasks.Task<System.Threading.Tasks.Task>);
-        var getAwaiter = BclMethod(taskOfTask, "GetAwaiter");
+        var getAwaiter = BclMember.Method(taskOfTask, "GetAwaiter", Type.EmptyTypes);
         var awaiter = typeof(System.Runtime.CompilerServices.TaskAwaiter<System.Threading.Tasks.Task>);
-        var getResult = BclMethod(awaiter, "GetResult");
+        var getResult = BclMember.Method(awaiter, "GetResult", Type.EmptyTypes);
 
         var waitCount = 0;
         foreach (var arm in node.Cases)
@@ -795,13 +799,13 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var valueTaskBool = typeof(System.Threading.Tasks.ValueTask<bool>);
-        var asTask = BclMethod(valueTaskBool, "AsTask");
+        var asTask = BclMember.Method(valueTaskBool, "AsTask", Type.EmptyTypes);
 
         if (arm.CaseKind == SelectCaseKind.Send)
         {
             var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-            var getWriter = BclGetter(channelClr, "Writer");
-            var waitToWrite = BclMethod(writerClr, "WaitToWriteAsync", typeof(System.Threading.CancellationToken));
+            var getWriter = BclMember.Getter(channelClr, "Writer");
+            var waitToWrite = BclMember.Method(writerClr, "WaitToWriteAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
@@ -812,8 +816,8 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
-            var getReader = BclGetter(channelClr, "Reader");
-            var waitToRead = BclMethod(readerClr, "WaitToReadAsync", typeof(System.Threading.CancellationToken));
+            var getReader = BclMember.Getter(channelClr, "Reader");
+            var waitToRead = BclMember.Method(readerClr, "WaitToReadAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
@@ -834,11 +838,11 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = BclGetter(channelClr, "Writer");
-        var writeAsync = BclMethod(writerClr, "WriteAsync", elementClr, typeof(System.Threading.CancellationToken));
-        var asTaskNonGeneric = BclMethod(typeof(System.Threading.Tasks.ValueTask), "AsTask");
-        var getAwaiter = BclMethod(typeof(System.Threading.Tasks.Task), "GetAwaiter");
-        var getResult = BclMethod(typeof(System.Runtime.CompilerServices.TaskAwaiter), "GetResult");
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var writeAsync = BclMember.Method(writerClr, "WriteAsync", elementClr, typeof(System.Threading.CancellationToken));
+        var asTaskNonGeneric = BclMember.Method(typeof(System.Threading.Tasks.ValueTask), "AsTask", Type.EmptyTypes);
+        var getAwaiter = BclMember.Method(typeof(System.Threading.Tasks.Task), "GetAwaiter", Type.EmptyTypes);
+        var getResult = BclMember.Method(typeof(System.Runtime.CompilerServices.TaskAwaiter), "GetResult", Type.EmptyTypes);
 
         var (vtSlot, taSlot, _, _) = this.channelOpSlots[node];
 

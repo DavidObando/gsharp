@@ -559,7 +559,7 @@ internal sealed class ConstructorBodyEmitter
     internal int EmitClassConstructorWithBodyBodyBytes(
         StructSymbol classSym,
         ConstructorSymbol ctor,
-        BaseConstructorInitializer init,
+        BaseConstructorInitializer? init,
         EntityHandle baseCtorToken)
     {
         var function = ctor.Function;

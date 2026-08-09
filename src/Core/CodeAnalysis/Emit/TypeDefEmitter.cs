@@ -111,7 +111,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
-    private readonly Func<StructSymbol, ConstructorSymbol?, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
+    private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
     private readonly Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes;
 
     public TypeDefEmitter(
@@ -139,7 +139,7 @@ internal sealed class TypeDefEmitter
         Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
-        Func<StructSymbol, ConstructorSymbol?, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
+        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
         Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));

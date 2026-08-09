@@ -1272,7 +1272,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(ILOpCode.Castclass);
                 this.il.Token((EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(System.Collections.IList)));
                 this.EmitExpression(idx.Arguments[0]);
-                var iListGetter = BclGetter(typeof(System.Collections.IList), "Item");
+                var iListGetter = BclMember.Getter(typeof(System.Collections.IList), "Item");
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(this.outer.memberRefs.GetMethodReference(iListGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
@@ -1291,7 +1291,7 @@ internal sealed partial class MethodBodyEmitter
                     this.il.Token(this.outer.memberRefs.GetElementTypeToken(idx.Arguments[0].Type));
                 }
 
-                var iDictGetter = BclGetter(typeof(System.Collections.IDictionary), "Item");
+                var iDictGetter = BclMember.Getter(typeof(System.Collections.IDictionary), "Item");
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(this.outer.memberRefs.GetMethodReference(iDictGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);

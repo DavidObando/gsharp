@@ -269,7 +269,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else if (emitFallthroughGuard)
         {
-            var constructor = BclCtor(typeof(InvalidOperationException), typeof(string));
+            var constructor = BclMember.Ctor(typeof(InvalidOperationException), typeof(string));
             this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(
                 DiagnosticDescriptors.NonVoidFallthroughGuardMessage));
             this.il.OpCode(ILOpCode.Newobj);
@@ -623,59 +623,6 @@ internal sealed partial class MethodBodyEmitter
     /// DataStructSynthesizer do not, but they contain no protected region and
     /// never reach this emitter.)
     /// </summary>
-    /// <summary>
-    /// Reads a property getter off a constructed BCL type the channel lowering
-    /// depends on. Absence is malformed metadata, not a recoverable condition,
-    /// so the invariant is asserted here rather than at each of the dozen or so
-    /// emit sites that consume the result.
-    /// </summary>
-    /// <param name="carrier">The constructed BCL type, e.g. <c>Channel&lt;T&gt;</c>.</param>
-    /// <param name="propertyName">The property whose getter is wanted.</param>
-    /// <returns>The getter.</returns>
-    private static MethodInfo BclGetter(Type carrier, string propertyName)
-        => Invariant.Required(
-            Invariant.Required(
-                carrier.GetProperty(propertyName),
-                $"{carrier.Name} declares the {propertyName} property").GetGetMethod(),
-            $"{carrier.Name}.{propertyName} declares a public getter");
-
-    /// <summary>
-    /// Reads a constructor off a BCL type the emitter depends on. See
-    /// <see cref="BclGetter"/> for why this asserts.
-    /// </summary>
-    /// <param name="carrier">The BCL type.</param>
-    /// <param name="parameterTypes">The constructor's parameter types.</param>
-    /// <returns>The constructor.</returns>
-    private static ConstructorInfo BclCtor(Type carrier, params Type[] parameterTypes)
-        => Invariant.Required(
-            carrier.GetConstructor(parameterTypes),
-            $"{carrier.Name} declares a constructor with the expected signature");
-
-    /// <summary>
-    /// Reads a method off a constructed BCL type the channel lowering depends
-    /// on. See <see cref="BclGetter"/> for why this asserts.
-    /// </summary>
-    /// <param name="carrier">The constructed BCL type.</param>
-    /// <param name="methodName">The method name.</param>
-    /// <param name="parameterTypes">The method's parameter types.</param>
-    /// <returns>The method.</returns>
-    private static MethodInfo BclMethod(Type carrier, string methodName, params Type[] parameterTypes)
-        => Invariant.Required(
-            carrier.GetMethod(methodName, parameterTypes),
-            $"{carrier.Name} declares {methodName} with the expected signature");
-
-    /// <summary>
-    /// Reads a static field off a BCL type the emitter depends on. See
-    /// <see cref="BclGetter"/> for why this asserts.
-    /// </summary>
-    /// <param name="carrier">The BCL type.</param>
-    /// <param name="fieldName">The field name.</param>
-    /// <returns>The field.</returns>
-    private static FieldInfo BclField(Type carrier, string fieldName)
-        => Invariant.Required(
-            carrier.GetField(fieldName),
-            $"{carrier.Name} declares the {fieldName} field");
-
     private ControlFlowBuilder ControlFlow => Invariant.Required(
         this.il.ControlFlowBuilder,
         "FunctionEmitter and ConstructorBodyEmitter build every encoder this emitter writes into with a control-flow builder");
