@@ -133,3 +133,4 @@ src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Arguments.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Candidates.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Invocations.cs
 src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.CallBinding.cs
+src/Core/CodeAnalysis/Binding/OverloadResolution/OverloadResolver.Constructors.cs
