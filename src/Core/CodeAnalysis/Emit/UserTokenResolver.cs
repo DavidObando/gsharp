@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // elements should appear in the correct order (the user-token memoization caches keep their original ReflectionMetadataEmitter band position, interleaved with the resolvers that consume them)
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the structural-unification / open-signature helpers sit next to the resolvers that consume them, preserving band order)

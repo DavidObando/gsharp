@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 using GSharp.Core.CodeAnalysis.Binding;
 
 namespace GSharp.Core.CodeAnalysis.Lowering;

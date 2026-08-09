@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 using System.Collections.Generic;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Syntax;

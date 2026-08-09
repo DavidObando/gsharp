@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1214 // readonly fields should appear before non-readonly fields — the two mutable `active*` remap pointers are grouped with the readonly registration maps they mirror, preserving the original ReflectionMetadataEmitter band's field order
 
 using System;

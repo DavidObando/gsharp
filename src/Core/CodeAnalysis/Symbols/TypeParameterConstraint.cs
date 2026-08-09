@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>Constraint kind for a <see cref="TypeParameterSymbol"/> (Phase 4.1 / ADR-0020; widened in Phase 4.2).</summary>

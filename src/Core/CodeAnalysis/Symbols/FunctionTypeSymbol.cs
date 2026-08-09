@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 

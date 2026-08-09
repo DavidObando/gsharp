@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1100 // base. required — Serialize(BlobBuilder) is inherited, not overridden
 #pragma warning disable SA1118 // multi-line Section ctor is clearest here
 

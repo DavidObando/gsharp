@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // a struct should not follow a class — paired by design
 #pragma warning disable SA1202 // public members before private — language-guid constant intentionally grouped with private state
 #pragma warning disable SA1611 // documentation for parameter is missing — internal helper APIs

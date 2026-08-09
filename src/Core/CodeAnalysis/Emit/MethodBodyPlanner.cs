@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by entry point, then helpers)
 #pragma warning disable SA1611 // Element parameters should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)
 #pragma warning disable SA1615 // Element return value should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)

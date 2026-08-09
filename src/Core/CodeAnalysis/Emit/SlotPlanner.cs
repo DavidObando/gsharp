@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // method should not follow a class (this file mixes private helper classes inline with methods)
 
 using GSharp.Core.CodeAnalysis.Binding;

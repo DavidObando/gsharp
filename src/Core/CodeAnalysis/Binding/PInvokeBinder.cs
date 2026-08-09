@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // Elements should appear in the correct order — the new ADR-0096 helpers (SupportedUnmanagedTypes, TryAttachMarshalAsMetadata, …) are grouped together at the bottom for diff locality; keeping the layout means StyleCop would reject the field-after-method order.
 #pragma warning disable SA1202 // 'public' / 'internal' members should come before 'private' — the new ADR-0096 internal helper (ReportMarshalAsOnNonPInvokeFunction) lives next to its private helpers so the file stays one feature per block.
 

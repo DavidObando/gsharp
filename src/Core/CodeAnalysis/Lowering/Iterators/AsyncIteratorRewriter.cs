@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable CS1591
 #pragma warning disable SA1028
 #pragma warning disable SA1116

@@ -25,5 +25,5 @@ Fixes #<issue> <!-- or: Part of #<issue> -->
 - [ ] **Nullable widenings**: every new `?` on a public/internal signature listed with the call site that produces null. A `?` with no such call site is a widening — it forces every caller to handle a null that never occurs — and does not belong in the diff.
 - [ ] **Latent bugs surfaced**: listed with issue numbers, or explicitly "none". An empty section is a claim; a missing one is silence.
 - [ ] `ArgumentNullException` guards: count reviewed, count removed (expected 0 — removal is a behaviour change needing its own commit and witness).
-- [ ] `build/nullable-enabled.txt` grew by exactly the file set this PR enabled.
+- [ ] Nullable changes preserve the production/test project boundary.
 - [ ] `test/Core.Tests/Baselines/refactoring-baseline.json` unchanged, or the change is explained with a witness — an annotation-only PR cannot move it.

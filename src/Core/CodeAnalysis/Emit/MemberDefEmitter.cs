@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: each public entry point is followed by its own private helpers — instance-property group, static-property group, instance-event group, static-event group, interface group)
 
 using System;

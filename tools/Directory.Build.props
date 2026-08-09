@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Supporting translator/generator projects are not part of the
+         production nullable migration; keep their existing oblivious build. -->
+    <IsToolingProject>true</IsToolingProject>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
+
+</Project>

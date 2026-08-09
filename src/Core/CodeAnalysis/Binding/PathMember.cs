@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;

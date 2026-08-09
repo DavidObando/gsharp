@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // elements should appear in the correct order (the delegate-shape caches keep their original ReflectionMetadataEmitter band position, interleaved with the factories that consume them)
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the open-definition / TypeBuilder-safe resolvers sit next to the member-ref factories that consume them, preserving band order)

@@ -4,6 +4,8 @@
 
 #nullable enable annotations
 
+#nullable disable warnings
+
 #pragma warning disable SA1201 // a struct should not follow a class — ReferenceInfo is paired with ReferenceResolver by design
 
 using System;

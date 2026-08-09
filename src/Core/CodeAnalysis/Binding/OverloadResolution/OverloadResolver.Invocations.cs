@@ -7,8 +7,6 @@
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1202 // Elements should be ordered by access
 
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;

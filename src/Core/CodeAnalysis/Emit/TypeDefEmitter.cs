@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: TypeDef-shape group is followed by its private helpers; constructor group is followed by its private helpers)
 
 using System;

@@ -4,6 +4,8 @@
 
 #nullable enable annotations
 
+#nullable disable warnings
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order

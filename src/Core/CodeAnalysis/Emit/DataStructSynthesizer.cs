@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by feature: inline-struct group then data-struct group, each followed by its own private helpers)
 
 using System;

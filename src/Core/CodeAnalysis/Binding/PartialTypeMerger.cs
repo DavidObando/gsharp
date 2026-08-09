@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1512 // Single-line comments should not be followed by blank line
 

@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by entry-point first, then private blob-encoding helpers)
 #pragma warning disable SA1611 // parameter documentation missing — the public API surface is mechanically lifted from ReflectionMetadataEmitter; existing call-site comments document them
 #pragma warning disable SA1615 // return-value documentation missing — same as SA1611

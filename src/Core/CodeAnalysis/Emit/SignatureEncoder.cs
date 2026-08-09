@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members (methods keep their original ReflectionMetadataEmitter band order: entry points interleaved with the private helpers they orchestrate)
 #pragma warning disable SA1204 // static members should come before non-static (the calling-convention/task-type helpers sit next to the encoders that consume them, preserving band order)
 #pragma warning disable SA1214 // readonly fields should appear before non-readonly fields (the delegate-shape caches keep their original ReflectionMetadataEmitter band position)

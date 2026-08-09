@@ -7,7 +7,10 @@
 
 ## Context
 
-Nullable reference types are globally disabled via `<Nullable>disable</Nullable>` in `build/gsharp.build.props`; only `src/vs-gsharp` opts in at the project level. That means the compiler performs no null-state analysis over ~160K lines of production C#, and no API in `src/Core` carries a nullability contract — consumers (LanguageServer, Repl, tests, future SDK users) cannot tell which parameters and returns may be null. Latent null-dereference bugs have already surfaced where the implicit contracts were guessed wrong (issue #2144: a `default(TextLocation)` with a null `Text` NRE'd diagnostic rendering and masked the whole batch).
+Before issue #1364, nullable reference types were globally disabled via
+`<Nullable>disable</Nullable>` in `build/gsharp.build.props`; only selected
+projects opted in. The final flip now enables nullable analysis for production
+projects by default while test projects remain flow-oblivious.
 
 Two constraints bound the migration. First, `TreatWarningsAsErrors=true` is global, so any file placed in a nullable context must be warning-clean immediately — a big-bang flip of the central switch is not buildable. Second, `src/Core` is a single project, so "enable per subsystem" cannot be expressed as a per-project MSBuild property; the enablement boundary must be finer-grained than the project.
 
@@ -17,7 +20,10 @@ Two files (`Diagnostic/FileLogger.cs`, `Diagnostic/ILogger.cs`) already use per-
 
 ### Mechanism: per-file `#nullable enable`, directory-at-a-time
 
-> **Amended (A1, A3).** Per-file directives apply to `src/Core` only; every other project flips via its own csproj property. The migration unit is a declared file set, not a directory. See [Amendments](#amendments-2026-08-07).
+> **Amended (A1, A3).** Per-file directives applied to `src/Core` only; every
+> other production project flips through shared build properties. The
+> migration unit was a declared file set, not a directory. See
+> [Amendments](#amendments-2026-08-07).
 
 - The central `<Nullable>disable</Nullable>` in `build/gsharp.build.props` stays until the migration completes.
 - A directory is migrated by adding `#nullable enable` to every `.cs` file in it and annotating until the solution builds clean under warnings-as-errors. The directive goes after the copyright header, separated by blank lines, before the `using` block (the `FileLogger.cs` layout).
@@ -53,15 +59,21 @@ Within a slice, dependencies must point outward only: an enabled directory may r
 ### Completion and tracking
 
 - Issue #1364 carries the checklist of enabled directories; every slice PR updates it and states which directories it enabled.
-- When every production source file is enabled, a final PR flips `build/gsharp.build.props` to `<Nullable>enable</Nullable>` and deletes all per-file directives in the same change. Test projects follow as a separate phase.
+- When every production source file is enabled, the final PR flips
+  `build/gsharp.build.props` conditionally and deletes the migration directives
+  from `src/Core`. Test projects remain oblivious.
 
-> **Amended (A5).** Directives are deleted per project, at the moment that project gains `<Nullable>enable</Nullable>` — not all at once in the final PR. This leaves the final PR as a pure MSBuild property change over byte-identical sources, which makes it provably a no-op. The final property is also conditional on `IsTestProject`, because test projects are deliberately staying oblivious. See [Amendments](#amendments-2026-08-07).
+> **Amended (A5).** Directives are deleted per project, at the moment that
+> project gains `<Nullable>enable</Nullable>`. The final property is
+> conditional on `IsTestProject`, because test projects deliberately stay
+> oblivious. This migration is complete for production projects.
 
 ## Consequences
 
 - Null-state analysis and explicit nullability contracts arrive incrementally without ever breaking the warnings-as-errors build, and without a long-lived migration branch.
 - The leaf-first order means the highest-value contracts (widely consumed utility types) harden earliest, while `Binding/` — where in-flight feature work concentrates — is disturbed last.
-- Per-file directives are visible noise in every enabled file until the final flip; the flip PR removes them wholesale.
+- Per-file directives are migration noise; the final flip removes the remaining
+  `src/Core` directives.
 - Enabled code referencing oblivious code gets lenient treatment at the boundary, so some null bugs remain invisible until the callee's directory migrates. This is the accepted cost of incrementality.
 - Annotation may surface latent bugs (as #2144 did); fixing them is in scope for a slice when local, but behavior-visible fixes get their own commit and test.
 
@@ -117,9 +129,18 @@ This is also the migration's largest laundering hazard, and worth naming as such
 
 ### A3 — The unit of migration is a declared file set, not a directory
 
-"A directory is either fully enabled or fully untouched" is unworkable where directories are large: `CodeAnalysis/Binding/` is 196 files and 100,105 lines, which is not a reviewable change under any protocol. Sub-directory slices are therefore permitted, and the unit becomes a **declared, closed file set** recorded in `build/nullable-enabled.txt`.
+"A directory is either fully enabled or fully untouched" was unworkable where
+directories were large: `CodeAnalysis/Binding/` is 196 files and 100,105
+lines, which was not a reviewable change under any protocol. Sub-directory
+slices were therefore permitted; the temporary migration manifest was deleted
+by the final flip.
 
-The directory rule existed to guarantee something worth keeping — that no file in a migrated area is silently left unannotated. That guarantee is preserved, and strengthened, by moving it from review convention to a CI gate: `build/nullable_hygiene.py` verifies that every file matching an enabled glob carries the directive, that no `#nullable disable`/`restore` is reintroduced, and that no `CS8` suppression appears in a pragma, a `NoWarn`, or `.editorconfig`. All of those baselines are currently zero.
+The directory rule existed to guarantee something worth keeping — that no file
+in a migrated area is silently left unannotated. The final-flip CI gate now
+verifies the shared production/test defaults, that Core has no stale exact
+`#nullable enable` directives, that no unallowlisted escape is reintroduced,
+and that no `CS8` suppression appears in a pragma, a `NoWarn`, or
+`.editorconfig`.
 
 The check must parse rather than grep: 129 column-0 `#nullable` lines exist inside verbatim string literals in the cs2gs translation tests, and the `#nullable disable` region at `test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs` is load-bearing — it exists precisely so the C# compiler emits no `NullableAttribute`, giving the G# metadata importer a genuinely oblivious type to import (issue #1354). It is a permanent allowlist entry and no cleanup may remove it.
 
@@ -158,7 +179,7 @@ Consequences for the plan:
 
 The claim that "enabling a directory never requires editing files outside the slice" holds only while every consumer is oblivious. `src/Repl` is already nullable-enabled and consumes `Core`, so Core annotations are type-checked against it immediately. Measured blast radius for the whole of Core: **3 warnings**. This is a feature — Repl is the only annotated consumer, so every solution build tests each new Core contract against real annotated calling code for free.
 
-### A5 — Directives are deleted per project; the final flip is conditional and provably inert
+### A5 — Directives are deleted per project; the final flip is conditional
 
 Rather than one final PR that both flips the switch and removes every directive, each project deletes its own directives at the moment it gains `<Nullable>enable</Nullable>` (for `src/Core`, that is the PR completing its last slice). The final PR then changes only an MSBuild property over byte-identical sources. With `Deterministic=true` already set, the assemblies it produces must be **byte-identical** to the previous commit's — an exact mechanical proof that the flip changed nothing, which is unavailable if source bytes move in the same change.
 

@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 using GSharp.Core.CodeAnalysis.Syntax;

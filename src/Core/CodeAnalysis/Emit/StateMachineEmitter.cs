@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1117 // parameters on same line
 #pragma warning disable SA1116 // parameters begin on line after declaration
 #pragma warning disable SA1124 // do not use regions

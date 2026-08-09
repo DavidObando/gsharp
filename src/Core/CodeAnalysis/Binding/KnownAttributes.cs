@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 #pragma warning disable SA1202 // 'public' members should come before 'private' members — the new ADR-0086 P/Invoke helpers (FindDllImport, TryConvertAttributeEnum) appear after the existing private helpers so the diff stays minimal; they form their own visually-grouped block.
 
 using System;

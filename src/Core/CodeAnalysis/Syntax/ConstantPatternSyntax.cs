@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>Represents a constant pattern wrapping the legacy case expression form.</summary>

@@ -2,12 +2,12 @@
 """Nullable-migration hygiene gate (ADR-0155, issue #1364).
 
 ADR-0155 states several rules that were originally review conventions. Review
-conventions do not survive a 573-file migration, so amendment A3 moves them
-here, where CI enforces them:
+conventions do not survive a large migration, so amendment A3 moved them here,
+where CI enforces them:
 
-  1. coverage      Every file matching a glob in build/nullable-enabled.txt
-                   carries a real top-level `#nullable enable`, placed after
-                   the copyright header and before the usings.
+  1. defaults      Production projects use the shared nullable-enabled default,
+                   tests and supporting tooling remain oblivious, and src/Core
+                   has no stale per-file enable directives after the final flip.
   2. no-escapes    No `#nullable disable` / `#nullable restore` inside an
                    enabled file. ADR-0155: "once a file is enabled it stays
                    enabled".
@@ -34,11 +34,11 @@ Checks 1 and 2 need to distinguish a real directive from the 129 column-0
 translation tests, so this module carries a small C# lexer (`code_only`) that
 blanks comments and string literals before matching. Grep cannot do this.
 
-`test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs` is a permanent
-allowlist entry for check 2: its `#nullable disable` region exists precisely so
-the C# compiler emits no NullableAttribute, giving the G# metadata importer a
-genuinely oblivious type to import (issue #1354). Removing it silently breaks
-the premise of that test.
+The allowlist contains permanent intentional oblivious regions, including the
+metadata-import test fixture and six legacy annotations-only production files.
+Removing those escapes would either break the fixture premise or expose
+unmigrated flow warnings; they are explicit boundaries, not warning
+suppression for newly migrated code.
 
 Usage:
     python3 build/nullable_hygiene.py                  # gate vs origin/main
@@ -53,17 +53,30 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MANIFEST = os.path.join(ROOT, "build", "nullable-enabled.txt")
-
-# Issue #1354: this region must survive the entire migration. See module docs.
+# These regions intentionally exercise oblivious metadata and must survive the
+# final project-wide default. See the comments at each source site.
 DISABLE_ALLOWLIST = {
     "test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs",
+    "test-assets/Issue3119.CrossConstants/Constants.cs",
+    "src/Core/CodeAnalysis/Binding/Binder.cs",
+    "src/Core/CodeAnalysis/Binding/BoundScope.cs",
+    "src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Invocation.cs",
+    "src/Core/CodeAnalysis/Binding/ExpressionBinder.cs",
+    "src/Core/CodeAnalysis/Symbols/ReferenceResolver.cs",
+    "src/Core/CodeAnalysis/Symbols/StructSymbol.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/CompilationUnit.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/GExpression.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/GMember.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/GPattern.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/GStatement.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/GTypeReference.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/Parameter.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Ast/TypeDeclaration.cs",
+    "tools/cs2gs/Cs2Gs.CodeModel/Printing/GSharpPrinter.cs",
 }
 # MEF [Import] fields legitimately use `= null!`; that tree is a separate
 # build island with its own Directory.Build.props.
 NULL_BANG_ALLOWLIST_PREFIXES = ("src/vs-gsharp/",)
-
-EXCLUDED_DIRS = {"bin", "obj", "out", "artifacts", ".claude", "node_modules"}
 
 # A null-forgiving `!`: preceded by something that can end an expression,
 # followed by something that can follow one. Excludes `!=` and prefix `!x`.
@@ -178,42 +191,6 @@ def directives(path):
             yield i, m.group(1)
 
 
-def manifest_globs():
-    if not os.path.exists(MANIFEST):
-        return []
-    with open(MANIFEST) as fh:
-        return [ln.strip() for ln in fh
-                if ln.strip() and not ln.lstrip().startswith("#")]
-
-
-def enabled_files():
-    """Expand the manifest. A line beginning with `!` subtracts a pattern.
-
-    Exclusions exist because a slice is a file set, not a directory (ADR-0155
-    amendment A3): `Binding/Bound*.cs` is the right way to say "the Bound node
-    types", and the handful of Bound* files that are logic rather than data are
-    subtracted by name rather than by contorting the glob.
-    """
-    import glob as g
-
-    def expand(pattern):
-        found = set()
-        for p in g.glob(os.path.join(ROOT, pattern), recursive=True):
-            rel = os.path.relpath(p, ROOT)
-            if rel.endswith(".cs") and not any(
-                    part in EXCLUDED_DIRS for part in rel.split(os.sep)):
-                found.add(rel)
-        return found
-
-    out = set()
-    for pattern in manifest_globs():
-        if pattern.startswith("!"):
-            out -= expand(pattern[1:].strip())
-        else:
-            out |= expand(pattern)
-    return sorted(out)
-
-
 HEAD_REF = None
 _PROJECT_NULLABLE = {}
 
@@ -221,11 +198,10 @@ _PROJECT_NULLABLE = {}
 def in_nullable_context(rel):
     """True if `rel` is compiled in a nullable context today.
 
-    Either the file carries `#nullable enable`, or its owning project sets
-    `<Nullable>enable</Nullable>` (as `src/Repl` already does, and as every
-    project will once Phase 2 lands). In an oblivious file `!` is a no-op and
-    `= null!` is meaningless, so the annotation-discipline checks would only
-    generate noise there.
+    Either the file carries `#nullable enable`, or its owning project is a
+    production project under the shared final-flip default. In an oblivious
+    file `!` is a no-op and `= null!` is meaningless, so the
+    annotation-discipline checks would only generate noise there.
     """
     full = os.path.join(ROOT, rel)
     if not os.path.exists(full):
@@ -242,16 +218,31 @@ def in_nullable_context(rel):
             return _PROJECT_NULLABLE[d]
         projs = [f for f in os.listdir(d) if f.endswith(".csproj")] if os.path.isdir(d) else []
         if projs:
+            oblivious_project = any(
+                re.search(r"<IsTestProject>\s*true\s*</IsTestProject>",
+                           open(os.path.join(d, p), encoding="utf-8",
+                                errors="replace").read())
+                for p in projs)
+            ancestor = d
+            while ancestor.startswith(ROOT) and len(ancestor) >= len(ROOT):
+                dbp = os.path.join(ancestor, "Directory.Build.props")
+                if os.path.exists(dbp):
+                    with open(dbp, encoding="utf-8", errors="replace") as fh:
+                        if re.search(r"<IsTestProject>\s*true\s*</IsTestProject>"
+                                     r"|<IsToolingProject>\s*true\s*</IsToolingProject>",
+                                     fh.read()):
+                            oblivious_project = True
+                            break
+                parent = os.path.dirname(ancestor)
+                if parent == ancestor:
+                    break
+                ancestor = parent
             enabled = False
             for p in projs:
                 with open(os.path.join(d, p), encoding="utf-8", errors="replace") as fh:
                     if re.search(r"<Nullable>\s*enable\s*</Nullable>", fh.read()):
                         enabled = True
-            # Directory.Build.props can enable a whole subtree (src/vs-gsharp).
-            dbp = os.path.join(d, "Directory.Build.props")
-            if not enabled and os.path.exists(dbp):
-                with open(dbp, encoding="utf-8", errors="replace") as fh:
-                    enabled = bool(re.search(r"<Nullable>\s*enable\s*</Nullable>", fh.read()))
+            enabled = enabled or not oblivious_project
             _PROJECT_NULLABLE[d] = enabled
             return enabled
         parent = os.path.dirname(d)
@@ -286,42 +277,38 @@ def added_lines(base, head=None):
 # --------------------------------------------------------------------------- checks
 
 def check_coverage(_base, fail):
-    files = enabled_files()
-    if not manifest_globs():
-        print("  manifest is empty -- no directories enabled yet")
-        return
-    if not files:
-        fail("build/nullable-enabled.txt lists globs but none matched any file")
-        return
+    props = read("build/gsharp.build.props")
+    required = (
+        "<Nullable Condition=\"'$(IsTestProject)' == 'true' or '$(IsToolingProject)' == 'true'\">disable</Nullable>",
+        "<Nullable Condition=\"'$(IsTestProject)' != 'true' and '$(IsToolingProject)' != 'true'\">enable</Nullable>",
+    )
     bad = 0
-    for rel in files:
-        ds = list(directives(rel))
-        if not any(k == "enable" for _, k in ds):
-            fail(f"{rel}: in an enabled glob but has no `#nullable enable` (ADR-0155)")
+    for line in required:
+        if line not in props:
+            fail(f"build/gsharp.build.props: missing final-flip property `{line}`")
             bad += 1
-            continue
-        first = next(ln for ln, k in ds if k == "enable")
-        code = code_only(read(rel)).splitlines()
-        for i, line in enumerate(code[:first - 1], start=1):
-            s = line.strip()
-            if s.startswith("using ") or s.startswith("namespace "):
-                fail(f"{rel}:{first}: `#nullable enable` must precede the usings "
-                     f"(found `{s[:40]}` at line {i})")
-                bad += 1
-                break
+    core_files = git("ls-files", "src/Core/**/*.cs").splitlines()
+    stale = [rel for rel in core_files
+             if re.search(r"^\s*#nullable\s+enable\s*$", code_only(read(rel)), re.MULTILINE)]
+    if stale:
+        for rel in stale:
+            fail(f"{rel}: obsolete per-file `#nullable enable` after final flip")
+            bad += 1
     if not bad:
-        print(f"  {len(files)} file(s) in the enabled set, all carry the directive")
+        print("  shared properties enable production and disable tests/tooling")
+        print("  src/Core has no obsolete per-file nullable directives")
 
 
 def check_no_escapes(_base, fail):
     bad = 0
-    for rel in enabled_files():
+    for rel in git("ls-files", "*.cs").splitlines():
         if rel in DISABLE_ALLOWLIST:
             continue
         for ln, kind in directives(rel):
             if kind in ("disable", "restore"):
                 fail(f"{rel}:{ln}: `#nullable {kind}` in an enabled file "
-                     f"(ADR-0155: once enabled it stays enabled)")
+                     f"(ADR-0155: once enabled it stays enabled; add only "
+                     f"intentional migration boundaries to the allowlist)")
                 bad += 1
     if not bad:
         print("  no disable/restore escapes in enabled files")
@@ -447,6 +434,8 @@ def check_forgiving(base, fail):
 # than annotation?".
 NULLABILITY_NOISE = [
     re.compile(r"^\s*#nullable\s+enable\s*$"),
+    re.compile(r"^\s*#nullable\s+enable\s+annotations\s*$"),
+    re.compile(r"^\s*#nullable\s+disable\s+warnings\s*$"),
     re.compile(r"^\s*using\s+System\.Diagnostics\.CodeAnalysis;\s*$"),
 ]
 ATTR_RE = re.compile(

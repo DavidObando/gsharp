@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>Variance kind for a <see cref="TypeParameterSymbol"/> (Phase 4.3 / ADR-0021).</summary>

@@ -78,7 +78,8 @@
   <!-- Compiler Options -->
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
-    <Nullable>disable</Nullable>
+    <Nullable Condition="'$(IsTestProject)' == 'true' or '$(IsToolingProject)' == 'true'">disable</Nullable>
+    <Nullable Condition="'$(IsTestProject)' != 'true' and '$(IsToolingProject)' != 'true'">enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <HighEntropyVA>true</HighEntropyVA>
