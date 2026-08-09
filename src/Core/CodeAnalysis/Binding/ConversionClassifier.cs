@@ -2,9 +2,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -70,7 +73,7 @@ internal sealed class ConversionClassifier
     private readonly Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter;
     private readonly Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType;
     private readonly Func<BoundExpression, bool> isLvalue;
-    private readonly Func<SyntaxToken, RefKind> getRefKindFromModifier;
+    private readonly Func<SyntaxToken?, RefKind> getRefKindFromModifier;
     private readonly Func<RefKind, string> refKindToString;
 
     /// <summary>
@@ -125,7 +128,7 @@ internal sealed class ConversionClassifier
         Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter,
         Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType,
         Func<BoundExpression, bool> isLvalue,
-        Func<SyntaxToken, RefKind> getRefKindFromModifier,
+        Func<SyntaxToken?, RefKind> getRefKindFromModifier,
         Func<RefKind, string> refKindToString)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -308,7 +311,7 @@ internal sealed class ConversionClassifier
         BoundExpression expression,
         TypeSymbol targetType,
         bool strict,
-        IReadOnlyDictionary<string, BoundExpression> explicitValues,
+        IReadOnlyDictionary<string, BoundExpression>? explicitValues,
         ImmutableArray<string> explicitOrder)
         => BindStructuralProjectionCore(
             diagnosticLocation,
@@ -582,11 +585,14 @@ internal sealed class ConversionClassifier
                 return new BoundClrConversionCallExpression(null, expression, convMethod, type);
             }
 
-            if (expression.Type != TypeSymbol.Error && type != TypeSymbol.Error)
+            if (expression.Type is { } sourceType
+                && type is { } targetType
+                && sourceType != TypeSymbol.Error
+                && targetType != TypeSymbol.Error)
             {
                 if (!StructuralProjectionPlanner.TryCreate(
-                    expression.Type,
-                    type,
+                    sourceType,
+                    targetType,
                     strict: true,
                     explicitMemberNames: null,
                     out _,
@@ -595,13 +601,13 @@ internal sealed class ConversionClassifier
                 {
                     Diagnostics.ReportStructuralProjectionFailure(
                         diagnosticLocation,
-                        expression.Type,
-                        type,
+                        sourceType,
+                        targetType,
                         projectionFailure);
                 }
                 else
                 {
-                    Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+                    Diagnostics.ReportCannotConvert(diagnosticLocation, sourceType, targetType);
                 }
             }
 
@@ -626,7 +632,9 @@ internal sealed class ConversionClassifier
                 || NullableLifting.IsUserValueTypeNullable(sourceNullable))
             && Conversion.ClassifyNonStructural(sourceNullable.UnderlyingType, type).IsIdentity)
         {
-            var unwrap = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type);
+            var unwrap = Invariant.Required(
+                BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, expression.Type),
+                "nullable-to-underlying conversion has a bound bang-bang operator");
             return new BoundUnaryExpression(null, unwrap, expression);
         }
 
@@ -655,10 +663,10 @@ internal sealed class ConversionClassifier
             // no-op both engines already lower. The planner itself only
             // understands concrete targets, so unwrap before planning and
             // re-wrap the projected value to keep the bound tree's type honest.
-            var projectionTargetType = type is NullableTypeSymbol projectionNullableTarget
+            TypeSymbol projectionTargetType = type is NullableTypeSymbol projectionNullableTarget
                 && Conversion.IsReferenceLikeTarget(projectionNullableTarget.UnderlyingType)
                 ? projectionNullableTarget.UnderlyingType
-                : type;
+                : Invariant.Required(type, "conversion targets are established before structural projection");
             var projected = BindStructuralProjectionCore(
                 diagnosticLocation,
                 expression,
@@ -668,7 +676,10 @@ internal sealed class ConversionClassifier
                 explicitOrder: default);
             return ReferenceEquals(projectionTargetType, type) || projected is BoundErrorExpression
                 ? projected
-                : new BoundConversionExpression(null, type, projected);
+                : new BoundConversionExpression(
+                    null,
+                    Invariant.Required(type, "conversion targets are established before structural projection"),
+                    projected);
         }
 
         // Issue #367: a by-ref-like (`ref struct`) value boxes when converted to
@@ -781,11 +792,11 @@ internal sealed class ConversionClassifier
         CallExpressionSyntax call,
         ImmutableArray<int> parameterMapping = default,
         int receiverArgCount = 0,
-        MethodInfo method = null,
-        TypeSymbol receiverType = null,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
+        MethodInfo? method = null,
+        TypeSymbol? receiverType = null,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
     {
-        ImmutableArray<BoundExpression>.Builder builder = null;
+        ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
@@ -1100,8 +1111,8 @@ internal sealed class ConversionClassifier
     /// <returns>Whether a user-defined implicit conversion was applied.</returns>
     public bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
     {
-        if (argument?.Type?.ClrType != null
-            && expectedType?.ClrType != null
+        if (argument.Type?.ClrType != null
+            && expectedType.ClrType != null
             && argument.Type != TypeSymbol.Error
             && ClrOperatorResolution.TryResolveConversion(argument.Type.ClrType, expectedType.ClrType, allowExplicit: false, out var convMethod, out _))
         {
@@ -1112,7 +1123,7 @@ internal sealed class ConversionClassifier
         // Issue #1017: same-package user-defined implicit conversion operators
         // are modelled as static op_Implicit FunctionSymbols and have no
         // reflectible ClrType during binding, so resolve them symbolically.
-        if (argument?.Type != null
+        if (argument.Type != null
             && expectedType != null
             && argument.Type != TypeSymbol.Error
             && TryResolveUserDefinedSymbolConversion(argument.Type, expectedType, allowExplicit: false, out var userConvOp))
@@ -1157,11 +1168,11 @@ internal sealed class ConversionClassifier
     /// receiver's own argument). May be default/empty when the method is
     /// non-generic or its type arguments could not be recovered.</param>
     /// <returns>The substituted target symbol or <see langword="null"/>.</returns>
-    public static TypeSymbol TrySubstituteParameterTypeFromReceiver(
-        MethodInfo method,
+    public static TypeSymbol? TrySubstituteParameterTypeFromReceiver(
+        MethodInfo? method,
         int paramIndex,
-        TypeSymbol receiverType,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default)
+        TypeSymbol? receiverType,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
     {
         // Issues #2385/#2664: the receiver type-argument gate below previously only
         // matched a same-compilation user type when it was DIRECTLY a
@@ -1201,7 +1212,7 @@ internal sealed class ConversionClassifier
         }
 
         var openDef = declaring.GetGenericTypeDefinition();
-        MethodInfo openMethod = null;
+        MethodInfo? openMethod = null;
         foreach (var candidate in openDef.GetMethods(
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
@@ -1282,10 +1293,10 @@ internal sealed class ConversionClassifier
     /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
     /// <param name="receiverType">The receiver's (symbolic) type.</param>
     /// <returns>The recovered type-parameter slot, or <see langword="null"/>.</returns>
-    public static TypeSymbol TryRecoverReceiverTypeParameterSlot(
-        MethodInfo method,
+    public static TypeSymbol? TryRecoverReceiverTypeParameterSlot(
+        MethodInfo? method,
         int paramIndex,
-        TypeSymbol receiverType)
+        TypeSymbol? receiverType)
     {
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
@@ -1301,7 +1312,7 @@ internal sealed class ConversionClassifier
         }
 
         var openDef = declaring.GetGenericTypeDefinition();
-        MethodInfo openMethod = null;
+        MethodInfo? openMethod = null;
         foreach (var candidate in openDef.GetMethods(
             BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
         {
@@ -1350,10 +1361,10 @@ internal sealed class ConversionClassifier
     /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
     /// <param name="methodTypeArgs">The symbolic method type-argument vector.</param>
     /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
-    public static TypeSymbol TrySubstituteParameterTypeFromMethodTypeArgs(
-        MethodInfo method,
+    public static TypeSymbol? TrySubstituteParameterTypeFromMethodTypeArgs(
+        MethodInfo? method,
         int paramIndex,
-        ImmutableArray<TypeSymbol> methodTypeArgs)
+        ImmutableArray<TypeSymbol?> methodTypeArgs)
     {
         if (method == null
             || !method.IsGenericMethod
@@ -1419,7 +1430,10 @@ internal sealed class ConversionClassifier
             // error type (which already produced a diagnostic).
             if (targetType != null && targetType != TypeSymbol.Error)
             {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+                Diagnostics.ReportCannotConvertMethodGroup(
+                    diagnosticLocation,
+                    group.MethodName,
+                    Invariant.Required(targetType, "method-group conversion has a target type"));
             }
 
             return new BoundErrorExpression(null);
@@ -1428,7 +1442,10 @@ internal sealed class ConversionClassifier
         var invoke = delegateClr.GetMethodSafe("Invoke");
         if (invoke == null)
         {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+            Diagnostics.ReportCannotConvertMethodGroup(
+                diagnosticLocation,
+                group.MethodName,
+                Invariant.Required(targetType, "method-group conversion has a target type"));
             return new BoundErrorExpression(null);
         }
 
@@ -1439,11 +1456,15 @@ internal sealed class ConversionClassifier
         var argTypes = new Type[invokeParams.Length + (closesExtensionReceiver ? 1 : 0)];
         if (closesExtensionReceiver)
         {
-            var receiverClr = NullableTypeSymbol.GetEffectiveClrType(group.Receiver.Type);
+            var receiver = Invariant.Required(group.Receiver, "a static method-group extension receiver was established");
+            var receiverClr = NullableTypeSymbol.GetEffectiveClrType(receiver.Type);
             if (receiverClr == null
-                && !MemberLookup.TryProjectErasedClrType(group.Receiver.Type, out receiverClr))
+                && !MemberLookup.TryProjectErasedClrType(receiver.Type, out receiverClr))
             {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+                Diagnostics.ReportCannotConvertMethodGroup(
+                    diagnosticLocation,
+                    group.MethodName,
+                    Invariant.Required(targetType, "method-group conversion has a target type"));
                 return new BoundErrorExpression(null);
             }
 
@@ -1493,14 +1514,21 @@ internal sealed class ConversionClassifier
             var resolution = ClrOverloadResolution.Resolve(applicable, argTypes);
             if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
-                var resolved = new BoundClrMethodGroupExpression(group.Syntax, group.Receiver, resolution.Best, targetType);
+                var resolved = new BoundClrMethodGroupExpression(
+                    group.Syntax,
+                    group.Receiver,
+                    Invariant.Required(resolution.Best, "a resolved overload has a best method"),
+                    Invariant.Required(targetType, "method-group conversion has a target type"));
                 return targetType is FunctionTypeSymbol functionTarget
                     ? this.createClrMethodGroupAdapter(resolved, functionTarget)
                     : resolved;
             }
         }
 
-        Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, group.MethodName, targetType);
+        Diagnostics.ReportCannotConvertMethodGroup(
+            diagnosticLocation,
+            group.MethodName,
+            Invariant.Required(targetType, "method-group conversion has a target type"));
         return new BoundErrorExpression(null);
     }
 
@@ -1547,7 +1575,10 @@ internal sealed class ConversionClassifier
         {
             if (targetType != null && targetType != TypeSymbol.Error)
             {
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+                Diagnostics.ReportCannotConvertMethodGroup(
+                    diagnosticLocation,
+                    groupName,
+                    Invariant.Required(targetType, "method-group conversion has a target type"));
             }
 
             return new BoundErrorExpression(null);
@@ -1558,11 +1589,11 @@ internal sealed class ConversionClassifier
             targetParameterTypes.Length,
             out var targetReturnRefKind);
 
-        FunctionSymbol pick = null;
-        StructSymbol pickOwner = null;
+        FunctionSymbol? pick = null;
+        StructSymbol? pickOwner = null;
         ImmutableArray<TypeSymbol> pickMethodTypeArguments = default;
-        TypeSymbol[] pickParameterTypes = null;
-        TypeSymbol pickReturnType = null;
+        TypeSymbol[]? pickParameterTypes = null;
+        TypeSymbol? pickReturnType = null;
         foreach (var candidate in group.Candidates)
         {
             var candidateOwner = group.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
@@ -1629,7 +1660,10 @@ internal sealed class ConversionClassifier
                     continue;
                 }
 
-                Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+                Diagnostics.ReportCannotConvertMethodGroup(
+                    diagnosticLocation,
+                    groupName,
+                    Invariant.Required(targetType, "method-group conversion has a target type"));
                 return new BoundErrorExpression(null);
             }
 
@@ -1642,11 +1676,16 @@ internal sealed class ConversionClassifier
 
         if (pick == null)
         {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            Diagnostics.ReportCannotConvertMethodGroup(
+                diagnosticLocation,
+                groupName,
+                Invariant.Required(targetType, "method-group conversion has a target type"));
             return new BoundErrorExpression(null);
         }
 
-        var pickFnType = FunctionTypeSymbol.Get(ImmutableArray.Create(pickParameterTypes), pickReturnType);
+        var pickFnType = FunctionTypeSymbol.Get(
+            ImmutableArray.Create(Invariant.Required(pickParameterTypes, "a selected method group has parameter types")),
+            Invariant.Required(pickReturnType, "a selected method group has a return type"));
         var resolvedGroup = new BoundMethodGroupExpression(
             group.Syntax,
             group.Receiver,
@@ -1666,7 +1705,10 @@ internal sealed class ConversionClassifier
         var conversion = Conversion.Classify(pickFnType, targetType);
         if (!conversion.Exists)
         {
-            Diagnostics.ReportCannotConvertMethodGroup(diagnosticLocation, groupName, targetType);
+            Diagnostics.ReportCannotConvertMethodGroup(
+                diagnosticLocation,
+                groupName,
+                Invariant.Required(targetType, "method-group conversion has a target type"));
             return new BoundErrorExpression(null);
         }
 
@@ -1790,7 +1832,12 @@ internal sealed class ConversionClassifier
             }
         }
 
-        return new BoundConditionalAddressExpression(null, condition, whenTrue, whenFalse, whenTrue.Type);
+        return new BoundConditionalAddressExpression(
+            null,
+            condition,
+            whenTrue,
+            whenFalse,
+            Invariant.Required(whenTrue.Type, "conditional ref branches have matching types"));
     }
 
     /// <summary>
@@ -1814,7 +1861,7 @@ internal sealed class ConversionClassifier
         string parameterName,
         TypeSymbol parameterType,
         bool isVariadic,
-        string asyncOrIteratorKind)
+        string? asyncOrIteratorKind)
     {
         var parameterRefKind = getRefKindFromModifier(parameterSyntax.RefKindModifier);
 
@@ -1824,7 +1871,7 @@ internal sealed class ConversionClassifier
         if (parameterType is ByRefTypeSymbol pointerParamType)
         {
             Diagnostics.ReportPointerTypeCannotBeParameterType(
-                parameterSyntax.Type.Location,
+                Invariant.Required(parameterSyntax.Type, "bound parameters have a type clause").Location,
                 parameterName,
                 pointerParamType.PointeeType.Name);
         }
@@ -1945,7 +1992,13 @@ internal sealed class ConversionClassifier
 
         // Bind the default-value expression in the surrounding scope. Diagnostics
         // (undefined symbol, etc.) bubble through normally.
-        var bound = bindExpression(parameterSyntax.DefaultValue);
+        var defaultValue = parameterSyntax.DefaultValue;
+        if (defaultValue == null)
+        {
+            return;
+        }
+
+        var bound = bindExpression(defaultValue);
         if (bound == null || bound is BoundErrorExpression || parameter.Type == TypeSymbol.Error)
         {
             return;
@@ -1974,8 +2027,10 @@ internal sealed class ConversionClassifier
     /// <param name="location">The diagnostic location.</param>
     /// <returns>The bound call expression, or <see langword="null"/> on
     /// failure.</returns>
-    public BoundExpression TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
+    public BoundExpression? TryBuildDisposeCall(VariableSymbol variable, TextLocation location)
     {
+        var variableType = Invariant.Required(variable.Type, "disposable variables have a bound type");
+
         // #568 primary path: if the variable's type is a user-defined class
         // that declares a public parameterless Dispose() (including via
         // IDisposable implementation), route through user-instance-call.
@@ -1994,17 +2049,17 @@ internal sealed class ConversionClassifier
         // Issue #2148: a same-compilation user class deriving from an imported
         // IDisposable base has no ClrType of its own, so fall back to the
         // nearest imported base's ClrType to find the inherited Dispose.
-        var clrType = variable.Type?.ClrType ?? GetNearestImportedBaseClrType(variable.Type);
+        var clrType = variableType.ClrType ?? GetNearestImportedBaseClrType(variableType);
         if (clrType == null)
         {
-            Diagnostics.ReportTypeNotDisposable(location, variable.Type ?? TypeSymbol.Error);
+            Diagnostics.ReportTypeNotDisposable(location, variableType);
             return null;
         }
 
         var disposeMethod = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(clrType, "Dispose", Type.EmptyTypes);
         if (disposeMethod == null)
         {
-            Diagnostics.ReportTypeNotDisposable(location, variable.Type);
+            Diagnostics.ReportTypeNotDisposable(location, variableType);
             return null;
         }
 
@@ -2022,8 +2077,9 @@ internal sealed class ConversionClassifier
     /// <param name="variable">The variable to async-dispose.</param>
     /// <param name="location">The diagnostic location.</param>
     /// <returns>A <see cref="BoundAwaitExpression"/> wrapping the DisposeAsync call, or <c>null</c> on failure.</returns>
-    public BoundExpression TryBuildDisposeAsyncCall(VariableSymbol variable, TextLocation location)
+    public BoundExpression? TryBuildDisposeAsyncCall(VariableSymbol variable, TextLocation location)
     {
+        var variableType = Invariant.Required(variable.Type, "async-disposable variables have a bound type");
         var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
 
         // User-defined G# class path: probe for DisposeAsync() returning ValueTask.
@@ -2040,10 +2096,10 @@ internal sealed class ConversionClassifier
         // CLR-type path: walk self + transitive interfaces for DisposeAsync.
         // Issue #2148: fall back to the nearest imported base's ClrType for a
         // same-compilation user class deriving from an imported IAsyncDisposable.
-        var clrType = variable.Type?.ClrType ?? GetNearestImportedBaseClrType(variable.Type);
+        var clrType = variableType.ClrType ?? GetNearestImportedBaseClrType(variableType);
         if (clrType == null)
         {
-            Diagnostics.ReportTypeNotAsyncDisposable(location, variable.Type ?? TypeSymbol.Error);
+            Diagnostics.ReportTypeNotAsyncDisposable(location, variableType);
             return null;
         }
 
@@ -2051,7 +2107,7 @@ internal sealed class ConversionClassifier
         if (disposeAsyncMethod == null ||
             disposeAsyncMethod.ReturnType.FullName != "System.Threading.Tasks.ValueTask")
         {
-            Diagnostics.ReportTypeNotAsyncDisposable(location, variable.Type);
+            Diagnostics.ReportTypeNotAsyncDisposable(location, variableType);
             return null;
         }
 
@@ -2070,7 +2126,7 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
-    private static TypeSymbol PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol mapped)
+    private static TypeSymbol? PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol? mapped)
     {
         var flags = ClrNullability.ReadNullableFlags(parameter, parameter.Member);
         return mapped != null
@@ -2110,7 +2166,7 @@ internal sealed class ConversionClassifier
     /// members (e.g. <c>Dispose</c>/<c>DisposeAsync</c>) that duck-typed
     /// protocol probes need to see.
     /// </summary>
-    private static Type GetNearestImportedBaseClrType(TypeSymbol type)
+    private static Type? GetNearestImportedBaseClrType(TypeSymbol? type)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -2148,7 +2204,11 @@ internal sealed class ConversionClassifier
     /// <param name="allowExplicit">Whether <c>op_Explicit</c> is acceptable.</param>
     /// <param name="method">The resolved conversion method on success.</param>
     /// <returns><see langword="true"/> if a conversion was found.</returns>
-    private static bool TryResolveUserDefinedSymbolConversion(TypeSymbol sourceType, TypeSymbol targetType, bool allowExplicit, out FunctionSymbol method)
+    private static bool TryResolveUserDefinedSymbolConversion(
+        TypeSymbol? sourceType,
+        TypeSymbol? targetType,
+        bool allowExplicit,
+        [NotNullWhen(true)] out FunctionSymbol? method)
     {
         method = null;
         if (sourceType == null || targetType == null
@@ -2180,7 +2240,7 @@ internal sealed class ConversionClassifier
         TypeSymbol source,
         TypeSymbol target,
         string opName,
-        out FunctionSymbol method,
+        [NotNullWhen(true)] out FunctionSymbol? method,
         out bool ambiguous)
     {
         method = null;
@@ -2231,7 +2291,7 @@ internal sealed class ConversionClassifier
         return true;
     }
 
-    private static StructSymbol GetUserConversionOwner(TypeSymbol type)
+    private static StructSymbol? GetUserConversionOwner(TypeSymbol type)
     {
         while (type is NullableTypeSymbol nullable)
         {
@@ -2242,7 +2302,7 @@ internal sealed class ConversionClassifier
     }
 
     private static void CollectUserConversions(
-        StructSymbol owner,
+        StructSymbol? owner,
         string opName,
         TypeSymbol source,
         TypeSymbol target,
@@ -2351,7 +2411,7 @@ internal sealed class ConversionClassifier
     /// (ADR-0087 §3 R5 / issue #765). When non-null and equal to
     /// <paramref name="from"/>, the conversion is treated as identity.</param>
     /// <returns>Whether a rebinding conversion is required.</returns>
-    private static bool NeedsBindClrParameterConversion(TypeSymbol from, Type targetParameterType, TypeSymbol substitutedTarget = null)
+    private static bool NeedsBindClrParameterConversion(TypeSymbol? from, Type? targetParameterType, TypeSymbol? substitutedTarget = null)
     {
         if (from == null || targetParameterType == null)
         {
@@ -2523,10 +2583,12 @@ internal sealed class ConversionClassifier
 
     // Issue #327/#321/#2451: extracts the CLR `RawDefaultValue` for an optional
     // parameter when it is a literal kind that BoundLiteralExpression carries.
-    private static bool TryGetConstantParameterDefault(ParameterInfo parameter, out object value)
+    private static bool TryGetConstantParameterDefault(
+        ParameterInfo parameter,
+        [NotNullWhen(true)] out object? value)
     {
         value = null;
-        object raw;
+        object? raw;
         try
         {
             raw = parameter.RawDefaultValue;
@@ -2621,7 +2683,11 @@ internal sealed class ConversionClassifier
     // bound expression, applying limited implicit conversion to the parameter type
     // (numeric widening / nil → reference|nullable). Returns false with a
     // human-visible reason otherwise.
-    private static bool TryExtractConstantDefault(BoundExpression bound, TypeSymbol parameterType, out object value, out string reason)
+    private static bool TryExtractConstantDefault(
+        BoundExpression bound,
+        TypeSymbol parameterType,
+        out object? value,
+        [NotNullWhen(false)] out string? reason)
     {
         value = null;
         reason = null;
@@ -2713,7 +2779,11 @@ internal sealed class ConversionClassifier
 
     // Constant rows carry the parameter's converted primitive value, not the
     // source literal's type (for example, `int64 x = 1` requires an I8 row).
-    private static bool TryNormalizeMetadataConstant(object value, TypeSymbol parameterType, out object normalized, out string reason)
+    private static bool TryNormalizeMetadataConstant(
+        object value,
+        TypeSymbol parameterType,
+        [NotNullWhen(true)] out object? normalized,
+        [NotNullWhen(false)] out string? reason)
     {
         normalized = null;
         reason = null;
@@ -2749,7 +2819,10 @@ internal sealed class ConversionClassifier
         return false;
     }
 
-    private static bool TryNormalizeClrConstant(object value, System.Type targetType, out object normalized)
+    private static bool TryNormalizeClrConstant(
+        object value,
+        System.Type targetType,
+        [NotNullWhen(true)] out object? normalized)
     {
         normalized = null;
         if (targetType.IsEnum)
@@ -2785,7 +2858,11 @@ internal sealed class ConversionClassifier
     // record <see langword="null"/>, which the call site materializes as the
     // all-zero value via a BoundDefaultExpression and the metadata encodes as a
     // nullref Constant (matching C# `T x = default`).
-    private static bool TryExtractValueTypeDefaultConstant(BoundDefaultExpression def, TypeSymbol parameterType, out object value, out string reason)
+    private static bool TryExtractValueTypeDefaultConstant(
+        BoundDefaultExpression def,
+        TypeSymbol parameterType,
+        out object? value,
+        [NotNullWhen(false)] out string? reason)
     {
         value = null;
         reason = null;
@@ -2869,7 +2946,7 @@ internal sealed class ConversionClassifier
 
     // Issue #1182: returns the typed CLR zero for a primitive value-type symbol so a
     // `default(T)` optional default emits the same CLR Constant row as `= 0`.
-    private static bool TryGetPrimitiveZero(TypeSymbol type, out object zero)
+    private static bool TryGetPrimitiveZero(TypeSymbol type, [NotNullWhen(true)] out object? zero)
     {
         zero = null;
 
@@ -2990,7 +3067,7 @@ internal sealed class ConversionClassifier
         BoundExpression expression,
         TypeSymbol targetType,
         bool strict,
-        IReadOnlyDictionary<string, BoundExpression> explicitValues,
+        IReadOnlyDictionary<string, BoundExpression>? explicitValues,
         ImmutableArray<string> explicitOrder)
     {
         var explicitNames = explicitValues == null
@@ -3030,7 +3107,7 @@ internal sealed class ConversionClassifier
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(expression.Syntax, sourceTemp, expression));
 
-        Dictionary<string, BoundExpression> explicitReads = null;
+        Dictionary<string, BoundExpression>? explicitReads = null;
         if (explicitValues != null)
         {
             explicitReads = new Dictionary<string, BoundExpression>(StringComparer.Ordinal);
@@ -3076,7 +3153,9 @@ internal sealed class ConversionClassifier
                     explicitReads);
                 initializers.Add(slot.TargetField != null
                     ? new BoundFieldInitializer(slot.TargetField, value)
-                    : new BoundFieldInitializer(slot.TargetProperty, value));
+                    : new BoundFieldInitializer(
+                        Invariant.Required(slot.TargetProperty, "a non-field projection slot has a target property"),
+                        value));
                 if (slot.TargetField != null)
                 {
                     initializedFields.Add(slot.TargetField);
@@ -3199,7 +3278,7 @@ internal sealed class ConversionClassifier
     private static bool TryGetStructuralProjectionFieldInitializer(
         StructSymbol type,
         FieldSymbol field,
-        out BoundExpression initializer)
+        [NotNullWhen(true)] out BoundExpression? initializer)
     {
         if (type.InstanceFieldInitializers.TryGetValue(field, out initializer))
         {
@@ -3224,10 +3303,10 @@ internal sealed class ConversionClassifier
 
     private BoundExpression BindStructuralProjectionSlot(
         TextLocation diagnosticLocation,
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol sourceTemp,
         StructuralProjectionSlot slot,
-        IReadOnlyDictionary<string, BoundExpression> explicitReads)
+        IReadOnlyDictionary<string, BoundExpression>? explicitReads)
     {
         if (slot.Source == null)
         {

@@ -1783,7 +1783,8 @@ internal sealed partial class ExpressionBinder
         var effectiveConversionReceiverType = hasConversionReceiverTypeOverride ? conversionReceiverType : receiverType;
         var conversionSymbolicMethodTypeArgs = symbolicMethodTypeArgs.IsDefault
             ? default
-            : ImmutableArray.CreateRange(symbolicMethodTypeArgs.Select(symbol => symbol ?? TypeSymbol.Error));
+            : ImmutableArray.CreateRange<TypeSymbol?>(
+                symbolicMethodTypeArgs.Select(symbol => symbol ?? TypeSymbol.Error));
         return conversions.BindClrParameterConversions(delegateArgs, parameters, call, parameterMapping, receiverArgCount, method, effectiveConversionReceiverType, conversionSymbolicMethodTypeArgs);
     }
 

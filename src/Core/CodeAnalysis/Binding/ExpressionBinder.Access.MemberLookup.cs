@@ -1746,7 +1746,9 @@ internal sealed partial class ExpressionBinder
                 return conversions.BindConversion(diagnosticLocation, boundValueOverride, elementType);
             }
 
-            return conversions.BindConversion(valueSyntax, elementType);
+            return conversions.BindConversion(
+                Invariant.Required(valueSyntax, "index assignments have a value expression"),
+                elementType);
         }
 
         if (boundIndexOverride != null

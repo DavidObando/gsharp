@@ -202,3 +202,5 @@ src/Core/CodeAnalysis/Binding/MagicCollectionZeroValue.cs
 src/Core/CodeAnalysis/Binding/BinderContext.cs
 # Slice 34 -- prior-submission global type projection.
 src/Core/CodeAnalysis/Binding/SubmissionGlobalTypeProjection.cs
+# Slice 35 -- conversion classification and binding helpers.
+src/Core/CodeAnalysis/Binding/ConversionClassifier.cs

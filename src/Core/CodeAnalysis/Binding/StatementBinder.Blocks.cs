@@ -751,7 +751,9 @@ internal sealed partial class StatementBinder
 
             if (caseSyntax.CaseKind == SelectCaseKind.Send)
             {
-                valueExpr = conversions.BindConversion(caseSyntax.Value, chan.ElementType);
+                valueExpr = conversions.BindConversion(
+                    Invariant.Required(caseSyntax.Value, "send select cases have a value expression"),
+                    chan.ElementType);
                 body = BindStatement(caseSyntax.Body);
             }
             else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
