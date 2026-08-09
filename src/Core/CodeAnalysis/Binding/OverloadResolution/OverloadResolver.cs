@@ -7,6 +7,8 @@
 #pragma warning disable SA1201 // Elements should appear in the correct order
 #pragma warning disable SA1202 // Elements should be ordered by access
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -162,9 +164,9 @@ internal sealed partial class OverloadResolver
     private readonly Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint;
     private readonly Func<TypeParameterSymbol, string> describeConstraint;
     private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget;
-    private readonly Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall;
-    private readonly Func<System.Type, CallExpressionSyntax, BoundExpression> bindImportedClrStaticCall;
+    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget;
+    private readonly Func<StructSymbol, CallExpressionSyntax, BoundExpression>? bindUserTypeStaticCall;
+    private readonly Func<System.Type, CallExpressionSyntax, BoundExpression>? bindImportedClrStaticCall;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="OverloadResolver"/>
@@ -291,9 +293,9 @@ internal sealed partial class OverloadResolver
         Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint,
         Func<TypeParameterSymbol, string> describeConstraint,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTarget = null,
-        Func<StructSymbol, CallExpressionSyntax, BoundExpression> bindUserTypeStaticCall = null,
-        Func<System.Type, CallExpressionSyntax, BoundExpression> bindImportedClrStaticCall = null)
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget = null,
+        Func<StructSymbol, CallExpressionSyntax, BoundExpression>? bindUserTypeStaticCall = null,
+        Func<System.Type, CallExpressionSyntax, BoundExpression>? bindImportedClrStaticCall = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -369,5 +371,5 @@ internal sealed partial class OverloadResolver
     /// touched by #2037, and to cover a future imported-generic-arg path
     /// without another audit.
     /// </summary>
-    private Func<Type, Type> MapClrType => binderCtx.References == null ? null : binderCtx.References.MapClrTypeToReferences;
+    private Func<Type, Type>? MapClrType => binderCtx.References == null ? null : binderCtx.References.MapClrTypeToReferences;
 }
