@@ -164,3 +164,7 @@ src/Core/CodeAnalysis/Binding/FriendAssemblyDeclarations.cs
 src/Core/CodeAnalysis/Binding/AnonymousTypeCache.cs
 # Slice 20 -- binary operator binding.
 src/Core/CodeAnalysis/Binding/BoundBinaryOperator.cs
+# Slice 21 -- standalone binding infrastructure helpers.
+src/Core/CodeAnalysis/Binding/BlittableDetector.cs
+src/Core/CodeAnalysis/Binding/DelegateRefKindUtilities.cs
+src/Core/CodeAnalysis/Binding/EnumOperatorTable.cs

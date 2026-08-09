@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -43,7 +45,7 @@ internal sealed class BlittableDetector
     /// </summary>
     /// <param name="type">The bound type symbol to classify.</param>
     /// <returns><c>true</c> when blittable.</returns>
-    public bool IsBlittable(TypeSymbol type)
+    public bool IsBlittable(TypeSymbol? type)
     {
         return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance), unmanaged: false);
     }
@@ -61,7 +63,7 @@ internal sealed class BlittableDetector
     /// </summary>
     /// <param name="type">The bound type symbol to classify.</param>
     /// <returns><c>true</c> when unmanaged.</returns>
-    public bool IsUnmanaged(TypeSymbol type)
+    public bool IsUnmanaged(TypeSymbol? type)
     {
         return type != null && IsBlittableImpl(type, new HashSet<StructSymbol>(ReferenceEqualityComparer.Instance), unmanaged: true);
     }
@@ -77,7 +79,7 @@ internal sealed class BlittableDetector
     /// </summary>
     /// <param name="type">The candidate pointee type.</param>
     /// <returns><c>true</c> when the type is a blittable value-type struct.</returns>
-    public static bool IsBlittableValueStructPointee(TypeSymbol type)
+    public static bool IsBlittableValueStructPointee(TypeSymbol? type)
     {
         if (type == null)
         {
@@ -94,7 +96,7 @@ internal sealed class BlittableDetector
         return new BlittableDetector().IsBlittable(type);
     }
 
-    private bool IsBlittableImpl(TypeSymbol type, HashSet<StructSymbol> visiting, bool unmanaged)
+    private bool IsBlittableImpl(TypeSymbol? type, HashSet<StructSymbol> visiting, bool unmanaged)
     {
         if (type == null || type == TypeSymbol.Error)
         {
@@ -210,7 +212,7 @@ internal sealed class BlittableDetector
         return false;
     }
 
-    private static bool IsImportedUnmanagedType(Type type, HashSet<Type> visiting)
+    private static bool IsImportedUnmanagedType(Type? type, HashSet<Type> visiting)
     {
         if (type == null
             || type.IsByRef

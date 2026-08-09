@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -102,7 +104,7 @@ internal static class DelegateRefKindUtilities
 
     private static ImmutableArray<RefKind> GetParameterRefKinds(
         FunctionSymbol function,
-        BoundExpression receiver)
+        BoundExpression? receiver)
     {
         var parameterOffset = function.IsExtension && receiver != null ? 1 : 0;
         return function.Parameters

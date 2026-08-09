@@ -2,8 +2,11 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -104,10 +107,10 @@ internal static class EnumOperatorTable
     /// <returns><c>true</c> if the table contains a matching rule.</returns>
     public static bool TryBindBinary(
         SyntaxKind syntaxKind,
-        TypeSymbol leftType,
-        TypeSymbol rightType,
+        TypeSymbol? leftType,
+        TypeSymbol? rightType,
         out BoundBinaryOperatorKind kind,
-        out TypeSymbol resultType)
+        [NotNullWhen(true)] out TypeSymbol? resultType)
     {
         kind = default;
         resultType = null;
@@ -134,7 +137,7 @@ internal static class EnumOperatorTable
                     ResultRule.ResultUnderlying => underlyingType,
                     _ => throw new InvalidOperationException($"Unknown result rule: {rule.Result}"),
                 };
-                return true;
+                return resultType is not null;
             }
         }
 
@@ -153,9 +156,9 @@ internal static class EnumOperatorTable
     /// <returns><c>true</c> if the table contains a matching rule.</returns>
     public static bool TryBindUnary(
         SyntaxKind syntaxKind,
-        TypeSymbol operandType,
+        TypeSymbol? operandType,
         out BoundUnaryOperatorKind kind,
-        out TypeSymbol resultType)
+        [NotNullWhen(true)] out TypeSymbol? resultType)
     {
         kind = default;
         resultType = null;
@@ -164,7 +167,7 @@ internal static class EnumOperatorTable
         {
             kind = BoundUnaryOperatorKind.OnesComplement;
             resultType = operandType;
-            return true;
+            return resultType is not null;
         }
 
         return false;
@@ -177,7 +180,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="type">The type to check.</param>
     /// <returns><c>true</c> if <paramref name="type"/> is an enum with an unsigned underlying type.</returns>
-    public static bool IsUnsignedEnumUnderlying(TypeSymbol type)
+    public static bool IsUnsignedEnumUnderlying(TypeSymbol? type)
     {
         if (type == null)
         {
@@ -219,7 +222,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="type">The type to check.</param>
     /// <returns><c>true</c> if the type is an enum.</returns>
-    public static bool IsEnumType(TypeSymbol type)
+    public static bool IsEnumType(TypeSymbol? type)
     {
         if (type is NullableTypeSymbol)
         {
@@ -244,7 +247,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="enumType">The enum type symbol.</param>
     /// <returns>The underlying primitive type symbol, or <c>null</c>.</returns>
-    internal static TypeSymbol GetUnderlyingType(TypeSymbol enumType)
+    internal static TypeSymbol? GetUnderlyingType(TypeSymbol? enumType)
     {
         if (enumType is EnumSymbol es)
         {
@@ -267,8 +270,8 @@ internal static class EnumOperatorTable
         OperandShape shape,
         TypeSymbol leftType,
         TypeSymbol rightType,
-        out TypeSymbol enumType,
-        out TypeSymbol underlyingType)
+        out TypeSymbol? enumType,
+        out TypeSymbol? underlyingType)
     {
         enumType = null;
         underlyingType = null;
