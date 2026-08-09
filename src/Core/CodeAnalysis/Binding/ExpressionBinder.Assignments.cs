@@ -106,9 +106,17 @@ internal sealed partial class ExpressionBinder
                 $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
             var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
-            return implicitStaticField.InterfaceType != null
-                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedValue)
-                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
+            if (implicitStaticField.InterfaceType is InterfaceSymbol interfaceType)
+            {
+                return new BoundFieldAssignmentExpression(null, implicitStaticField.Field, interfaceType, convertedValue);
+            }
+
+            if (implicitStaticField.StructType is StructSymbol structType)
+            {
+                return new BoundFieldAssignmentExpression(null, null, structType, implicitStaticField.Field, convertedValue);
+            }
+
+            throw new InvalidOperationException("Static field symbol has no owning type.");
         }
 
         // ADR-0053: bare static property assignment inside a method body
@@ -1263,9 +1271,17 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
 
-            return implicitStaticField.InterfaceType != null
-                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedResult)
-                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
+            if (implicitStaticField.InterfaceType is InterfaceSymbol interfaceType)
+            {
+                return new BoundFieldAssignmentExpression(null, implicitStaticField.Field, interfaceType, convertedResult);
+            }
+
+            if (implicitStaticField.StructType is StructSymbol structType)
+            {
+                return new BoundFieldAssignmentExpression(null, null, structType, implicitStaticField.Field, convertedResult);
+            }
+
+            throw new InvalidOperationException("Static field symbol has no owning type.");
         }
 
         // ADR-0053: bare static property compound assignment inside a method

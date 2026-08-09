@@ -302,3 +302,13 @@ src/Core/CodeAnalysis/Symbols/SymbolKind.cs
 src/Core/CodeAnalysis/Symbols/TypeArgsKey.cs
 src/Core/CodeAnalysis/Symbols/TypeParameterConstraint.cs
 src/Core/CodeAnalysis/Symbols/TypeParameterVariance.cs
+
+# Slice 56 -- enum, destructor, and implicit variable symbols.
+src/Core/CodeAnalysis/Symbols/DeinitSymbol.cs
+src/Core/CodeAnalysis/Symbols/EnumMemberSymbol.cs
+src/Core/CodeAnalysis/Symbols/EnumSymbol.cs
+src/Core/CodeAnalysis/Symbols/GlobalVariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/ImplicitFieldVariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/ImplicitPropertyVariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/ImplicitStaticFieldVariableSymbol.cs
+src/Core/CodeAnalysis/Symbols/ImplicitStaticPropertyVariableSymbol.cs

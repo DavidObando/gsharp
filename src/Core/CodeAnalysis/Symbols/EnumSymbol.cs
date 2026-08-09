@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -59,7 +61,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// Gets the enclosing user-defined type when this enum is a nested type
     /// declaration (ADR-0110 / issue #910), or <c>null</c> when top-level.
     /// </summary>
-    public TypeSymbol ContainingType { get; private set; }
+    public TypeSymbol? ContainingType { get; private set; }
 
     /// <summary>
     /// Gets the open declaration represented by this symbol. Definitions point
@@ -83,7 +85,7 @@ public sealed class EnumSymbol : TypeSymbol
 
     /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910).</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
-    public void SetContainingType(TypeSymbol containingType)
+    public void SetContainingType(TypeSymbol? containingType)
     {
         ContainingType = containingType;
     }
@@ -99,7 +101,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="name">The member name.</param>
     /// <param name="member">The found member, if any.</param>
     /// <returns>True if the member exists.</returns>
-    public bool TryGetMember(string name, out EnumMemberSymbol member)
+    public bool TryGetMember(string name, [NotNullWhen(true)] out EnumMemberSymbol? member)
     {
         foreach (var candidate in Members)
         {
@@ -121,8 +123,8 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="enclosingTypeArguments">Flattened enclosing arguments in CLR order.</param>
     /// <returns>The interned constructed reference.</returns>
     [return: NotNullIfNotNull(nameof(nestedDefinition))]
-    public static EnumSymbol ConstructNested(
-        EnumSymbol nestedDefinition,
+    public static EnumSymbol? ConstructNested(
+        EnumSymbol? nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments)
     {
         if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
@@ -144,8 +146,8 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="substitute">The type substitution.</param>
     /// <returns>The substituted enclosing vector, or <c>default</c> when none exists.</returns>
     public static ImmutableArray<TypeSymbol> SubstituteEnclosingArguments(
-        EnumSymbol nested,
-        Func<TypeSymbol, TypeSymbol> substitute)
+        EnumSymbol? nested,
+        Func<TypeSymbol, TypeSymbol>? substitute)
     {
         if (nested == null || substitute == null)
         {
@@ -190,9 +192,9 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="typeParameters">Type parameters indexed by source name.</param>
     /// <returns>The constructed nested enum, or <paramref name="nested"/> when its enclosing parameters are not all in scope.</returns>
     [return: NotNullIfNotNull(nameof(nested))]
-    internal static EnumSymbol ConstructNestedFromTypeParameterScope(
-        EnumSymbol nested,
-        IReadOnlyDictionary<string, TypeParameterSymbol> typeParameters)
+    internal static EnumSymbol? ConstructNestedFromTypeParameterScope(
+        EnumSymbol? nested,
+        IReadOnlyDictionary<string, TypeParameterSymbol>? typeParameters)
     {
         if (nested == null || !nested.EnclosingTypeArguments.IsDefaultOrEmpty || typeParameters == null)
         {

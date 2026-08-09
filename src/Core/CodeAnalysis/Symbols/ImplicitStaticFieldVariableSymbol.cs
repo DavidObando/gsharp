@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -44,10 +46,10 @@ public sealed class ImplicitStaticFieldVariableSymbol : VariableSymbol
     public override SymbolKind Kind => SymbolKind.LocalVariable;
 
     /// <summary>Gets the class that owns the static field, or <c>null</c> for an interface owner.</summary>
-    public StructSymbol StructType { get; }
+    public StructSymbol? StructType { get; }
 
     /// <summary>Gets the interface that owns the static field (issue #1030), or <c>null</c> for a struct/class owner.</summary>
-    public InterfaceSymbol InterfaceType { get; }
+    public InterfaceSymbol? InterfaceType { get; }
 
     /// <summary>Gets the display name of the owning type (struct/class or interface).</summary>
     public string OwnerName => StructType?.Name ?? InterfaceType?.Name ?? string.Empty;
