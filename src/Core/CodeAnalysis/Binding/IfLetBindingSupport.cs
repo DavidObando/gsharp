@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // Elements should appear in the correct order
 
 using System;
@@ -37,7 +39,7 @@ internal static class IfLetBindingSupport
     /// <param name="Initializer">The bound right-hand-side expression.</param>
     internal readonly record struct BoundIfLetBinding(
         VariableSymbol Variable,
-        TypeSymbol Underlying,
+        TypeSymbol? Underlying,
         BoundExpression Initializer)
     {
         /// <summary>Gets a value indicating whether the clause produced a usable binding.</summary>
@@ -66,7 +68,7 @@ internal static class IfLetBindingSupport
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> declareLocal)
     {
-        TypeSymbol declaredUnderlying = null;
+        TypeSymbol? declaredUnderlying = null;
         if (binding.TypeClause != null)
         {
             declaredUnderlying = bindTypeClause(binding.TypeClause);
@@ -147,9 +149,9 @@ internal static class IfLetBindingSupport
     /// <param name="syntax">The syntax the synthesized nodes are attributed to.</param>
     /// <param name="variables">The binding variables, in source order.</param>
     /// <returns>The nil-check chain, or <see langword="null"/> when there are no bindings.</returns>
-    internal static BoundExpression BuildNilCheckChain(SyntaxNode syntax, IEnumerable<VariableSymbol> variables)
+    internal static BoundExpression? BuildNilCheckChain(SyntaxNode syntax, IEnumerable<VariableSymbol> variables)
     {
-        BoundExpression result = null;
+        BoundExpression? result = null;
         foreach (var variable in variables)
         {
             var read = new BoundVariableExpression(syntax, variable);
