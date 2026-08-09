@@ -156,3 +156,6 @@ src/Core/CodeAnalysis/Binding/IfLetBindingSupport.cs
 
 # Slice 17 -- lexical iterator/yield detection helper.
 src/Core/CodeAnalysis/Binding/IteratorDetection.cs
+
+# Slice 18 -- early friend-assembly declaration collector.
+src/Core/CodeAnalysis/Binding/FriendAssemblyDeclarations.cs
