@@ -161,7 +161,8 @@ public class Program
                     },
                 };
 
-                if (parsed.OutputPath is null)
+                var outputPath = parsed.OutputPath;
+                if (outputPath is null)
                 {
                     // Legacy / no-output mode (ADR-0156 Phase 1): compile with
                     // the real emitter into memory and execute in-process,
@@ -169,7 +170,7 @@ public class Program
                     return ExecuteInMemory(compilation, parsed, referencePaths);
                 }
 
-                return Emit(compilation, parsed);
+                return Emit(compilation, parsed, outputPath);
             }
             finally
             {
@@ -342,9 +343,8 @@ public class Program
         return Success;
     }
 
-    private static int Emit(Compilation compilation, CommandLineArgs args)
+    private static int Emit(Compilation compilation, CommandLineArgs args, string outputPath)
     {
-        var outputPath = args.OutputPath;
         var outputDir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(outputDir))
         {
@@ -375,7 +375,7 @@ public class Program
         // sidecar stream alongside the PE. If the caller did not supply an
         // explicit /pdb:<path>, default to "<PE>.pdb" (csc.exe convention).
         // Embedded format keeps the PDB content inside the PE — no sidecar.
-        string pdbOutputPath = null;
+        string? pdbOutputPath = null;
         if (compilation.DebugInformation.Format == DebugInformationFormat.Portable)
         {
             pdbOutputPath = compilation.DebugInformation.PdbFilePath;
@@ -463,7 +463,7 @@ public class Program
         return Success;
     }
 
-    private static string GetTargetFrameworkMoniker(string targetFramework)
+    private static string? GetTargetFrameworkMoniker(string? targetFramework)
     {
         if (string.IsNullOrWhiteSpace(targetFramework))
         {
@@ -561,7 +561,7 @@ public class Program
         }
     }
 
-    private static void WriteRuntimeConfig(string assemblyPath, string targetFramework)
+    private static void WriteRuntimeConfig(string assemblyPath, string? targetFramework)
     {
         var tfm = string.IsNullOrEmpty(targetFramework) ? "net10.0" : targetFramework;
         var (frameworkName, frameworkVersion) = ResolveFrameworkMoniker(tfm);
@@ -653,7 +653,7 @@ public class Program
             RedirectStandardError = true,
         };
 
-        Process proc;
+        Process? proc;
         try
         {
             proc = Process.Start(psi);
@@ -661,6 +661,11 @@ public class Program
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception)
         {
             return ReportGsgenFailure($"failed to launch gsgen ('{gsgenPath}'): {ex.Message}");
+        }
+
+        if (proc is null)
+        {
+            return ReportGsgenFailure($"failed to launch gsgen ('{gsgenPath}'): no process was started.");
         }
 
         using (proc)
@@ -1292,17 +1297,17 @@ public class Program
         public List<string> GlobalOptions { get; } = new();
 
         /// <summary>Gets or sets an explicit override for the resolved gsgen.dll path (from /gsgentool:&lt;path&gt;).</summary>
-        public string GsgenToolPath { get; set; }
+        public string? GsgenToolPath { get; set; }
 
-        public string OutputPath { get; set; }
+        public string? OutputPath { get; set; }
 
-        public string RefOutputPath { get; set; }
+        public string? RefOutputPath { get; set; }
 
-        public string AssemblyName { get; set; }
+        public string? AssemblyName { get; set; }
 
         public OutputTarget Target { get; set; } = OutputTarget.Exe;
 
-        public string TargetFramework { get; set; }
+        public string? TargetFramework { get; set; }
 
         public bool ShowHelp { get; set; }
 
@@ -1330,13 +1335,13 @@ public class Program
         public bool DebugFlagSeen { get; set; }
 
         /// <summary>Gets or sets the explicit sidecar PDB path (from /pdb:&lt;path&gt;). Null means "default to {OutputPath}.pdb".</summary>
-        public string PdbPath { get; set; }
+        public string? PdbPath { get; set; }
 
         /// <summary>Gets or sets the XML documentation output path (from /doc:&lt;path&gt;).</summary>
-        public string DocumentationFile { get; set; }
+        public string? DocumentationFile { get; set; }
 
         /// <summary>Gets or sets the path to a Source Link JSON file (from /sourcelink:&lt;path&gt;).</summary>
-        public string SourceLinkPath { get; set; }
+        public string? SourceLinkPath { get; set; }
 
         /// <summary>Gets or sets a value indicating whether the emit should be deterministic (from /deterministic, /deterministic+/-).</summary>
         public bool Deterministic { get; set; }
@@ -1345,10 +1350,10 @@ public class Program
         public bool EmbedAllSources { get; set; }
 
         /// <summary>Gets or sets the informational version string stamped on the output assembly (from /version:).</summary>
-        public string Version { get; set; }
+        public string? Version { get; set; }
 
         /// <summary>Gets or sets the log file path (from /log:&lt;file&gt;). When non-null, a <see cref="FileLogger"/> is created and attached to the compilation.</summary>
-        public string LogPath { get; set; }
+        public string? LogPath { get; set; }
     }
 
     private sealed class CommandLineException : Exception
