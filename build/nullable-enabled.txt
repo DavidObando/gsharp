@@ -208,3 +208,5 @@ src/Core/CodeAnalysis/Binding/ConversionClassifier.cs
 src/Core/CodeAnalysis/Symbols/NullableLifting.cs
 # Slice 37 -- conversion classification contracts.
 src/Core/CodeAnalysis/Binding/Conversion.cs
+# Slice 38 -- CLR operator and user-defined conversion resolution.
+src/Core/CodeAnalysis/Binding/ClrOperatorResolution.cs
