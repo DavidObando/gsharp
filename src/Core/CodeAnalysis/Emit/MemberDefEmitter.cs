@@ -997,7 +997,7 @@ internal sealed class MemberDefEmitter
     private static bool PropertyMatchesInterfaceSlot(
         PropertySymbol property,
         PropertySymbol interfaceProperty,
-        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         if (property.Name != interfaceProperty.Name
             || property.IsIndexer != interfaceProperty.IsIndexer

@@ -57,7 +57,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="syntax">The return type clause syntax.</param>
     /// <param name="isAsync">Whether the enclosing function is async.</param>
     /// <returns>The bound type or <c>null</c>.</returns>
-    internal delegate TypeSymbol BindReturnTypeClauseDelegate(TypeClauseSyntax syntax, bool isAsync);
+    internal delegate TypeSymbol BindReturnTypeClauseDelegate(TypeClauseSyntax? syntax, bool isAsync);
 
     /// <summary>
     /// Issue #1812: signature for the

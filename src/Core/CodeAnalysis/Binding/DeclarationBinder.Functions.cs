@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -81,7 +83,9 @@ internal sealed partial class DeclarationBinder
     {
         if (syntax.IsExtension && syntax.Identifier.Text.StartsWith("op_", StringComparison.Ordinal))
         {
-            return TryGetOpenSelfTypeParameters(syntax.Receiver.Type, package);
+            return syntax.Receiver is { Type: { } receiverType }
+                ? TryGetOpenSelfTypeParameters(receiverType, package)
+                : ImmutableArray<TypeParameterSymbol>.Empty;
         }
 
         if (syntax.IsConversionOperator)
@@ -102,7 +106,7 @@ internal sealed partial class DeclarationBinder
     }
 
     private ImmutableArray<TypeParameterSymbol> TryGetOpenSelfTypeParameters(
-        TypeClauseSyntax syntax,
+        TypeClauseSyntax? syntax,
         PackageSymbol package)
     {
         if (syntax == null
@@ -111,7 +115,15 @@ internal sealed partial class DeclarationBinder
             || syntax.IsArray
             || syntax.IsNullable
             || syntax.IsParenthesizedNullable
-            || !scope.TryLookupTypeAlias(syntax.Identifier.Text, syntax.TypeArguments.Count, out var candidate)
+            || syntax.Identifier == null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var identifier = syntax.Identifier;
+        if (identifier == null
+            || syntax.TypeArguments is not { } typeArguments
+            || !scope.TryLookupTypeAlias(identifier.Text, typeArguments.Count, out var candidate)
             || candidate is not StructSymbol candidateStruct)
         {
             return ImmutableArray<TypeParameterSymbol>.Empty;
@@ -204,7 +216,7 @@ internal sealed partial class DeclarationBinder
             if (!methodName.StartsWith("op_", StringComparison.Ordinal))
             {
                 Diagnostics.ReportReceiverClauseOnOwnedType(
-                    syntax.Receiver.Type.Location,
+                    syntax.Receiver?.Type?.Location ?? syntax.Identifier.Location,
                     methodReceiverStruct.Name,
                     methodName);
             }
@@ -272,7 +284,7 @@ internal sealed partial class DeclarationBinder
                     syntax,
                     package,
                     accessibility,
-                    receiverType: (TypeSymbol)null);
+                    receiverType: (TypeSymbol?)null);
                 function.TypeParameters = typeParameters;
                 function.IsUnsafe = syntax.IsUnsafe;
                 function.ReturnRefKind = returnRefKind;
@@ -314,7 +326,9 @@ internal sealed partial class DeclarationBinder
                 explicitReceiverParameter);
             function.TypeParameters = typeParameters;
             function.IsAsync = syntax.IsAsync
-                || (isAsyncIteratorReturnType(type) && IteratorDetection.ContainsYield(syntax.Body));
+                || (isAsyncIteratorReturnType(type)
+                    && syntax.Body is { } functionBody
+                    && IteratorDetection.ContainsYield(functionBody));
             function.AsyncReturnsValueTask = typeIsValueTask;
             function.IsUnsafe = syntax.IsUnsafe;
             function.ReturnRefKind = returnRefKind;
@@ -364,7 +378,7 @@ internal sealed partial class DeclarationBinder
         function = new FunctionSymbol(syntax.Identifier.Text, parameters.ToImmutable(), type, syntax, package, accessibility);
         function.TypeParameters = typeParameters;
         function.IsAsync = syntax.IsAsync
-            || (isAsyncIteratorReturnType(type) && IteratorDetection.ContainsYield(syntax.Body));
+            || (isAsyncIteratorReturnType(type) && syntax.Body is { } body && IteratorDetection.ContainsYield(body));
         function.AsyncReturnsValueTask = typeIsValueTask;
         function.IsUnsafe = syntax.IsUnsafe;
         function.ReturnRefKind = returnRefKind;
@@ -406,9 +420,10 @@ internal sealed partial class DeclarationBinder
             {
                 candidate.IsExtension = true;
                 candidate.ExtensionReceiverType = Binder.SubstituteType(
-                    receiverType,
+                    receiverType ?? TypeSymbol.Error,
                     BuildTypeParameterSubstitution(function.TypeParameters, candidate.TypeParameters));
-                if (!candidate.Declaration.Identifier.IsMissing && !scope.TryDeclareExtensionFunction(candidate))
+                if (candidate.Declaration is { Identifier.IsMissing: false }
+                    && !scope.TryDeclareExtensionFunction(candidate))
                 {
                     Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, candidate.Name, Binder.FormatOverloadSignature(candidate));
                 }
@@ -419,7 +434,7 @@ internal sealed partial class DeclarationBinder
 
         foreach (var candidate in functions)
         {
-            if (candidate.Declaration.Identifier.IsMissing || scope.TryDeclareFunction(candidate))
+            if (candidate.Declaration?.Identifier.IsMissing != false || scope.TryDeclareFunction(candidate))
             {
                 continue;
             }
@@ -451,7 +466,7 @@ internal sealed partial class DeclarationBinder
 
     private ImmutableArray<FunctionSymbol> ExpandNullableSequenceIteratorSpecializations(FunctionSymbol function)
     {
-        if (function?.Declaration?.Body == null)
+        if (function.Declaration?.Body == null)
         {
             return ImmutableArray.Create(function);
         }
@@ -479,7 +494,8 @@ internal sealed partial class DeclarationBinder
         if (targetIndex < 0)
         {
             Diagnostics.ReportUnconstrainedNullableSequenceElement(
-                function.Declaration.Type.SequenceElementType.Location,
+                function.Declaration.Type?.SequenceElementType?.Location
+                    ?? function.Declaration.Identifier.Location,
                 target.Name);
             return ImmutableArray.Create(function);
         }
@@ -518,7 +534,7 @@ internal sealed partial class DeclarationBinder
         }
 
         var specializedParameters = parameters.MoveToImmutable();
-        ParameterSymbol specializedExplicitReceiver = null;
+        ParameterSymbol? specializedExplicitReceiver = null;
         if (function.ExplicitReceiverParameter != null)
         {
             for (var i = 0; i < function.Parameters.Length; i++)
@@ -531,7 +547,9 @@ internal sealed partial class DeclarationBinder
             }
         }
 
-        var specializedReceiverType = Binder.SubstituteType(function.ReceiverType, substitution);
+        var specializedReceiverType = function.ReceiverType is { } receiverType
+            ? Binder.SubstituteType(receiverType, substitution)
+            : null;
         var specialized = new FunctionSymbol(
             function.Name,
             specializedParameters,
@@ -546,13 +564,17 @@ internal sealed partial class DeclarationBinder
         specialized.TypeParameters = typeParameters;
         specialized.OverriddenMethod = function.OverriddenMethod;
         specialized.ExternalOverriddenMethod = function.ExternalOverriddenMethod;
-        specialized.ExternalOverrideContainingType = Binder.SubstituteType(function.ExternalOverrideContainingType, substitution);
+        specialized.ExternalOverrideContainingType = function.ExternalOverrideContainingType is { } externalOverrideContainingType
+            ? Binder.SubstituteType(externalOverrideContainingType, substitution)
+            : null;
         specialized.IsAsync = function.IsAsync;
         specialized.AsyncReturnsValueTask = function.AsyncReturnsValueTask;
         specialized.IsUnsafe = function.IsUnsafe;
         specialized.ReturnRefKind = function.ReturnRefKind;
         specialized.IsStatic = function.IsStatic;
-        specialized.StaticOwnerType = Binder.SubstituteType(function.StaticOwnerType, substitution);
+        specialized.StaticOwnerType = function.StaticOwnerType is { } staticOwnerType
+            ? Binder.SubstituteType(staticOwnerType, substitution)
+            : null;
         specialized.IsSpecialName = function.IsSpecialName;
         specialized.SetAttributes(function.Attributes);
         specialized.SetDocumentation(function.GetDocumentation());
@@ -582,7 +604,9 @@ internal sealed partial class DeclarationBinder
             syntax.Body != null && IteratorDetection.ContainsYield(syntax.Body) ? syntax.Type : null;
         try
         {
-            return bindReturnTypeClause(syntax.Type, syntax.IsAsync) ?? TypeSymbol.Void;
+            return syntax.Type is { } returnType
+                ? bindReturnTypeClause(returnType, syntax.IsAsync) ?? TypeSymbol.Void
+                : TypeSymbol.Void;
         }
         finally
         {
@@ -591,9 +615,9 @@ internal sealed partial class DeclarationBinder
     }
 
     private readonly record struct FunctionReceiverBindingResult(
-        TypeSymbol ReceiverType,
-        ParameterSymbol ExplicitReceiverParameter,
-        StructSymbol MethodReceiverStruct,
+        TypeSymbol? ReceiverType,
+        ParameterSymbol? ExplicitReceiverParameter,
+        StructSymbol? MethodReceiverStruct,
         bool Succeeded);
 
     private readonly record struct FunctionReturnBindingResult(
@@ -634,19 +658,27 @@ internal sealed partial class DeclarationBinder
         // Phase 3.B.6 / ADR-0019 and Phase 6.4 / ADR-0024: receiver
         // clauses become parameters[0]. Same-package struct/class receivers
         // are methods; all other valid receivers remain extension functions.
-        TypeSymbol receiverType = null;
-        ParameterSymbol explicitReceiverParameter = null;
-        StructSymbol methodReceiverStruct = null;
+        TypeSymbol? receiverType = null;
+        ParameterSymbol? explicitReceiverParameter = null;
+        StructSymbol? methodReceiverStruct = null;
         if (syntax.IsExtension)
         {
-            var recvName = syntax.Receiver.Identifier.Text;
-            receiverType = bindTypeClause(syntax.Receiver.Type);
+            var receiverSyntax = syntax.Receiver;
+            if (receiverSyntax == null)
+            {
+                return new FunctionReceiverBindingResult(TypeSymbol.Error, null, null, false);
+            }
+
+            var recvName = receiverSyntax.Identifier.Text;
+            receiverType = receiverSyntax.Type is { } receiverTypeSyntax
+                ? bindTypeClause(receiverTypeSyntax)
+                : TypeSymbol.Error;
             if (receiverType == null)
             {
                 receiverType = TypeSymbol.Error;
             }
 
-            explicitReceiverParameter = new ParameterSymbol(recvName, receiverType, declaringSyntax: syntax.Receiver);
+            explicitReceiverParameter = new ParameterSymbol(recvName, receiverType, declaringSyntax: receiverSyntax);
             seenParameterNames.Add(recvName);
             parameters.Add(explicitReceiverParameter);
 
@@ -654,9 +686,11 @@ internal sealed partial class DeclarationBinder
             {
                 methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
             }
-            else if (IsSamePackageNonAggregateReceiver(syntax.Receiver.Type, receiverType, package))
+            else if (IsSamePackageNonAggregateReceiver(receiverSyntax.Type, receiverType, package))
             {
-                Diagnostics.ReportMethodReceiverMustBeStructOrClass(syntax.Receiver.Type.Location, receiverType.Name);
+                Diagnostics.ReportMethodReceiverMustBeStructOrClass(
+                    receiverSyntax.Type?.Location ?? receiverSyntax.Identifier.Location,
+                    receiverType.Name);
                 return new FunctionReceiverBindingResult(receiverType, explicitReceiverParameter, methodReceiverStruct, false);
             }
         }
@@ -677,7 +711,9 @@ internal sealed partial class DeclarationBinder
         {
             var parameterSyntax = syntax.Parameters[pIndex];
             var parameterName = parameterSyntax.Identifier.Text;
-            var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+            var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                : TypeSymbol.Error;
 
             // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
             // permitted on named functions/methods. Each `_` occupies a positional slot
@@ -928,7 +964,7 @@ internal sealed partial class DeclarationBinder
             syntax,
             package,
             accessibility,
-            receiverType: null);
+            receiverType: (TypeSymbol?)null);
         function.IsStatic = true;
         function.StaticOwnerType = owner;
         function.IsSpecialName = true;
@@ -971,7 +1007,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="type">The candidate owner type.</param>
     /// <param name="package">The owning package.</param>
     /// <returns>The owning struct definition, or <see langword="null"/>.</returns>
-    private static StructSymbol TryGetSamePackageOwner(TypeSymbol type, PackageSymbol package)
+    private static StructSymbol? TryGetSamePackageOwner(TypeSymbol type, PackageSymbol package)
     {
         if (type is StructSymbol structSymbol
             && package != null
@@ -1047,7 +1083,7 @@ internal sealed partial class DeclarationBinder
             && accessibility == Accessibility.Public;
     }
 
-    private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
+    private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax? receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
     {
         if (receiverType is InterfaceSymbol iface)
         {
@@ -1076,7 +1112,7 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     /// <param name="syntax">The type-parameter list syntax.</param>
     /// <returns>The bound type-parameter symbols.</returns>
-    internal ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax syntax)
+    internal ImmutableArray<TypeParameterSymbol> BindTypeParameterList(TypeParameterListSyntax? syntax)
     {
         if (syntax == null)
         {
@@ -1088,7 +1124,7 @@ internal sealed partial class DeclarationBinder
         return symbols;
     }
 
-    private ImmutableArray<TypeParameterSymbol> CreateTypeParameterSymbols(TypeParameterListSyntax syntax)
+    private ImmutableArray<TypeParameterSymbol> CreateTypeParameterSymbols(TypeParameterListSyntax? syntax)
     {
         if (syntax == null)
         {
@@ -1126,7 +1162,7 @@ internal sealed partial class DeclarationBinder
     }
 
     private void ResolveTypeParameterConstraints(
-        TypeParameterListSyntax syntax,
+        TypeParameterListSyntax? syntax,
         ImmutableArray<TypeParameterSymbol> symbols)
     {
         if (syntax == null)
@@ -1193,7 +1229,11 @@ internal sealed partial class DeclarationBinder
                 // redundant; flag the explicit `struct`.
                 if (hasUnmanaged && hasValueType)
                 {
-                    Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "unmanaged", "struct");
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.StructConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "unmanaged",
+                        "struct");
                     hasValueType = false;
                 }
 
@@ -1201,13 +1241,21 @@ internal sealed partial class DeclarationBinder
                 // with the reference-type (`class`) constraint.
                 if (hasUnmanaged && hasRefType)
                 {
-                    Diagnostics.ReportTypeParameterConstraintConflict(p.ClassConstraintKeyword.Location, name, "class", "unmanaged");
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.ClassConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "class",
+                        "unmanaged");
                     hasUnmanaged = false;
                 }
 
                 if (hasRefType && hasValueType)
                 {
-                    Diagnostics.ReportTypeParameterConstraintConflict(p.StructConstraintKeyword.Location, name, "class", "struct");
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.StructConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "class",
+                        "struct");
                     hasValueType = false;
                 }
 
@@ -1216,7 +1264,11 @@ internal sealed partial class DeclarationBinder
                     // `struct` already implies `init()` at the CLR level (ECMA-335 II.10.1.7);
                     // emitting both would be redundant and would force callers to
                     // remember an arbitrary order. Flag the explicit `init()`.
-                    Diagnostics.ReportTypeParameterConstraintConflict(p.InitConstraintKeyword.Location, name, "struct", "init()");
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.InitConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "struct",
+                        "init()");
                     hasDefaultCtor = false;
                 }
 
@@ -1225,7 +1277,11 @@ internal sealed partial class DeclarationBinder
                 // explicit `init()`.
                 if (hasUnmanaged && hasDefaultCtor)
                 {
-                    Diagnostics.ReportTypeParameterConstraintConflict(p.InitConstraintKeyword.Location, name, "unmanaged", "init()");
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.InitConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "unmanaged",
+                        "init()");
                     hasDefaultCtor = false;
                 }
 
@@ -1276,7 +1332,7 @@ internal sealed partial class DeclarationBinder
             openBracketToken: null,
             lengthToken: null,
             closeBracketToken: null,
-            identifier: p.Constraint,
+            identifier: p.Constraint ?? p.Identifier,
             typeArgumentOpenBracketToken: p.ConstraintTypeArgumentOpenBracketToken,
             typeArguments: p.ConstraintTypeArguments,
             typeArgumentCloseBracketToken: p.ConstraintTypeArgumentCloseBracketToken,
@@ -1334,7 +1390,7 @@ internal sealed partial class DeclarationBinder
 
         // Resolved to something that is not a legal constraint (a struct, enum,
         // or other value type).
-        Diagnostics.ReportConstraintNotInterface(p.Constraint.Location, resolved.Name);
+        Diagnostics.ReportConstraintNotInterface(p.Constraint?.Location ?? p.Identifier.Location, resolved.Name);
     }
 
     /// <summary>
@@ -1351,8 +1407,8 @@ internal sealed partial class DeclarationBinder
     /// which instead returns <c>null</c>/no-match there because that caller is
     /// selecting the correct overload rather than only enriching an existing map).
     /// </summary>
-    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> WithMethodTypeParameterSubstitution(
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> baseTypeArgSubst,
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? WithMethodTypeParameterSubstitution(
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? baseTypeArgSubst,
         FunctionSymbol candidate,
         ImmutableArray<TypeParameterSymbol> overrideTypeParameters)
     {
@@ -1388,9 +1444,9 @@ internal sealed partial class DeclarationBinder
     /// matched against the base member's un-substituted (open) signature. Returns
     /// <c>null</c> when no constructed base contributes a substitution.
     /// </summary>
-    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> BuildBaseTypeArgumentSubstitution(StructSymbol derived)
+    private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? BuildBaseTypeArgumentSubstitution(StructSymbol derived)
     {
-        Dictionary<TypeParameterSymbol, TypeSymbol> subst = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? subst = null;
         for (var b = derived?.BaseClass; b != null; b = b.BaseClass)
         {
             if (b.Definition == null || b.TypeArguments.IsDefaultOrEmpty)
@@ -1468,7 +1524,9 @@ internal sealed partial class DeclarationBinder
         {
             if (anon.HasBaseType)
             {
-                var baseType = bindTypeClause(anon.BaseTypeClause);
+                var baseType = anon.BaseTypeClause is { } baseTypeClause
+                    ? bindTypeClause(baseTypeClause)
+                    : null;
                 if (baseType != null && baseType != TypeSymbol.Error)
                 {
                     return baseType;
@@ -1508,7 +1566,7 @@ internal sealed partial class DeclarationBinder
         ImmutableArray<ParameterSymbol> derivedParams,
         TypeSymbol derivedReturnType,
         RefKind derivedReturnRefKind,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap)
         => SignaturesMatch(baseMethod, derivedParams, derivedReturnType, derivedReturnRefKind, typeParamMap, derivedIsAsync: false);
 
     /// <summary>
@@ -1526,7 +1584,7 @@ internal sealed partial class DeclarationBinder
         ImmutableArray<ParameterSymbol> derivedParams,
         TypeSymbol derivedReturnType,
         RefKind derivedReturnRefKind,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap,
         bool derivedIsAsync)
     {
         if (!ReturnTypesMatch(baseMethod, derivedReturnType, derivedIsAsync, typeParamMap))
@@ -1583,7 +1641,7 @@ internal sealed partial class DeclarationBinder
     private static TypeSymbol NormalizeAsyncDeclaredReturnType(TypeSymbol declaredType, bool isAsync, out bool isValueTask)
     {
         isValueTask = false;
-        if (!isAsync || declaredType == null)
+        if (!isAsync)
         {
             return declaredType;
         }
@@ -1609,7 +1667,7 @@ internal sealed partial class DeclarationBinder
         FunctionSymbol baseMethod,
         TypeSymbol derivedReturnType,
         bool derivedIsAsync,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap)
     {
         var baseIsAsync = baseMethod.IsAsync;
         if (AsyncIteratorDetection.IsAsyncIteratorReturnType(baseMethod.Type)
@@ -1644,7 +1702,7 @@ internal sealed partial class DeclarationBinder
     /// viable generic match (mismatched arity) so the caller treats it as no
     /// match; returns an empty map when neither method is generic.
     /// </summary>
-    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> TryBuildMethodTypeParameterMap(
+    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? TryBuildMethodTypeParameterMap(
         FunctionSymbol baseMethod,
         FunctionSymbol candidate)
     {
@@ -1725,7 +1783,7 @@ internal sealed partial class DeclarationBinder
     /// signatures to match exactly — mirroring #2010's original mangled-name
     /// matching rules, minus the string parsing.
     /// </summary>
-    private static FunctionSymbol TryResolveExplicitInterfaceImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
+    private static FunctionSymbol? TryResolveExplicitInterfaceImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
     {
         if (structSymbol.Methods.IsDefaultOrEmpty)
         {
@@ -1787,7 +1845,7 @@ internal sealed partial class DeclarationBinder
     /// <paramref name="iprop"/>'s declared type against the candidate's own
     /// (concrete) type.
     /// </summary>
-    private static PropertySymbol TryResolveExplicitInterfacePropertyImplementation(
+    private static PropertySymbol? TryResolveExplicitInterfacePropertyImplementation(
         StructSymbol structSymbol,
         InterfaceSymbol iface,
         PropertySymbol iprop,
@@ -1896,7 +1954,7 @@ internal sealed partial class DeclarationBinder
     /// <see cref="EventSymbol.ExplicitInterfaceMember"/> the first time it
     /// is resolved) or <see langword="null"/> if no such event exists.
     /// </summary>
-    private static EventSymbol TryResolveExplicitInterfaceEventImplementation(StructSymbol structSymbol, InterfaceSymbol iface, EventSymbol ievent)
+    private static EventSymbol? TryResolveExplicitInterfaceEventImplementation(StructSymbol structSymbol, InterfaceSymbol iface, EventSymbol ievent)
     {
         if (structSymbol.Events.IsDefaultOrEmpty)
         {
@@ -1950,7 +2008,7 @@ internal sealed partial class DeclarationBinder
     /// first time it is resolved) or <see langword="null"/> if no such
     /// static method exists.
     /// </summary>
-    private static FunctionSymbol TryResolveExplicitInterfaceStaticImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
+    private static FunctionSymbol? TryResolveExplicitInterfaceStaticImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
     {
         if (structSymbol.StaticMethods.IsDefaultOrEmpty)
         {
@@ -2005,7 +2063,7 @@ internal sealed partial class DeclarationBinder
     /// is resolved) or <see langword="null"/> if no such static property
     /// exists.
     /// </summary>
-    private static PropertySymbol TryResolveExplicitInterfaceStaticPropertyImplementation(
+    private static PropertySymbol? TryResolveExplicitInterfaceStaticPropertyImplementation(
         StructSymbol structSymbol,
         InterfaceSymbol iface,
         PropertySymbol iprop)
@@ -2067,7 +2125,7 @@ internal sealed partial class DeclarationBinder
     /// open definition itself), matching that method's "no substitution"
     /// convention.
     /// </summary>
-    internal static Dictionary<TypeParameterSymbol, TypeSymbol> BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
+    internal static Dictionary<TypeParameterSymbol, TypeSymbol>? BuildInterfaceTypeParameterMap(InterfaceSymbol iface)
     {
         var def = iface.Definition;
         if (def == null || ReferenceEquals(def, iface) || def.TypeParameters.IsDefaultOrEmpty)
@@ -2143,7 +2201,7 @@ internal sealed partial class DeclarationBinder
                     {
                         if (method.HasExplicitInterfaceClause && method.ExplicitInterfaceClauseTarget == null)
                         {
-                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, method.Declaration.ExplicitInterfaceType, method.Name);
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, method.Declaration?.ExplicitInterfaceType, method.Name);
                             if (target != null)
                             {
                                 method.ExplicitInterfaceClauseTarget = target;
@@ -2158,7 +2216,7 @@ internal sealed partial class DeclarationBinder
                     {
                         if (prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget == null)
                         {
-                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, prop.Declaration.ExplicitInterfaceType, prop.Name);
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, prop.Declaration?.ExplicitInterfaceType, prop.Name);
                             if (target != null)
                             {
                                 prop.ExplicitInterfaceClauseTarget = target;
@@ -2203,7 +2261,7 @@ internal sealed partial class DeclarationBinder
                     {
                         if (evt.HasExplicitInterfaceClause && evt.ExplicitInterfaceClauseTarget == null)
                         {
-                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, evt.Declaration.ExplicitInterfaceType, evt.Name);
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, evt.Declaration?.ExplicitInterfaceType, evt.Name);
                             if (target != null)
                             {
                                 evt.ExplicitInterfaceClauseTarget = target;
@@ -2253,7 +2311,7 @@ internal sealed partial class DeclarationBinder
                     {
                         if (method.HasExplicitInterfaceClause && method.ExplicitInterfaceClauseTarget == null)
                         {
-                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, method.Declaration.ExplicitInterfaceType, method.Name);
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, method.Declaration?.ExplicitInterfaceType, method.Name);
                             if (target != null)
                             {
                                 method.ExplicitInterfaceClauseTarget = target;
@@ -2268,7 +2326,7 @@ internal sealed partial class DeclarationBinder
                     {
                         if (prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget == null)
                         {
-                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, prop.Declaration.ExplicitInterfaceType, prop.Name);
+                            var target = ResolveExplicitInterfaceClauseTarget(structSymbol, prop.Declaration?.ExplicitInterfaceType, prop.Name);
                             if (target != null)
                             {
                                 prop.ExplicitInterfaceClauseTarget = target;
@@ -2352,8 +2410,13 @@ internal sealed partial class DeclarationBinder
     /// downstream — <see cref="VerifyInterfaceImplementations"/>'s trailing
     /// unresolved-clause sweep does not re-report a second diagnostic for it).
     /// </summary>
-    private TypeSymbol ResolveExplicitInterfaceClauseTarget(StructSymbol structSymbol, TypeClauseSyntax clauseTypeSyntax, string memberName)
+    private TypeSymbol? ResolveExplicitInterfaceClauseTarget(StructSymbol structSymbol, TypeClauseSyntax? clauseTypeSyntax, string memberName)
     {
+        if (clauseTypeSyntax == null)
+        {
+            return null;
+        }
+
         var boundType = bindTypeClause(clauseTypeSyntax);
         if (boundType is InterfaceSymbol clauseIface)
         {
@@ -2421,7 +2484,7 @@ internal sealed partial class DeclarationBinder
     /// <c>IEnumerator[T]</c>) are not equated — so genuinely mismatched
     /// signatures are still rejected with GS0187.
     /// </summary>
-    internal static bool TypeSignaturesEquivalent(TypeSymbol a, TypeSymbol b)
+    internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
     internal static bool InterfaceEventTypesEquivalent(
@@ -2437,9 +2500,9 @@ internal sealed partial class DeclarationBinder
                 BuildInterfaceTypeParameterMap(iface));
 
     internal static bool TypeSignaturesEquivalent(
-        TypeSymbol a,
-        TypeSymbol b,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        TypeSymbol? a,
+        TypeSymbol? b,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap)
     {
         // Issue #1007: substitute a generic interface method's type parameter
         // with the implementing method's positionally-corresponding type
@@ -2471,6 +2534,8 @@ internal sealed partial class DeclarationBinder
         {
             return aIsSequence
                 && bIsSequence
+                && aSequenceDefinition != null
+                && bSequenceDefinition != null
                 && ClrTypeUtilities.AreSame(aSequenceDefinition, bSequenceDefinition)
                 && TypeSignaturesEquivalent(aSequenceElement, bSequenceElement, typeParamMap);
         }
@@ -2578,7 +2643,7 @@ internal sealed partial class DeclarationBinder
     private static bool TypeArgumentsEquivalent(
         ImmutableArray<TypeSymbol> a,
         ImmutableArray<TypeSymbol> b,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParamMap)
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap)
     {
         if (a.IsDefaultOrEmpty && b.IsDefaultOrEmpty)
         {
@@ -2650,33 +2715,34 @@ internal sealed partial class DeclarationBinder
             return RefKind.None;
         }
 
+        var location = syntax.ReturnRefModifier?.Location ?? syntax.Identifier.Location;
         if (syntax.Type == null)
         {
-            Diagnostics.ReportRefReturnRequiresReturnType(syntax.ReturnRefModifier.Location);
+            Diagnostics.ReportRefReturnRequiresReturnType(location);
             return RefKind.None;
         }
 
         if (syntax.IsAsync)
         {
-            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "async");
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "async");
             return RefKind.None;
         }
 
         if (returnType is SequenceTypeSymbol)
         {
-            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "sequence");
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "sequence");
             return RefKind.None;
         }
 
         if (returnType is AsyncSequenceTypeSymbol)
         {
-            Diagnostics.ReportRefReturnOnAsyncOrIterator(syntax.ReturnRefModifier.Location, "async sequence");
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "async sequence");
             return RefKind.None;
         }
 
         if (returnType is ByRefTypeSymbol)
         {
-            Diagnostics.ReportRefReturnOfByRefType(syntax.ReturnRefModifier.Location);
+            Diagnostics.ReportRefReturnOfByRefType(location);
             return RefKind.None;
         }
 

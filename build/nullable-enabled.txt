@@ -185,3 +185,5 @@ src/Core/CodeAnalysis/Binding/StatementBinder.Blocks.cs
 src/Core/CodeAnalysis/Binding/DeclarationBinder.Attributes.cs
 # Slice 26 -- declaration binder core contracts and declaration dispatch.
 src/Core/CodeAnalysis/Binding/DeclarationBinder.cs
+# Slice 27 -- function declaration binding and generic callable contracts.
+src/Core/CodeAnalysis/Binding/DeclarationBinder.Functions.cs

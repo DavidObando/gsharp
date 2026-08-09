@@ -3609,16 +3609,16 @@ internal sealed partial class ExpressionBinder
                         }
                     }
 
-                    if (slotProp == null || slotProp.GetterSymbol == null)
+                    if (slotProp == null || slotProp.GetterSymbol == null || slotIface == null)
                     {
                         Diagnostics.ReportStaticVirtualMemberNotFoundOnTypeParameter(
                             leftName.Location, tpSym.Name, propName);
                         return new BoundErrorExpression(null);
                     }
 
-                    var propType = DeclarationBinder.GetInterfacePropertyExpectedType(
-                        slotProp.Type,
-                        DeclarationBinder.BuildInterfaceTypeParameterMap(slotIface));
+                    var typeParameterMap = DeclarationBinder.BuildInterfaceTypeParameterMap(slotIface)
+                        ?? new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var propType = DeclarationBinder.GetInterfacePropertyExpectedType(slotProp.Type, typeParameterMap);
 
                     return new BoundConstrainedStaticCallExpression(
                         ne,
