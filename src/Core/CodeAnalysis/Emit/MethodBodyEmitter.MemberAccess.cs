@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1028 // trailing whitespace
 #pragma warning disable SA1116 // parameters begin on line after declaration
 #pragma warning disable SA1117 // parameters on same line
@@ -428,7 +430,7 @@ internal sealed partial class MethodBodyEmitter
         // re-evaluation of k or a get_Item re-read. set_Item is void, so we
         // dup the value just before the call, save the dup to a scratch
         // local, then push it back as the expression result.
-        var targetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+        var targetType = ixa.TargetExpression?.Type ?? BoundNodeForm.VariableTarget(ixa).Type;
         var mapType = (MapTypeSymbol)targetType;
         var dictType = mapType.ClrType;
 
@@ -448,7 +450,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            this.EmitLoadVariable(ixa.Target);
+            this.EmitLoadVariable(BoundNodeForm.VariableTarget(ixa));
         }
 
         this.EmitExpression(ixa.Index);
@@ -662,7 +664,7 @@ internal sealed partial class MethodBodyEmitter
             // the write. The field is re-read through the address afterwards to
             // leave the assigned value as the expression result.
             var addressReceiver = fas.ReceiverExpression is BoundDereferenceExpression drefRecv
-                && !fas.StructType.IsClass
+                && !BoundNodeForm.DeclaringType(fas).IsClass
                 && Symbols.TypeSymbol.IsUnmanagedPointer(drefRecv.Operand.Type)
                 ? drefRecv.Operand
                 : null;
@@ -731,24 +733,30 @@ internal sealed partial class MethodBodyEmitter
         // invariant explicit so any future binder change that introduces
         // self-mutating value expressions trips loudly in Debug instead of
         // silently miscompiling.
+        // Every static form returned above, so the receiver is present from
+        // here down -- which is exactly what the comment already states.
+        var fieldReceiver = Invariant.Required(
+            fas.Receiver,
+            "the static and expression-receiver field-write forms all returned above, leaving only the variable-receiver form");
+
         Debug.Assert(
-            !ValueExpressionMutatesReceiver(fas.Value, fas.Receiver),
-            $"EmitFieldAssignment: value expression for field '{fas.Field.Name}' must not reassign the receiver variable '{fas.Receiver.Name}'.");
+            !ValueExpressionMutatesReceiver(fas.Value, fieldReceiver),
+            $"EmitFieldAssignment: value expression for field '{fas.Field.Name}' must not reassign the receiver variable '{fieldReceiver.Name}'.");
 
         // Issue #1235 (write side): a field write on a receiver whose static
         // type is a type parameter constrained to a class (`t.F = v` with
         // `t : T`, `T : Base`). Mirrors EmitFieldAccess's read-side
         // `box !!T; ldfld` with `box !!T; stfld`.
-        if (fas.Receiver.Type is TypeParameterSymbol fieldAssnTp)
+        if (fieldReceiver.Type is TypeParameterSymbol fieldAssnTp)
         {
-            this.EmitLoadVariable(fas.Receiver);
+            this.EmitLoadVariable(fieldReceiver);
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldAssnTp));
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
 
-            this.EmitLoadVariable(fas.Receiver);
+            this.EmitLoadVariable(fieldReceiver);
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(fieldAssnTp));
             this.il.OpCode(ILOpCode.Ldfld);
@@ -759,22 +767,22 @@ internal sealed partial class MethodBodyEmitter
         // Class field assignment: load the reference, evaluate the value,
         // stfld through the reference. Re-load the receiver + ldfld to
         // leave the new value on the stack as the expression result.
-        if (fas.StructType.IsClass)
+        if (BoundNodeForm.DeclaringType(fas).IsClass)
         {
-            this.EmitLoadVariable(fas.Receiver);
+            this.EmitLoadVariable(fieldReceiver);
             this.EmitExpression(fas.Value);
             this.il.OpCode(ILOpCode.Stfld);
             this.il.Token(fieldHandle);
 
-            this.EmitLoadVariable(fas.Receiver);
+            this.EmitLoadVariable(fieldReceiver);
             this.il.OpCode(ILOpCode.Ldfld);
             this.il.Token(fieldHandle);
             return;
         }
 
-        // Issue #1988 (follow-up to #1917/#1982): the four `TryLoadVariableAddress(fas.Receiver)`
+        // Issue #1988 (follow-up to #1917/#1982): the four `TryLoadVariableAddress(fieldReceiver)`
         // calls below (not `TryLoadStructVariableAddress`) are intentional, not
-        // an unmigrated oversight. `fas.Receiver` is a bare `VariableSymbol`,
+        // an unmigrated oversight. `fieldReceiver` is a bare `VariableSymbol`,
         // which — unlike `BoundVariableExpression` — carries no `NarrowedType`.
         // The binder (`BindFieldAssignmentExpression`) dispatches to this
         // struct-field-write branch using the receiver's raw DECLARED type
@@ -783,7 +791,7 @@ internal sealed partial class MethodBodyEmitter
         // Money`) can never reach here as a struct receiver: `oa.Cents = v`
         // instead resolves `oa`'s declared `object` type and fails to find
         // member `Cents` (GS0158) before emission — see
-        // Issue1988NarrowedStructFieldAssignmentBinderTests. `fas.Receiver` is
+        // Issue1988NarrowedStructFieldAssignmentBinderTests. `fieldReceiver` is
         // therefore always the variable's own struct-typed storage, so the
         // direct `ldarga`/`ldloca` path is correct and the unbox helper does
         // not apply.
@@ -795,10 +803,10 @@ internal sealed partial class MethodBodyEmitter
         if (fas.Value is BoundDefaultExpression defaultExpr && ReflectionMetadataEmitter.IsValueTypeSymbol(defaultExpr.Type))
         {
             // Emit: receiver-address; ldflda field; initobj T
-            if (!this.TryLoadVariableAddress(fas.Receiver))
+            if (!this.TryLoadVariableAddress(fieldReceiver))
             {
                 throw new InvalidOperationException(
-                    $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                    $"Cannot take the address of variable '{fieldReceiver.Name}' for field assignment.");
             }
 
             this.il.OpCode(ILOpCode.Ldflda);
@@ -807,10 +815,10 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(defaultExpr.Type));
 
             // Leave the assigned value on the stack as the expression result.
-            if (!this.TryLoadVariableAddress(fas.Receiver))
+            if (!this.TryLoadVariableAddress(fieldReceiver))
             {
                 throw new InvalidOperationException(
-                    $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                    $"Cannot take the address of variable '{fieldReceiver.Name}' for field assignment.");
             }
 
             this.il.OpCode(ILOpCode.Ldfld);
@@ -819,10 +827,10 @@ internal sealed partial class MethodBodyEmitter
         }
 
         // Binder guarantees the receiver is a simple variable for Phase 3.B.1.
-        if (!this.TryLoadVariableAddress(fas.Receiver))
+        if (!this.TryLoadVariableAddress(fieldReceiver))
         {
             throw new InvalidOperationException(
-                $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                $"Cannot take the address of variable '{fieldReceiver.Name}' for field assignment.");
         }
 
         this.EmitExpression(fas.Value);
@@ -830,10 +838,10 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(fieldHandle);
 
         // Leave the assigned value on the stack as the expression result.
-        if (!this.TryLoadVariableAddress(fas.Receiver))
+        if (!this.TryLoadVariableAddress(fieldReceiver))
         {
             throw new InvalidOperationException(
-                $"Cannot take the address of variable '{fas.Receiver.Name}' for field assignment.");
+                $"Cannot take the address of variable '{fieldReceiver.Name}' for field assignment.");
         }
 
         this.il.OpCode(ILOpCode.Ldfld);
@@ -1046,10 +1054,11 @@ internal sealed partial class MethodBodyEmitter
         // reference types, call for value types); fields use `ldfld`.
         // When `Receiver` is null the access is static: emit `ldsfld` /
         // `call get_X` with no receiver instead.
-        var isStatic = access.Receiver == null;
-        if (!isStatic)
+        var receiver = access.Receiver;
+        var isStatic = receiver == null;
+        if (receiver != null)
         {
-            this.EmitInstanceReceiver(access.Receiver);
+            this.EmitInstanceReceiver(receiver);
         }
 
         // Issue #454: use IsValueTypeSymbol — same predicate that
@@ -1059,7 +1068,7 @@ internal sealed partial class MethodBodyEmitter
         // EmitInstanceReceiver already loaded `ldloca` for them; emitting
         // `callvirt` against a value-type method with a managed-pointer
         // receiver produces invalid IL.
-        var receiverIsValueType = !isStatic && ReflectionMetadataEmitter.IsValueTypeSymbol(access.Receiver.Type);
+        var receiverIsValueType = receiver != null && ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type);
         switch (access.Member)
         {
             case PropertyInfo property:
@@ -1135,7 +1144,8 @@ internal sealed partial class MethodBodyEmitter
         // can produce the result with `ldloc` instead of re-evaluating the
         // receiver and calling the getter — the previous shape called any
         // side-effecting receiver expression (e.g. `Make().P = v`) twice.
-        var isStatic = assn.Receiver == null;
+        var receiver = assn.Receiver;
+        var isStatic = receiver == null;
         if (!this.receiverSpillSlots.TryGetValue(assn, out var valueSlot))
         {
             throw new InvalidOperationException(
@@ -1156,7 +1166,9 @@ internal sealed partial class MethodBodyEmitter
                 wantSetter: true)
                 ?? throw new InvalidOperationException(
                     $"Property '{constrainedProperty.DeclaringType?.FullName}.{constrainedProperty.Name}' has no public setter.");
-            this.EmitConstrainedTypeParameterReceiver(assn.Receiver);
+            this.EmitConstrainedTypeParameterReceiver(Invariant.Required(
+                assn.Receiver,
+                "a constrained type-parameter property write dispatches on a receiver"));
             this.EmitExpression(assn.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
@@ -1170,16 +1182,16 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if (!isStatic)
+        if (receiver != null)
         {
-            this.EmitInstanceReceiver(assn.Receiver);
+            this.EmitInstanceReceiver(receiver);
         }
 
         this.EmitExpression(assn.Value);
         this.il.OpCode(ILOpCode.Dup);
         this.il.StoreLocal(valueSlot);
 
-        var receiverIsValueType = !isStatic && ReflectionMetadataEmitter.IsValueTypeSymbol(assn.Receiver.Type);
+        var receiverIsValueType = receiver != null && ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type);
         switch (assn.Member)
         {
             case PropertyInfo property:
@@ -1198,7 +1210,7 @@ internal sealed partial class MethodBodyEmitter
                     ? (assn.StaticContainerType != null
                         ? this.outer.memberRefs.GetMethodEntityHandle(setter, assn.StaticContainerType)
                         : (EntityHandle)this.outer.memberRefs.GetMethodReference(setter))
-                    : this.outer.memberRefs.GetMethodEntityHandle(setter, assn.Receiver.Type));
+                    : this.outer.memberRefs.GetMethodEntityHandle(setter, receiver?.Type));
                 break;
             case FieldInfo field:
                 this.il.OpCode(isStatic ? ILOpCode.Stsfld : ILOpCode.Stfld);
@@ -1260,9 +1272,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.OpCode(ILOpCode.Castclass);
                 this.il.Token((EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(System.Collections.IList)));
                 this.EmitExpression(idx.Arguments[0]);
-                var iListGetter = typeof(System.Collections.IList)
-                    .GetProperty("Item")
-                    .GetGetMethod();
+                var iListGetter = BclGetter(typeof(System.Collections.IList), "Item");
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(this.outer.memberRefs.GetMethodReference(iListGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
@@ -1281,9 +1291,7 @@ internal sealed partial class MethodBodyEmitter
                     this.il.Token(this.outer.memberRefs.GetElementTypeToken(idx.Arguments[0].Type));
                 }
 
-                var iDictGetter = typeof(System.Collections.IDictionary)
-                    .GetProperty("Item")
-                    .GetGetMethod();
+                var iDictGetter = BclGetter(typeof(System.Collections.IDictionary), "Item");
                 this.il.OpCode(ILOpCode.Callvirt);
                 this.il.Token(this.outer.memberRefs.GetMethodReference(iDictGetter));
                 this.EmitErasedObjectReturnWidening(TypeSymbol.Object, idx.Type);
@@ -1340,7 +1348,7 @@ internal sealed partial class MethodBodyEmitter
             }
 
             BoundExpression constrainedReceiver = ixa.TargetExpression
-                ?? new BoundVariableExpression(null, ixa.Target);
+                ?? new BoundVariableExpression(null, BoundNodeForm.VariableTarget(ixa));
             var constrainedValueSlot = this.indexAssignmentValueSlots[ixa];
             this.EmitConstrainedTypeParameterReceiver(constrainedReceiver);
             foreach (var arg in ixa.Arguments)
@@ -1372,7 +1380,7 @@ internal sealed partial class MethodBodyEmitter
             var refGetter = ImportedMemberRefFactory.GetTypeBuilderSafePropertyAccessor(ixa.Indexer, wantSetter: false)
                 ?? throw new InvalidOperationException(
                     $"Indexer on '{ixa.Indexer.DeclaringType?.FullName}' has no public setter or getter.");
-            BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);
+            BoundExpression receiver = ixa.TargetExpression ?? new BoundVariableExpression(null, BoundNodeForm.VariableTarget(ixa));
             var tmp = this.indexAssignmentValueSlots[ixa];
 
             // store: <receiver-addr> <index...> get_Item(ref T) <value> dup stloc tmp stobj/stind
@@ -1407,8 +1415,8 @@ internal sealed partial class MethodBodyEmitter
         // Issue #418 (P1-1): spill v to a temp before the call so the result
         // is the assigned value without a re-read via get_Item (which would
         // re-evaluate every index argument).
-        BoundExpression writeReceiver = ixa.TargetExpression ?? new BoundVariableExpression(null, ixa.Target);
-        var targetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+        BoundExpression writeReceiver = ixa.TargetExpression ?? new BoundVariableExpression(null, BoundNodeForm.VariableTarget(ixa));
+        var targetType = ixa.TargetExpression?.Type ?? BoundNodeForm.VariableTarget(ixa).Type;
         var targetIsValueType = ReflectionMetadataEmitter.IsValueTypeSymbol(targetType);
         var slot = this.indexAssignmentValueSlots[ixa];
 
@@ -2058,7 +2066,7 @@ internal sealed partial class MethodBodyEmitter
     /// <summary>ADR-0039: Emits ldind.* or ldobj for loading a value through a managed pointer.</summary>
     private void EmitLoadIndirect(TypeSymbol pointeeType)
     {
-        var clrType = pointeeType?.ClrType;
+        var clrType = pointeeType.ClrType;
         if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
             this.il.OpCode(ILOpCode.Ldind_i4);
@@ -2109,7 +2117,7 @@ internal sealed partial class MethodBodyEmitter
     /// <summary>ADR-0056 §2: Emits stind.* or stobj to store a value through a managed pointer.</summary>
     private void EmitStoreIndirect(TypeSymbol pointeeType)
     {
-        var clrType = pointeeType?.ClrType;
+        var clrType = pointeeType.ClrType;
         if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
             this.il.OpCode(ILOpCode.Stind_i4);
@@ -2150,7 +2158,7 @@ internal sealed partial class MethodBodyEmitter
     // accessor must be referenced via a MemberRef parented at the CONSTRUCTED
     // base TypeSpec. Returns that constructed base, or null when the property is
     // not inherited from a generic base.
-    private static StructSymbol ResolveInheritedGenericBaseForProperty(StructSymbol receiver, PropertySymbol property)
+    private static StructSymbol? ResolveInheritedGenericBaseForProperty(StructSymbol? receiver, PropertySymbol property)
     {
         if (receiver == null || property == null)
         {
@@ -2180,7 +2188,7 @@ internal sealed partial class MethodBodyEmitter
     }
 
     // Issue #1254: the field analogue of ResolveInheritedGenericBaseForProperty.
-    private static StructSymbol ResolveInheritedGenericBaseForField(StructSymbol receiver, FieldSymbol field)
+    private static StructSymbol? ResolveInheritedGenericBaseForField(StructSymbol? receiver, FieldSymbol field)
     {
         if (receiver == null || field == null)
         {
@@ -2221,7 +2229,7 @@ internal sealed partial class MethodBodyEmitter
     // generic type itself. A non-generic declaring type is returned unchanged;
     // ResolveFieldToken will then select its bare FieldDef instead of guessing
     // from a generic derived receiver.
-    private static StructSymbol ResolveFieldReferenceContainer(StructSymbol declaringType, StructSymbol receiver, FieldSymbol field)
+    private static StructSymbol? ResolveFieldReferenceContainer(StructSymbol? declaringType, StructSymbol? receiver, FieldSymbol field)
     {
         if (declaringType == null)
         {
@@ -2246,7 +2254,7 @@ internal sealed partial class MethodBodyEmitter
     }
 
     // Issue #1467: the property analogue of ResolveFieldReferenceContainer.
-    private static StructSymbol ResolvePropertyReferenceContainer(StructSymbol declaringType, StructSymbol receiver, PropertySymbol property)
+    private static StructSymbol? ResolvePropertyReferenceContainer(StructSymbol? declaringType, StructSymbol? receiver, PropertySymbol property)
     {
         if (declaringType == null)
         {

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1028 // trailing whitespace
 #pragma warning disable SA1116 // parameters begin on line after declaration
 #pragma warning disable SA1117 // parameters on same line
@@ -60,7 +62,7 @@ internal sealed partial class MethodBodyEmitter
         // branches/end label. EmitMethodBody must append a real ret at that
         // label so no branch targets the exact end of the method body.
         var endLabel = this.il.DefineLabel();
-        BoundPatternSwitchArm defaultArm = null;
+        BoundPatternSwitchArm? defaultArm = null;
 
         foreach (var arm in node.Arms)
         {
@@ -108,7 +110,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.StoreLocal(discrSlot);
 
         var endLabel = this.il.DefineLabel();
-        BoundSwitchExpressionArm defaultArm = null;
+        BoundSwitchExpressionArm? defaultArm = null;
 
         foreach (var arm in node.Arms)
         {
@@ -144,7 +146,7 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             const string Message = "Unmatched switch expression value.";
-            var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
+            var constructor = BclCtor(typeof(InvalidOperationException), typeof(string));
             this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(Message));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(constructor));
@@ -229,7 +231,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        var isObject = valueType?.ClrType.IsSameAs(typeof(object)) == true;
+        var isObject = valueType.ClrType?.IsSameAs(typeof(object)) == true;
         var isValueNullable = valueType is NullableTypeSymbol nullable
             && ReflectionMetadataEmitter.IsValueTypeNullable(nullable);
         if (isObject || isValueNullable)
@@ -372,7 +374,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.OpCode(ILOpCode.Unbox_any);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType));
         }
-        else if (tp.TargetType?.ClrType.IsSameAs(typeof(object)) != true)
+        else if (tp.TargetType.ClrType?.IsSameAs(typeof(object)) != true)
         {
             this.il.OpCode(ILOpCode.Castclass);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tp.TargetType));
@@ -403,7 +405,13 @@ internal sealed partial class MethodBodyEmitter
                 this.il.Token(this.outer.memberRefs.GetElementTypeToken(nullableValueType));
                 this.il.Branch(ILOpCode.Brfalse, failLabel);
 
-                receiverSlot = this.locals[pp.UnwrappedVariable];
+                // The pattern allocates UnwrappedVariable under exactly the
+                // condition tested above, but against its own Type rather than
+                // the discriminant's; the two agree by construction.
+                var unwrapped = Invariant.Required(
+                    pp.UnwrappedVariable,
+                    "a property pattern over a nullable value type allocates an unwrapped-value local");
+                receiverSlot = this.locals[unwrapped];
                 this.il.LoadLocalAddress(inputSlot);
                 if (NullableLifting.RequiresSymbolicNullableGetValue(nullableValueType))
                 {
@@ -475,7 +483,7 @@ internal sealed partial class MethodBodyEmitter
             var tupleClr = tupleType.ClrType;
             foreach (var field in pp.Fields)
             {
-                var fieldName = field.Field.Name;
+                var fieldName = field.Name;
                 Action loadTupleChild = () =>
                 {
                     if (tupleClr == null)
@@ -608,23 +616,30 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Neither the CLR-member nor the property form matched, so this is the
+        // field form: every constructor sets exactly one of ClrMember, Property
+        // and Field, from a non-nullable parameter.
+        var patternField = Invariant.Required(
+            field.Field,
+            "a property-pattern member that is neither CLR-backed nor property-backed is field-backed");
+
         EntityHandle fieldHandle;
         var fieldContainer = ResolveFieldReferenceContainer(
             field.DeclaringType as StructSymbol,
             receiverType as StructSymbol,
-            field.Field);
+            patternField);
         if (fieldContainer != null)
         {
-            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, field.Field);
+            fieldHandle = this.outer.userTokens.ResolveFieldToken(fieldContainer, patternField);
         }
-        else if (this.outer.cache.StructFieldDefs.TryGetValue(field.Field, out var fieldDefinition))
+        else if (this.outer.cache.StructFieldDefs.TryGetValue(patternField, out var fieldDefinition))
         {
             fieldHandle = fieldDefinition;
         }
         else
         {
             throw new InvalidOperationException(
-                $"Property pattern field '{field.Field.Name}' has no emitted field token.");
+                $"Property pattern field '{patternField.Name}' has no emitted field token.");
         }
 
         loadReceiver();

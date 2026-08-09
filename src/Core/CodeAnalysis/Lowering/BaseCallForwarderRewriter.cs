@@ -6,6 +6,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -196,7 +197,11 @@ public static class BaseCallForwarderRewriter
 
         private FunctionSymbol GetOrCreateForwarder(BoundBaseClassCallExpression node)
         {
-            var key = (this.classDef, node.Method);
+            var method = Invariant.Required(
+                node.Method,
+                "RewriteBaseClassCallExpression returns early for the property-accessor form, so only the method form reaches here");
+
+            var key = (this.classDef, method);
             if (this.forwarders.TryGetValue(key, out var existing))
             {
                 return existing;
@@ -207,8 +212,8 @@ public static class BaseCallForwarderRewriter
 
             // Fresh parameters so the forwarder body can read them without
             // aliasing the base method's parameter symbols.
-            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Method.Parameters.Length);
-            foreach (var p in node.Method.Parameters)
+            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.Parameters.Length);
+            foreach (var p in method.Parameters)
             {
                 paramBuilder.Add(new ParameterSymbol(p.Name, p.Type));
             }
@@ -235,7 +240,7 @@ public static class BaseCallForwarderRewriter
                 null,
                 thisExpr,
                 node.BaseClass,
-                node.Method,
+                method,
                 argBuilder.ToImmutable(),
                 node.Type);
 

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1202 // 'public' members should come before 'private' members (organized by entry point, then helpers)
 #pragma warning disable SA1611 // Element parameters should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)
 #pragma warning disable SA1615 // Element return value should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)
@@ -68,7 +70,7 @@ internal sealed class MethodBodyPlanner
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
     private readonly Action<SignatureTypeEncoder, TypeSymbol> encodeTypeSymbol;
 
-    private StateMachineEmitter stateMachines;
+    private StateMachineEmitter? stateMachines;
 
     public MethodBodyPlanner(
         EmitContext emitCtx,
@@ -87,6 +89,15 @@ internal sealed class MethodBodyPlanner
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
         this.encodeTypeSymbol = encodeTypeSymbol ?? throw new ArgumentNullException(nameof(encodeTypeSymbol));
     }
+
+    /// <summary>
+    /// Gets the state-machine emitter. Null only between construction and the
+    /// wiring step in <c>ReflectionMetadataEmitter</c>, which runs before any
+    /// body is planned.
+    /// </summary>
+    private StateMachineEmitter StateMachines => Invariant.Required(
+        this.stateMachines,
+        "ReflectionMetadataEmitter wires the state-machine emitter into the planner before any body is planned");
 
     /// <summary>
     /// Late-binds the <see cref="StateMachineEmitter"/>. <c>TryGetUserKickoffReceiverHandle</c>
@@ -235,7 +246,7 @@ internal sealed class MethodBodyPlanner
     /// Resolves the package that a state-machine type's kickoff belongs to,
     /// for determining which <c>&lt;Program&gt;</c> TypeDef it nests inside.
     /// </summary>
-    public PackageSymbol GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol entryPointPackage)
+    public PackageSymbol? GetSmPackage(StructSymbol smSym, ImmutableArray<PackageSymbol> packages, PackageSymbol entryPointPackage)
     {
         // Try the SM's packageName to find the matching package.
         if (smSym.PackageName != null)
@@ -267,8 +278,8 @@ internal sealed class MethodBodyPlanner
     public bool TryGetUserKickoffReceiverHandle(StructSymbol smSym, out TypeDefinitionHandle enclosingHandle)
     {
         enclosingHandle = default;
-        FunctionSymbol kickoff = null;
-        foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
+        FunctionSymbol? kickoff = null;
+        foreach (var plan in this.StateMachines.AsyncStateMachinePlans)
         {
             if (ReferenceEquals(plan.StateMachine.MaterializeAsStructSymbol(), smSym))
             {
@@ -280,7 +291,7 @@ internal sealed class MethodBodyPlanner
         // Issue #641: also check sync iterator and async iterator SM classes.
         if (kickoff == null)
         {
-            foreach (var kvp in this.stateMachines.IteratorStateMachineInfos)
+            foreach (var kvp in this.StateMachines.IteratorStateMachineInfos)
             {
                 if (ReferenceEquals(kvp.Key, smSym))
                 {
@@ -292,7 +303,7 @@ internal sealed class MethodBodyPlanner
 
         if (kickoff == null)
         {
-            foreach (var kvp in this.stateMachines.AsyncIteratorInfos)
+            foreach (var kvp in this.StateMachines.AsyncIteratorInfos)
             {
                 if (ReferenceEquals(kvp.Key, smSym))
                 {
@@ -341,7 +352,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots,
         Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots,
         InstructionEncoder il,
-        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null)
+        Dictionary<BoundStackAllocExpression, int>? stackAllocResultSlots = null)
     {
         this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
         this.CollectBlockExpressionLocals(body, locals, localTypes);
@@ -764,7 +775,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
+        BoundScopeStatement? currentScope)
     {
         // Issue #418 (P1-3): the legacy bespoke switch missed many expression
         // kinds (tuple/map literals, ?., CLR calls/indexers/properties,
@@ -868,7 +879,7 @@ internal sealed class MethodBodyPlanner
 
             foreach (var cf in constructed.Fields)
             {
-                FieldSymbol df = null;
+                FieldSymbol? df = null;
                 foreach (var candidate in def.Fields)
                 {
                     if (candidate.Name == cf.Name)
@@ -912,19 +923,22 @@ internal sealed class MethodBodyPlanner
         // through the symbolic TypeSpec encoder (which emits a real
         // reference to the user TypeDef) so the interface rows carry the
         // strongly-typed `IEnumerable<Shape>` / `IEnumerator<Shape>`.
-        var elementNeedsSymbolic = elementContainsTp
-            || elementType?.ClrType == null
-            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
+        // Hold the reified CLR element type rather than a bare
+        // `needs symbolic` flag: the reified branch below needs the value, and
+        // a separate bool cannot carry the fact that it is present.
+        var elementClr = elementContainsTp
+            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
+            ? null
+            : elementType.ClrType;
         EntityHandle enumerableHandle;
         EntityHandle enumeratorHandle;
-        if (elementNeedsSymbolic)
+        if (elementClr is null)
         {
             enumerableHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerable<>), elementType);
             enumeratorHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IEnumerator<>), elementType);
         }
         else
         {
-            var elementClr = elementType.ClrType ?? typeof(object);
             enumerableHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(elementClr));
             enumeratorHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(elementClr));
         }
@@ -972,18 +986,20 @@ internal sealed class MethodBodyPlanner
         // through the symbolic TypeSpec encoder so the interface rows
         // carry the strongly-typed `IAsyncEnumerable<Shape>` /
         // `IAsyncEnumerator<Shape>`.
-        var elementNeedsSymbolic = elementType?.ClrType == null
-            || elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
+        // See AddIteratorInterfaceImplementations: hold the reified CLR element
+        // type rather than a `needs symbolic` flag.
+        var elementClr = elementType is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true }
+            ? null
+            : elementType.ClrType;
         EntityHandle asyncEnumeratorHandle;
         EntityHandle asyncEnumerableHandle;
-        if (elementNeedsSymbolic)
+        if (elementClr is null)
         {
             asyncEnumeratorHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IAsyncEnumerator<>), elementType);
             asyncEnumerableHandle = this.BuildGenericInterfaceTypeSpec(typeof(System.Collections.Generic.IAsyncEnumerable<>), elementType);
         }
         else
         {
-            var elementClr = elementType.ClrType;
             asyncEnumeratorHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementClr));
             asyncEnumerableHandle = this.getTypeHandleForMember(typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(elementClr));
         }

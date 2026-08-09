@@ -2,15 +2,18 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1201 // method should not follow a class (this file mixes private helper classes inline with methods)
 
-using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -241,7 +244,7 @@ internal sealed class SlotPlanner
         Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
         Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement currentScope)
+        BoundScopeStatement? currentScope)
     {
         var allocator = new PatternSwitchSlotAllocator(
             this.cache,
@@ -271,7 +274,7 @@ internal sealed class SlotPlanner
         private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
         private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
         private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
-        private BoundScopeStatement currentScope;
+        private BoundScopeStatement? currentScope;
 
         public PatternSwitchSlotAllocator(
             MetadataTokenCache cache,
@@ -284,7 +287,7 @@ internal sealed class SlotPlanner
             Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
             Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
             Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-            BoundScopeStatement currentScope)
+            BoundScopeStatement? currentScope)
         {
             this.cache = cache;
             this.locals = locals;
@@ -580,8 +583,16 @@ internal sealed class SlotPlanner
 
                 if (arm.CaseKind == SelectCaseKind.Send)
                 {
-                    valueSlots[i] = localTypes.Count;
-                    localTypes.Add(arm.Value.Type);
+                    // A send arm whose channel expression failed to bind is
+                    // recovered with a null value (StatementBinder.Blocks);
+                    // there is no value to hold, and emit is unreachable for a
+                    // compilation that reported that diagnostic.
+                    if (arm.Value != null)
+                    {
+                        valueSlots[i] = localTypes.Count;
+                        localTypes.Add(arm.Value.Type);
+                    }
+
                     continue;
                 }
 
@@ -929,7 +940,11 @@ internal sealed class SlotPlanner
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
-            this.VisitExpression(node.Initializer);
+            if (node.Initializer != null)
+            {
+                this.VisitExpression(node.Initializer);
+            }
+
             this.declared.Add(node.Variable);
         }
 
@@ -1024,7 +1039,7 @@ internal sealed class SlotPlanner
             base.VisitStatement(node);
         }
 
-        private void AddIfStackAlloc(BoundExpression expression)
+        private void AddIfStackAlloc(BoundExpression? expression)
         {
             if (expression is BoundStackAllocExpression sa)
             {
@@ -1308,7 +1323,7 @@ internal sealed class SlotPlanner
             base.VisitClrPropertyAccessExpression(node);
         }
 
-        private void CheckReceiver(BoundExpression receiver)
+        private void CheckReceiver(BoundExpression? receiver)
         {
             if (receiver != null && ReferenceEquals(receiver, this.target))
             {
@@ -1612,7 +1627,7 @@ internal sealed class SlotPlanner
     // precisely on which nodes need a pre-allocated slot.
     internal static bool IsReferenceTypeParameterCoalesceProbe(
         BoundBinaryExpression node,
-        out TypeParameterSymbol typeParameter)
+        [NotNullWhen(true)] out TypeParameterSymbol? typeParameter)
     {
         if (node.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
             && node.Left.Type is TypeParameterSymbol tp

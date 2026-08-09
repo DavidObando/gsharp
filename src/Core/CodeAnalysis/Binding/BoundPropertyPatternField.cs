@@ -6,6 +6,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -101,6 +102,9 @@ public sealed class BoundPropertyPatternField : BoundNode
     public TypeSymbol Type { get; }
 
     /// <summary>Gets a value indicating whether matching reads through a property getter.</summary>
+    // Both property-backed constructors -- and only those -- allocate
+    // ValueVariable, so this discriminates it.
+    [MemberNotNullWhen(true, nameof(ValueVariable))]
     public bool IsProperty => Property != null || ClrMember is PropertyInfo;
 
     /// <summary>Gets the nested field pattern.</summary>

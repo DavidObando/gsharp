@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1028 // trailing whitespace
 #pragma warning disable SA1116 // parameters begin on line after declaration
 #pragma warning disable SA1117 // parameters on same line
@@ -11,20 +13,21 @@
 #pragma warning disable SA1505 // opening brace should not be followed by a blank line — partial classes ship with a leading blank for readability
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members
 
-using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Diagnostics;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -62,8 +65,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var userVtSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for user value-type Nullable<T> '!!' operand — "
-                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for user value-type Nullable<T> '!!' operand — check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 this.EmitExpression(u.Operand);
@@ -88,8 +90,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var unwrapSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — "
-                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for value-type Nullable<T> '!!' operand — check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 this.EmitExpression(u.Operand);
@@ -119,8 +120,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.receiverSpillSlots.TryGetValue(u.Operand, out var tpUnwrapSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for class-constrained `T?` / open `T` '!!' operand — "
-                        + "check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for class-constrained `T?` / open `T` '!!' operand — check NullableValueTypeUnwrapCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 var tpToken = this.outer.memberRefs.GetElementTypeToken(tpOperand);
@@ -229,7 +229,7 @@ internal sealed partial class MethodBodyEmitter
             case BoundUnaryOperatorKind.Negation:
                 if (u.Op.OperandType == TypeSymbol.Decimal)
                 {
-                    var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
+                    var neg = BclMethod(typeof(decimal), "op_UnaryNegation", typeof(decimal));
                     this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
                 }
                 else
@@ -317,7 +317,7 @@ internal sealed partial class MethodBodyEmitter
                 case BoundUnaryOperatorKind.Negation:
                     if (underlying == TypeSymbol.Decimal)
                     {
-                        var neg = typeof(decimal).GetMethod("op_UnaryNegation", new[] { typeof(decimal) });
+                        var neg = BclMethod(typeof(decimal), "op_UnaryNegation", typeof(decimal));
                         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(neg));
                     }
                     else
@@ -437,8 +437,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var slot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for value-type Nullable<T> '??' LHS — "
-                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for value-type Nullable<T> '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 this.EmitExpression(b.Left);
@@ -517,8 +516,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var tpSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for class-constrained `T?` '??' LHS — "
-                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for class-constrained `T?` '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 var tpToken = this.outer.memberRefs.GetElementTypeToken(tpUnderlying);
@@ -557,8 +555,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var bareSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for bare reference-typed type-parameter '??' LHS — "
-                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for bare reference-typed type-parameter '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 var bareToken = this.outer.memberRefs.GetElementTypeToken(bareTp);
@@ -610,8 +607,7 @@ internal sealed partial class MethodBodyEmitter
                 if (!this.nullableCoalesceSpillSlots.TryGetValue(b, out var userVtSlot))
                 {
                     throw new InvalidOperationException(
-                        "No scratch slot pre-allocated for user value-type Nullable<T> '??' LHS — "
-                        + "check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
+                        "No scratch slot pre-allocated for user value-type Nullable<T> '??' LHS — check NullableValueTypeCoalesceCollector and the prepass in CollectLocalsAndLabels.");
                 }
 
                 var userVtBoxToken = this.outer.memberRefs.GetElementTypeToken(userVtNullable);
@@ -1151,7 +1147,7 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private static bool TryMatchTypeParameterNilCompare(
         BoundBinaryExpression node,
-        out BoundExpression operand)
+        [NotNullWhen(true)] out BoundExpression? operand)
     {
         if (node.Right.Type == TypeSymbol.Null
             && IsOpenTypeParameterOrNullable(node.Left.Type))
@@ -1200,7 +1196,7 @@ internal sealed partial class MethodBodyEmitter
     /// narrowed bare-`T` operand shape produced after a preceding
     /// nil-check guard.
     /// </summary>
-    private static bool TryGetOpenTypeParameter(TypeSymbol t, out TypeParameterSymbol typeParameter)
+    private static bool TryGetOpenTypeParameter(TypeSymbol t, [NotNullWhen(true)] out TypeParameterSymbol? typeParameter)
     {
         if (t is TypeParameterSymbol bare && !bare.HasValueTypeConstraint)
         {
@@ -1340,7 +1336,7 @@ internal sealed partial class MethodBodyEmitter
     // followed Go, substituting zero when the count was >= the operand width.)
     private bool TryEmitDecimalBinary(BoundBinaryOperatorKind kind)
     {
-        string opName = kind switch
+        string? opName = kind switch
         {
             BoundBinaryOperatorKind.Sum => "op_Addition",
             BoundBinaryOperatorKind.Difference => "op_Subtraction",
@@ -1399,9 +1395,6 @@ internal sealed partial class MethodBodyEmitter
         var leftUnderlyingClr = leftUnderlying.ClrType
             ?? throw new InvalidOperationException(
                 $"Lifted binary operator '{b.Op.Kind}' on Nullable<{leftUnderlying.Name}>: underlying has no CLR type.");
-        var rightUnderlying = rightNullable?.UnderlyingType;
-        var rightUnderlyingClr = rightUnderlying?.ClrType;
-
         var lhsSlot = slots.LhsSlot;
         var rhsSlot = slots.RhsSlot;
 
@@ -1429,6 +1422,15 @@ internal sealed partial class MethodBodyEmitter
 
             return;
         }
+
+        // Resolved only past the `x? == nil` arm above, which is the one form
+        // that has no nullable right operand at all.
+        var rightUnderlying = Invariant.Required(
+            rightNullable,
+            $"lifted binary operator '{b.Op.Kind}': every form but the nil-compare handled above has a nullable right operand").UnderlyingType;
+        var rightUnderlyingClr = rightUnderlying.ClrType
+            ?? throw new InvalidOperationException(
+                $"Lifted binary operator '{b.Op.Kind}' on Nullable<{rightUnderlying.Name}>: underlying has no CLR type.");
 
         // Spill both operands.
         this.EmitExpression(b.Left);
@@ -1796,11 +1798,15 @@ internal sealed partial class MethodBodyEmitter
         // binder only produces the Function-carrying shape when lifting
         // applies, so it always has a liftedBinarySlots entry and is
         // handled above.)
+        var operatorMethod = Invariant.Required(
+            op.Method,
+            "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above");
+
         this.EmitExpression(op.Left);
         this.EmitExpression(op.Right);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
+        this.il.Token(this.outer.memberRefs.GetMethodReference(operatorMethod));
+        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(operatorMethod.ReturnType), op.Type);
     }
 
     // Issue #2388: mirrors EmitLiftedNullableBinary's HasValue/get_Value
@@ -2082,7 +2088,9 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
+        this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
+            op.Method,
+            "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above")));
     }
 
     private void EmitClrUnaryOperator(BoundClrUnaryOperatorExpression op)

@@ -7,6 +7,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -91,6 +92,7 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     /// </summary>
     public TypeSymbol? ConstrainedInterfaceType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => returnTypeOverride ?? Method.Type;

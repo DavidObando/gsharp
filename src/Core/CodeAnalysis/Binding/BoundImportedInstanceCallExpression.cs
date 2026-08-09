@@ -7,6 +7,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -133,6 +134,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     public TypeSymbol? ConstrainedInterfaceType { get; }
 
     /// <summary>Gets a value indicating whether this call dispatches through a type-parameter interface constraint (issue #943).</summary>
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 
     /// <summary>

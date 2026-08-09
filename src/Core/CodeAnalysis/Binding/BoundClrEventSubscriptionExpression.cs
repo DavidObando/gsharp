@@ -6,6 +6,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -55,6 +56,7 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 
     public TypeSymbol? EventContainingType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => TypeSymbol.Void;

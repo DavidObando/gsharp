@@ -6,6 +6,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -50,5 +51,10 @@ public sealed record BoundSelectCase
     public BoundStatement Body { get; }
 
     /// <summary>Gets a value indicating whether this is the <c>default</c> arm.</summary>
+    // Every non-default arm references a channel -- the binder binds one before
+    // it can classify the arm at all, including on the error-recovery path.
+    // Value has no such guarantee: a send arm whose channel failed to bind is
+    // recovered with a null value.
+    [MemberNotNullWhen(false, nameof(Channel))]
     public bool IsDefault => CaseKind == SelectCaseKind.Default;
 }

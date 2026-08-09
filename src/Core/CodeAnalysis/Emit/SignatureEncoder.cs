@@ -911,8 +911,15 @@ internal sealed class SignatureEncoder
     /// time (GS9998). `MapToReferenceClrType` now performs the same recursive
     /// remapping itself, so both callers share one implementation.
     /// </summary>
-    internal Type? ResolveTargetDelegateClrType(Type hostDelegate)
-        => this.MapToReferenceClrType(hostDelegate);
+    /// <remarks>
+    /// Falls back to <paramref name="hostDelegate"/> when the reference set has
+    /// no matching type, exactly as every other <see cref="MapToReferenceClrType"/>
+    /// caller does: an unmappable delegate is still a delegate the emitter must
+    /// reference, and both callers here feed the result straight into a
+    /// MemberRef/TypeRef that a null would only turn into a null dereference.
+    /// </remarks>
+    internal Type ResolveTargetDelegateClrType(Type hostDelegate)
+        => this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
 
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses

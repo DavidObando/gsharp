@@ -4,8 +4,8 @@
 
 #nullable enable
 
-using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 

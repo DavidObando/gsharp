@@ -38,10 +38,10 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax node.</param>
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static group.</param>
-    /// <param name="declaringType">The CLR type declaring the candidates.</param>
+    /// <param name="declaringType">The CLR type declaring the candidates, or <see langword="null"/> when the candidates are imported free functions with no single declaring type.</param>
     /// <param name="methodName">The method-group name.</param>
     /// <param name="candidates">All name-matching overloads.</param>
-    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression receiver, Type declaringType, string methodName, ImmutableArray<MethodInfo> candidates)
+    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression? receiver, Type? declaringType, string methodName, ImmutableArray<MethodInfo> candidates)
         : base(syntax)
     {
         Receiver = receiver;
@@ -59,7 +59,7 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static group.</param>
     /// <param name="resolvedMethod">The selected overload.</param>
     /// <param name="delegateType">The target delegate type symbol.</param>
-    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression receiver, MethodInfo resolvedMethod, TypeSymbol delegateType)
+    public BoundClrMethodGroupExpression(SyntaxNode? syntax, BoundExpression? receiver, MethodInfo resolvedMethod, TypeSymbol delegateType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -70,7 +70,11 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
         DelegateType = delegateType;
     }
 
-    public BoundExpression Receiver { get; }
+    /// <summary>
+    /// Gets the instance receiver captured as the delegate's target, or
+    /// <see langword="null"/> for a group over a static method.
+    /// </summary>
+    public BoundExpression? Receiver { get; }
 
     public Type? DeclaringType { get; }
 

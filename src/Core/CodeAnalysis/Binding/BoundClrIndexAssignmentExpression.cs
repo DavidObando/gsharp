@@ -7,6 +7,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -84,6 +85,7 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 
     public TypeSymbol? ConstrainedInterfaceType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }

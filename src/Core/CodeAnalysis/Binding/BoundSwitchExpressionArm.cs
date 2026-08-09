@@ -5,6 +5,7 @@
 #nullable enable
 
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -41,5 +42,6 @@ public sealed class BoundSwitchExpressionArm : BoundNode
     public BoundExpression Result { get; }
 
     /// <summary>Gets a value indicating whether this is the <c>default</c> arm.</summary>
+    [MemberNotNullWhen(false, nameof(Pattern))]
     public bool IsDefault => Pattern == null;
 }

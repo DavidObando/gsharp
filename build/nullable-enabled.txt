@@ -96,3 +96,19 @@ src/Core/CodeAnalysis/Emit/ParameterMetadataEmitter.cs
 src/Core/CodeAnalysis/Emit/PortablePdbEmitter.cs
 src/Core/CodeAnalysis/Emit/TypeDefEmitter.cs
 src/Core/CodeAnalysis/Emit/UserTokenResolver.cs
+
+# Slice 9c -- the method-body emitters. One partial class across nine files
+# plus the two planners that feed it; they share the emit session's state, so
+# they converge together or not at all.
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Async.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Calls.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Closures.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Conversions.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Expressions.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.MemberAccess.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Operators.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Patterns.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.Statements.cs
+src/Core/CodeAnalysis/Emit/MethodBodyEmitter.cs
+src/Core/CodeAnalysis/Emit/MethodBodyPlanner.cs
+src/Core/CodeAnalysis/Emit/SlotPlanner.cs

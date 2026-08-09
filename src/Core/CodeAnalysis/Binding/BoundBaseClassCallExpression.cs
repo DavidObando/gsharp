@@ -4,9 +4,11 @@
 
 #nullable enable
 
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -37,7 +39,7 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
         SyntaxNode? syntax,
         BoundExpression receiver,
         StructSymbol baseClass,
-        FunctionSymbol method,
+        FunctionSymbol? method,
         ImmutableArray<BoundExpression> arguments,
         TypeSymbol? returnTypeOverride = null,
         PropertySymbol? property = null,
@@ -59,7 +61,8 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
     /// <inheritdoc/>
     // The constructor requires returnTypeOverride whenever method is null (a
     // base auto-property accessor, issue #1347), so at least one is present.
-    public override TypeSymbol Type => returnTypeOverride ?? Method!.Type;
+    public override TypeSymbol Type => returnTypeOverride
+        ?? Invariant.Required(Method, "the property-accessor form (Method null) is only constructed with a returnTypeOverride, so a null override means this is the method form").Type;
 
     /// <summary>Gets the implicit <c>this</c> receiver — a <see cref="BoundVariableExpression"/> reading the enclosing method's first parameter.</summary>
     public BoundExpression Receiver { get; }
@@ -68,7 +71,17 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
     public StructSymbol BaseClass { get; }
 
     /// <summary>Gets the base-class method whose implementation is invoked non-virtually, or <see langword="null"/> for a base auto-property accessor (issue #1347).</summary>
-    public FunctionSymbol Method { get; }
+    public FunctionSymbol? Method { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this is the auto-property-accessor form
+    /// (issue #1347) rather than the ordinary method form. The two forms are
+    /// complementary: exactly one of <see cref="Property"/> and
+    /// <see cref="Method"/> is present, so this discriminates both.
+    /// </summary>
+    [MemberNotNullWhen(true, nameof(Property))]
+    [MemberNotNullWhen(false, nameof(Method))]
+    public bool IsPropertyAccessor => Property != null;
 
     /// <summary>
     /// Gets the base auto-property whose synthesized accessor is invoked
