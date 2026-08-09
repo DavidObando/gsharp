@@ -182,3 +182,4 @@ src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Arguments.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Jumps.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Narrowing.cs
 src/Core/CodeAnalysis/Binding/StatementBinder.Blocks.cs
+src/Core/CodeAnalysis/Binding/DeclarationBinder.Attributes.cs

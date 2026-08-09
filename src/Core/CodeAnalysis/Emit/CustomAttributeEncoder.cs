@@ -818,7 +818,7 @@ internal sealed class CustomAttributeEncoder
         return true;
     }
 
-    private static bool ArgAssignable(object supplied, Type paramType)
+    private static bool ArgAssignable(object? supplied, Type paramType)
     {
         // Third-party attributes are commonly resolved through a
         // MetadataLoadContext. Normalize framework types before using CLR
@@ -879,7 +879,7 @@ internal sealed class CustomAttributeEncoder
     /// <see cref="object"/>[] when the call site supplied the elements inline
     /// (params expansion). Returns one value per constructor parameter.
     /// </summary>
-    private static object[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
+    private static object?[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
     {
         var lastIsArray = ctorParams.Length > 0
             && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
@@ -898,7 +898,7 @@ internal sealed class CustomAttributeEncoder
 
         if (direct)
         {
-            var values = new object[ctorParams.Length];
+            var values = new object?[ctorParams.Length];
             for (int i = 0; i < ctorParams.Length; i++)
             {
                 values[i] = positional[i].Value;
@@ -907,14 +907,14 @@ internal sealed class CustomAttributeEncoder
             return values;
         }
 
-        var result = new object[ctorParams.Length];
+        var result = new object?[ctorParams.Length];
         for (int i = 0; i < ctorParams.Length - 1; i++)
         {
             result[i] = positional[i].Value;
         }
 
         var tail = positional.Length - (ctorParams.Length - 1);
-        var array = new object[tail];
+        var array = new object?[tail];
         for (int i = 0; i < tail; i++)
         {
             array[i] = positional[ctorParams.Length - 1 + i].Value;
@@ -1262,9 +1262,10 @@ internal sealed class CustomAttributeEncoder
 
     private void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
     {
-        var prop = attributeType.GetProperty(arg.Name, BindingFlags.Public | BindingFlags.Instance);
+        var name = Invariant.Required(arg.Name, "a named attribute argument always has a member name");
+        var prop = attributeType.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
         var field = prop == null
-            ? attributeType.GetField(arg.Name, BindingFlags.Public | BindingFlags.Instance)
+            ? attributeType.GetField(name, BindingFlags.Public | BindingFlags.Instance)
             : null;
         Type memberType;
         byte kindTag;

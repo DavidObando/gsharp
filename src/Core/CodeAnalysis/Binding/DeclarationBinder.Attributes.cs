@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable
+
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -11,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -197,7 +200,7 @@ internal sealed partial class DeclarationBinder
         return builder.ToImmutable();
     }
 
-    private BoundAttribute BindAttribute(
+    private BoundAttribute? BindAttribute(
         AnnotationSyntax annotation,
         AttributeTargetKind defaultTarget,
         ImmutableHashSet<AttributeTargetKind> allowedTargets,
@@ -350,11 +353,11 @@ internal sealed partial class DeclarationBinder
     // (`List[int32]`) already goes through, by building a synthetic
     // `TypeClauseSyntax` out of the annotation's own tokens — no separate
     // generic-attribute-construction logic to maintain.
-    private TypeSymbol ResolveGenericAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
+    private TypeSymbol? ResolveGenericAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
     {
         nameIsExact = true;
         var nameLocation = GetAnnotationNameLocation(annotation);
-        var arity = annotation.TypeArguments.Count;
+        var arity = Invariant.Required(annotation.TypeArguments, "a generic attribute has a type-argument list").Count;
 
         var simpleName = name;
         var dotIndex = string.IsNullOrEmpty(name) ? -1 : name.LastIndexOf('.');
@@ -371,7 +374,7 @@ internal sealed partial class DeclarationBinder
             && !string.IsNullOrEmpty(simpleName)
             && scope.TryLookupTypeAlias(simpleName, arity, out _);
 
-        string suffixedName = null;
+        string? suffixedName = null;
         var suffixedExists = false;
         if (dotIndex < 0 && !string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
         {
@@ -393,7 +396,7 @@ internal sealed partial class DeclarationBinder
         else if (suffixedExists)
         {
             nameIsExact = false;
-            resolvedLastSegment = suffixedName;
+            resolvedLastSegment = Invariant.Required(suffixedName, "a detected suffixed attribute name is assigned before lookup");
         }
         else if (dotIndex < 0)
         {
@@ -446,7 +449,7 @@ internal sealed partial class DeclarationBinder
             questionToken: null);
     }
 
-    private TypeSymbol ResolveAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
+    private TypeSymbol? ResolveAttributeType(string name, AnnotationSyntax annotation, out bool nameIsExact)
     {
         var nameLocation = GetAnnotationNameLocation(annotation);
         nameIsExact = true;
@@ -469,7 +472,7 @@ internal sealed partial class DeclarationBinder
             simpleName = name.Substring(dotIndex + 1);
         }
 
-        TypeSymbol suffixed = null;
+        TypeSymbol? suffixed = null;
         if (!string.IsNullOrEmpty(simpleName) && !simpleName.EndsWith("Attribute", StringComparison.Ordinal))
         {
             var suffixedName = dotIndex >= 0
@@ -525,7 +528,7 @@ internal sealed partial class DeclarationBinder
     // `System.Runtime.InteropServices.DllImport`) is resolved by full name
     // against the reference set — the same resolution used for qualified type
     // references elsewhere (e.g. `System.IntPtr`).
-    private TypeSymbol ResolveAttributeName(string name)
+    private TypeSymbol? ResolveAttributeName(string name)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -546,7 +549,7 @@ internal sealed partial class DeclarationBinder
         return null;
     }
 
-    private static bool IsAttributeType(TypeSymbol typeSymbol)
+    private static bool IsAttributeType(TypeSymbol? typeSymbol)
     {
         // Issue #1921: a same-compilation user class deriving from
         // System.Attribute (via either the `@Attribute` sugar or a plain
@@ -678,7 +681,10 @@ internal sealed partial class DeclarationBinder
     /// <param name="value">The extracted compile-time value when the method returns <c>true</c>.</param>
     /// <param name="type">The static type carried by the argument when the method returns <c>true</c>.</param>
     /// <returns><c>true</c> if the expression maps to a supported attribute constant; otherwise <c>false</c>.</returns>
-    private bool TryBindAttributeArgument(ExpressionSyntax syntax, out object value, out TypeSymbol type)
+    private bool TryBindAttributeArgument(
+        ExpressionSyntax syntax,
+        out object? value,
+        [NotNullWhen(true)] out TypeSymbol? type)
     {
         value = null;
         type = null;
@@ -753,8 +759,8 @@ internal sealed partial class DeclarationBinder
 
     private bool TryBindAttributeArrayArgument(
         ArrayCreationExpressionSyntax syntax,
-        out object value,
-        out TypeSymbol type)
+        out object? value,
+        [NotNullWhen(true)] out TypeSymbol? type)
     {
         value = null;
         type = null;
@@ -779,10 +785,15 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
-        var result = Array.CreateInstance(elementClrType, syntax.Elements.Count);
-        for (int i = 0; i < syntax.Elements.Count; i++)
+        if (syntax.Elements is not { } elements)
         {
-            if (!TryBindAttributeArgument(syntax.Elements[i], out var elementValue, out _))
+            return false;
+        }
+
+        var result = Array.CreateInstance(elementClrType, elements.Count);
+        for (int i = 0; i < elements.Count; i++)
+        {
+            if (!TryBindAttributeArgument(elements[i], out var elementValue, out _))
             {
                 return false;
             }
@@ -798,7 +809,7 @@ internal sealed partial class DeclarationBinder
         }
 
         value = result;
-        type = bound.Type;
+        type = Invariant.Required(bound.Type, "a bound attribute array has a resolved array type");
         return true;
     }
 
@@ -821,7 +832,8 @@ internal sealed partial class DeclarationBinder
 
             // Match the InlineDataAttribute by CLR type name (handles any xunit version).
             var clrType = attr.AttributeType?.ClrType;
-            if (clrType == null || !clrType.FullName.EndsWith("InlineDataAttribute", StringComparison.Ordinal))
+            if (clrType?.FullName is not { } fullName
+                || !fullName.EndsWith("InlineDataAttribute", StringComparison.Ordinal))
             {
                 continue;
             }
@@ -857,7 +869,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static object CoerceAttributeElement(object value, Type elementType)
+    private static object? CoerceAttributeElement(object? value, Type elementType)
     {
         if (value == null || elementType.IsInstanceOfType(value))
         {
