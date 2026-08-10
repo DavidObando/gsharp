@@ -185,7 +185,7 @@ internal static class ImportedAssemblySemantics
         return true;
     }
 
-    public static bool GrantsInternalAccessTo(Assembly assembly, string consumerAssemblyName)
+    public static bool GrantsInternalAccessTo(Assembly? assembly, string? consumerAssemblyName)
     {
         if (assembly == null || string.IsNullOrWhiteSpace(consumerAssemblyName))
         {
