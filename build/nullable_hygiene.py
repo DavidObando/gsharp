@@ -21,6 +21,8 @@ where CI enforces them:
                    justification so a reviewer reads a short report instead of
                    hunting through the diff.
   5. null-bang     No `= null!` / `= default!` initializer is introduced.
+  5b. arg-null-bang No `f(null!)` in production code -- the argument-position
+                   twin of `= null!`. Test projects are oblivious, so exempt.
   6. classify      Reports which changed files are annotation-only -- their
                    added and removed lines are identical once nullability
                    syntax is stripped, so they cannot have changed behaviour.
@@ -82,9 +84,11 @@ NULL_BANG_ALLOWLIST_PREFIXES = ("src/vs-gsharp/",)
 # followed by something that can follow one. Excludes `!=` and prefix `!x`.
 FORGIVING_RE = re.compile(r"[A-Za-z0-9_\)\]\"]!(?!=)(?=[.\[\)\],;:}\s]|$)")
 # `foo(null!)` / `foo(x, null!)` deliberately passes null to a non-nullable
-# parameter -- the standard way to test an ArgumentNullException guard. That is
-# the opposite of laundering, so it is exempt. `= null!` and `return null!`
-# still trip (null-bang and forgiving respectively).
+# parameter. In a test that is how you check an ArgumentNullException guard --
+# the opposite of laundering -- so `forgiving` ignores it. In PRODUCTION code it
+# is laundering, and `arg-null-bang` fails on it; that check runs only where
+# `in_nullable_context` holds, which post-flip excludes every test project.
+# `= null!` and `return null!` still trip (null-bang and forgiving respectively).
 ARG_NULL_BANG_RE = re.compile(r"[(,]\s*null!")
 
 
@@ -351,6 +355,33 @@ def check_null_bang(base, fail):
         print("  no `= null!` initializers introduced")
 
 
+def check_arg_null_bang(base, fail):
+    """No `f(null!)` in a nullable context.
+
+    Passing `null!` to a non-nullable parameter is the argument-position twin
+    of `= null!`: it asserts a contract the call site then violates, and defers
+    the consequence to a runtime NRE somewhere downstream. The honest fixes are
+    to widen the parameter (if null is a real form) or to not pass null.
+
+    Test code is exempt and needs no allowlist: passing `null!` to check that a
+    guard throws is the opposite of laundering, and post-flip every test project
+    builds with `Nullable=disable`, so `in_nullable_context` already excludes it.
+    """
+    bad = 0
+    for path, ln, text in added_lines(base, HEAD_REF):
+        if path and path.startswith(NULL_BANG_ALLOWLIST_PREFIXES):
+            continue
+        if not path or not path.endswith(".cs") or not in_nullable_context(path):
+            continue
+        if ARG_NULL_BANG_RE.search(code_only(text)):
+            fail(f"{path}:{ln}: passes `null!` to a non-nullable parameter -- "
+                 f"widen the parameter or stop passing null; do not suppress\n"
+                 f"      {text.strip()[:100]}")
+            bad += 1
+    if not bad:
+        print("  no `null!` arguments in nullable code")
+
+
 def has_justification(path, lineno, window=30):
     """Return the justifying comment for a `!` at `lineno`, or None.
 
@@ -503,6 +534,7 @@ CHECKS = {
     "no-escapes": check_no_escapes,
     "suppressions": check_suppressions,
     "null-bang": check_null_bang,
+    "arg-null-bang": check_arg_null_bang,
     "forgiving": check_forgiving,
 }
 

@@ -497,7 +497,14 @@ internal sealed partial class ExpressionBinder
         var memberType = matchedField != null && isStatic && declaringType != null
             ? declaringType.SubstituteMemberType(matchedField.Type)
             : matchedField?.Type ?? matchedProperty?.Type;
-        if (memberType == null || declaringType == null)
+
+        // declaringType is null for a property declared on an INTERFACE: the
+        // out-parameter is a StructSymbol and an interface is not one. Bailing
+        // out here (as a nullable-warning guard once did) silently unbinds
+        // `ifaceReceiver.DelegateProp(args)` and reports GS0159 -- issues #2925
+        // and #3016. BoundPropertyAccessExpression.StructType is nullable for
+        // exactly this form, so the null flows through correctly.
+        if (memberType == null)
         {
             return false;
         }
@@ -537,7 +544,8 @@ internal sealed partial class ExpressionBinder
             var accessibility = matchedField != null
                 ? matchedField.Accessibility
                 : matchedProperty?.Accessibility;
-            if (accessibility is { } memberAccessibility
+            if (declaringType != null
+                && accessibility is { } memberAccessibility
                 && !AccessibilityChecker.IsAccessible(memberAccessibility, declaringType, function))
             {
                 Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, memberAccessibility);

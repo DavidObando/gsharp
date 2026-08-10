@@ -481,7 +481,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
-                    CreateTypeOf(property.StructType),
+                    CreateTypeOf(Invariant.Required(
+                        property.StructType,
+                        "this is the receiverless (static) property form; only the interface-receiver form leaves StructType null, and that form carries a receiver")),
                     new BoundLiteralExpression(null, property.Property.Name, TypeSymbol.String)));
         }
 
@@ -1342,8 +1344,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return result.MoveToImmutable();
     }
 
+    // Normalizes an uninitialized type-argument vector to Empty. Callers
+    // enumerate the result, and enumerating a default ImmutableArray throws --
+    // returning `default` here would defeat the whole point of the helper.
     private static ImmutableArray<TypeSymbol> GetTypeSymbols(ImmutableArray<TypeSymbol> types)
-        => types.IsDefault ? default : types;
+        => types.IsDefault ? ImmutableArray<TypeSymbol>.Empty : types;
 
     private static ImmutableArray<ParameterSymbol> GetCallableParameters(FunctionSymbol function)
     {

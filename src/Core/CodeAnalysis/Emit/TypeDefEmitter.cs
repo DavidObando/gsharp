@@ -94,7 +94,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<Type, EntityHandle> getImportedTypeHandle;
     private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
     private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
-    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
+    private readonly Func<StructSymbol, ConstructorSymbol?, EntityHandle> resolveConstructedBaseExplicitCtorToken;
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<TypeDefinitionHandle> emitNullableContextOnType;
@@ -122,7 +122,7 @@ internal sealed class TypeDefEmitter
         Func<Type, EntityHandle> getImportedTypeHandle,
         Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
         Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
-        Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
+        Func<StructSymbol, ConstructorSymbol?, EntityHandle> resolveConstructedBaseExplicitCtorToken,
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<TypeDefinitionHandle> emitNullableContextOnType,
@@ -1953,9 +1953,11 @@ internal sealed class TypeDefEmitter
                 : ((gsharpBase != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(gsharpBase)) ? gsharpBase : null);
         if (constructedGenericBase != null)
         {
-            return this.resolveConstructedBaseExplicitCtorToken(
-                constructedGenericBase,
-                Invariant.Required(init.GSharpConstructor, "a constructed G# base initializer has an explicit constructor"));
+            // GSharpConstructor is null when the initializer targets the base's
+            // PRIMARY constructor rather than an explicit `init(...)` -- the same
+            // case the `init.GSharpConstructor != null` test below handles. The
+            // resolver takes null to mean exactly that.
+            return this.resolveConstructedBaseExplicitCtorToken(constructedGenericBase, init.GSharpConstructor);
         }
 
         // Issue #1060: when the base initializer resolved to a specific explicit

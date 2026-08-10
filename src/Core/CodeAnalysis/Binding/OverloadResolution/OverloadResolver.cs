@@ -113,7 +113,7 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         out BoundExpression result,
-        Type[] explicitTypeArgs,
+        Type[]? explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
         ImmutableArray<string> argumentNames,
         bool allowProtectedInherited = false);
@@ -133,7 +133,7 @@ internal sealed partial class OverloadResolver
 
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
     private readonly Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType;
-    private readonly Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression;
+    private readonly Func<RefArgumentExpressionSyntax, ParameterSymbol?, BoundExpression> bindRefArgumentExpression;
     private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder;
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
     private readonly Func<string, TypeSymbol> lookupType;
@@ -269,7 +269,7 @@ internal sealed partial class OverloadResolver
         ConversionClassifier conversions,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType,
-        Func<RefArgumentExpressionSyntax, ParameterSymbol, BoundExpression> bindRefArgumentExpression,
+        Func<RefArgumentExpressionSyntax, ParameterSymbol?, BoundExpression> bindRefArgumentExpression,
         Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder,
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
         Func<string, TypeSymbol> lookupType,
@@ -333,7 +333,7 @@ internal sealed partial class OverloadResolver
         TypeSymbol receiverType,
         TextLocation location,
         string receiverName,
-        string nullSafeInvocation)
+        string? nullSafeInvocation)
     {
         if (receiverType is not NullableTypeSymbol nullableReceiver
             || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(nullableReceiver.UnderlyingType, out _))

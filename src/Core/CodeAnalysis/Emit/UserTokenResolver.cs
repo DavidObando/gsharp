@@ -1968,7 +1968,7 @@ internal sealed class UserTokenResolver
     /// type; a MemberRef parented at the constructed base's TypeSpec is emitted
     /// with the open ctor's signature (type-parameter slots encode as VAR).
     /// </summary>
-    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol ctor)
+    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol? ctor)
     {
         if (ctor == null || !this.cache.ExplicitCtorHandles.TryGetValue(ctor, out var ctorDef))
         {

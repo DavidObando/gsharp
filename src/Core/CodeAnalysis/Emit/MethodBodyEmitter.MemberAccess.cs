@@ -873,12 +873,12 @@ internal sealed partial class MethodBodyEmitter
         {
             getterHandle = handles.Getter.Value;
         }
-        else if ((access.StructType as StructSymbol)?.ClrType != null)
+        else if (access.StructType is { ClrType: not null } importedGetterContainer)
         {
             // Issue #2291: a property on an IMPORTED type (e.g. a C# record's
             // auto-property) has no planned PropertyAccessorHandles entry —
             // resolve its getter MethodRef directly off the imported CLR type.
-            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(access.StructType as StructSymbol, access.Property, wantSetter: false);
+            getterHandle = this.outer.userTokens.ResolveUserPropertyAccessorToken(importedGetterContainer, access.Property, wantSetter: false);
         }
         else
         {

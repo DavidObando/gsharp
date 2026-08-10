@@ -1705,7 +1705,10 @@ public static class BoundNodePrinter
         }
         else
         {
-            writer.WriteIdentifier(node.StructType.Name);
+            // Only the interface-receiver form leaves StructType null, and that
+            // form always carries a receiver, so this branch has one. A printer
+            // must not throw, so fall back rather than assert.
+            writer.WriteIdentifier(node.StructType?.Name ?? node.Property.Name);
             writer.WritePunctuation(SyntaxKind.DotToken);
         }
 

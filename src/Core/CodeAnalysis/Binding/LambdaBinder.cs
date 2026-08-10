@@ -1224,12 +1224,14 @@ internal sealed class LambdaBinder
 
         for (var i = 0; i < targetFunctionType.ParameterTypes.Length; i++)
         {
+            // BoundNode.Syntax is null by design for a synthesized node -- a
+            // method group produced by an earlier rewrite has none -- and
+            // ParameterSymbol.declaringSyntax is nullable for exactly that
+            // reason, so this passes through rather than asserting.
             var parameter = new ParameterSymbol(
                 $"arg{i}",
                 targetFunctionType.ParameterTypes[i],
-                declaringSyntax: Invariant.Required(
-                    group.Syntax,
-                    "a method-group adapter has syntax"));
+                declaringSyntax: group.Syntax);
             adapterParameters.Add(parameter);
             arguments.Add(new BoundConversionExpression(
                 null,

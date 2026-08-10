@@ -15,7 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundPropertyAccessExpression : BoundExpression
 {
-    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol structType, PropertySymbol property)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, PropertySymbol property)
         : this(syntax, receiver, structType, property, narrowedType: null)
     {
     }
@@ -33,7 +33,7 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// <param name="structType">The declaring struct/class type.</param>
     /// <param name="property">The property to read.</param>
     /// <param name="narrowedType">The narrowed type to surface, or <c>null</c> to use <paramref name="property"/>'s declared type.</param>
-    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol structType, PropertySymbol property, TypeSymbol? narrowedType)
+    public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, PropertySymbol property, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -45,7 +45,13 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// <summary>Gets the instance receiver, or <see langword="null"/> for a static property.</summary>
     public BoundExpression? Receiver { get; }
 
-    public StructSymbol StructType { get; }
+    /// <summary>
+    /// Gets the struct/class that declares <see cref="Property"/>, or
+    /// <see langword="null"/> for an access through an interface-typed
+    /// receiver, where the declaring type is the interface rather than an
+    /// aggregate.
+    /// </summary>
+    public StructSymbol? StructType { get; }
 
     public PropertySymbol Property { get; }
 

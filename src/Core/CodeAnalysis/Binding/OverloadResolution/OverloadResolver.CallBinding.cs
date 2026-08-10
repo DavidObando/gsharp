@@ -493,7 +493,7 @@ internal sealed partial class OverloadResolver
             if (argSyntax is RefArgumentExpressionSyntax refArg)
             {
                 // The first binding pass has no resolved parameter for inline out arguments.
-                boundArgument = bindRefArgumentExpression(refArg, null!);
+                boundArgument = bindRefArgumentExpression(refArg, null);
             }
             else if (argumentNames.IsDefault
                 && bindLambdaWithTarget != null
@@ -661,7 +661,7 @@ internal sealed partial class OverloadResolver
                 var implicitObjectReceiver = new BoundVariableExpression(null, effThis);
 
                 // The callback uses null to mean that no explicit type arguments were supplied.
-                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null!, default, argumentNames))
+                if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
                 {
                     return implicitObjectCall;
                 }
@@ -1061,7 +1061,7 @@ internal sealed partial class OverloadResolver
                 var eventRaiseCaptureRef = new BoundVariableExpression(null, eventRaiseCapture);
 
                 // The callback uses null to mean that no explicit type arguments were supplied.
-                if (tryBindInheritedClrInstanceCall(eventRaiseCaptureRef, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var guardedInvoke, null!, default, argumentNames)
+                if (tryBindInheritedClrInstanceCall(eventRaiseCaptureRef, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var guardedInvoke, null, default, argumentNames)
                     && guardedInvoke is not BoundErrorExpression)
                 {
                     return BuildNullConditionalDelegateResult(syntax, receiver, eventRaiseCapture, guardedInvoke, guardedInvoke.Type);
@@ -1069,7 +1069,7 @@ internal sealed partial class OverloadResolver
             }
 
             // The callback uses null to mean that no explicit type arguments were supplied.
-            if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null!, default, argumentNames))
+            if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
                 return invokeCall;
             }
@@ -2013,12 +2013,12 @@ internal sealed partial class OverloadResolver
         // non-null annotation predates its use for static fields.
         var calleeLoad = new BoundClrPropertyAccessExpression(
             syntax,
-            receiver: null!,
+            receiver: null,
             field,
             Invariant.Required(functionType, "a mapped CLR delegate has a function type"));
 
         // The callback uses null to mean that no null-safe invocation token was present.
-        result = BindIndirectCallExpression(syntax, calleeLoad, name, syntax.Identifier.Location, nullSafeInvocation: null!);
+        result = BindIndirectCallExpression(syntax, calleeLoad, name, syntax.Identifier.Location, nullSafeInvocation: null);
         return true;
     }
 

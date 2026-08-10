@@ -295,7 +295,7 @@ internal sealed partial class ExpressionBinder
                             return new BoundLiteralExpression(null, symbolicLiteral.GetRawConstantValue(), literalType);
                         }
 
-                        return new BoundClrPropertyAccessExpression(null, null!, staticMember, staticType, classSymbol.SymbolicReceiver);
+                        return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType, classSymbol.SymbolicReceiver);
                     }
 
                     // Literal (const) fields aren't real runtime fields, so
@@ -305,7 +305,7 @@ internal sealed partial class ExpressionBinder
                         return new BoundLiteralExpression(null, literal.GetRawConstantValue(), staticType);
                     }
 
-                    return new BoundClrPropertyAccessExpression(null, null!, staticMember, staticType);
+                    return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType);
                 }
                 else if (receiver != null && receiver.Type is StructSymbol structSym)
                 {
@@ -468,7 +468,7 @@ internal sealed partial class ExpressionBinder
                             return new BoundErrorExpression(null);
                         }
 
-                        return new BoundPropertyAccessExpression(null, receiver, null!, ifaceProp);
+                        return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
                     }
 
                     // Issue #1397: an instance method declared on the static
@@ -3453,7 +3453,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                return new BoundPropertyAccessExpression(null, receiver, null!, ifaceProp);
+                return new BoundPropertyAccessExpression(null, receiver, null, ifaceProp);
             }
         }
 

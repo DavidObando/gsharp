@@ -213,7 +213,7 @@ internal sealed partial class OverloadResolver
                 boundArguments,
                 syntax,
                 out whenNotNull,
-                explicitTypeArgs: null!,
+                explicitTypeArgs: null,
                 typeArgSymbols: default,
                 argumentNames))
             {
@@ -690,7 +690,7 @@ internal sealed partial class OverloadResolver
                     // non-null annotation predates its use for static fields.
                     load = new BoundFieldAccessExpression(
                         null,
-                        receiver: null!,
+                        receiver: null,
                         staticField.StructType,
                         staticField.Field,
                         narrowedType);
@@ -732,7 +732,7 @@ internal sealed partial class OverloadResolver
                 // non-null annotation predates its use for static properties.
                 load = new BoundPropertyAccessExpression(
                     null,
-                    receiver: null!,
+                    receiver: null,
                     staticProp.StructType,
                     staticProp.Property,
                     narrowedType);
@@ -845,7 +845,7 @@ internal sealed partial class OverloadResolver
         BoundExpression callee,
         string calleeName,
         TextLocation calleeLocation,
-        string nullSafeInvocation)
+        string? nullSafeInvocation)
     {
         if (callee is BoundErrorExpression)
         {
@@ -973,7 +973,7 @@ internal sealed partial class OverloadResolver
         // callable through its `Invoke` method, mirroring the direct-call path.
         if (callee.Type?.ClrType is System.Type calleeClrType && ClrTypeUtilities.IsDelegateType(calleeClrType))
         {
-            if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null!, default, argumentNames))
+            if (tryBindInheritedClrInstanceCall(callee, calleeClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
                 return CompleteInvocation(invokeCall);
             }
