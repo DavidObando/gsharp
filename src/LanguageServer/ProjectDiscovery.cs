@@ -384,6 +384,14 @@ public static class ProjectDiscovery
                 .Where(e => e.Name.LocalName == "ProjectReference")
                 .Select(e => e.Attribute("Include")?.Value)
                 .OfType<string>()
+
+                // OfType drops a missing Include attribute but keeps an empty
+                // one, and Path.Combine(dir, "") resolves to dir itself -- so
+                // `<ProjectReference Include="" />` would be reported as a
+                // reference to the project's own directory. Nothing downstream
+                // checks the path exists, so the emptiness filter this replaced
+                // has to stay.
+                .Where(v => v.Length > 0)
                 .Select(v => Path.GetFullPath(Path.Combine(projectDir, v)))
                 .ToList();
             return refs;
