@@ -55,7 +55,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="syntax">The return type clause syntax.</param>
     /// <param name="isAsync">Whether the enclosing function is async.</param>
     /// <returns>The bound type or <c>null</c>.</returns>
-    internal delegate TypeSymbol BindReturnTypeClauseDelegate(TypeClauseSyntax? syntax, bool isAsync);
+    internal delegate TypeSymbol? BindReturnTypeClauseDelegate(TypeClauseSyntax? syntax, bool isAsync);
 
     /// <summary>
     /// Issue #1812: signature for the
@@ -74,20 +74,20 @@ internal sealed partial class DeclarationBinder
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly BindExpressionDelegate bindExpression;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly BindReturnTypeClauseDelegate bindReturnTypeClause;
     private readonly BindTypeOfExpressionDelegate bindTypeOfExpression;
     private readonly BindArrayCreationExpressionDelegate bindArrayCreationExpression;
     private readonly BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable;
     private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
-    private readonly Func<string, TypeSymbol> lookupType;
+    private readonly Func<string, TypeSymbol?> lookupType;
     private readonly Func<TypeSymbol, Type?> getEffectiveArgumentClrType;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncSequenceReturnType;
     private readonly Func<string, bool> isPrimitiveTypeName;
     private readonly Func<RefKind, string> refKindToString;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Action<FunctionSymbol> setCurrentFunction;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
+    private readonly Action<FunctionSymbol?> setCurrentFunction;
 
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
@@ -134,19 +134,19 @@ internal sealed partial class DeclarationBinder
         BinderContext binderCtx,
         ConversionClassifier conversions,
         BindExpressionDelegate bindExpression,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         BindReturnTypeClauseDelegate bindReturnTypeClause,
         BindTypeOfExpressionDelegate bindTypeOfExpression,
         BindArrayCreationExpressionDelegate bindArrayCreationExpression,
         Func<SyntaxToken?, Accessibility> resolveAccessibility,
-        Func<string, TypeSymbol> lookupType,
+        Func<string, TypeSymbol?> lookupType,
         Func<TypeSymbol, Type?> getEffectiveArgumentClrType,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncSequenceReturnType,
         Func<string, bool> isPrimitiveTypeName,
         Func<RefKind, string> refKindToString,
-        Func<FunctionSymbol> getCurrentFunction,
-        Action<FunctionSymbol> setCurrentFunction,
+        Func<FunctionSymbol?> getCurrentFunction,
+        Action<FunctionSymbol?> setCurrentFunction,
         BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -179,7 +179,7 @@ internal sealed partial class DeclarationBinder
     }
 
 #pragma warning disable SA1300 // Element should begin with an uppercase letter
-    private FunctionSymbol function => getCurrentFunction();
+    private FunctionSymbol? function => getCurrentFunction();
 #pragma warning restore SA1300
 
     /// <summary>

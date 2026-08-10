@@ -70,13 +70,13 @@ internal sealed class LambdaBinder
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly Func<BlockStatementSyntax, BoundStatement> bindBlockStatement;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
-    private readonly Func<TypeClauseSyntax, bool, TypeSymbol> bindReturnTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, bool, TypeSymbol?> bindReturnTypeClause;
     private readonly Func<TypeSymbol, bool> isIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
-    private readonly Func<TypeSymbol, Type> resolveClrTypeForGenericArg;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Action<FunctionSymbol> setCurrentFunction;
+    private readonly Func<TypeSymbol, Type?> resolveClrTypeForGenericArg;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
+    private readonly Action<FunctionSymbol?> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
     private readonly Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
@@ -146,13 +146,13 @@ internal sealed class LambdaBinder
         BinderContext binderCtx,
         ConversionClassifier conversions,
         Func<BlockStatementSyntax, BoundStatement> bindBlockStatement,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
-        Func<TypeClauseSyntax, bool, TypeSymbol> bindReturnTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
+        Func<TypeClauseSyntax, bool, TypeSymbol?> bindReturnTypeClause,
         Func<TypeSymbol, bool> isIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
-        Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
-        Func<FunctionSymbol> getCurrentFunction,
-        Action<FunctionSymbol> setCurrentFunction,
+        Func<TypeSymbol, Type?> resolveClrTypeForGenericArg,
+        Func<FunctionSymbol?> getCurrentFunction,
+        Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
         Func<ExpressionSyntax, BoundExpression>? bindLambdaBodyExpression = null,
         Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList = null)
@@ -259,12 +259,11 @@ internal sealed class LambdaBinder
             // a typed delegate (the common case), pack/pass-through happens
             // on the indirect-call path inside OverloadResolver.
             var isVariadic = p.IsVariadic;
-            if (isVariadic && ptype != TypeSymbol.Error)
-            {
-                ptype = SliceTypeSymbol.Get(ptype);
-            }
-
             var parameterType = Invariant.Required(ptype, "lambda parameter binding produces a type");
+            if (isVariadic && parameterType != TypeSymbol.Error)
+            {
+                parameterType = SliceTypeSymbol.Get(parameterType);
+            }
 
             // Issue #1262: the discard identifier `_` is not a real binding —
             // C# allows repeated `_` discard parameters (e.g. `(_, _) => ...`).
@@ -289,7 +288,7 @@ internal sealed class LambdaBinder
             conversions.BindAndAttachParameterDefaultValue(p, lambdaParam);
             AttachParameterAttributes(p, lambdaParam);
             parameterSymbols.Add(lambdaParam);
-            parameterTypes.Add(ptype);
+            parameterTypes.Add(parameterType);
         }
 
         // ADR-0101 follow-up / issue #812: enforce variadic structural rules.

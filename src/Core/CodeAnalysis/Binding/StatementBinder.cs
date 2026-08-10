@@ -77,7 +77,7 @@ internal sealed partial class StatementBinder
     private readonly PatternBinder patterns;
     private readonly BindExpressionDelegate bindExpression;
     private readonly BindExpressionWithTargetTypeDelegate bindExpressionWithTargetType;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly BindLocalVariableDelegate bindLocalVariable;
     private readonly BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility;
     private readonly Func<string, TextLocation, VariableSymbol?> bindVariableReference;
@@ -87,7 +87,7 @@ internal sealed partial class StatementBinder
     private readonly Func<TypeSymbol, bool> isIteratorReturnType;
     private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType;
     private readonly Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
@@ -104,7 +104,7 @@ internal sealed partial class StatementBinder
         PatternBinder patterns,
         BindExpressionDelegate bindExpression,
         BindExpressionWithTargetTypeDelegate bindExpressionWithTargetType,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         BindLocalVariableDelegate bindLocalVariable,
         BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility,
         Func<string, TextLocation, VariableSymbol?> bindVariableReference,
@@ -114,7 +114,7 @@ internal sealed partial class StatementBinder
         Func<TypeSymbol, bool> isIteratorReturnType,
         Func<SyntaxToken?, Accessibility> resolveAccessibility,
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
-        Func<FunctionSymbol> getCurrentFunction,
+        Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
         Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration = null,
         Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
@@ -151,7 +151,7 @@ internal sealed partial class StatementBinder
     }
 
 #pragma warning disable SA1300 // Element should begin with an uppercase letter
-    private FunctionSymbol function => getCurrentFunction();
+    private FunctionSymbol? function => getCurrentFunction();
 #pragma warning restore SA1300
 
     private BoundStatement BindErrorStatement()

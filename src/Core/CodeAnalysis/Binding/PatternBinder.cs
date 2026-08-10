@@ -59,7 +59,7 @@ internal sealed class PatternBinder
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly Func<BoundExpression, bool> isNilLiteral;
 
     /// <summary>
@@ -85,7 +85,7 @@ internal sealed class PatternBinder
         BinderContext binderCtx,
         ConversionClassifier conversions,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         Func<BoundExpression, bool> isNilLiteral)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));

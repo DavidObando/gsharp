@@ -199,7 +199,7 @@ internal sealed partial class OverloadResolver
             .ToString(System.Globalization.CultureInfo.InvariantCulture);
         var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: nullable.UnderlyingType);
         var captureRef = new BoundVariableExpression(null, capture);
-        BoundExpression whenNotNull;
+        BoundExpression? whenNotNull;
         if (nullable.UnderlyingType is not FunctionTypeSymbol
             && nullable.UnderlyingType is not DelegateTypeSymbol
             && nullable.UnderlyingType.ClrType is System.Type delegateClr

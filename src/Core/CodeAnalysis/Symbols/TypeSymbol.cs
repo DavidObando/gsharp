@@ -244,7 +244,7 @@ public class TypeSymbol : Symbol
     /// </summary>
     /// <param name="type">The type to inspect.</param>
     /// <returns><c>true</c> if the type is by-ref-like.</returns>
-    public static bool IsByRefLike(TypeSymbol type)
+    public static bool IsByRefLike(TypeSymbol? type)
     {
         var unwrapped = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
         if (unwrapped is StructSymbol { IsRefStruct: true })

@@ -26,14 +26,14 @@ public sealed class BoundGlobalScope
     /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
-        BoundGlobalScope previous,
+        BoundGlobalScope? previous,
         PackageSymbol package,
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
         ImmutableArray<ImportSymbol> imports,
         ImmutableArray<FunctionSymbol> functions,
         ImmutableArray<VariableSymbol> variables,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         ImmutableArray<BoundStatement> statements)
         : this(previous, package, packages, diagnostics, imports, functions, variables, ImmutableDictionary<string, TypeSymbol>.Empty, ImmutableArray<StructSymbol>.Empty, entryPoint, statements)
     {
@@ -56,7 +56,7 @@ public sealed class BoundGlobalScope
     /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
-        BoundGlobalScope previous,
+        BoundGlobalScope? previous,
         PackageSymbol package,
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
@@ -66,7 +66,7 @@ public sealed class BoundGlobalScope
         ImmutableDictionary<string, TypeSymbol> typeAliases,
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         ImmutableArray<BoundStatement> statements)
         : this(previous, package, packages, diagnostics, imports, functions, variables, typeAliases, structs, interfaces, ImmutableArray<EnumSymbol>.Empty, entryPoint, statements)
     {
@@ -89,7 +89,7 @@ public sealed class BoundGlobalScope
     /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
-        BoundGlobalScope previous,
+        BoundGlobalScope? previous,
         PackageSymbol package,
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
@@ -100,7 +100,7 @@ public sealed class BoundGlobalScope
         ImmutableArray<StructSymbol> structs,
         ImmutableArray<InterfaceSymbol> interfaces,
         ImmutableArray<EnumSymbol> enums,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         ImmutableArray<BoundStatement> statements)
         : this(previous, package, packages, diagnostics, imports, functions, variables, typeAliases, structs, interfaces, enums, ImmutableArray<DelegateTypeSymbol>.Empty, entryPoint, statements)
     {
@@ -124,7 +124,7 @@ public sealed class BoundGlobalScope
     /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
-        BoundGlobalScope previous,
+        BoundGlobalScope? previous,
         PackageSymbol package,
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
@@ -136,7 +136,7 @@ public sealed class BoundGlobalScope
         ImmutableArray<InterfaceSymbol> interfaces,
         ImmutableArray<EnumSymbol> enums,
         ImmutableArray<DelegateTypeSymbol> delegates,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         ImmutableArray<BoundStatement> statements)
     {
         Previous = previous;
@@ -171,7 +171,7 @@ public sealed class BoundGlobalScope
     /// <param name="entryPoint">The entry-point function for this compilation, or null if the compilation is a library.</param>
     /// <param name="statements">Statements in the current compilation.</param>
     public BoundGlobalScope(
-        BoundGlobalScope previous,
+        BoundGlobalScope? previous,
         PackageSymbol package,
         ImmutableArray<PackageSymbol> packages,
         ImmutableArray<Diagnostic> diagnostics,
@@ -180,7 +180,7 @@ public sealed class BoundGlobalScope
         ImmutableArray<VariableSymbol> variables,
         ImmutableDictionary<string, TypeSymbol> typeAliases,
         ImmutableArray<StructSymbol> structs,
-        FunctionSymbol entryPoint,
+        FunctionSymbol? entryPoint,
         ImmutableArray<BoundStatement> statements)
         : this(previous, package, packages, diagnostics, imports, functions, variables, typeAliases, structs, ImmutableArray<InterfaceSymbol>.Empty, entryPoint, statements)
     {
@@ -189,7 +189,7 @@ public sealed class BoundGlobalScope
     /// <summary>
     /// Gets the previous compilation global scope.
     /// </summary>
-    public BoundGlobalScope Previous { get; }
+    public BoundGlobalScope? Previous { get; }
 
     /// <summary>
     /// Gets the entry-point package symbol for the current compilation. This
@@ -263,7 +263,7 @@ public sealed class BoundGlobalScope
     /// Gets the synthesized or explicit entry-point function for this compilation,
     /// or null if the compilation produces a library (no entry point).
     /// </summary>
-    public FunctionSymbol EntryPoint { get; }
+    public FunctionSymbol? EntryPoint { get; }
 
     /// <summary>
     /// Gets the statements in the current compilation.

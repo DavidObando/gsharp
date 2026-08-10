@@ -62,7 +62,7 @@ internal static class IfLetBindingSupport
         IfLetBindingClauseSyntax binding,
         DiagnosticBag diagnostics,
         ConversionClassifier conversions,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> declareLocal)
     {

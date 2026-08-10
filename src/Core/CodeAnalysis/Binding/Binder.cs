@@ -2,10 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
-
-#nullable disable warnings
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -176,7 +172,7 @@ public sealed class Binder
     // callbacks; never back-references Binder.
     private readonly ExpressionBinder expressions;
 
-    private FunctionSymbol function;
+    private FunctionSymbol? function;
 
     // SA1202 exempt: static initializer placement matches Binder's design.
 #pragma warning disable SA1642
@@ -198,22 +194,22 @@ public sealed class Binder
     /// </summary>
     /// <param name="parent">The parent scope.</param>
     /// <param name="function">The function to bind.</param>
-    public Binder(BoundScope parent, FunctionSymbol function)
+    public Binder(BoundScope parent, FunctionSymbol? function)
     {
         binderCtx = new BinderContext(parent);
         memberLookup = new MemberLookup(binderCtx);
         conversions = new ConversionClassifier(
             binderCtx,
             memberLookup,
-            bindExpression: syntax => expressions.BindExpression(syntax),
-            bindExpressionWithTargetType: (syntax, targetType) => expressions.BindExpression(syntax, targetType),
+            bindExpression: syntax => Expressions.BindExpression(syntax),
+            bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
-            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
-            createClrMethodGroupAdapter: (group, targetFunctionType) => lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             getMethodGroupObservableReturnType: (method, returnType) =>
                 method.IsAsync && !IsAsyncIteratorReturnType(returnType)
-                    ? lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
+                    ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
                     : returnType,
             isLvalue: ExpressionBinder.IsLvalue,
             getRefKindFromModifier: GetRefKindFromModifier,
@@ -222,23 +218,23 @@ public sealed class Binder
             binderCtx,
             memberLookup,
             conversions,
-            bindExpression: syntax => expressions.BindExpression(syntax),
-            bindExpressionWithTargetType: (syntax, targetType) => expressions.BindExpression(syntax, targetType),
-            bindRefArgumentExpression: (refSyntax, parameter) => expressions.BindRefArgumentExpression(refSyntax, parameter),
-            tryRebindInlineOutVarPlaceholder: (boundArg, slotSyntax, resolvedParameter, substitutedPointeeType) => expressions.TryRebindInlineOutVarPlaceholder(boundArg, slotSyntax, resolvedParameter, substitutedPointeeType),
+            bindExpression: syntax => Expressions.BindExpression(syntax),
+            bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
+            bindRefArgumentExpression: (refSyntax, parameter) => Expressions.BindRefArgumentExpression(refSyntax, parameter),
+            tryRebindInlineOutVarPlaceholder: (boundArg, slotSyntax, resolvedParameter, substitutedPointeeType) => Expressions.TryRebindInlineOutVarPlaceholder(boundArg, slotSyntax, resolvedParameter, substitutedPointeeType),
             bindTypeClause: BindTypeClause,
             lookupType: LookupType,
             lookupTypeWithArity: LookupType,
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
-            tryBindClrConstructorCall: (syntax, out result) => expressions.TryBindClrConstructorCall(syntax, out result),
-            tryBindIntrinsicCall: (syntax, out result) => expressions.TryBindIntrinsicCall(syntax, out result),
-            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, Type[] explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) => expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited),
+            tryBindClrConstructorCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindClrConstructorCall(syntax, out result),
+            tryBindIntrinsicCall: (CallExpressionSyntax syntax, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result) => Expressions.TryBindIntrinsicCall(syntax, out result),
+            tryBindInheritedClrInstanceCall: (BoundExpression receiver, Type? importedBaseClr, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result, Type[]? explicitTypeArgs, ImmutableArray<TypeSymbol> typeArgSymbols, ImmutableArray<string> argumentNames, bool allowProtectedInherited) => Expressions.TryBindInheritedClrInstanceCall(receiver, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames, allowProtectedInherited: allowProtectedInherited),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             getRefKindFromModifier: GetRefKindFromModifier,
             refKindToString: RefKindToString,
-            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
-            wrapAsTask: (t, useValueTask) => lambdas.WrapAsTask(t, useValueTask),
+            createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
+            wrapAsTask: (t, useValueTask) => Lambdas.WrapAsTask(t, useValueTask),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,
@@ -246,19 +242,19 @@ public sealed class Binder
             satisfiesConstraint: SatisfiesConstraint,
             describeConstraint: DescribeConstraint,
             getCurrentFunction: () => this.function,
-            bindLambdaWithTarget: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType),
-            bindUserTypeStaticCall: (structSym, ce) => expressions.BindUserTypeStaticCall(structSym, ce),
-            bindImportedClrStaticCall: (clrType, ce) => expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce));
+            bindLambdaWithTarget: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
+            bindUserTypeStaticCall: (structSym, ce) => Expressions.BindUserTypeStaticCall(structSym, ce),
+            bindImportedClrStaticCall: (clrType, ce) => Expressions.BindAccessorCall(receiver: null, new ImportedClassSymbol(clrType, ce, references: scope.References), ce));
         patterns = new PatternBinder(
             binderCtx,
             conversions,
-            bindExpression: syntax => expressions.BindExpression(syntax),
+            bindExpression: syntax => Expressions.BindExpression(syntax),
             bindTypeClause: BindTypeClause,
             isNilLiteral: StatementBinder.IsNilLiteral);
         lambdas = new LambdaBinder(
             binderCtx,
             conversions,
-            bindBlockStatement: syntax => statements.BindBlockStatement(syntax),
+            bindBlockStatement: syntax => Statements.BindBlockStatement(syntax),
             bindTypeClause: BindTypeClause,
             bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
             isIteratorReturnType: IsIteratorReturnType,
@@ -266,52 +262,52 @@ public sealed class Binder
             resolveClrTypeForGenericArg: ResolveClrTypeForGenericArg,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
-            bindParameterAttributes: syntax => declarations.BindAttributes(
+            bindParameterAttributes: syntax => Declarations.BindAttributes(
                 syntax.Annotations,
                 AttributeTargetKind.Param,
                 ParameterAllowedTargets,
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
-            bindLambdaBodyExpression: syntax => expressions.BindLambdaBodyExpression(syntax),
-            bindTypeParameterList: syntax => declarations.BindTypeParameterList(syntax));
+            bindLambdaBodyExpression: syntax => Expressions.BindLambdaBodyExpression(syntax),
+            bindTypeParameterList: syntax => Declarations.BindTypeParameterList(syntax));
         statements = new StatementBinder(
             binderCtx,
             conversions,
             patterns,
-            bindExpression: (syntax, canBeVoid) => expressions.BindExpression(syntax, canBeVoid),
-            bindExpressionWithTargetType: (syntax, targetType) => expressions.BindExpression(syntax, targetType),
+            bindExpression: (syntax, canBeVoid) => Expressions.BindExpression(syntax, canBeVoid),
+            bindExpressionWithTargetType: (syntax, targetType) => Expressions.BindExpression(syntax, targetType),
             bindTypeClause: BindTypeClause,
-            bindLocalVariable: (identifier, isReadOnly, type) => declarations.BindVariableDeclaration(identifier, isReadOnly, type),
-            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
-            bindVariableReference: (name, location) => expressions.BindVariableReference(name, location),
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
+            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
+            bindLocalVariableWithAccessibility: (identifier, isReadOnly, type, accessibility) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type, accessibility),
+            bindVariableReference: (name, location) => Expressions.BindVariableReference(name, location),
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType),
             isFormattableStringTargetType: ExpressionBinder.IsFormattableStringTargetType,
             isLvalue: ExpressionBinder.IsLvalue,
             isIteratorReturnType: IsIteratorReturnType,
             resolveAccessibility: ResolveAccessibility,
-            bindVariableDeclarationAttributes: (annotations, positionDescription) => declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
+            bindVariableDeclarationAttributes: (annotations, positionDescription) => Declarations.BindAttributes(annotations, AttributeTargetKind.Field, VariableDeclarationAllowedTargets, positionDescription, System.AttributeTargets.Field),
             getCurrentFunction: () => this.function,
-            bindLambdaWithTargetType: (syntax, targetType) => lambdas.BindLambdaExpression(syntax, targetType),
-            bindGenericLocalFunctionDeclaration: syntax => lambdas.BindGenericLocalFunctionDeclaration(syntax),
-            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
+            bindLambdaWithTargetType: (syntax, targetType) => Lambdas.BindLambdaExpression(syntax, targetType),
+            bindGenericLocalFunctionDeclaration: syntax => Lambdas.BindGenericLocalFunctionDeclaration(syntax),
+            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal));
         declarations = new DeclarationBinder(
             binderCtx,
             conversions,
-            bindExpression: syntax => expressions.BindExpression(syntax),
+            bindExpression: syntax => Expressions.BindExpression(syntax),
             bindTypeClause: BindTypeClause,
             bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
-            bindTypeOfExpression: syntax => expressions.BindTypeOfExpression(syntax),
-            bindArrayCreationExpression: syntax => expressions.BindArrayCreationExpression(syntax),
+            bindTypeOfExpression: syntax => Expressions.BindTypeOfExpression(syntax),
+            bindArrayCreationExpression: syntax => Expressions.BindArrayCreationExpression(syntax),
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
-            getEffectiveArgumentClrType: t => expressions.GetEffectiveArgumentClrType(t),
+            getEffectiveArgumentClrType: t => Expressions.GetEffectiveArgumentClrType(t),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             isAsyncSequenceReturnType: IsAsyncSequenceReturnType,
             isPrimitiveTypeName: IsPrimitiveTypeName,
             refKindToString: RefKindToString,
             getCurrentFunction: () => this.function,
             setCurrentFunction: fn => this.function = fn,
-            bindInterpolatedStringAsFormattable: (syntax, targetType) => expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
+            bindInterpolatedStringAsFormattable: (syntax, targetType) => Expressions.BindInterpolatedStringAsFormattable(syntax, targetType));
         expressions = new ExpressionBinder(
             binderCtx,
             memberLookup,
@@ -325,8 +321,8 @@ public sealed class Binder
             reportObsoleteUseIfApplicable: ReportObsoleteUseIfApplicable,
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             getCurrentFunction: () => this.function,
-            bindStatementList: (syntax, trailing) => statements.BindStatementList(syntax, trailingStatement: trailing),
-            bindLocalVariable: (identifier, isReadOnly, type) => declarations.BindVariableDeclaration(identifier, isReadOnly, type));
+            bindStatementList: (syntax, trailing) => Statements.BindStatementList(syntax, trailingStatement: trailing),
+            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type));
 
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -637,6 +633,35 @@ public sealed class Binder
         }
     }
 
+    // The seven sub-binders above are mutually referential (e.g. `expressions`
+    // needs `conversions`, `conversions` needs `expressions`), so the
+    // constructor wires each one's dependencies as closures over the
+    // still-unassigned sibling fields — every closure is stored, not invoked,
+    // and none of them runs until construction has fully completed (the rest
+    // of the constructor after the wiring block only seeds `scope`, which
+    // never calls back into a sub-binder). Reading a not-yet-assigned field
+    // directly inside the SAME constructor makes the compiler's flow analysis
+    // treat it as "maybe null" at that lexical point even though its declared
+    // type is non-nullable and it is always non-null once this constructor
+    // returns. The property accessors below exist only to break that
+    // constructor-local flow tracking: as ordinary members (not the
+    // constructor body performing the phased assignment) they see each field
+    // solely through its declared, non-nullable type. Use these accessors —
+    // not the bare field — from inside the wiring closures above.
+    private ConversionClassifier Conversions => conversions;
+
+    private OverloadResolver Overloads => overloads;
+
+    private PatternBinder Patterns => patterns;
+
+    private LambdaBinder Lambdas => lambdas;
+
+    private StatementBinder Statements => statements;
+
+    private DeclarationBinder Declarations => declarations;
+
+    private ExpressionBinder Expressions => expressions;
+
     /// <summary>
     /// Gets the diagnostics bag.
     /// </summary>
@@ -846,7 +871,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[delegateSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(delegateSyntax.AccessibilityModifier);
-            DelegateTypeSymbol sym = null;
+            DelegateTypeSymbol? sym = null;
             RunWithPackage(owningPackage, delegateSyntax.SyntaxTree, () => sym = binder.declarations.DeclareDelegateSymbol(delegateSyntax, owningPackage));
             if (sym != null)
             {
@@ -869,7 +894,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(ifaceSyntax.AccessibilityModifier);
-            InterfaceSymbol sym = null;
+            InterfaceSymbol? sym = null;
             RunWithPackage(owningPackage, ifaceSyntax.SyntaxTree, () => sym = binder.declarations.DeclareInterfaceSymbol(ifaceSyntax, owningPackage));
             if (sym != null)
             {
@@ -920,7 +945,7 @@ public sealed class Binder
         {
             var owningPackage = packageByTree[structSyntax.SyntaxTree];
             binder.declarations.ValidateTopLevelProtected(structSyntax.AccessibilityModifier);
-            StructSymbol structSymbol = null;
+            StructSymbol? structSymbol = null;
             RunWithPackage(owningPackage, structSyntax.SyntaxTree, () =>
             {
                 structSymbol = binder.declarations.DeclareStructShell(structSyntax, owningPackage);
@@ -983,7 +1008,7 @@ public sealed class Binder
 
             bindingState[index] = 1;
             var (syntax, symbol) = declaredStructs[index];
-            TypeClauseSyntax baseType = syntax.BaseTypeClauses.Count > 0
+            TypeClauseSyntax? baseType = syntax.BaseTypeClauses.Count > 0
                 ? syntax.BaseTypeClauses[0]
                 : syntax.BaseTypeIdentifier == null
                     ? null
@@ -992,8 +1017,11 @@ public sealed class Binder
                 ?? baseType?.Identifier?.Text;
             if (symbol.IsClass && baseName != null && declarationsByName.TryGetValue(baseName, out var candidates))
             {
-                var requestedPackage = baseType.HasQualifier
-                    ? baseType.DottedName[..^(baseName.Length + 1)]
+                // baseName is derived from baseType via `?.`, so a non-null
+                // baseName implies baseType is non-null.
+                var nonNullBaseType = Invariant.Required(baseType, "baseName is non-null only when baseType is non-null");
+                var requestedPackage = nonNullBaseType.HasQualifier
+                    ? nonNullBaseType.DottedName[..^(baseName.Length + 1)]
                     : symbol.PackageName;
                 var matchingPackage = candidates.Where(candidate =>
                     declaredStructs[candidate].Symbol.IsClass &&
@@ -1113,8 +1141,8 @@ public sealed class Binder
         // binder declares the implicit `args string[]` parameter and exposes
         // a non-null `function` for downstream return-type checks (D2/D3
         // build on this).
-        FunctionSymbol synthesizedEntryPoint = null;
-        PackageSymbol synthesizedEntryPointPackage = null;
+        FunctionSymbol? synthesizedEntryPoint = null;
+        PackageSymbol? synthesizedEntryPointPackage = null;
         if (globalStatements.Length > 0)
         {
             synthesizedEntryPointPackage = packageByTree[globalStatements[0].SyntaxTree];
@@ -1166,8 +1194,8 @@ public sealed class Binder
             // types / functions remain visible while the new binder's own
             // RootScope owns the `args` parameter declaration.
             var tlsBinder = new Binder(binder.scope, synthesizedEntryPoint);
-            string previousPackage = null;
-            SyntaxTree previousTree = null;
+            string? previousPackage = null;
+            SyntaxTree? previousTree = null;
             var contextSet = false;
             try
             {
@@ -1231,7 +1259,7 @@ public sealed class Binder
             // field and are skipped (no echo), as are `void`/error results.
             if (submission?.CaptureTrailingExpression == true && statements.Count > 0)
             {
-                GlobalVariableSymbol resultVariable = null;
+                GlobalVariableSymbol? resultVariable = null;
                 var trailing = statements[statements.Count - 1];
                 if (trailing is BoundExpressionStatement trailingExpression
                     && IsCapturableEchoType(trailingExpression.Expression.Type))
@@ -1429,7 +1457,7 @@ public sealed class Binder
     /// on any path all decline the capture (no echo), exactly like the
     /// historical single-statement shapes declined non-capturable values.
     /// </summary>
-    private static bool TryInferTrailingCaptureType(BoundStatement statement, out TypeSymbol type)
+    private static bool TryInferTrailingCaptureType(BoundStatement statement, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? type)
     {
         switch (statement)
         {
@@ -1460,7 +1488,7 @@ public sealed class Binder
             case BoundPatternSwitchStatement switchStatement
                 when switchStatement.Arms.Length > 0
                     && (switchStatement.IsExhaustive || switchStatement.Arms.Any(a => a.IsDefault && a.Guard == null)):
-                TypeSymbol common = null;
+                TypeSymbol? common = null;
                 foreach (var arm in switchStatement.Arms)
                 {
                     if (!TryInferTrailingCaptureType(arm.Body, out var armType)
@@ -1519,11 +1547,17 @@ public sealed class Binder
                         RewriteTrailingCapture(block.Statements[block.Statements.Length - 1], resultVariable)));
 
             case BoundIfStatement ifStatement:
+                // TryInferTrailingCaptureType only succeeds for a trailing
+                // BoundIfStatement when ElseStatement is non-null (see its
+                // `when ifStatement.ElseStatement != null` case guard), and
+                // this method only runs on a statement that already passed
+                // that check.
+                var ifElseStatement = Invariant.Required(ifStatement.ElseStatement, "TryInferTrailingCaptureType verified this if-statement has an else branch");
                 return new BoundIfStatement(
                     ifStatement.Syntax,
                     ifStatement.Condition,
                     RewriteTrailingCapture(ifStatement.ThenStatement, resultVariable),
-                    RewriteTrailingCapture(ifStatement.ElseStatement, resultVariable));
+                    RewriteTrailingCapture(ifElseStatement, resultVariable));
 
             case BoundPatternSwitchStatement switchStatement:
                 return new BoundPatternSwitchStatement(
@@ -1579,7 +1613,7 @@ public sealed class Binder
     /// emitted IL or the diagnostics relative to a from-scratch bind.
     /// </param>
     /// <returns>A bound program.</returns>
-    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references, BoundBodyCache cache)
+    public static BoundProgram BindProgram(BoundGlobalScope globalScope, ReferenceResolver? references, BoundBodyCache? cache)
         => BindProgram(globalScope, references, cache, dirtyTrees: null);
 
     /// <summary>
@@ -1643,16 +1677,17 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, function.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, function, function.Declaration.Body, diagnostics, () =>
+                var (functionDeclaration, functionBody) = RequireDeclaredBody(function);
+                var loweredBody = BindBodyWithPackage(parentScope, function.Package?.Name, functionBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, function);
-                    var body = binder.statements.BindStatement(function.Declaration.Body);
+                    var body = binder.statements.BindBlockStatement(functionBody);
                     binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body);
 
                     if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(function.Declaration.Identifier.Location);
+                        binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
                     }
 
                     AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
@@ -1668,8 +1703,9 @@ public sealed class Binder
 
         // Phase 3.B.3 sub-step 2b: bind class method bodies. Methods are not
         // in globalScope.Functions (they're addressed via the dot operator),
-        // so we walk Structs explicitly here.
-        foreach (var structSym in globalScope.Structs)
+        // so we walk Structs explicitly here. globalScope is this method's
+        // own non-nullable parameter, never reassigned above.
+        foreach (var structSym in globalScope!.Structs)
         {
             if (structSym.Methods.IsDefaultOrEmpty)
             {
@@ -1690,16 +1726,17 @@ public sealed class Binder
                     continue;
                 }
 
-                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+                var (methodDeclaration, methodBody) = RequireDeclaredBody(method);
+                var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, methodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
-                    var body = binder.statements.BindStatement(method.Declaration.Body);
+                    var body = binder.statements.BindBlockStatement(methodBody);
                     binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body, structSym);
 
                     if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                        binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
                     }
 
                     AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
@@ -1837,15 +1874,16 @@ public sealed class Binder
             {
                 // ADR-0065 §5: skip synthesized primary-ctor symbols; the
                 // emitter materializes their field-assignment body directly.
-                if (ctor.IsSynthesizedFromPrimaryConstructor || ctor.Declaration == null)
+                var ctorDeclaration = ctor.Declaration;
+                if (ctor.IsSynthesizedFromPrimaryConstructor || ctorDeclaration == null)
                 {
                     continue;
                 }
 
-                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, ctor.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctor.Declaration.Body, diagnostics, () =>
+                var ctorLoweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, ctorDeclaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
                 {
                     var ctorBinder = new Binder(parentScope, ctor.Function);
-                    var ctorBody = ctorBinder.statements.BindStatement(ctor.Declaration.Body);
+                    var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
                     ctorBinder.statements.FinalizeUserLabels();
 
                     // ADR-0065 §2 Rule 3: a `convenience init` body must begin
@@ -2078,6 +2116,23 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// Asserts that <paramref name="function"/> has a source declaration with
+    /// a body, for the member-body binding loops in <see cref="BindProgram(BoundGlobalScope, ReferenceResolver?, BoundBodyCache?, ImmutableHashSet{SyntaxTree}?)"/>
+    /// and <see cref="BindInterfaceMethodBody"/>/<see cref="BindStructMemberBody"/>
+    /// and friends. Every caller has already skipped members with no body
+    /// (P/Invoke, abstract, or an explicit <c>Declaration?.Body == null</c>
+    /// check) before reaching this call.
+    /// </summary>
+    /// <param name="function">The member symbol whose declaration and body are required.</param>
+    /// <returns>The member's non-null declaration and body.</returns>
+    private static (FunctionDeclarationSyntax Declaration, BlockStatementSyntax Body) RequireDeclaredBody(FunctionSymbol function)
+    {
+        var declaration = Invariant.Required(function.Declaration, "the caller has already skipped members with no source declaration");
+        var body = Invariant.Required(declaration.Body, "the caller has already skipped members with no body (abstract/PInvoke/extern)");
+        return (declaration, body);
+    }
+
+    /// <summary>
     /// ADR-0105 helper shared by every member-body bind site in
     /// <see cref="BindProgram(BoundGlobalScope, ReferenceResolver, BoundBodyCache, ImmutableHashSet{SyntaxTree})"/>.
     /// On a <em>sound</em> cache hit it returns the cached lowered body and
@@ -2102,8 +2157,8 @@ public sealed class Binder
     /// <param name="bindAndLower">Produces the freshly bound+lowered body and its diagnostics on a miss.</param>
     /// <returns>The lowered body — reused on a sound hit, freshly produced otherwise.</returns>
     private static BoundBlockStatement BindBodyWithCache(
-        BoundBodyCache cache,
-        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
         FunctionSymbol member,
         SyntaxNode bodySyntax,
         ImmutableArray<Diagnostic>.Builder diagnostics,
@@ -2124,7 +2179,11 @@ public sealed class Binder
 
         var (body, bodyDiagnostics) = bindAndLower();
         AppendBodyDiagnostics(diagnostics, bodyDiagnostics, member);
-        cache?.Store(member, bodySyntax, body, bodyDiagnostics);
+
+        // bodySyntax is this method's own non-nullable parameter, never
+        // reassigned above (the `bodySyntax?.SyntaxTree` read a few lines up
+        // is a redundant null-conditional, not a narrowing of bodySyntax).
+        cache?.Store(member, bodySyntax!, body, bodyDiagnostics);
         return body;
     }
 
@@ -2174,7 +2233,7 @@ public sealed class Binder
     /// <param name="referencingTree">The syntax tree (file) the member's body belongs to.</param>
     /// <param name="bind">Performs the member-body bind/lower work.</param>
     /// <returns>The lowered body produced by <paramref name="bind"/>.</returns>
-    private static BoundBlockStatement BindBodyWithPackage(BoundScope parentScope, string packageName, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree referencingTree, Func<BoundBlockStatement> bind)
+    private static BoundBlockStatement BindBodyWithPackage(BoundScope parentScope, string? packageName, GSharp.Core.CodeAnalysis.Syntax.SyntaxTree referencingTree, Func<BoundBlockStatement> bind)
     {
         var previousPackage = parentScope.SetCurrentDeclaringPackage(packageName);
         var previousTree = parentScope.SetCurrentReferencingSyntaxTree(referencingTree);
@@ -2203,23 +2262,24 @@ public sealed class Binder
     /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     private static void BindInterfaceMethodBody(
-        BoundBodyCache cache,
-        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol method,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var (interfaceMethodDeclaration, interfaceMethodBody) = RequireDeclaredBody(method);
+        var loweredBody = BindBodyWithPackage(parentScope, method.Package?.Name, interfaceMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindStatement(method.Declaration.Body);
+            var body = binder.statements.BindBlockStatement(interfaceMethodBody);
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body);
 
             if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
             }
 
             AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
@@ -2247,8 +2307,8 @@ public sealed class Binder
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     /// <param name="requireAllPathsReturn">When true (a getter), all code paths must return a value.</param>
     private static void BindInterfaceAccessorBody(
-        BoundBodyCache cache,
-        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol accessor,
         BlockStatementSyntax bodySyntax,
@@ -2259,7 +2319,7 @@ public sealed class Binder
         var loweredBody = BindBodyWithPackage(parentScope, accessor.Package?.Name, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, accessor);
-            var body = binder.statements.BindStatement(bodySyntax);
+            var body = binder.statements.BindBlockStatement(bodySyntax);
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body);
 
@@ -2295,8 +2355,8 @@ public sealed class Binder
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     /// <param name="allPathsReturnLocation">When non-null, the location at which to report a missing all-paths return.</param>
     private static void BindStructMemberBody(
-        BoundBodyCache cache,
-        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol member,
         StatementSyntax bodySyntax,
@@ -2308,7 +2368,10 @@ public sealed class Binder
         var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, bodySyntax.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
         {
             var binder = new Binder(parentScope, member);
-            var body = binder.statements.BindStatement(bodySyntax);
+
+            // BindStatement returns null only for a SyntaxKind.CommentToken
+            // node; a member body is never a bare comment.
+            var body = Invariant.Required(binder.statements.BindStatement(bodySyntax), "a member body statement is never a bare comment token");
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body, structSym);
 
@@ -2342,24 +2405,25 @@ public sealed class Binder
     /// <param name="functionBodies">The function-body map to register the lowered body in.</param>
     /// <param name="diagnostics">The program-level diagnostics accumulator.</param>
     private static void BindStructMethodBody(
-        BoundBodyCache cache,
-        ImmutableHashSet<SyntaxTree> dirtyTrees,
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
         BoundScope parentScope,
         FunctionSymbol method,
         StructSymbol structSym,
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, method.Declaration.Body.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, method.Declaration.Body, diagnostics, () =>
+        var (structMethodDeclaration, structMethodBody) = RequireDeclaredBody(method);
+        var loweredBody = BindBodyWithPackage(parentScope, structSym.PackageName, structMethodBody.SyntaxTree, () => BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
         {
             var binder = new Binder(parentScope, method);
-            var body = binder.statements.BindStatement(method.Declaration.Body);
+            var body = binder.statements.BindBlockStatement(structMethodBody);
             binder.statements.FinalizeUserLabels();
             var lowered = Lowerer.Lower(body, structSym);
 
             if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
             {
-                binder.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+                binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
             }
 
             AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
@@ -2398,11 +2462,16 @@ public sealed class Binder
         StructSymbol structSym,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var initBlocks = structSym.Declaration?.SharedBlock?.InitBlocks ?? ImmutableArray<StaticInitializerBlockSyntax>.Empty;
+        var structDeclaration = structSym.Declaration;
+        var initBlocks = structDeclaration?.SharedBlock?.InitBlocks ?? ImmutableArray<StaticInitializerBlockSyntax>.Empty;
         if (initBlocks.IsDefaultOrEmpty)
         {
             return;
         }
+
+        // Non-empty initBlocks came from structDeclaration?.SharedBlock?.InitBlocks,
+        // so structDeclaration is non-null here.
+        structDeclaration = Invariant.Required(structDeclaration, "initBlocks is only non-empty when structDeclaration is non-null");
 
         var context = new FunctionSymbol(
             "<static-initializer>",
@@ -2415,14 +2484,14 @@ public sealed class Binder
         };
 
         var previousPackage = parentScope.SetCurrentDeclaringPackage(structSym.PackageName);
-        var previousTree = parentScope.SetCurrentReferencingSyntaxTree(structSym.Declaration.SyntaxTree);
+        var previousTree = parentScope.SetCurrentReferencingSyntaxTree(structDeclaration.SyntaxTree);
         try
         {
             var binder = new Binder(parentScope, context);
             var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var initBlock in initBlocks)
             {
-                boundBlocks.Add(binder.statements.BindStatement(initBlock.Body));
+                boundBlocks.Add(binder.statements.BindBlockStatement(initBlock.Body));
             }
 
             binder.statements.FinalizeUserLabels();
@@ -2453,7 +2522,7 @@ public sealed class Binder
     /// <param name="additionalLocals">In-scope locals/parameters to declare before binding, or <c>null</c>.</param>
     /// <param name="expression">The receiver expression to infer a type for.</param>
     /// <returns>The inferred non-error, non-void type, or <c>null</c> when inference fails.</returns>
-    public static TypeSymbol TryInferExpressionType(
+    public static TypeSymbol? TryInferExpressionType(
         BoundGlobalScope globalScope,
         ReferenceResolver references,
         FunctionSymbol? containingFunction,
@@ -2615,27 +2684,32 @@ public sealed class Binder
         // the first base type populates BaseTypeIdentifier, subsequent ones
         // AdditionalBaseTypeIdentifiers, and the full list is preserved on
         // BaseTypeClauses.
-        SyntaxToken baseColon = null;
-        SyntaxToken baseTypeIdentifier = null;
-        var additionalBaseIdentifiers = ImmutableArray<SyntaxToken>.Empty;
+        SyntaxToken? baseColon = null;
+        SyntaxToken? baseTypeIdentifier = null;
+        var additionalBaseIdentifiers = ImmutableArray<SyntaxToken?>.Empty;
         var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
-        if (syntax.HasBaseType && syntax.BaseTypeClause != null)
+        var syntaxBaseTypeClause = syntax.BaseTypeClause;
+        if (syntax.HasBaseType && syntaxBaseTypeClause != null)
         {
             baseColon = syntax.BaseColonToken;
-            baseTypeIdentifier = syntax.BaseTypeClause.DottedName == null
+            baseTypeIdentifier = syntaxBaseTypeClause.DottedName == null
                 ? null
-                : new SyntaxToken(tree, SyntaxKind.IdentifierToken, syntax.BaseTypeClause.Identifier.Position, syntax.BaseTypeClause.DottedName, null);
+                : new SyntaxToken(tree, SyntaxKind.IdentifierToken, Invariant.Required(syntaxBaseTypeClause.Identifier, "a base-type clause with a non-empty DottedName has an Identifier").Position, syntaxBaseTypeClause.DottedName, null);
 
             var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-            nodesAndSeparators.Add(syntax.BaseTypeClause);
-            var addlBuilder = ImmutableArray.CreateBuilder<SyntaxToken>();
+            nodesAndSeparators.Add(syntaxBaseTypeClause);
+            var addlBuilder = ImmutableArray.CreateBuilder<SyntaxToken?>();
             foreach (var addl in syntax.AdditionalBaseTypeClauses)
             {
                 nodesAndSeparators.Add(new SyntaxToken(tree, SyntaxKind.CommaToken, position, ",", null));
                 nodesAndSeparators.Add(addl);
+
+                // Entries of AnonymousClassExpressionSyntax.AdditionalBaseTypeClauses are
+                // always parsed as named (simple or dotted) base-type references, never an
+                // array/pointer/function clause, so the parser always sets Identifier here.
                 addlBuilder.Add(addl.DottedName == null
                     ? null
-                    : new SyntaxToken(tree, SyntaxKind.IdentifierToken, addl.Identifier.Position, addl.DottedName, null));
+                    : new SyntaxToken(tree, SyntaxKind.IdentifierToken, Invariant.Required(addl.Identifier, "an additional base-type clause is always a named type reference with an identifier").Position, addl.DottedName, null));
             }
 
             additionalBaseIdentifiers = addlBuilder.ToImmutable();
@@ -2686,8 +2760,8 @@ public sealed class Binder
         DiagnosticBag diagnostics,
         out bool awaitFound)
     {
-        ReturnStatementSyntax firstBare = null;
-        ReturnStatementSyntax firstValue = null;
+        ReturnStatementSyntax? firstBare = null;
+        ReturnStatementSyntax? firstValue = null;
         bool localAwaitFound = false;
         foreach (var gs in globalStatements)
         {
@@ -2729,8 +2803,8 @@ public sealed class Binder
     /// </summary>
     private static void CollectTopLevelReturnsAndAwaits(
         SyntaxNode node,
-        ref ReturnStatementSyntax firstBare,
-        ref ReturnStatementSyntax firstValue,
+        ref ReturnStatementSyntax? firstBare,
+        ref ReturnStatementSyntax? firstValue,
         ref bool awaitFound)
     {
         if (node == null)
@@ -2813,18 +2887,18 @@ public sealed class Binder
     }
 
     private static BoundScope CreateParentScope(
-        BoundGlobalScope previous,
-        ReferenceResolver references,
-        ImmutableHashSet<string> preprocessorSymbols,
+        BoundGlobalScope? previous,
+        ReferenceResolver? references,
+        ImmutableHashSet<string>? preprocessorSymbols,
         bool preserveLatestImportSyntaxTrees)
         => CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees, previous?.SubmissionImports);
 
     private static BoundScope CreateParentScope(
-        BoundGlobalScope previous,
-        ReferenceResolver references,
-        ImmutableHashSet<string> preprocessorSymbols,
+        BoundGlobalScope? previous,
+        ReferenceResolver? references,
+        ImmutableHashSet<string>? preprocessorSymbols,
         bool preserveLatestImportSyntaxTrees,
-        SubmissionImports submissionImports)
+        SubmissionImports? submissionImports)
     {
         var stack = new Stack<BoundGlobalScope>();
         while (previous != null)
@@ -2885,7 +2959,7 @@ public sealed class Binder
         return parent;
     }
 
-    private static BoundScope CreateRootScope(ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
+    private static BoundScope CreateRootScope(ReferenceResolver? references, ImmutableHashSet<string>? preprocessorSymbols)
     {
         // Issues #3245/#3246: the legacy `print`/`input`/`rnd` builtins were
         // retired (clean cut) — the root scope declares no builtin functions.
@@ -2974,7 +3048,7 @@ public sealed class Binder
         }
     }
 
-    private TypeSymbol BindNonNullableTypeClause(TypeClauseSyntax syntax)
+    private TypeSymbol? BindNonNullableTypeClause(TypeClauseSyntax? syntax)
     {
         if (syntax == null)
         {
@@ -2988,10 +3062,11 @@ public sealed class Binder
             // parameter/return types eagerly so structural identity holds
             // across declarations even when the user spells the same
             // signature differently elsewhere.
-            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
-            for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
+            var fpParameterTypes = Invariant.Required(syntax.FunctionParameterTypes, "a function-pointer type clause (IsFunctionPointer) always carries its parameter-type list from the parser");
+            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(fpParameterTypes.Count);
+            for (var i = 0; i < fpParameterTypes.Count; i++)
             {
-                var pt = BindTypeClause(syntax.FunctionParameterTypes[i]);
+                var pt = BindTypeClause(fpParameterTypes[i]);
                 if (pt == null)
                 {
                     return null;
@@ -3014,7 +3089,7 @@ public sealed class Binder
                 if (!binderCtx.InUnsafeContext)
                 {
                     Diagnostics.ReportUnmanagedPointerOutsideUnsafe(
-                        syntax.ManagedFunctionPointerStarToken.Location);
+                        Invariant.Required(syntax.ManagedFunctionPointerStarToken, "the parser sets the star token whenever IsManagedFunctionPointer (ManagedFunctionPointerFuncKeyword) is set").Location);
                     return null;
                 }
 
@@ -3061,13 +3136,14 @@ public sealed class Binder
             // and the per-slot variadic flag is threaded into the cached
             // `FunctionTypeSymbol` so call-site pack / pass-through can
             // consult it.
-            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.FunctionParameterTypes.Count);
-            var variadicFlagsBuilder = ImmutableArray.CreateBuilder<bool>(syntax.FunctionParameterTypes.Count);
+            var fnParameterTypes = Invariant.Required(syntax.FunctionParameterTypes, "a function type clause (IsFunction) always carries its parameter-type list from the parser");
+            var paramTypes = ImmutableArray.CreateBuilder<TypeSymbol>(fnParameterTypes.Count);
+            var variadicFlagsBuilder = ImmutableArray.CreateBuilder<bool>(fnParameterTypes.Count);
             var anyVariadic = false;
             var firstVariadicSeen = false;
-            for (var i = 0; i < syntax.FunctionParameterTypes.Count; i++)
+            for (var i = 0; i < fnParameterTypes.Count; i++)
             {
-                var paramSyntax = syntax.FunctionParameterTypes[i];
+                var paramSyntax = fnParameterTypes[i];
                 var pt = BindTypeClause(paramSyntax);
                 if (pt == null)
                 {
@@ -3084,7 +3160,7 @@ public sealed class Binder
                     }
 
                     firstVariadicSeen = true;
-                    if (i < syntax.FunctionParameterTypes.Count - 1)
+                    if (i < fnParameterTypes.Count - 1)
                     {
                         Diagnostics.ReportVariadicParameterMustBeLast(paramSyntax.Location, $"<arg{i}>");
                     }
@@ -3103,7 +3179,8 @@ public sealed class Binder
                 variadicFlagsBuilder.Add(isVariadicSlot);
             }
 
-            var ret = syntax.ReturnTypeClause != null ? BindTypeClause(syntax.ReturnTypeClause) : TypeSymbol.Void;
+            var fnReturnTypeClauseSyntax = syntax.ReturnTypeClause;
+            var ret = fnReturnTypeClauseSyntax != null ? BindTypeClause(fnReturnTypeClauseSyntax) : TypeSymbol.Void;
             if (ret == null)
             {
                 return null;
@@ -3114,7 +3191,7 @@ public sealed class Binder
                 if (IsTaskShapedReturn(ret))
                 {
                     Diagnostics.ReportAsyncFunctionTypeClauseHasExplicitTaskReturn(
-                        syntax.ReturnTypeClause.Location,
+                        Invariant.Required(fnReturnTypeClauseSyntax, "ret is task-shaped only when it was bound from an explicit return-type clause above").Location,
                         ret.Name);
                     return null;
                 }
@@ -3142,17 +3219,20 @@ public sealed class Binder
 
         if (syntax.IsTuple)
         {
-            // Phase 4.5: tuple type clause `(T1, T2, ...)`.
-            if (syntax.TupleElements.Count < 2)
+            // Phase 4.5: tuple type clause `(T1, T2, ...)`. IsTuple implies the
+            // parser set TupleElements and CloseParenToken.
+            var tupleElements = Invariant.Required(syntax.TupleElements, "IsTuple implies the parser set TupleElements");
+            if (tupleElements.Count < 2)
             {
-                Diagnostics.ReportUnexpectedToken(syntax.CloseParenToken.Location, syntax.CloseParenToken.Kind, SyntaxKind.IdentifierToken);
+                var closeParenToken = Invariant.Required(syntax.CloseParenToken, "IsTuple implies the parser set CloseParenToken");
+                Diagnostics.ReportUnexpectedToken(closeParenToken.Location, closeParenToken.Kind, SyntaxKind.IdentifierToken);
                 return null;
             }
 
-            var elements = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TupleElements.Count);
-            for (var i = 0; i < syntax.TupleElements.Count; i++)
+            var elements = ImmutableArray.CreateBuilder<TypeSymbol>(tupleElements.Count);
+            for (var i = 0; i < tupleElements.Count; i++)
             {
-                var elementType = BindTypeClause(syntax.TupleElements[i]);
+                var elementType = BindTypeClause(tupleElements[i]);
                 if (elementType == null)
                 {
                     return null;
@@ -3166,9 +3246,10 @@ public sealed class Binder
 
         if (syntax.IsMap)
         {
-            // ADR-0104: map type clause `map[K,V]`.
-            var keyType = BindTypeClause(syntax.MapKeyType);
-            var valueType = BindTypeClause(syntax.MapValueType);
+            // ADR-0104: map type clause `map[K,V]`. IsMap implies the parser
+            // set MapKeyType/MapValueType.
+            var keyType = BindTypeClause(Invariant.Required(syntax.MapKeyType, "IsMap implies the parser set MapKeyType"));
+            var valueType = BindTypeClause(Invariant.Required(syntax.MapValueType, "IsMap implies the parser set MapValueType"));
             if (keyType == null || valueType == null)
             {
                 return null;
@@ -3183,9 +3264,11 @@ public sealed class Binder
             // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
             // Reports GS0316 anchored at the `chan` keyword and recovers by
             // binding the channel type as if the import were present.
-            binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.ChanKeyword.Location, "chan");
+            // IsChannel implies the parser set ChanKeyword/ChanElementType.
+            var chanKeyword = Invariant.Required(syntax.ChanKeyword, "IsChannel implies the parser set ChanKeyword");
+            binderCtx.ReportIfGoExtensionsImportMissing(syntax, chanKeyword.Location, "chan");
 
-            var elementType = BindTypeClause(syntax.ChanElementType);
+            var elementType = BindTypeClause(Invariant.Required(syntax.ChanElementType, "IsChannel implies the parser set ChanElementType"));
             if (elementType == null)
             {
                 return null;
@@ -3230,7 +3313,7 @@ public sealed class Binder
                 && typeParameter.ClassConstraint == null)
             {
                 Diagnostics.ReportUnconstrainedNullableSequenceElement(
-                    syntax.SequenceElementType.Location,
+                    Invariant.Required(syntax.SequenceElementType, "IsSequence implies the parser set SequenceElementType").Location,
                     typeParameter.Name);
             }
 
@@ -3282,7 +3365,7 @@ public sealed class Binder
                     // managed reference / string / class field) or to any
                     // managed reference type is still rejected here with GS0398,
                     // matching C#'s unmanaged-type rule.
-                    Diagnostics.ReportUnmanagedPointerIllegalPointee(syntax.PointerPointeeType.Location, pointeeType.Name);
+                    Diagnostics.ReportUnmanagedPointerIllegalPointee(Invariant.Required(syntax.PointerPointeeType, "IsPointer implies the parser set PointerPointeeType").Location, pointeeType.Name);
                     return PointerTypeSymbol.Get(pointeeType);
                 }
 
@@ -3302,16 +3385,22 @@ public sealed class Binder
         // dotted-qualifier names (`Outer.Inner`) are routed through
         // <see cref="BindQualifiedTypeName"/> below, which handles the
         // arity-mangled lookup for a generic NESTED type itself.
+        // HasTypeArguments implies the parser set TypeArguments; the
+        // single-identifier form (HasQualifier false) implies Identifier is
+        // set (both are dereferenced unconditionally by the fallthrough
+        // identifier-lookup path below too).
+        var identifierToken = Invariant.Required(syntax.Identifier, "the single-identifier type-clause form has an Identifier token");
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(syntax.Identifier.Text, syntax.TypeArguments.Count, out var clrOpenType))
+            scope.TryLookupImportedGenericClass(identifierToken.Text, Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count, out var clrOpenType))
         {
-            var clrArgs = new System.Type[syntax.TypeArguments.Count];
-            var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
+            var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
+            var clrArgs = new System.Type[topLevelTypeArguments.Count];
+            var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(topLevelTypeArguments.Count);
             var hasSymbolicArg = false;
-            for (var i = 0; i < syntax.TypeArguments.Count; i++)
+            for (var i = 0; i < topLevelTypeArguments.Count; i++)
             {
-                var ta = BindTypeClause(syntax.TypeArguments[i]);
+                var ta = BindTypeClause(topLevelTypeArguments[i]);
                 if (ta == null)
                 {
                     return null;
@@ -3324,7 +3413,7 @@ public sealed class Binder
                 // forbids constructing a generic type over a by-ref-like type.
                 if (TypeSymbol.IsByRefLike(ta))
                 {
-                    var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                    var taLocation = topLevelTypeArguments[i].Identifier?.Location ?? identifierToken.Location;
                     Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                     return null;
                 }
@@ -3376,12 +3465,12 @@ public sealed class Binder
             }
             catch (System.ArgumentException)
             {
-                Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
                 return null;
             }
         }
 
-        TypeSymbol element;
+        TypeSymbol? element;
         if (syntax.HasQualifier)
         {
             // Issue #526: dotted-qualifier name `Outer.Inner` (or `A.B.C`).
@@ -3397,7 +3486,7 @@ public sealed class Binder
             }
 
             // ADR-0047 §6 / #175: obsolete-use reporting still applies.
-            ReportObsoleteUseIfApplicable(syntax.Identifier.Location, element, element.Name);
+            ReportObsoleteUseIfApplicable(identifierToken.Location, element, element.Name);
 
             // BindQualifiedTypeName already consumed `syntax.TypeArguments` if
             // there was an arity match; skip the single-identifier generic
@@ -3410,8 +3499,8 @@ public sealed class Binder
             // and a generic of different arity coexist. With a type-argument
             // list, prefer the matching generic definition; without one, prefer
             // the arity-0 type.
-            var requestedArity = syntax.HasTypeArguments ? syntax.TypeArguments.Count : 0;
-            element = LookupType(syntax.Identifier.Text, requestedArity, out var ambiguousAcrossImportedPackages);
+            var requestedArity = syntax.HasTypeArguments ? Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count : 0;
+            element = LookupType(identifierToken.Text, requestedArity, out var ambiguousAcrossImportedPackages);
             if (element == null)
             {
                 // Issue #2455: "ambiguous between imported packages" and "no
@@ -3421,11 +3510,11 @@ public sealed class Binder
                 // that the type is undefined.
                 if (ambiguousAcrossImportedPackages)
                 {
-                    Diagnostics.ReportAmbiguousSourceType(syntax.Identifier.Location, syntax.Identifier.Text);
+                    Diagnostics.ReportAmbiguousSourceType(identifierToken.Location, identifierToken.Text);
                 }
                 else
                 {
-                    Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.Identifier.Text);
+                    Diagnostics.ReportUndefinedType(identifierToken.Location, identifierToken.Text);
                 }
 
                 return null;
@@ -3435,7 +3524,7 @@ public sealed class Binder
             // class, interface, or enum reference appearing in type position
             // (parameter types, return types, field types, generic-argument
             // positions, type aliases, etc.).
-            ReportObsoleteUseIfApplicable(syntax.Identifier.Location, element, element.Name);
+            ReportObsoleteUseIfApplicable(identifierToken.Location, element, element.Name);
 
             if (element is EnumSymbol nestedEnum)
             {
@@ -3448,10 +3537,11 @@ public sealed class Binder
             // type position (currently interfaces; structs follow up later).
             if (syntax.HasTypeArguments)
             {
-                var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.TypeArguments.Count);
-                for (var i = 0; i < syntax.TypeArguments.Count; i++)
+                var elementTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
+                var typeArgsBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(elementTypeArguments.Count);
+                for (var i = 0; i < elementTypeArguments.Count; i++)
                 {
-                    var ta = BindTypeClause(syntax.TypeArguments[i]);
+                    var ta = BindTypeClause(elementTypeArguments[i]);
                     if (ta == null)
                     {
                         return null;
@@ -3461,7 +3551,7 @@ public sealed class Binder
                     // as generic type arguments to a user-defined generic type.
                     if (TypeSymbol.IsByRefLike(ta))
                     {
-                        var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                        var taLocation = elementTypeArguments[i].Identifier?.Location ?? identifierToken.Location;
                         Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                         return null;
                     }
@@ -3474,13 +3564,13 @@ public sealed class Binder
                 {
                     if (!iface.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
                         return null;
                     }
 
                     if (iface.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, iface.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, iface.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3490,13 +3580,13 @@ public sealed class Binder
                 {
                     if (!genericStruct.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
                         return null;
                     }
 
                     if (genericStruct.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, genericStruct.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, genericStruct.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3510,13 +3600,13 @@ public sealed class Binder
                     // substituted with the supplied type arguments.
                     if (!genericDelegate.IsGenericDefinition)
                     {
-                        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                        Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
                         return null;
                     }
 
                     if (genericDelegate.TypeParameters.Length != typeArgs.Length)
                     {
-                        Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.Identifier.Text, genericDelegate.TypeParameters.Length, typeArgs.Length);
+                        Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, identifierToken.Text, genericDelegate.TypeParameters.Length, typeArgs.Length);
                         return null;
                     }
 
@@ -3524,7 +3614,7 @@ public sealed class Binder
                 }
                 else
                 {
-                    Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.Identifier.Text);
+                    Diagnostics.ReportTypeNotGeneric(identifierToken.Location, identifierToken.Text);
                     return null;
                 }
             }
@@ -3543,7 +3633,7 @@ public sealed class Binder
     /// <param name="syntax">The (possibly array-prefixed) type clause.</param>
     /// <param name="element">The already-resolved element type.</param>
     /// <returns>The slice/array symbol, the element itself, or <c>null</c> on error.</returns>
-    private TypeSymbol ApplyArraySuffix(TypeClauseSyntax syntax, TypeSymbol element)
+    private TypeSymbol? ApplyArraySuffix(TypeClauseSyntax syntax, TypeSymbol? element)
     {
         if (element == null || !syntax.IsArray)
         {
@@ -3567,16 +3657,19 @@ public sealed class Binder
             return SliceTypeSymbol.Get(element);
         }
 
-        if (!int.TryParse(syntax.LengthToken.Text, out var length) || length < 0)
+        // IsSlice (checked above, false here) is exactly "bracketed AND no
+        // length token", so a non-slice array clause has a length token.
+        var lengthToken = Invariant.Required(syntax.LengthToken, "a non-slice array type clause has a length token");
+        if (!int.TryParse(lengthToken.Text, out var length) || length < 0)
         {
-            Diagnostics.ReportInvalidArrayLength(syntax.LengthToken.Location, syntax.LengthToken.Text);
+            Diagnostics.ReportInvalidArrayLength(lengthToken.Location, lengthToken.Text);
             return null;
         }
 
         return ArrayTypeSymbol.Get(element, length);
     }
 
-    private TypeSymbol BindTypeClause(TypeClauseSyntax syntax)
+    private TypeSymbol? BindTypeClause(TypeClauseSyntax? syntax)
     {
         var bound = BindNonNullableTypeClause(syntax);
         if (bound == null)
@@ -3584,15 +3677,19 @@ public sealed class Binder
             return bound;
         }
 
+        // BindNonNullableTypeClause returns null immediately when its syntax
+        // argument is null, so a non-null bound here means syntax is non-null.
+        var nonNullSyntax = Invariant.Required(syntax, "BindNonNullableTypeClause returned non-null, so its syntax argument was non-null");
+
         // Issue #1212: for an array/slice clause the trailing `?` is consumed
         // by ApplyArraySuffix and applied to the element type (`[]T?`), so it
         // must not also wrap the whole array. The *array* is made nullable only
         // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
-        if (syntax.IsArray)
+        if (nonNullSyntax.IsArray)
         {
-            bound = syntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
+            bound = nonNullSyntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
         }
-        else if (syntax.IsNullable)
+        else if (nonNullSyntax.IsNullable)
         {
             bound = NullableTypeSymbol.Get(bound);
         }
@@ -3602,7 +3699,7 @@ public sealed class Binder
         // `(chan int32)?` is a nullable channel, `([]T)?` equals `[]?T`. The
         // already-nullable guard makes redundant spellings like `(int32?)?`
         // collapse instead of double-wrapping.
-        if (syntax.IsParenthesizedNullable && bound is not NullableTypeSymbol)
+        if (nonNullSyntax.IsParenthesizedNullable && bound is not NullableTypeSymbol)
         {
             bound = NullableTypeSymbol.Get(bound);
         }
@@ -3641,7 +3738,7 @@ public sealed class Binder
     /// symbol — the value set via <c>SetContainingType</c> during declaration
     /// binding — or <c>null</c> for a top-level type or a non-aggregate symbol.
     /// </summary>
-    private static TypeSymbol SymbolContainingType(TypeSymbol type) => type switch
+    private static TypeSymbol? SymbolContainingType(TypeSymbol type) => type switch
     {
         StructSymbol s => s.ContainingType,
         EnumSymbol e => e.ContainingType,
@@ -3661,20 +3758,34 @@ public sealed class Binder
     /// type, letting the caller fall back to the reflection-based CLR nested-type walk. Array
     /// suffixes are applied by the caller.
     /// </summary>
-    private TypeSymbol TryResolveUserNestedTypeChain(TypeClauseSyntax syntax, string[] segmentTexts)
+    private TypeSymbol? TryResolveUserNestedTypeChain(TypeClauseSyntax syntax, string[] segmentTexts)
     {
         if (segmentTexts.Length < 2)
         {
             return null;
         }
 
-        var headArity = syntax.SegmentHasTypeArguments(0) ? syntax.GetSegmentTypeArguments(0).Count : -1;
-        var definitions = new TypeSymbol[segmentTexts.Length];
+        // SegmentHasTypeArguments(i) true implies GetSegmentTypeArguments(i)
+        // is non-null (both read the same underlying per-segment slot).
+        SeparatedSyntaxList<TypeClauseSyntax> SegmentTypeArguments(int index) => Invariant.Required(
+            syntax.GetSegmentTypeArguments(index),
+            "SegmentHasTypeArguments(index) was true, and both read the same per-segment slot");
+
+        var headArity = syntax.SegmentHasTypeArguments(0) ? SegmentTypeArguments(0).Count : -1;
+        var definitions = new TypeSymbol?[segmentTexts.Length];
         definitions[0] = LookupType(segmentTexts[0], headArity > 0 ? headArity : -1);
         if (definitions[0] == null)
         {
             return null;
         }
+
+        // Every entry from here on is set to a non-null value in the loop
+        // below, or the loop returns null (unresolved segment) before this
+        // method uses definitions[] again — so once execution reaches the
+        // construction pass past the loop, every entry is populated.
+        TypeSymbol ResolvedDefinition(int index) => Invariant.Required(
+            definitions[index],
+            "the segment-resolution loop above either populates every definitions[] entry or returns null before this method reads one");
 
         for (var i = 1; i < segmentTexts.Length; i++)
         {
@@ -3684,12 +3795,12 @@ public sealed class Binder
             // then fails the containment check and breaks `Container.Nested`
             // references. Issue #1506: each segment now drives its own preferred
             // arity from its own type-argument list.
-            var preferredArity = syntax.SegmentHasTypeArguments(i) ? syntax.GetSegmentTypeArguments(i).Count : -1;
-            if (scope.TryLookupNestedTypeAlias(definitions[i - 1], segmentTexts[i], preferredArity, out var nested))
+            var preferredArity = syntax.SegmentHasTypeArguments(i) ? SegmentTypeArguments(i).Count : -1;
+            if (scope.TryLookupNestedTypeAlias(ResolvedDefinition(i - 1), segmentTexts[i], preferredArity, out var nested))
             {
                 definitions[i] = nested;
             }
-            else if (definitions[i - 1] is StructSymbol containerStruct
+            else if (ResolvedDefinition(i - 1) is StructSymbol containerStruct
                 && scope.TryLookupNestedTypeAliasIncludingInherited(containerStruct, segmentTexts[i], preferredArity, out var inheritedNested, out var declaringContainer))
             {
                 definitions[i - 1] = declaringContainer;
@@ -3706,19 +3817,22 @@ public sealed class Binder
         // closed type; every earlier (outer) generic segment is bound and
         // validated so a malformed `Outer[bad].Inner` is diagnosed here rather
         // than falling through to a confusing CLR-path error.
-        var deepest = definitions[segmentTexts.Length - 1];
+        var deepest = ResolvedDefinition(segmentTexts.Length - 1);
         var constructedSegments = new TypeSymbol[segmentTexts.Length];
         for (var i = 0; i < segmentTexts.Length; i++)
         {
-            constructedSegments[i] = definitions[i];
+            constructedSegments[i] = ResolvedDefinition(i);
             if (!syntax.SegmentHasTypeArguments(i))
             {
                 continue;
             }
 
-            var segmentName = i == 0 ? syntax.Identifier.Text : string.Join(".", segmentTexts, 0, i + 1);
-            var segmentLocation = i == 0 ? syntax.Identifier.Location : syntax.QualifierIdentifierTokens[i - 1].Location;
-            var constructed = BindAndConstructUserGenericSegment(syntax, definitions[i], syntax.GetSegmentTypeArguments(i), segmentLocation, segmentName);
+            // This method resolves a dotted-qualifier chain, so its head
+            // segment always has an Identifier token.
+            var headIdentifier = Invariant.Required(syntax.Identifier, "a dotted-qualifier type-clause chain has a head Identifier");
+            var segmentName = i == 0 ? headIdentifier.Text : string.Join(".", segmentTexts, 0, i + 1);
+            var segmentLocation = i == 0 ? headIdentifier.Location : syntax.QualifierIdentifierTokens[i - 1].Location;
+            var constructed = BindAndConstructUserGenericSegment(syntax, ResolvedDefinition(i), SegmentTypeArguments(i), segmentLocation, segmentName);
             if (constructed == null)
             {
                 return null;
@@ -3779,7 +3893,7 @@ public sealed class Binder
     /// <returns>The flattened enclosing type-argument vector, or <c>default</c>.</returns>
     private static ImmutableArray<TypeSymbol> CollectConstructedEnclosingArguments(TypeSymbol[] constructedSegments, int deepestIndex)
     {
-        ImmutableArray<TypeSymbol>.Builder builder = null;
+        ImmutableArray<TypeSymbol>.Builder? builder = null;
         for (var i = 0; i < deepestIndex; i++)
         {
             var seg = constructedSegments[i];
@@ -3823,7 +3937,7 @@ public sealed class Binder
     /// <see cref="InterfaceSymbol"/>, or <see cref="DelegateTypeSymbol"/>). Reports the usual
     /// by-ref-like, wrong-arity, and not-generic diagnostics and returns <c>null</c> on error.
     /// </summary>
-    private TypeSymbol BindAndConstructUserGenericSegment(
+    private TypeSymbol? BindAndConstructUserGenericSegment(
         TypeClauseSyntax syntax,
         TypeSymbol definition,
         SeparatedSyntaxList<TypeClauseSyntax> argumentList,
@@ -3863,17 +3977,22 @@ public sealed class Binder
         }
     }
 
-    private TypeSymbol BindQualifiedTypeName(TypeClauseSyntax syntax)
+    private TypeSymbol? BindQualifiedTypeName(TypeClauseSyntax syntax)
     {
+        // Callers only reach this method for a dotted-qualifier name
+        // (syntax.HasQualifier), which always has a head Identifier.
+        var qualifiedIdentifier = Invariant.Required(syntax.Identifier, "a dotted-qualifier type clause has a head Identifier");
         var totalSegments = 1 + syntax.QualifierIdentifierTokens.Length;
         var segmentTexts = new string[totalSegments];
-        segmentTexts[0] = syntax.Identifier.Text;
+        segmentTexts[0] = qualifiedIdentifier.Text;
         for (var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++)
         {
             segmentTexts[1 + i] = syntax.QualifierIdentifierTokens[i].Text;
         }
 
-        var targetArity = syntax.HasTypeArguments ? syntax.TypeArguments.Count : 0;
+        // HasTypeArguments implies the parser set TypeArguments.
+        var qualifiedTypeArguments = syntax.TypeArguments;
+        var targetArity = syntax.HasTypeArguments ? Invariant.Required(qualifiedTypeArguments, "HasTypeArguments implies the parser set TypeArguments").Count : 0;
 
         // Issue #1069: a dotted name may reference a *user-defined* nested type
         // declared in the current compilation (e.g. `Outer.Entry`,
@@ -3949,8 +4068,8 @@ public sealed class Binder
             var constructed = BindAndConstructUserGenericSegment(
                 syntax,
                 sourceType,
-                syntax.TypeArguments,
-                syntax.Identifier.Location,
+                Invariant.Required(qualifiedTypeArguments, "targetArity != 0 implies HasTypeArguments was true, so TypeArguments is non-null"),
+                qualifiedIdentifier.Location,
                 syntax.DottedName);
             if (constructed != null)
             {
@@ -3963,10 +4082,10 @@ public sealed class Binder
         // a regular "undefined type". Otherwise walk from the outermost
         // resolvable segment and emit "Outer does not contain a nested type
         // 'X'" for the first failing segment.
-        var outermost = LookupType(syntax.Identifier.Text);
+        var outermost = LookupType(qualifiedIdentifier.Text);
         if (outermost == null)
         {
-            Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportUndefinedType(qualifiedIdentifier.Location, syntax.DottedName);
             return null;
         }
 
@@ -3975,16 +4094,16 @@ public sealed class Binder
         {
             // Outer is a built-in / GSharp-defined type with no CLR
             // representation reachable here; just report it as undefined.
-            Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportUndefinedType(qualifiedIdentifier.Location, syntax.DottedName);
             return null;
         }
 
-        var lastGoodName = syntax.Identifier.Text;
+        var lastGoodName = qualifiedIdentifier.Text;
         for (var i = 0; i < syntax.QualifierIdentifierTokens.Length; i++)
         {
             var segmentText = syntax.QualifierIdentifierTokens[i].Text;
             var isLast = i == syntax.QualifierIdentifierTokens.Length - 1;
-            Type next = null;
+            Type? next = null;
             if (isLast && targetArity > 0)
             {
                 scope.References.TryResolveNestedType(current, segmentText + "`" + targetArity, out next);
@@ -4010,7 +4129,7 @@ public sealed class Binder
 
         // Walk succeeded but ConstructIfGeneric must have failed; surface a
         // generic-mismatch diagnostic as a fallback.
-        Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+        Diagnostics.ReportTypeNotGeneric(qualifiedIdentifier.Location, syntax.DottedName);
         return null;
     }
 
@@ -4021,7 +4140,7 @@ public sealed class Binder
     /// prefixes, and the active import set as a namespace prefix for
     /// multi-segment prefixes.
     /// </summary>
-    private Type TryResolveOuterPrefix(string[] segmentTexts, int outerLen, int lastSegmentArity = 0)
+    private Type? TryResolveOuterPrefix(string[] segmentTexts, int outerLen, int lastSegmentArity = 0)
     {
         if (outerLen == 1)
         {
@@ -4077,14 +4196,14 @@ public sealed class Binder
     /// <c>Outer.Generic[T]</c> matches.
     /// Returns <c>null</c> when any segment fails to resolve.
     /// </summary>
-    private Type WalkNestedSegments(Type container, string[] segmentTexts, int start, int end, int targetArity)
+    private Type? WalkNestedSegments(Type container, string[] segmentTexts, int start, int end, int targetArity)
     {
         var current = container;
         for (var i = start; i < end; i++)
         {
             var name = segmentTexts[i];
             var isLast = i == end - 1;
-            Type next = null;
+            Type? next = null;
             if (isLast && targetArity > 0)
             {
                 scope.References.TryResolveNestedType(current, name + "`" + targetArity, out next);
@@ -4114,16 +4233,22 @@ public sealed class Binder
     /// unchanged. A type-arguments-on-a-non-generic mismatch surfaces a
     /// <c>ReportTypeNotGeneric</c> diagnostic.
     /// </summary>
-    private TypeSymbol ConstructIfGeneric(Type clrType, TypeClauseSyntax syntax, int targetArity)
+    private TypeSymbol? ConstructIfGeneric(Type clrType, TypeClauseSyntax syntax, int targetArity)
     {
         if (targetArity == 0)
         {
             return ResolveClrTypeClauseSymbol(clrType);
         }
 
+        // targetArity > 0 is only ever computed from HasTypeArguments (or an
+        // equivalent per-segment discriminator) being true, which implies the
+        // parser set both Identifier and TypeArguments.
+        var identifierToken = Invariant.Required(syntax.Identifier, "targetArity > 0 implies a type-argument-bearing clause, which has an Identifier");
+        var typeArguments = Invariant.Required(syntax.TypeArguments, "targetArity > 0 implies the parser set TypeArguments");
+
         if (!clrType.IsGenericTypeDefinition)
         {
-            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportTypeNotGeneric(identifierToken.Location, syntax.DottedName);
             return null;
         }
 
@@ -4132,7 +4257,7 @@ public sealed class Binder
         var hasSymbolicArg = false;
         for (var i = 0; i < targetArity; i++)
         {
-            var ta = BindTypeClause(syntax.TypeArguments[i]);
+            var ta = BindTypeClause(typeArguments[i]);
             if (ta == null)
             {
                 return null;
@@ -4143,7 +4268,7 @@ public sealed class Binder
             // Issue #367: by-ref-like types cannot serve as generic arguments.
             if (TypeSymbol.IsByRefLike(ta))
             {
-                var taLocation = syntax.TypeArguments[i].Identifier?.Location ?? syntax.Identifier.Location;
+                var taLocation = typeArguments[i].Identifier?.Location ?? identifierToken.Location;
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                 return null;
             }
@@ -4163,7 +4288,7 @@ public sealed class Binder
         }
         catch (System.ArgumentException)
         {
-            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportTypeNotGeneric(identifierToken.Location, syntax.DottedName);
             return null;
         }
     }
@@ -4186,7 +4311,7 @@ public sealed class Binder
     /// arguments) — matching how reflection orders <see cref="Type.GetGenericArguments"/>.
     /// </para>
     /// </summary>
-    private TypeSymbol BindPerSegmentClrQualifiedTypeName(TypeClauseSyntax syntax, string[] segmentTexts)
+    private TypeSymbol? BindPerSegmentClrQualifiedTypeName(TypeClauseSyntax syntax, string[] segmentTexts)
     {
         var segmentCount = segmentTexts.Length;
 
@@ -4211,7 +4336,7 @@ public sealed class Binder
                 continue;
             }
 
-            var outerArity = syntax.SegmentHasTypeArguments(outerLen - 1) ? syntax.GetSegmentTypeArguments(outerLen - 1).Count : 0;
+            var outerArity = syntax.SegmentHasTypeArguments(outerLen - 1) ? Invariant.Required(syntax.GetSegmentTypeArguments(outerLen - 1), "SegmentHasTypeArguments(outerLen - 1) was true, and both read the same per-segment slot").Count : 0;
             var outerClrType = TryResolveOuterPrefixWithArity(segmentTexts, outerLen, outerArity);
             if (outerClrType == null)
             {
@@ -4227,7 +4352,7 @@ public sealed class Binder
             return ConstructNestedClrTypeFromSegments(syntax, nestedDef, outerLen - 1, segmentCount);
         }
 
-        Diagnostics.ReportUndefinedType(syntax.Identifier.Location, syntax.DottedName);
+        Diagnostics.ReportUndefinedType(Invariant.Required(syntax.Identifier, "a dotted-qualifier type clause has a head Identifier").Location, syntax.DottedName);
         return null;
     }
 
@@ -4237,7 +4362,7 @@ public sealed class Binder
     /// driving the trailing segment's arity from <paramref name="arity"/> so a constructed
     /// generic outer (<c>List[int32]</c> → <c>List`1</c>) resolves to its OPEN definition.
     /// </summary>
-    private Type TryResolveOuterPrefixWithArity(string[] segmentTexts, int outerLen, int arity)
+    private Type? TryResolveOuterPrefixWithArity(string[] segmentTexts, int outerLen, int arity)
     {
         if (outerLen == 1)
         {
@@ -4283,14 +4408,14 @@ public sealed class Binder
     /// declared type-argument count) before the unmangled name, so a nested generic such as
     /// <c>Outer[T].Inner[U]</c> matches. Returns <c>null</c> when any segment fails.
     /// </summary>
-    private Type WalkNestedSegmentsPerArity(Type container, string[] segmentTexts, TypeClauseSyntax syntax, int start, int end)
+    private Type? WalkNestedSegmentsPerArity(Type container, string[] segmentTexts, TypeClauseSyntax syntax, int start, int end)
     {
         var current = container;
         for (var i = start; i < end; i++)
         {
             var name = segmentTexts[i];
-            var ownArity = syntax.SegmentHasTypeArguments(i) ? syntax.GetSegmentTypeArguments(i).Count : 0;
-            Type next = null;
+            var ownArity = syntax.SegmentHasTypeArguments(i) ? Invariant.Required(syntax.GetSegmentTypeArguments(i), "SegmentHasTypeArguments(i) was true, and both read the same per-segment slot").Count : 0;
+            Type? next = null;
             if (ownArity > 0)
             {
                 scope.References.TryResolveNestedType(current, name + "`" + ownArity, out next);
@@ -4323,8 +4448,9 @@ public sealed class Binder
     /// (#313 type parameters / #671 user types project onto <c>System.Object</c>) and
     /// by-ref-like rejection (#367).
     /// </summary>
-    private TypeSymbol ConstructNestedClrTypeFromSegments(TypeClauseSyntax syntax, Type nestedDef, int firstArgSegment, int segmentCount)
+    private TypeSymbol? ConstructNestedClrTypeFromSegments(TypeClauseSyntax syntax, Type nestedDef, int firstArgSegment, int segmentCount)
     {
+        var identifierToken = Invariant.Required(syntax.Identifier, "a dotted-qualifier type clause has a head Identifier");
         var argSyntaxes = new List<TypeClauseSyntax>();
         for (var i = firstArgSegment; i < segmentCount; i++)
         {
@@ -4333,7 +4459,7 @@ public sealed class Binder
                 continue;
             }
 
-            foreach (var ta in syntax.GetSegmentTypeArguments(i))
+            foreach (var ta in Invariant.Required(syntax.GetSegmentTypeArguments(i), "SegmentHasTypeArguments(i) was true, and both read the same per-segment slot"))
             {
                 argSyntaxes.Add(ta);
             }
@@ -4346,14 +4472,14 @@ public sealed class Binder
                 return ResolveClrTypeClauseSymbol(nestedDef);
             }
 
-            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportTypeNotGeneric(identifierToken.Location, syntax.DottedName);
             return null;
         }
 
         var expected = nestedDef.GetGenericArguments().Length;
         if (expected != argSyntaxes.Count)
         {
-            Diagnostics.ReportWrongTypeArgumentCount(syntax.Identifier.Location, syntax.DottedName, expected, argSyntaxes.Count);
+            Diagnostics.ReportWrongTypeArgumentCount(identifierToken.Location, syntax.DottedName, expected, argSyntaxes.Count);
             return null;
         }
 
@@ -4372,7 +4498,7 @@ public sealed class Binder
 
             if (TypeSymbol.IsByRefLike(ta))
             {
-                var taLocation = argSyntaxes[i].Identifier?.Location ?? syntax.Identifier.Location;
+                var taLocation = argSyntaxes[i].Identifier?.Location ?? identifierToken.Location;
                 Diagnostics.ReportByRefLikeEscape(taLocation, ta, "be used as a generic type argument");
                 return null;
             }
@@ -4392,7 +4518,7 @@ public sealed class Binder
         }
         catch (System.ArgumentException)
         {
-            Diagnostics.ReportTypeNotGeneric(syntax.Identifier.Location, syntax.DottedName);
+            Diagnostics.ReportTypeNotGeneric(identifierToken.Location, syntax.DottedName);
             return null;
         }
     }
@@ -4452,7 +4578,7 @@ public sealed class Binder
     /// nested type clauses — <c>sequence[T]</c> continues to mean
     /// <c>IEnumerable[T]</c> (ADR-0040).
     /// </summary>
-    private TypeSymbol BindReturnTypeClause(TypeClauseSyntax syntax, bool isAsync)
+    private TypeSymbol? BindReturnTypeClause(TypeClauseSyntax? syntax, bool isAsync)
     {
         var bound = BindTypeClause(syntax);
         if (!isAsync || bound == null)
@@ -4607,7 +4733,7 @@ public sealed class Binder
             return false;
         }
 
-        string fullName;
+        string? fullName;
         if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
         {
             fullName = clr.GetGenericTypeDefinition()?.FullName;
@@ -4711,7 +4837,7 @@ public sealed class Binder
     /// pre-pass wrapping (e.g. statements injected by lowering passes added
     /// at a later date) without giving up on the chaining check.
     /// </summary>
-    private static BoundStatement FindFirstSignificantStatement(BoundStatement statement)
+    private static BoundStatement? FindFirstSignificantStatement(BoundStatement statement)
     {
         if (statement is BoundBlockStatement block)
         {
@@ -4735,7 +4861,7 @@ public sealed class Binder
     /// </summary>
     /// <param name="modifier">The <c>ref</c>/<c>out</c>/<c>in</c> contextual-keyword token (<see langword="null"/> for none).</param>
     /// <returns>The corresponding <see cref="RefKind"/> value.</returns>
-    private static RefKind GetRefKindFromModifier(SyntaxToken modifier)
+    private static RefKind GetRefKindFromModifier(SyntaxToken? modifier)
     {
         if (modifier == null)
         {
@@ -4774,7 +4900,7 @@ public sealed class Binder
             // type conflicts.
             if (substitution.TryGetValue(tp, out var existing))
             {
-                substitution[tp] = MemberLookup.MergeInferredTypeArgument(existing, argumentType);
+                substitution[tp] = MemberLookup.MergeInferredTypeArgument(existing, argumentType) ?? existing;
             }
             else
             {
@@ -4983,7 +5109,7 @@ public sealed class Binder
     // `interface` -> InterfaceSymbol), so generic-method inference can unify
     // a parameter like `Pair[T]` against an argument like `Pair[string]` the
     // same way it already does for imported CLR generics (`List[T]`).
-    private static bool TryGetUserGenericArguments(TypeSymbol type, out TypeSymbol definition, out ImmutableArray<TypeSymbol> typeArguments)
+    private static bool TryGetUserGenericArguments(TypeSymbol type, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? definition, out ImmutableArray<TypeSymbol> typeArguments)
     {
         switch (type)
         {
@@ -5061,7 +5187,7 @@ public sealed class Binder
     // #611: find the closed generic interface on a CLR type that matches
     // the given open generic definition (e.g. find `IEnumerable<int>` on
     // `int[]` given `IEnumerable<>` as the open definition).
-    private static Type FindMatchingInterface(Type clrType, Type openDefinition)
+    private static Type? FindMatchingInterface(Type? clrType, Type? openDefinition)
     {
         if (clrType == null || openDefinition == null || !openDefinition.IsGenericTypeDefinition)
         {
@@ -5094,7 +5220,7 @@ public sealed class Binder
     // array's element type has no `ClrType` (still source-only), so
     // reflection-based interface lookup (<see cref="FindMatchingInterface"/>)
     // isn't available.
-    private static bool IsArrayCompatibleOpenInterface(Type openDefinition)
+    private static bool IsArrayCompatibleOpenInterface(Type? openDefinition)
     {
         if (openDefinition == null || !openDefinition.IsGenericTypeDefinition)
         {
@@ -5151,7 +5277,7 @@ public sealed class Binder
     /// <see langword="null"/> to skip the projection.
     /// </param>
     /// <returns>The substituted type.</returns>
-    internal static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution, Func<Type, Type> mapClrType)
+    internal static TypeSymbol SubstituteType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol> substitution, Func<Type, Type>? mapClrType)
     {
         if (type is TypeParameterSymbol tp)
         {
@@ -5431,7 +5557,7 @@ public sealed class Binder
                 }
             }
 
-            return ImportedTypeSymbol.GetConstructed(it.ClrType, it.OpenDefinition, substitutedArgs);
+            return ImportedTypeSymbol.GetConstructed(Invariant.Required(it.ClrType, "a constructed imported type has a CLR representation"), it.OpenDefinition, substitutedArgs);
         }
 
         return type;
@@ -5925,7 +6051,11 @@ public sealed class Binder
         }
 
         var openDefName = constraintClr.GetGenericTypeDefinition().FullName;
-        var constraintArgs = MemberLookup.GetImportedTypeSymbol(constraint)?.TypeArguments
+
+        // constraint is this method's own non-nullable parameter (the
+        // `constraint?.ClrType` read above is a redundant null-conditional,
+        // not a narrowing of constraint).
+        var constraintArgs = MemberLookup.GetImportedTypeSymbol(constraint!)?.TypeArguments
             ?? ImmutableArray<TypeSymbol>.Empty;
         var constraintClrArgs = constraintClr.GetGenericArguments();
 
@@ -5973,7 +6103,7 @@ public sealed class Binder
     {
         var expectedCount = !constraintArgs.IsDefaultOrEmpty
             ? constraintArgs.Length
-            : constraintClrArgs?.Length ?? 0;
+            : constraintClrArgs.Length;
         if (expectedCount == 0 || candidateArgs.Length != expectedCount)
         {
             return false;
@@ -6188,7 +6318,7 @@ public sealed class Binder
     /// The CLR type projected onto the reference load context, or <c>null</c>
     /// when the symbol has no CLR type.
     /// </returns>
-    private Type ResolveClrTypeForGenericArg(TypeSymbol typeSymbol)
+    private Type? ResolveClrTypeForGenericArg(TypeSymbol typeSymbol)
         => NullableLifting.ResolveClrTypeForGenericArg(this.scope.References, typeSymbol);
 
     /// <summary>
@@ -6231,10 +6361,10 @@ public sealed class Binder
         }
     }
 
-    private TypeSymbol LookupType(string name)
+    private TypeSymbol? LookupType(string name)
         => LookupType(name, preferredArity: -1);
 
-    private TypeSymbol LookupType(string name, int preferredArity)
+    private TypeSymbol? LookupType(string name, int preferredArity)
         => LookupType(name, preferredArity, out _);
 
     /// <summary>
@@ -6252,7 +6382,7 @@ public sealed class Binder
     /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
     /// <param name="ambiguousAcrossImportedPackages">Whether the miss was specifically a cross-package import ambiguity.</param>
     /// <returns>The resolved type, or <c>null</c> when unresolved or ambiguous.</returns>
-    private TypeSymbol LookupType(string name, int preferredArity, out bool ambiguousAcrossImportedPackages)
+    private TypeSymbol? LookupType(string name, int preferredArity, out bool ambiguousAcrossImportedPackages)
     {
         ambiguousAcrossImportedPackages = false;
 
@@ -6429,7 +6559,7 @@ public sealed class Binder
     /// <param name="name">The identifier text as written in the base clause.</param>
     /// <param name="importedInterface">The resolved CLR interface type symbol on success.</param>
     /// <returns><see langword="true"/> when the name resolves to an imported CLR interface; otherwise <see langword="false"/>.</returns>
-    private bool TryResolveImportedInterface(string name, out TypeSymbol importedInterface)
+    private bool TryResolveImportedInterface(string name, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? importedInterface)
     {
         importedInterface = null;
 
@@ -6475,7 +6605,7 @@ public sealed class Binder
     /// interfaces, value types, and sealed classes are rejected so the regular
     /// "cannot find type" / single-inheritance diagnostics still apply.
     /// </summary>
-    private bool TryResolveImportedBaseType(string baseName, out TypeSymbol importedBaseType)
+    private bool TryResolveImportedBaseType(string baseName, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? importedBaseType)
     {
         importedBaseType = null;
 
@@ -6517,7 +6647,7 @@ public sealed class Binder
     /// the outer portion, matching <see cref="BindQualifiedTypeName"/>.
     /// Returns <c>null</c> when no split yields a fully resolvable type chain.
     /// </summary>
-    private System.Type TryResolveDottedClrType(string dottedName)
+    private System.Type? TryResolveDottedClrType(string dottedName)
     {
         if (string.IsNullOrEmpty(dottedName) || !dottedName.Contains('.'))
         {
@@ -6527,7 +6657,7 @@ public sealed class Binder
         var segments = dottedName.Split('.');
         for (var outerLen = segments.Length; outerLen >= 1; outerLen--)
         {
-            System.Type outer;
+            System.Type? outer;
             if (outerLen == 1)
             {
                 outer = LookupType(segments[0])?.ClrType;
@@ -6585,14 +6715,14 @@ public sealed class Binder
     /// per the rules in design/Gsharp-design-v0.1.md (C#-9-style top-level
     /// statements). Reports diagnostics for ambiguity.
     /// </summary>
-    private static FunctionSymbol ResolveEntryPoint(
+    private static FunctionSymbol? ResolveEntryPoint(
         Binder binder,
         ImmutableArray<FunctionSymbol> functions,
         ImmutableArray<StructSymbol> structs,
         GlobalStatementSyntax[] globalStatements,
         ImmutableArray<SyntaxTree> syntaxTrees,
         PackageSymbol entryPointPackage,
-        FunctionSymbol synthesizedEntryPoint)
+        FunctionSymbol? synthesizedEntryPoint)
     {
         var explicitMain = functions.FirstOrDefault(f => f.Name == "Main");
 
@@ -6643,8 +6773,12 @@ public sealed class Binder
 
             if (explicitMain != null)
             {
+                // explicitMain is either a source-declared `Main` function or
+                // a class-scoped static `Main` method (classMain below) —
+                // both are real user declarations, never the declaration:null
+                // synthesized entry point.
                 binder.Diagnostics.ReportTopLevelStatementsConflictWithMain(
-                    explicitMain.Declaration.Identifier.Location);
+                    Invariant.Required(explicitMain.Declaration, "a user-declared Main function has a source declaration").Identifier.Location);
             }
 
             // ADR-0066 D1: the synthesized entry-point symbol (with its
@@ -6685,7 +6819,7 @@ public sealed class Binder
     /// </summary>
     /// <param name="symbol">The symbol that should receive the parsed documentation.</param>
     /// <param name="syntax">The syntax node whose attached doc-comment text is being attached.</param>
-    internal static void AttachDocumentation(Symbol symbol, SyntaxNode syntax)
+    internal static void AttachDocumentation(Symbol symbol, SyntaxNode? syntax)
     {
         var docText = syntax?.SyntaxTree?.GetDocumentation(syntax);
         if (docText == null)

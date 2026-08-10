@@ -65,12 +65,12 @@ internal sealed partial class ExpressionBinder
     private readonly OverloadResolver overloads;
     private readonly PatternBinder patterns;
     private readonly LambdaBinder lambdas;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
-    private readonly Func<string, TypeSymbol> lookupType;
-    private readonly Func<TypeSymbol, Type> resolveClrTypeForGenericArg;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
+    private readonly Func<string, TypeSymbol?> lookupType;
+    private readonly Func<TypeSymbol, Type?> resolveClrTypeForGenericArg;
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList;
 
     // ADR-0151: declares the local a value-position `if let` binding
@@ -98,12 +98,12 @@ internal sealed partial class ExpressionBinder
         OverloadResolver overloads,
         PatternBinder patterns,
         LambdaBinder lambdas,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
-        Func<string, TypeSymbol> lookupType,
-        Func<TypeSymbol, Type> resolveClrTypeForGenericArg,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
+        Func<string, TypeSymbol?> lookupType,
+        Func<TypeSymbol, Type?> resolveClrTypeForGenericArg,
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
-        Func<FunctionSymbol> getCurrentFunction,
+        Func<FunctionSymbol?> getCurrentFunction,
         Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable)
     {
@@ -134,7 +134,7 @@ internal sealed partial class ExpressionBinder
     }
 
 #pragma warning disable SA1300 // Element should begin with an uppercase letter
-    private FunctionSymbol function => getCurrentFunction();
+    private FunctionSymbol? function => getCurrentFunction();
 #pragma warning restore SA1300
 
     /// <summary>

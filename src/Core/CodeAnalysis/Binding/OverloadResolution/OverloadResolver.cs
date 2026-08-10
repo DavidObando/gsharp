@@ -90,7 +90,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     public delegate bool TryBindClrConstructorCallDelegate(
         CallExpressionSyntax syntax,
-        out BoundExpression result);
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result);
 
     /// <summary>
     /// Custom delegate type for the <c>TryBindIntrinsicCall</c>
@@ -99,7 +99,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     public delegate bool TryBindIntrinsicCallDelegate(
         CallExpressionSyntax syntax,
-        out BoundExpression result);
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result);
 
     /// <summary>
     /// Custom delegate type for the <c>TryBindInheritedClrInstanceCall</c>
@@ -108,11 +108,11 @@ internal sealed partial class OverloadResolver
     /// </summary>
     public delegate bool TryBindInheritedClrInstanceCallDelegate(
         BoundExpression receiver,
-        Type importedBaseClr,
+        Type? importedBaseClr,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
-        out BoundExpression result,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result,
         Type[]? explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
         ImmutableArray<string> argumentNames,
@@ -125,7 +125,7 @@ internal sealed partial class OverloadResolver
     /// </summary>
     public delegate bool TryGetFunctionLiteralDelegate(
         BoundExpression expression,
-        out BoundFunctionLiteralExpression literal);
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal);
 
     private readonly BinderContext binderCtx;
     private readonly MemberLookup memberLookup;
@@ -134,9 +134,9 @@ internal sealed partial class OverloadResolver
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
     private readonly Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType;
     private readonly Func<RefArgumentExpressionSyntax, ParameterSymbol?, BoundExpression> bindRefArgumentExpression;
-    private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
-    private readonly Func<string, TypeSymbol> lookupType;
+    private readonly Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression?> tryRebindInlineOutVarPlaceholder;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
+    private readonly Func<string, TypeSymbol?> lookupType;
 
     // Issue #1263: arity-aware type lookup. When a construction carries an
     // explicit type-argument list (`Op[int32](5)`), the constructed type name
@@ -144,7 +144,7 @@ internal sealed partial class OverloadResolver
     // `Op[T]` can coexist — mirroring the #1051 disambiguation already used by
     // the type-reference and struct-literal paths. A negative arity means "no
     // preference" and falls back to the arity-0 type.
-    private readonly Func<string, int, TypeSymbol> lookupTypeWithArity;
+    private readonly Func<string, int, TypeSymbol?> lookupTypeWithArity;
     private readonly Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable;
     private readonly TryBindClrConstructorCallDelegate tryBindClrConstructorCall;
     private readonly TryBindIntrinsicCallDelegate tryBindIntrinsicCall;
@@ -161,7 +161,7 @@ internal sealed partial class OverloadResolver
     private readonly Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType;
     private readonly Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint;
     private readonly Func<TypeParameterSymbol, string> describeConstraint;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget;
     private readonly Func<StructSymbol, CallExpressionSyntax, BoundExpression>? bindUserTypeStaticCall;
     private readonly Func<System.Type, CallExpressionSyntax, BoundExpression>? bindImportedClrStaticCall;
@@ -270,10 +270,10 @@ internal sealed partial class OverloadResolver
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<ExpressionSyntax, TypeSymbol, BoundExpression> bindExpressionWithTargetType,
         Func<RefArgumentExpressionSyntax, ParameterSymbol?, BoundExpression> bindRefArgumentExpression,
-        Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression> tryRebindInlineOutVarPlaceholder,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
-        Func<string, TypeSymbol> lookupType,
-        Func<string, int, TypeSymbol> lookupTypeWithArity,
+        Func<BoundExpression, ExpressionSyntax, ParameterSymbol, TypeSymbol, BoundExpression?> tryRebindInlineOutVarPlaceholder,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
+        Func<string, TypeSymbol?> lookupType,
+        Func<string, int, TypeSymbol?> lookupTypeWithArity,
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         TryBindClrConstructorCallDelegate tryBindClrConstructorCall,
         TryBindIntrinsicCallDelegate tryBindIntrinsicCall,
@@ -290,7 +290,7 @@ internal sealed partial class OverloadResolver
         Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType,
         Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint,
         Func<TypeParameterSymbol, string> describeConstraint,
-        Func<FunctionSymbol> getCurrentFunction,
+        Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget = null,
         Func<StructSymbol, CallExpressionSyntax, BoundExpression>? bindUserTypeStaticCall = null,
         Func<System.Type, CallExpressionSyntax, BoundExpression>? bindImportedClrStaticCall = null)

@@ -2192,7 +2192,7 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindArrayCreationExpression(ArrayCreationExpressionSyntax syntax)
     {
-        TypeSymbol elementType;
+        TypeSymbol? elementType;
         if (syntax.HasNestedElementTypeClause)
         {
             // Issue #1046: jagged-array literal — the element is a nested type
