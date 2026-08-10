@@ -103,7 +103,7 @@ internal sealed class TypeDefEmitter
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
-    private readonly Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType;
+    private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes;
@@ -131,7 +131,7 @@ internal sealed class TypeDefEmitter
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
-        Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType,
+        Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
         Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes,
@@ -1940,7 +1940,7 @@ internal sealed class TypeDefEmitter
         {
             return this.getCtorReferenceForType(
                 Invariant.Required(init.ClrConstructor, "a CLR base initializer has a CLR constructor"),
-                Invariant.Required(classSym.ImportedBaseType, "a CLR base initializer (init.IsClrBase) only exists when classSym itself has an imported CLR base type"));
+                classSym.ImportedBaseType);
         }
 
         var gsharpBase = init.GSharpBaseType;
