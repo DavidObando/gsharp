@@ -114,9 +114,7 @@ internal sealed partial class StatementBinder
 
         var body = BindLoopBody(bodySyntax, labelName, out var breakLabel, out var continueLabel);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         return new BoundForInfiniteStatement(null, body, breakLabel, continueLabel);
     }
@@ -136,9 +134,7 @@ internal sealed partial class StatementBinder
         var variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: TypeSymbol.Int32);
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         return new BoundForEllipsisStatement(null, variable, lowerBound, upperBound, body, breakLabel, continueLabel);
     }
@@ -475,9 +471,7 @@ internal sealed partial class StatementBinder
             body = new BoundBlockStatement(originatingSyntax, prelude.Add(body));
         }
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         return new BoundForRangeStatement(originatingSyntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
@@ -583,9 +577,7 @@ internal sealed partial class StatementBinder
             backEdgeTail: null,
             backEdgeCondition: condition);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
         var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
@@ -656,9 +648,7 @@ internal sealed partial class StatementBinder
             post,
             condition);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
         var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
@@ -874,9 +864,7 @@ internal sealed partial class StatementBinder
             backEdgeTail: null,
             backEdgeCondition: condition);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
 

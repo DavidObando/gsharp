@@ -162,6 +162,24 @@ public sealed class BoundScope
     public SubmissionImports? SubmissionImports => submissionImports ?? Parent?.SubmissionImports;
 
     /// <summary>
+    /// Returns the enclosing scope, for a pop that pairs with an earlier
+    /// <c>scope = new BoundScope(scope)</c> push.
+    /// </summary>
+    /// <remarks>
+    /// Binders push and pop scopes in matched pairs, so a scope being popped
+    /// always has a parent -- only the root from <see cref="Binder.CreateRootScope"/>
+    /// has none, and nothing pops the root. Stating that once here replaces the
+    /// twenty identical <c>scope.Parent!</c> suppressions the binders carried,
+    /// and upgrades the failure mode from a null that propagates into an NRE
+    /// somewhere later into a GS9998 naming the cause at the pop itself.
+    /// </remarks>
+    /// <returns>The enclosing scope.</returns>
+    public BoundScope Pop()
+        => Invariant.Required(
+            Parent,
+            "a scope being popped was pushed as a child of an enclosing scope; only the root scope has no parent, and the root is never popped");
+
+    /// <summary>
     /// Tries to add an import to this scope.
     /// </summary>
     /// <param name="import">The import.</param>

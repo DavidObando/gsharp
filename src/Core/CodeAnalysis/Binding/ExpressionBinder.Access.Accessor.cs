@@ -1350,9 +1350,7 @@ internal sealed partial class ExpressionBinder
         var captureRef = new BoundVariableExpression(null, capture);
         var whenNotNull = BindAccessorStep(captureRef, null, rightPart);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope a few lines above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         // Issue #1213: a null-conditional invocation whose access produces no
         // value — the canonical event-raise form `evt?.Invoke(args)` where the

@@ -115,9 +115,7 @@ internal sealed partial class ExpressionBinder
 
             var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame);
 
-            // scope was just pushed as a child of the pre-existing (non-null)
-            // scope above, so its Parent is never null here.
-            scope = scope.Parent!;
+            scope = scope.Pop();
             boundArmBuilders.Add((armSyntax, pattern, guard, armResult));
         }
 

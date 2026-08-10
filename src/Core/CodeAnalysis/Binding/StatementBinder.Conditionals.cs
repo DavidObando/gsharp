@@ -84,9 +84,7 @@ internal sealed partial class StatementBinder
         var initThen = BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
         var initElse = syntax.ElseClause == null ? null : BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
 
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
 
         var inner = new BoundIfStatement(syntax, initCondition, initThen, initElse);
         if (initElseNarrow != null && initElseNarrow.Count > 0)
@@ -161,9 +159,7 @@ internal sealed partial class StatementBinder
 
         // Pop the scope BEFORE binding the else clause so the bindings are
         // not visible inside it (ADR-0071: bindings are then-only).
-        // scope was just pushed as a child of the pre-existing (non-null)
-        // scope above, so its Parent is never null here.
-        scope = scope.Parent!;
+        scope = scope.Pop();
         var elseStatement = syntax.ElseClause == null ? null : BindStatement(syntax.ElseClause.ElseStatement);
 
         // If no binding survived (every initializer was an error), just
