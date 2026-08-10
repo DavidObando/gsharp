@@ -81,7 +81,7 @@ internal sealed partial class DeclarationBinder
     private readonly BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable;
     private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
     private readonly Func<string, TypeSymbol> lookupType;
-    private readonly Func<TypeSymbol, Type> getEffectiveArgumentClrType;
+    private readonly Func<TypeSymbol, Type?> getEffectiveArgumentClrType;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncSequenceReturnType;
     private readonly Func<string, bool> isPrimitiveTypeName;
@@ -140,7 +140,7 @@ internal sealed partial class DeclarationBinder
         BindArrayCreationExpressionDelegate bindArrayCreationExpression,
         Func<SyntaxToken?, Accessibility> resolveAccessibility,
         Func<string, TypeSymbol> lookupType,
-        Func<TypeSymbol, Type> getEffectiveArgumentClrType,
+        Func<TypeSymbol, Type?> getEffectiveArgumentClrType,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncSequenceReturnType,
         Func<string, bool> isPrimitiveTypeName,

@@ -330,7 +330,7 @@ internal sealed partial class OverloadResolver
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
 
     internal bool TryReportNullableDelegateReceiver(
-        TypeSymbol receiverType,
+        TypeSymbol? receiverType,
         TextLocation location,
         string receiverName,
         string? nullSafeInvocation)
@@ -348,7 +348,7 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
-    internal static string GetNullableDelegateNullSafeInvocation(ExpressionSyntax receiverSyntax)
+    internal static string GetNullableDelegateNullSafeInvocation(ExpressionSyntax? receiverSyntax)
         => receiverSyntax is NameExpressionSyntax or AccessorExpressionSyntax
             ? "?(...)"
             : "?.Invoke(...)";

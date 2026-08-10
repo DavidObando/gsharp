@@ -1586,7 +1586,7 @@ internal sealed partial class ExpressionBinder
             // lambda's `Func<…>` matches the erased `Lazy<object>` ctor's
             // `Func<object>` parameter. Other delegate args (and generic-method
             // inference elsewhere) keep the default enum→int ride-through.
-            System.Type t;
+            System.Type? t;
             var priorErase = eraseDelegateInnerEnumToObject;
             eraseDelegateInnerEnumToObject = symbolicCtorDelegateArgs.Contains(i);
             try

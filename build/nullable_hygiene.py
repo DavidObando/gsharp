@@ -64,8 +64,6 @@ DISABLE_ALLOWLIST = {
     "test/Core.Tests/CodeAnalysis/Symbols/ClrNullabilityTests.cs",
     "test-assets/Issue3119.CrossConstants/Constants.cs",
     "src/Core/CodeAnalysis/Binding/Binder.cs",
-    "src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Invocation.cs",
-    "src/Core/CodeAnalysis/Binding/ExpressionBinder.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/CompilationUnit.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/GExpression.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/GMember.cs",

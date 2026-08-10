@@ -2,10 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable annotations
-
-#nullable disable warnings
-
 #pragma warning disable SA1611 // Element parameters should be documented
 #pragma warning disable SA1615 // Element return value should be documented
 #pragma warning disable SA1201 // Elements should appear in the correct order
@@ -15,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -107,8 +104,8 @@ internal sealed partial class ExpressionBinder
         Action<TextLocation, Symbol, string> reportObsoleteUseIfApplicable,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<FunctionSymbol> getCurrentFunction,
-        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList = null,
-        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable = null)
+        Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList,
+        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -154,7 +151,7 @@ internal sealed partial class ExpressionBinder
     /// <c>this</c> is in scope, so this returns <see langword="null"/> and the
     /// bare-name method-group path stays unchanged.
     /// </summary>
-    private ParameterSymbol GetEffectiveThisParameter()
+    private ParameterSymbol? GetEffectiveThisParameter()
     {
         var current = getCurrentFunction();
         if (current?.ThisParameter != null)
@@ -177,7 +174,7 @@ internal sealed partial class ExpressionBinder
     /// inherited member would be reachable through an arbitrary receiver,
     /// leaking accessibility outside the derived class.
     /// </summary>
-    private bool IsCurrentThisReceiver(BoundExpression receiver)
+    private bool IsCurrentThisReceiver(BoundExpression? receiver)
     {
         var effThis = GetEffectiveThisParameter();
         return effThis != null
@@ -291,7 +288,7 @@ internal sealed partial class ExpressionBinder
     private bool TryBindLambdaExpressionWithTargetType(
         ExpressionSyntax syntax,
         TypeSymbol targetType,
-        out BoundExpression bound)
+        [NotNullWhen(true)] out BoundExpression? bound)
     {
         // Keep event handlers and assignment RHS binding on one target-typing path.
         // An explicitly typed lambda already has a complete natural shape.
@@ -707,7 +704,7 @@ internal sealed partial class ExpressionBinder
     private static BoundExpression BuildNarrowedRead(
         BoundExpression bareRead,
         TypeSymbol declaredType,
-        TypeSymbol narrowedType,
+        TypeSymbol? narrowedType,
         Func<TypeSymbol, BoundExpression> makeNarrowedNode)
     {
         if (narrowedType == null)
@@ -730,14 +727,16 @@ internal sealed partial class ExpressionBinder
                 || NullableLifting.IsUserValueTypeNullable(nullable))
             && narrowedType is not NullableTypeSymbol)
         {
-            var op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType);
+            // Bind's first arm unconditionally returns non-null for
+            // BangBangToken (BoundUnaryOperator.cs), regardless of operandType.
+            var op = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, declaredType)!;
             return new BoundUnaryExpression(null, op, bareRead);
         }
 
         return makeNarrowedNode(narrowedType);
     }
 
-    private TypeSymbol TryGetNarrowedType(VariableSymbol variable)
+    private TypeSymbol? TryGetNarrowedType(VariableSymbol variable)
     {
         // Phase 3.C.4: smart-cast narrowing map. Walk the active stack from
         // innermost frame outward — the topmost narrowing wins.
@@ -759,13 +758,8 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="path">The stable access path to look up.</param>
     /// <returns>The narrowed type, or <c>null</c> when the path is not narrowed.</returns>
-    private TypeSymbol TryGetNarrowedType(AccessPath path)
+    private TypeSymbol? TryGetNarrowedType(AccessPath path)
     {
-        if (path == null)
-        {
-            return null;
-        }
-
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
             if (binderCtx.NarrowedVariables[i].TryGetValue(path, out var narrowed))
@@ -874,7 +868,7 @@ internal sealed partial class ExpressionBinder
     /// <c>!(x is T)</c>, and nested <c>&amp;&amp;</c> chains; returns
     /// <c>null</c> when no narrowing can be safely inferred.
     /// </summary>
-    private Dictionary<AccessPath, TypeSymbol> TryClassifyTypeTestNarrowingForAnd(BoundExpression boundLeft)
+    private Dictionary<AccessPath, TypeSymbol>? TryClassifyTypeTestNarrowingForAnd(BoundExpression boundLeft)
     {
         var (thenFrame, _) = ClassifyTypeTestNarrowing(boundLeft);
         return (thenFrame != null && thenFrame.Count > 0) ? thenFrame : null;
@@ -888,20 +882,20 @@ internal sealed partial class ExpressionBinder
     /// <c>else</c> frame (the negation of its narrowing) applies. This
     /// makes `!(x is T) || f(x)` bind `f(x)` with `x` narrowed to `T`.
     /// </summary>
-    private Dictionary<AccessPath, TypeSymbol> TryClassifyTypeTestNarrowingForOr(BoundExpression boundLeft)
+    private Dictionary<AccessPath, TypeSymbol>? TryClassifyTypeTestNarrowingForOr(BoundExpression boundLeft)
     {
         var (_, elseFrame) = ClassifyTypeTestNarrowing(boundLeft);
         return (elseFrame != null && elseFrame.Count > 0) ? elseFrame : null;
     }
 
-    private static (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ClassifyTypeTestNarrowing(BoundExpression condition)
+    private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyTypeTestNarrowing(BoundExpression condition)
     {
         switch (condition)
         {
             case BoundIsExpression isExpr:
                 {
-                    AccessPath targetPath;
-                    TypeSymbol declaredType;
+                    AccessPath? targetPath;
+                    TypeSymbol? declaredType;
                     if (isExpr.Expression is BoundVariableExpression bve
                         && bve.Variable is LocalVariableSymbol or ParameterSymbol)
                     {
@@ -983,7 +977,7 @@ internal sealed partial class ExpressionBinder
                     var (leftThen, leftElse) = ClassifyTypeTestNarrowing(binary.Left);
                     var (rightThen, rightElse) = ClassifyTypeTestNarrowing(binary.Right);
 
-                    Dictionary<AccessPath, TypeSymbol> combinedThen = null;
+                    Dictionary<AccessPath, TypeSymbol>? combinedThen = null;
                     if (leftThen != null && leftThen.Count > 0 && rightThen != null && rightThen.Count > 0)
                     {
                         foreach (var kv in leftThen)
@@ -996,7 +990,7 @@ internal sealed partial class ExpressionBinder
                         }
                     }
 
-                    Dictionary<AccessPath, TypeSymbol> combinedElse = null;
+                    Dictionary<AccessPath, TypeSymbol>? combinedElse = null;
                     if ((leftElse != null && leftElse.Count > 0) || (rightElse != null && rightElse.Count > 0))
                     {
                         combinedElse = leftElse == null ? new Dictionary<AccessPath, TypeSymbol>() : new Dictionary<AccessPath, TypeSymbol>(leftElse);
@@ -1073,7 +1067,7 @@ internal sealed partial class ExpressionBinder
         return fnRetClr == invoke.ReturnType;
     }
 
-    private static bool TryGetWritableClrMember(MemberInfo? member, out Type targetType, out TypeSymbol targetTypeSymbol, out bool writable)
+    private static bool TryGetWritableClrMember(MemberInfo? member, [NotNullWhen(true)] out Type? targetType, [NotNullWhen(true)] out TypeSymbol? targetTypeSymbol, out bool writable)
     {
         switch (member)
         {
@@ -1141,7 +1135,7 @@ internal sealed partial class ExpressionBinder
     /// syntax so the argument-conversion loops can re-bind it against the
     /// resolved parameter type.
     /// </summary>
-    internal static bool IsDeferredBranchyArgumentPlaceholder(BoundExpression expression, out ExpressionSyntax branchySyntax)
+    internal static bool IsDeferredBranchyArgumentPlaceholder(BoundExpression expression, [NotNullWhen(true)] out ExpressionSyntax? branchySyntax)
     {
         if (expression is BoundErrorExpression { Syntax: ExpressionSyntax syntax }
             && IsTargetTypedBranchyArgumentSyntax(syntax))
@@ -1179,7 +1173,7 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private static bool TryGetTaskElementType(TypeSymbol type, out TypeSymbol element)
+    private static bool TryGetTaskElementType(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? element)
     {
         element = null;
 
@@ -1242,17 +1236,17 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    internal VariableSymbol BindVariableReference(string name, TextLocation location)
+    internal VariableSymbol? BindVariableReference(string name, TextLocation location)
     {
         return BindVariableReference(name, location, suppressNotAVariable: false);
     }
 
-    internal VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable)
+    internal VariableSymbol? BindVariableReference(string name, TextLocation location, bool suppressNotAVariable)
     {
         return BindVariableReference(name, location, suppressNotAVariable, suppressUndefinedVariable: false);
     }
 
-    internal VariableSymbol BindVariableReference(string name, TextLocation location, bool suppressNotAVariable, bool suppressUndefinedVariable)
+    internal VariableSymbol? BindVariableReference(string name, TextLocation location, bool suppressNotAVariable, bool suppressUndefinedVariable)
     {
         switch (scope.TryLookupSymbol(name))
         {
@@ -1310,7 +1304,7 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private bool TryBindMethodGroup(string name, out BoundExpression methodGroup)
+    private bool TryBindMethodGroup(string name, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
 
@@ -1410,7 +1404,7 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private bool TryBindSingleMethodGroup(FunctionSymbol function, out BoundExpression methodGroup)
+    private bool TryBindSingleMethodGroup(FunctionSymbol function, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
 
@@ -1441,7 +1435,7 @@ internal sealed partial class ExpressionBinder
     /// matching an argument in overload resolution. Delegates to
     /// <see cref="NullableTypeSymbol.GetEffectiveClrType"/>.
     /// </summary>
-    internal Type GetEffectiveArgumentClrType(TypeSymbol typeSymbol)
+    internal Type? GetEffectiveArgumentClrType(TypeSymbol typeSymbol)
     {
         return NullableTypeSymbol.GetEffectiveClrType(typeSymbol);
     }
@@ -1454,7 +1448,7 @@ internal sealed partial class ExpressionBinder
     /// if none). Regular types delegate to
     /// <see cref="GetEffectiveArgumentClrType"/>.
     /// </summary>
-    internal Type GetEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol typeSymbol)
+    internal Type? GetEffectiveArgumentClrTypeForOverloadResolution(TypeSymbol typeSymbol)
     {
         var clrType = GetEffectiveArgumentClrType(typeSymbol);
         if (clrType != null)
@@ -1651,9 +1645,9 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    internal static Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>> MakeMethodGroupInference(
+    internal static Func<int, IReadOnlyList<Type>, Tuple<Type[], Type>?>? MakeMethodGroupInference(
         IReadOnlyList<BoundExpression> arguments,
-        Func<TypeSymbol, Type> projectType,
+        Func<TypeSymbol, Type?> projectType,
         int argumentOffset = 0)
     {
         if (arguments == null || !arguments.Any(ClrOverloadResolution.IsUnresolvedMethodGroupArgument))
@@ -1673,7 +1667,7 @@ internal sealed partial class ExpressionBinder
         };
     }
 
-    internal static Func<int, bool> MakeMethodGroupArgumentCheck(
+    internal static Func<int, bool>? MakeMethodGroupArgumentCheck(
         IReadOnlyList<BoundExpression> arguments,
         int argumentOffset = 0)
     {
@@ -1691,19 +1685,22 @@ internal sealed partial class ExpressionBinder
         };
     }
 
-    private static Tuple<Type[], Type> ResolveMethodGroupInferenceSignature(
+    private static Tuple<Type[], Type>? ResolveMethodGroupInferenceSignature(
         BoundExpression argument,
         IReadOnlyList<Type> delegateParameterTypes,
-        Func<TypeSymbol, Type> projectType)
+        Func<TypeSymbol, Type?> projectType)
     {
         if (argument is BoundClrMethodGroupExpression { ResolvedMethod: null } clrGroup)
         {
-            var closesExtensionReceiver = clrGroup.Receiver != null
+            var receiver = clrGroup.Receiver;
+            var closesExtensionReceiver = receiver != null
                 && clrGroup.Candidates.All(candidate => candidate.IsStatic);
             var resolutionArguments = new Type[delegateParameterTypes.Count + (closesExtensionReceiver ? 1 : 0)];
             if (closesExtensionReceiver)
             {
-                var receiverClr = projectType(clrGroup.Receiver.Type);
+                // closesExtensionReceiver is only true when the `receiver != null`
+                // conjunct above held.
+                var receiverClr = projectType(receiver!.Type);
                 if (receiverClr == null)
                 {
                     return null;
@@ -1718,12 +1715,12 @@ internal sealed partial class ExpressionBinder
             }
 
             var resolution = ClrOverloadResolution.Resolve(clrGroup.Candidates, resolutionArguments);
-            if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
+            if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
+                || resolution.Best is not { } method)
             {
                 return null;
             }
 
-            var method = resolution.Best;
             var parameters = method.GetParameters();
             var parameterOffset = closesExtensionReceiver ? 1 : 0;
             var signatureParameters = new Type[parameters.Length - parameterOffset];
@@ -1764,15 +1761,21 @@ internal sealed partial class ExpressionBinder
             var compatible = true;
             for (var i = 0; i < parameterTypes.Length; i++)
             {
-                parameterTypes[i] = projectType(closedParameters[i]);
-                conversions[i] = parameterTypes[i] == null
-                    ? ClrOverloadResolution.ImplicitConversionKind.None
-                    : ClrOverloadResolution.ClassifyImplicit(parameterTypes[i], delegateParameterTypes[i]);
+                var projected = projectType(closedParameters[i]);
+                if (projected == null)
+                {
+                    compatible = false;
+                    break;
+                }
+
+                conversions[i] = ClrOverloadResolution.ClassifyImplicit(projected, delegateParameterTypes[i]);
                 if (conversions[i] == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
                     compatible = false;
                     break;
                 }
+
+                parameterTypes[i] = projected;
             }
 
             if (!compatible)
@@ -1801,8 +1804,8 @@ internal sealed partial class ExpressionBinder
         BoundExpression? receiver,
         StructSymbol? candidateOwner,
         IReadOnlyList<TypeSymbol> targetParameterTypes,
-        out TypeSymbol[] closedParameters,
-        out TypeSymbol closedReturn,
+        [NotNullWhen(true)] out TypeSymbol[]? closedParameters,
+        [NotNullWhen(true)] out TypeSymbol? closedReturn,
         out ImmutableArray<TypeSymbol> methodTypeArguments)
     {
         closedParameters = null;
@@ -1836,7 +1839,7 @@ internal sealed partial class ExpressionBinder
             candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
         }
 
-        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null;
         if (candidate.IsGeneric)
         {
             substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
@@ -1844,7 +1847,9 @@ internal sealed partial class ExpressionBinder
             {
                 var receiverParameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[0].Type)
                     ?? candidate.Parameters[0].Type;
-                Binder.InferTypeArguments(receiverParameter, receiver.Type, substitution);
+
+                // parameterOffset is 1 only when `candidate.IsExtension && receiver != null` held above.
+                Binder.InferTypeArguments(receiverParameter, receiver!.Type, substitution);
             }
 
             for (var i = 0; i < targetParameterTypes.Count; i++)
@@ -1915,7 +1920,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="structSymbol">The user class to resolve the inherited CLR base for.</param>
     /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
-    internal static Type GetInheritedClrBaseType(StructSymbol structSymbol)
+    internal static Type? GetInheritedClrBaseType(StructSymbol structSymbol)
     {
         for (var c = structSymbol; c != null; c = c.BaseClass)
         {
@@ -1940,7 +1945,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="name">The bare identifier text.</param>
     /// <param name="bound">The bound member access on success.</param>
     /// <returns><see langword="true"/> when an inherited CLR member was bound.</returns>
-    private bool TryBindInheritedClrInstanceMemberByBareName(string name, out BoundExpression bound)
+    private bool TryBindInheritedClrInstanceMemberByBareName(string name, [NotNullWhen(true)] out BoundExpression? bound)
     {
         bound = null;
 
@@ -1977,7 +1982,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="receiver">The effective <c>this</c> receiver on success.</param>
     /// <param name="member">The resolved inherited CLR member on success.</param>
     /// <returns><see langword="true"/> when an inherited CLR member was resolved.</returns>
-    private bool TryResolveInheritedClrInstanceMemberByBareName(string name, out BoundExpression receiver, out MemberInfo member)
+    private bool TryResolveInheritedClrInstanceMemberByBareName(string name, [NotNullWhen(true)] out BoundExpression? receiver, [NotNullWhen(true)] out MemberInfo? member)
     {
         receiver = null;
         member = null;
@@ -2025,7 +2030,7 @@ internal sealed partial class ExpressionBinder
         string name,
         ExpressionSyntax valueSyntax,
         TextLocation assignLocation,
-        out BoundExpression bound)
+        [NotNullWhen(true)] out BoundExpression? bound)
     {
         bound = null;
 
@@ -2062,7 +2067,7 @@ internal sealed partial class ExpressionBinder
     /// <see langword="false"/> when any inner type cannot be erased or the
     /// arity has no shipped delegate shape (&gt;16 args).
     /// </summary>
-    private bool TryBuildErasedDelegateClrType(FunctionTypeSymbol functionType, out Type erased)
+    private bool TryBuildErasedDelegateClrType(FunctionTypeSymbol functionType, [NotNullWhen(true)] out Type? erased)
     {
         erased = null;
 
@@ -2120,7 +2125,7 @@ internal sealed partial class ExpressionBinder
     /// <c>object</c> instead. The real type is recovered downstream via the
     /// symbolic delegate-target binding and symbolic ctor emit.
     /// </summary>
-    private Type EraseDelegateInnerClrTypeForOverloadResolution(TypeSymbol typeSymbol)
+    private Type? EraseDelegateInnerClrTypeForOverloadResolution(TypeSymbol typeSymbol)
     {
         if (eraseDelegateInnerEnumToObject
             && typeSymbol.ClrType == null
@@ -2133,7 +2138,7 @@ internal sealed partial class ExpressionBinder
         return GetEffectiveArgumentClrTypeForOverloadResolution(typeSymbol);
     }
 
-    private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, out BoundExpression methodGroup)
+    private bool TryBindClrMethodGroup(BoundExpression receiver, Type declaringType, bool wantStatic, string name, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
 

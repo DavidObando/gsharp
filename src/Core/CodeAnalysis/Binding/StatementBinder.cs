@@ -80,7 +80,7 @@ internal sealed partial class StatementBinder
     private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
     private readonly BindLocalVariableDelegate bindLocalVariable;
     private readonly BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility;
-    private readonly Func<string, TextLocation, VariableSymbol> bindVariableReference;
+    private readonly Func<string, TextLocation, VariableSymbol?> bindVariableReference;
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
     private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
     private readonly Func<BoundExpression, bool> isLvalue;
@@ -107,7 +107,7 @@ internal sealed partial class StatementBinder
         Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
         BindLocalVariableDelegate bindLocalVariable,
         BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility,
-        Func<string, TextLocation, VariableSymbol> bindVariableReference,
+        Func<string, TextLocation, VariableSymbol?> bindVariableReference,
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
         Func<TypeSymbol, bool> isFormattableStringTargetType,
         Func<BoundExpression, bool> isLvalue,

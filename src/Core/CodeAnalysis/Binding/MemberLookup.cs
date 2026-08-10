@@ -1247,7 +1247,7 @@ internal sealed class MemberLookup
     /// <returns>An array sized to the open method's generic-parameter arity, with one entry per ordinal (<see langword="null"/> when unrecovered).</returns>
     public static TypeSymbol?[] InferSymbolicMethodTypeArguments(
         MethodInfo openMethod,
-        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
         bool isExpanded = false)
     {
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
@@ -1448,7 +1448,10 @@ internal sealed class MemberLookup
         }
 
         var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
-            ? InferSymbolicMethodTypeArguments(openMethod, symbolicArgTypes, isExpanded)
+            ? InferSymbolicMethodTypeArguments(
+                openMethod,
+                ImmutableArray.CreateRange<TypeSymbol, TypeSymbol?>(symbolicArgTypes, static t => t),
+                isExpanded)
             : new TypeSymbol?[arity];
 
         // Explicit list takes precedence at each slot when present.
@@ -2112,7 +2115,7 @@ internal sealed class MemberLookup
     /// <param name="view">The symbolic Dictionary view, on success.</param>
     /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
     public static bool TryGetSymbolicOpenMapReceiverView(
-        TypeSymbol receiverType,
+        TypeSymbol? receiverType,
         [NotNullWhen(true)] out ImportedTypeSymbol? view)
     {
         view = null;

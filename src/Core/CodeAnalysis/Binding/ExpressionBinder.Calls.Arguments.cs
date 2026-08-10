@@ -36,7 +36,7 @@ internal sealed partial class ExpressionBinder
     /// erase the lambda's return type and break the extension's type-argument
     /// inference.
     /// </summary>
-    private bool UserExtensionHasFunctionTypedParameterAt(BoundExpression receiver, string methodName, int argSlot)
+    private bool UserExtensionHasFunctionTypedParameterAt(BoundExpression? receiver, string methodName, int argSlot)
     {
         if (receiver?.Type == null)
         {
@@ -91,10 +91,10 @@ internal sealed partial class ExpressionBinder
     /// </para>
     /// </summary>
     private bool TryPreferBetterExtensionOverClrInstanceMethod(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         string methodName,
-        MethodInfo clrBest,
-        Type[] argTypes,
+        MethodInfo? clrBest,
+        Type?[]? argTypes,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
@@ -167,7 +167,7 @@ internal sealed partial class ExpressionBinder
     /// / named / defaulted form this cheap check cannot reason about, so the
     /// tie-break is skipped and the instance method keeps winning).
     /// </summary>
-    private static ClrOverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type[] argTypes)
+    private static ClrOverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type?[] argTypes)
     {
         var parameters = candidate.GetParameters();
         if (parameters.Length != argTypes.Length)
@@ -205,7 +205,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private ClrOverloadResolution.ImplicitConversionKind ComputeBestApplicableExtensionWorstConversionRank(
         ImmutableArray<FunctionSymbol> extCandidates,
-        Type[] argTypes)
+        Type?[] argTypes)
     {
         var best = ClrOverloadResolution.ImplicitConversionKind.None;
         foreach (var candidate in extCandidates)
@@ -274,7 +274,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="result">The bound call, when an extension overload matched.</param>
     /// <returns><see langword="true"/> when at least one extension overload matched the (receiver, name) pair.</returns>
     private bool TryBindExtensionFunctionOverload(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,

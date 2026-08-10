@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -140,7 +141,7 @@ internal static class SmartCastStability
     /// <param name="path">The resulting stable member path, when successful.</param>
     /// <param name="currentType">The current static type of the read.</param>
     /// <returns><c>true</c> when a stable member path was derived.</returns>
-    public static bool TryGetStableMemberPath(BoundExpression expr, out AccessPath? path, out TypeSymbol? currentType)
+    public static bool TryGetStableMemberPath(BoundExpression expr, [NotNullWhen(true)] out AccessPath? path, [NotNullWhen(true)] out TypeSymbol? currentType)
     {
         path = TryGetStablePath(expr);
         if (path != null && path.HasMembers)
@@ -192,7 +193,7 @@ internal static class SmartCastStability
     /// non-nil when the comparison is false).
     /// </param>
     /// <returns><c>true</c> when a nil-guard leaf was recognised.</returns>
-    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, out AccessPath? target, out TypeSymbol? underlying, out bool nonNilWhenTrue)
+    public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, [NotNullWhen(true)] out AccessPath? target, [NotNullWhen(true)] out TypeSymbol? underlying, out bool nonNilWhenTrue)
     {
         target = null;
         underlying = null;
