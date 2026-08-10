@@ -981,7 +981,7 @@ internal static class ClrOverloadResolution
     /// <param name="t2">The second candidate target type.</param>
     /// <param name="source">The source argument type.</param>
     /// <returns>-1, 0, or +1 per the description above.</returns>
-    public static int CompareNumericTargets(Type t1, Type t2, Type source)
+    public static int CompareNumericTargets(Type t1, Type t2, Type? source)
     {
         if (t1 is null || t2 is null || source is null)
         {
@@ -3795,18 +3795,15 @@ internal static class ClrOverloadResolution
         var hasStrictlyBetter = false;
         for (var i = 0; i < a.Length; i++)
         {
-            if (sources[i] is null)
-            {
-                return false;
-            }
-
-            var source = sources[i];
-            if (source is null)
-            {
-                return false;
-            }
-
-            var cmp = CompareConversions(a[i], paramsA[i], b[i], paramsB[i], source);
+            // A null source is an argument with no CLR type -- `nil` is the
+            // common one. It carries no preference between two candidates, and
+            // CompareNumericTargets already returns 0 for it, so the comparison
+            // must CONTINUE to the remaining arguments rather than bail out.
+            // Returning false here (as a nullable-warning guard once did) made
+            // every overload set containing a `nil` argument ambiguous:
+            // `Timer(cb, nil, 0, 1000)` stopped preferring .ctor(_, _, int, int)
+            // over the Int64/UInt32 overloads and failed to bind at all.
+            var cmp = CompareConversions(a[i], paramsA[i], b[i], paramsB[i], sources[i]);
             if (cmp > 0)
             {
                 return false;
@@ -3826,7 +3823,7 @@ internal static class ClrOverloadResolution
         Type paramA,
         ImplicitConversionKind kb,
         Type paramB,
-        Type source)
+        Type? source)
     {
         // Issue #377 sub-item 4: when one candidate offers a Tier-4
         // interpolated-string→FormattableString/IFormattable conversion and
@@ -3896,7 +3893,11 @@ internal static class ClrOverloadResolution
         // mirroring C#'s preference of the closest integral target.
         if (ka == ImplicitConversionKind.DelegateReturnNumericWidening)
         {
-            if (TryGetDelegateSignature(paramA, out _, out var retA)
+            // A null source has no delegate return type to compare against, so
+            // this tiebreak yields no preference -- the same `return 0` the
+            // TryGetDelegateSignature failures below already produce.
+            if (source is not null
+                && TryGetDelegateSignature(paramA, out _, out var retA)
                 && TryGetDelegateSignature(paramB, out _, out var retB)
                 && TryGetDelegateSignature(source, out _, out var retSource)
                 && retA != null && retB != null && retSource != null)
