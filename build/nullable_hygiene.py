@@ -23,6 +23,9 @@ where CI enforces them:
   5. null-bang     No `= null!` / `= default!` initializer is introduced.
   5b. arg-null-bang No `f(null!)` in production code -- the argument-position
                    twin of `= null!`. Test projects are oblivious, so exempt.
+  7. guard-added   ADVISORY. Lists null guards added in files this diff also
+                   annotates, because a guard added to silence a nullable
+                   warning is a behaviour change no other check can see.
   6. classify      Reports which changed files are annotation-only -- their
                    added and removed lines are identical once nullability
                    syntax is stripped, so they cannot have changed behaviour.
@@ -430,6 +433,52 @@ def has_justification(path, lineno, window=30):
     return None
 
 
+def check_guard_added(base, _fail):
+    """Report null guards introduced alongside nullable annotations.
+
+    Advisory, not a gate. ADR-0155 A8 defect 1: resolving a nullable warning by
+    adding or widening an `if (x == null) return/continue/throw` silences the
+    compiler by changing control flow. Two shipped issues were regressed that
+    way on this migration, and neither the build nor any other check here can
+    see it -- both the before and after type-check.
+
+    A guard is legitimate when it is provably unreachable from every caller, or
+    when the null case genuinely has nothing to do. That is a judgment a
+    reviewer makes; this check only guarantees the reviewer is shown the line.
+
+    Scoped to files that this diff also touches nullability in, so an ordinary
+    defensive check in unrelated work does not show up.
+    """
+    # A null test that gates control flow: an `if` whose condition mentions
+    # null, or a null test on the same line as return/continue/break/throw.
+    # Ternaries and `??` are expression-level and cannot skip a statement, so
+    # they are excluded -- they were pure noise in the first version of this.
+    NULL_TEST = re.compile(r"(?:==|!=)\s*null\b|\bis\s+(?:not\s+)?null\b")
+    CONTROL = re.compile(r"^\s*(?:\}\s*)?else\s+if\s*\(|^\s*if\s*\(|\b(?:return|continue|break|throw)\b")
+
+    nullable_touched, guards = set(), []
+    for path, ln, text in added_lines(base, HEAD_REF):
+        if not path or not path.endswith(".cs") or not in_nullable_context(path):
+            continue
+        code = code_only(text)
+        if "?" in code or "Nullable" in code or "NotNull" in code:
+            nullable_touched.add(path)
+        if NULL_TEST.search(code) and CONTROL.search(code):
+            guards.append((path, ln, text.strip()[:100]))
+
+    guards = [g for g in guards if g[0] in nullable_touched]
+    if not guards:
+        print("  no null guards added in nullability-touched files")
+        return
+
+    print(f"  {len(guards)} null guard(s) added in files this diff also annotates.")
+    print("  For each: does it change control flow versus the original? A guard added")
+    print("  to silence a warning is a behaviour change (ADR-0155 A8, defect 1).")
+    for path, ln, text in guards:
+        print(f"    {path}:{ln}")
+        print(f"      {text}")
+
+
 def check_forgiving(base, fail):
     sites, bad = [], 0
     for path, ln, text in added_lines(base, HEAD_REF):
@@ -533,6 +582,7 @@ CHECKS = {
     "null-bang": check_null_bang,
     "arg-null-bang": check_arg_null_bang,
     "forgiving": check_forgiving,
+    "guard-added": check_guard_added,
 }
 
 

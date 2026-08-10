@@ -23,6 +23,7 @@ Fixes #<issue> <!-- or: Part of #<issue> -->
 - [ ] Three commits, unsquashed: `nullable(directives)` (mechanical, reviewer skips), `nullable(annotate)` (the only commit a human reads), then zero or more `fix(#NNNN)` behaviour commits.
 - [ ] `python3 build/nullable_hygiene.py` clean; the `!` report pasted into Verification.
 - [ ] **Nullable widenings**: every new `?` on a public/internal signature listed with the call site that produces null. A `?` with no such call site is a widening — it forces every caller to handle a null that never occurs — and does not belong in the diff.
+- [ ] **Null guards added**: the `guard-added` advisory from `nullable_hygiene.py` reviewed, and each listed guard confirmed unreachable from every caller or genuinely a no-op. A guard added to silence a nullable warning is a behaviour change (ADR-0155 A8).
 - [ ] **Latent bugs surfaced**: listed with issue numbers, or explicitly "none". An empty section is a claim; a missing one is silence.
 - [ ] `ArgumentNullException` guards: count reviewed, count removed (expected 0 — removal is a behaviour change needing its own commit and witness).
 - [ ] Nullable changes preserve the production/test project boundary.
