@@ -1594,7 +1594,11 @@ internal sealed class TypeDefEmitter
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitClassConstructorWithBaseInitializer(StructSymbol classSym, ImmutableArray<ParameterSymbol> parameters)
     {
-        var init = classSym.BaseConstructorInitializer;
+        // Non-null: both call sites (ReflectionMetadataEmitter.cs, the
+        // synthesized-primary-constructor and single-constructor emission
+        // branches) check `c.BaseConstructorInitializer != null` before
+        // routing to this "WithBaseInitializer" emitter.
+        var init = classSym.BaseConstructorInitializer!;
         var baseCtorToken = this.GetBaseInitializerCtorToken(classSym, init);
 
         int bodyOffset = -1;
@@ -1696,7 +1700,9 @@ internal sealed class TypeDefEmitter
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol? ctor = null)
     {
-        ctor ??= classSym.ExplicitConstructor;
+        ctor ??= Invariant.Required(
+            classSym.ExplicitConstructor,
+            "callers either pass an explicit overload from classSym.ExplicitConstructors or rely on the legacy single-constructor fallback, which requires classSym to have declared at least one init(...) constructor");
         var function = ctor.Function;
         var init = ctor.BaseInitializer;
         var baseCtorToken = classSym.IsClass
@@ -1934,7 +1940,7 @@ internal sealed class TypeDefEmitter
         {
             return this.getCtorReferenceForType(
                 Invariant.Required(init.ClrConstructor, "a CLR base initializer has a CLR constructor"),
-                classSym.ImportedBaseType);
+                Invariant.Required(classSym.ImportedBaseType, "a CLR base initializer (init.IsClrBase) only exists when classSym itself has an imported CLR base type"));
         }
 
         var gsharpBase = init.GSharpBaseType;
@@ -2336,7 +2342,7 @@ internal sealed class TypeDefEmitter
     /// <param name="emitCtx">The current emit context.</param>
     /// <param name="typeDefHandle">The TypeDef handle the layout applies to.</param>
     /// <param name="metadata">The resolved layout metadata, or <c>null</c>.</param>
-    internal static void EmitClassLayout(EmitContext emitCtx, TypeDefinitionHandle typeDefHandle, StructLayoutMetadata metadata)
+    internal static void EmitClassLayout(EmitContext emitCtx, TypeDefinitionHandle typeDefHandle, StructLayoutMetadata? metadata)
     {
         if (metadata == null)
         {

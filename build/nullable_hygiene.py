@@ -64,7 +64,6 @@ DISABLE_ALLOWLIST = {
     "src/Core/CodeAnalysis/Binding/BoundScope.cs",
     "src/Core/CodeAnalysis/Binding/ExpressionBinder.Calls.Invocation.cs",
     "src/Core/CodeAnalysis/Binding/ExpressionBinder.cs",
-    "src/Core/CodeAnalysis/Symbols/StructSymbol.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/CompilationUnit.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/GExpression.cs",
     "tools/cs2gs/Cs2Gs.CodeModel/Ast/GMember.cs",
