@@ -193,3 +193,56 @@ That final property is conditional, because the ~489k-line test tree is delibera
 `IsTestProject` is already the flag this file uses to gate the ruleset, StyleCop and `DocumentationFile`, and it resolves correctly for every test project including the two outside `test/` that set it in their own csproj. The conditional is preferred over per-project properties because it makes **a newly created production project nullable by default**, which is the property the migration exists to establish.
 
 Migrating the test tree is deferred rather than declined, and it is not a mechanical flip: 138 test files load their own assembly as a G# metadata reference, and `CodeAnalysis/Symbols/ClrNullability.cs` reads exactly the `NullableAttribute` data that annotating those fixtures would newly emit. Test annotation changes the input to the nullability importer that is itself under test, so it needs its own plan and its own witnesses.
+
+## Amendment (2026-08-10)
+
+### A8 — What the build cannot check: four measured defect modes
+
+A6 says the build is a complete decision procedure for a compile-time property, and treats an annotation-only slice as needing no test run. That is true of the *property* and false of the *edit*. On the branch completing this migration, ten tests were failing when the work was declared done — with a clean solution build under `TreatWarningsAsErrors` and a passing `nullable_hygiene.py` throughout. All ten came from two commits, in four shapes. Every one was found by a test suite; none by the build, the gate, or static analysis.
+
+The four are recorded here because three of them look like good practice at review time.
+
+**1. A null guard added to silence a warning.** The archetype:
+
+```diff
+-  if (memberType == null)
++  if (memberType == null || declaringType == null)
+       return false;
+```
+
+The warning was on a constructor argument whose parameter was non-nullable. Widening the bail-out silenced it — and silently unbound `ifaceReceiver.DelegateProp(args)`, because a property declared on an *interface* legitimately has no `StructSymbol` declaring type. That regressed two shipped issues (#2925, #3016) and reported GS0159 instead. The correct fix was widening the constructor parameter, after which the guard returns to its original form.
+
+> **Rule.** Resolving a nullable warning by adding or widening an `if (x == null) return/continue/throw` is a behaviour change, not an annotation. A guard is correct only when the null case genuinely has nothing to do — and then the comment must say so.
+
+**2. `ImmutableArray<T>` normalization inverted.** `ImmutableArray<T>` is a struct, so it never produces a nullable diagnostic — yet `default(ImmutableArray<T>)` throws on enumeration. A helper existing purely to normalize that away was "tidied" into a no-op:
+
+```diff
+-    => types.IsDefault ? ImmutableArray<TypeSymbol>.Empty : types;
++    => types.IsDefault ? default : types;
+```
+
+Both arms type-check; the compiler cannot help at all. Six tests died on `InvalidOperationException` several frames away.
+
+> **Rule.** `IsDefault` / `IsDefaultOrEmpty` guards are load-bearing and invisible to nullable analysis. Do not touch them during an annotation slice.
+
+**3 and 4. False `Invariant.Required`.** Four shipped across the migration. A7 already states the rule — *"if you cannot name what establishes the invariant, you do not have one"* — and it did not hold in practice, because a plausible-sounding `because` is easy to write and nothing forces it to be derived from code. Two of the four were disproved by a null test in the *same method*; one asserted a value whose target parameter was *already nullable*, making the assertion pure noise that still crashed; and one asserted `BoundNode.Syntax`, whose nullability is this migration's own headline finding.
+
+> **Rule.** The `because` must cite the construct that establishes the invariant — a named guard, constructor, or caller — not a restatement of the claim. Before writing one, check whether the target is already nullable; if it is, pass the value through.
+
+### What follows for the gate
+
+`nullable_hygiene.py` was extended in response:
+
+- **`arg-null-bang`** — `f(null!)` now fails wherever `in_nullable_context` holds. It had been exempted wholesale on the grounds that passing null to a non-nullable parameter is how a test exercises an `ArgumentNullException` guard. That is true of tests and false of production, where fourteen had accumulated; nine marked genuinely over-strict contracts and five were dead `!` on already-nullable targets. Post-flip every test project is `Nullable=disable`, so scoping the check to `in_nullable_context` preserves the original rationale without an allowlist.
+
+Two further checks are worth adding and are not yet implemented: flagging `Invariant.Required` whose target is already nullable (mechanical, and would have caught defect 4 on its own), and flagging a diff that both resolves a nullable warning and adds a null-comparison line (defect 1's signature).
+
+### What follows for slice verification
+
+A6's `classify` split — annotation-only versus behaviour-capable — is the right instrument and correctly flagged all four offending files as behaviour-capable. The gap is that nothing *required* the suites to run for them.
+
+> **Rule.** A slice containing any behaviour-capable file is not done until `Core.Tests`, `Compiler.Tests` and `Interpreter.Tests` have all run green **on one tree with no rebuild in between**. Rebuilding mid-run invalidates the run; results from a tree that has since changed do not count.
+
+`test/Core.Tests/Baselines/refactoring-baseline.json` is the cheapest strong oracle available: a byte-for-byte PE comparison that an annotation-only change cannot move. It stayed unchanged across the entire migration, which is what makes the emit-side claim credible.
+
+Finally: any detector written to audit these shapes needs a mutation witness (ADR-0154). A first attempt at auditing the migration's 588 `Invariant.Required` sites reported zero hits and was simply broken — its method segmenter mis-parsed, and re-introducing a known defect failed to trip it. **A zero from an unwitnessed detector carries no information.**
