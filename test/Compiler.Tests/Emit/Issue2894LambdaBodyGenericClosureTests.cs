@@ -262,7 +262,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             ]);
             Assert.Equal(0, exitCode);
 
-            Assert.Equal(expectedOutput + "\n", Run(assemblyPath, directory));
+            Assert.Equal(expectedOutput + Environment.NewLine, Run(assemblyPath, directory));
 
             var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
             var closureTypes = assembly.GetTypes()
@@ -323,7 +323,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             throw new TimeoutException("dotnet child process timed out.");
         }
 
-        var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n");
+        var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
         var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(
             process.ExitCode == 0,

@@ -75,20 +75,20 @@ public class Issue3099TypeArgumentReificationTests
 
             Reify[int32]()
             """;
-        const string Expected =
-            "chan:System.Threading.Channels.Channel`1\n"
-            + "chan-arg:System.Int32\n"
-            + "sequence:System.Collections.Generic.IEnumerable`1\n"
-            + "sequence-arg:System.Int32\n"
-            + "map:System.Collections.Generic.Dictionary`2\n"
-            + "map-key:System.String\n"
-            + "map-value:System.Int32\n"
-            + "async-sequence:System.Collections.Generic.IAsyncEnumerable`1\n"
-            + "async-sequence-arg:System.Int32\n"
-            + "deep-map:System.Collections.Generic.Dictionary`2\n"
-            + "deep-sequence:System.Collections.Generic.IEnumerable`1\n"
-            + "deep-channel:System.Threading.Channels.Channel`1\n"
-            + "deep-arg:System.Int32\n";
+        string Expected =
+            $"chan:System.Threading.Channels.Channel`1{Environment.NewLine}"
+            + $"chan-arg:System.Int32{Environment.NewLine}"
+            + $"sequence:System.Collections.Generic.IEnumerable`1{Environment.NewLine}"
+            + $"sequence-arg:System.Int32{Environment.NewLine}"
+            + $"map:System.Collections.Generic.Dictionary`2{Environment.NewLine}"
+            + $"map-key:System.String{Environment.NewLine}"
+            + $"map-value:System.Int32{Environment.NewLine}"
+            + $"async-sequence:System.Collections.Generic.IAsyncEnumerable`1{Environment.NewLine}"
+            + $"async-sequence-arg:System.Int32{Environment.NewLine}"
+            + $"deep-map:System.Collections.Generic.Dictionary`2{Environment.NewLine}"
+            + $"deep-sequence:System.Collections.Generic.IEnumerable`1{Environment.NewLine}"
+            + $"deep-channel:System.Threading.Channels.Channel`1{Environment.NewLine}"
+            + $"deep-arg:System.Int32{Environment.NewLine}";
         var root = Path.Combine(
             GetRepositoryRoot(),
             "out",
@@ -107,7 +107,7 @@ public class Issue3099TypeArgumentReificationTests
                 GSharp.Repl.Program.Main);
             var interactive = RunInteractiveEmit(Source);
 
-            Assert.Equal(Expected + "Success.\n", compiler);
+            Assert.Equal(Expected + $"Success.{Environment.NewLine}", compiler);
             Assert.Equal(Expected, gsi);
             Assert.Equal(Expected, interactive);
         }
@@ -147,11 +147,11 @@ public class Issue3099TypeArgumentReificationTests
         {
             var output = RunSourceDriver(root, Source, Program.Main);
             Assert.Contains(
-                "func:System.Func`2\nfunc-arg:System.Int32\nfunc-return:System.Int32\n",
+                $"func:System.Func`2{Environment.NewLine}func-arg:System.Int32{Environment.NewLine}func-return:System.Int32{Environment.NewLine}",
                 output,
                 StringComparison.Ordinal);
             Assert.Contains("warning GS0303:", output, StringComparison.Ordinal);
-            Assert.EndsWith("Success.\n", output, StringComparison.Ordinal);
+            Assert.EndsWith($"Success.{Environment.NewLine}", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -193,7 +193,7 @@ public class Issue3099TypeArgumentReificationTests
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);
             Assert.DoesNotContain("Cannot encode", result.Stdout, StringComparison.Ordinal);
-            Assert.Equal("Failed.\n", result.Stderr);
+            Assert.Equal($"Failed.{Environment.NewLine}", result.Stderr);
         }
         finally
         {
@@ -240,7 +240,7 @@ public class Issue3099TypeArgumentReificationTests
                 StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", result.Stdout, StringComparison.Ordinal);
             Assert.DoesNotContain("Cannot encode", result.Stdout, StringComparison.Ordinal);
-            Assert.Equal("Failed.\n", result.Stderr);
+            Assert.Equal($"Failed.{Environment.NewLine}", result.Stderr);
         }
         finally
         {
@@ -291,8 +291,9 @@ public class Issue3099TypeArgumentReificationTests
                 Path.Combine(root, "gsc-script"),
                 source,
                 Program.Main);
-            Assert.EndsWith("Success.\n", gscScript);
-            gscScript = gscScript[..^"Success.\n".Length];
+            var successSuffix = $"Success.{Environment.NewLine}";
+            Assert.EndsWith(successSuffix, gscScript);
+            gscScript = gscScript[..^successSuffix.Length];
 
             var gsiScript = RunSourceDriver(
                 Path.Combine(root, "gsi"),
@@ -333,18 +334,18 @@ public class Issue3099TypeArgumentReificationTests
             var interactiveOutput = NormalizeGenericTypeNames(interactiveEmit);
             var gscOutput = NormalizeGenericTypeNames(gscScript);
             var gsiOutput = NormalizeGenericTypeNames(gsiScript);
-            const string ControlShape =
-                "44\n2|Eleven:System.Int32:True:False:False|TwentyTwo:System.String:False:False:False\n";
-            Assert.Contains(ControlShape, expected, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, interactiveOutput, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, gscOutput, StringComparison.Ordinal);
-            Assert.Contains(ControlShape, gsiOutput, StringComparison.Ordinal);
+            var controlShape =
+                $"44{Environment.NewLine}2|Eleven:System.Int32:True:False:False|TwentyTwo:System.String:False:False:False{Environment.NewLine}";
+            Assert.Contains(controlShape, expected, StringComparison.Ordinal);
+            Assert.Contains(controlShape, interactiveOutput, StringComparison.Ordinal);
+            Assert.Contains(controlShape, gscOutput, StringComparison.Ordinal);
+            Assert.Contains(controlShape, gsiOutput, StringComparison.Ordinal);
             Assert.Equal(expected, interactiveOutput);
             Assert.Equal(expected, gscOutput);
             Assert.Equal(expected, gsiOutput);
-            Assert.Contains("11\n", expected);
-            Assert.Contains("22\n", expected);
-            Assert.Contains("33\n", expected);
+            Assert.Contains($"11{Environment.NewLine}", expected);
+            Assert.Contains($"22{Environment.NewLine}", expected);
+            Assert.Contains($"33{Environment.NewLine}", expected);
         }
         finally
         {
@@ -430,7 +431,7 @@ public class Issue3099TypeArgumentReificationTests
         using var engine = new EmittedSessionEngine { CaptureConsole = true };
         var cell = engine.Evaluate(source);
         Assert.False(cell.HasError, string.Join(Environment.NewLine, cell.Diagnostics));
-        return cell.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return cell.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string PrepareEmptyDirectory(string directory)
@@ -471,8 +472,8 @@ public class Issue3099TypeArgumentReificationTests
 
         return new DriverResult(
             exit,
-            stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
-            stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            stdout.ToString().ReplaceLineEndings(Environment.NewLine),
+            stderr.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     private readonly record struct DriverResult(int ExitCode, string Stdout, string Stderr);

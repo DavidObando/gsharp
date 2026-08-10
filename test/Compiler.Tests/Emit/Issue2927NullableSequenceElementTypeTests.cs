@@ -155,7 +155,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("1,nil,3,\n", RunBounded(assemblyPath, nameof(NullableSequenceParameterAcceptsList)));
+        Assert.Equal($"1,nil,3,{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableSequenceParameterAcceptsList)));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("x\nnil\n", RunBounded(assemblyPath, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+        Assert.Equal($"x{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(ReferenceConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("woof\nnil\n", RunBounded(assemblyPath, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+        Assert.Equal($"woof{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(BaseClassConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("5\nnil\n", RunBounded(assemblyPath, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
+        Assert.Equal($"5{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(StructConstrainedGenericNullableSequenceLoadsVerifiesAndRuns)));
     }
 
     [Fact]
@@ -261,7 +261,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("x\nnil\n", RunBounded(assemblyPath, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns)));
+        Assert.Equal($"x{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableReferenceSequenceGuardLoadsVerifiesAndRuns)));
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("A\nnil\n", RunBounded(assemblyPath, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns)));
+        Assert.Equal($"A{Environment.NewLine}nil{Environment.NewLine}", RunBounded(assemblyPath, nameof(NullableUserEnumSequenceGuardLoadsVerifiesAndRuns)));
     }
 
     [Fact]
@@ -487,7 +487,7 @@ public class Issue2927NullableSequenceElementTypeTests
         AssertSpecializedMethods(types, "asyncValues", typeof(IAsyncEnumerable<>));
         AssertSpecializedIteratorInterfaces(types, typeof(IEnumerable<>));
         AssertSpecializedIteratorInterfaces(types, typeof(IAsyncEnumerable<>));
-        Assert.Equal("ok\n", RunBounded(assemblyPath, nameof(GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces)));
+        Assert.Equal($"ok{Environment.NewLine}", RunBounded(assemblyPath, nameof(GenericNullableSequenceMetadataUsesMatchingSpecializedSignaturesAndInterfaces)));
     }
 
     [Fact]
@@ -533,8 +533,8 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var result = InvokeCompiler(Source, nameof(UnconstrainedNullableSequenceNonIteratorReturnStillReportsGS0508));
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0508:", StringComparison.Ordinal)));
-        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0155:", StringComparison.Ordinal)));
+        Assert.Equal(1, result.Output.Split(Environment.NewLine).Count(line => line.Contains("error GS0508:", StringComparison.Ordinal)));
+        Assert.Equal(1, result.Output.Split(Environment.NewLine).Count(line => line.Contains("error GS0155:", StringComparison.Ordinal)));
         Assert.False(File.Exists(result.AssemblyPath));
     }
 
@@ -564,7 +564,7 @@ public class Issue2927NullableSequenceElementTypeTests
 
         var result = InvokeCompiler(Source, nameof(SpecializedIteratorBodyDiagnosticIsReportedOnce));
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Equal(1, result.Output.Split('\n').Count(line => line.Contains("error GS0125:", StringComparison.Ordinal)));
+        Assert.Equal(1, result.Output.Split(Environment.NewLine).Count(line => line.Contains("error GS0125:", StringComparison.Ordinal)));
         Assert.DoesNotContain("error GS0508:", result.Output, StringComparison.Ordinal);
         Assert.False(File.Exists(result.AssemblyPath));
     }
@@ -769,7 +769,7 @@ public class Issue2927NullableSequenceElementTypeTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal($"{expected}\n{expected}\n", RunBounded(assemblyPath, name));
+        Assert.Equal($"{expected}{Environment.NewLine}{expected}{Environment.NewLine}", RunBounded(assemblyPath, name));
     }
 
     private static string Compile(string source, string name)
@@ -783,7 +783,7 @@ public class Issue2927NullableSequenceElementTypeTests
     {
         var result = InvokeCompiler(source, name);
         Assert.NotEqual(0, result.ExitCode);
-        var diagnostics = result.Output.Split('\n')
+        var diagnostics = result.Output.Split(Environment.NewLine)
             .Where(line => line.Contains("error GS", StringComparison.Ordinal))
             .ToArray();
         Assert.Single(diagnostics);
@@ -797,7 +797,7 @@ public class Issue2927NullableSequenceElementTypeTests
         string message)
     {
         Assert.NotEqual(0, result.ExitCode);
-        var diagnostics = result.Output.Split('\n')
+        var diagnostics = result.Output.Split(Environment.NewLine)
             .Where(line => line.Contains("error GS", StringComparison.Ordinal))
             .ToArray();
         Assert.Single(diagnostics);
@@ -873,6 +873,6 @@ public class Issue2927NullableSequenceElementTypeTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

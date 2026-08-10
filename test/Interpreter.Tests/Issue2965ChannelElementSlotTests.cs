@@ -37,7 +37,7 @@ public class Issue2965ChannelElementSlotTests
             }
             """;
 
-        Assert.Equal("41\n42\n", RunSubmission(Source));
+        Assert.Equal($"41{Environment.NewLine}42{Environment.NewLine}", RunSubmission(Source));
     }
 
     private static string RunSubmission(string source)
@@ -55,6 +55,6 @@ public class Issue2965ChannelElementSlotTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

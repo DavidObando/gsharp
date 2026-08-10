@@ -142,7 +142,7 @@ public sealed class Issue2893ConstructorAccessibilityEmitTests
             var types = assembly.GetTypes();
             Assert.Equal(16, types.Length);
             assertions(types);
-            Assert.Equal("11\n22\n33\n34\n44\n", Run(assemblyPath, directory));
+            Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}34{Environment.NewLine}44{Environment.NewLine}", Run(assemblyPath, directory));
         }
         finally
         {
@@ -236,6 +236,6 @@ public sealed class Issue2893ConstructorAccessibilityEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"emitted program exited {process.ExitCode}\nstdout:\n{stdout.Result}\nstderr:\n{stderr.Result}");
-        return stdout.Result.Replace("\r\n", "\n");
+        return stdout.Result.ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -116,7 +116,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             """;
 
         Assert.Equal(
-            "func\n",
+            $"func{Environment.NewLine}",
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
@@ -149,7 +149,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             """;
 
         Assert.Equal(
-            "2\n",
+            $"2{Environment.NewLine}",
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
@@ -182,7 +182,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             """;
 
         Assert.Equal(
-            "ada+tom,bea+rex\n",
+            $"ada+tom,bea+rex{Environment.NewLine}",
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
@@ -213,7 +213,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             """;
 
         Assert.Equal(
-            "JoinClause: matched=ada+tom,bea+rex,bea+ziggy\n",
+            $"JoinClause: matched=ada+tom,bea+rex,bea+ziggy{Environment.NewLine}",
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
@@ -258,7 +258,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             """;
 
         Assert.Equal(
-            "74\n",
+            $"74{Environment.NewLine}",
             Evaluate(WithExecutionScope(declarations, statements, topLevel)));
     }
 
@@ -277,7 +277,7 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string RunSubmission(string source)
@@ -294,6 +294,6 @@ public class Issue2918InlineLambdaErasedReceiverEmittedOracleTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

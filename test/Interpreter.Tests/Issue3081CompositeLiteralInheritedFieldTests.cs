@@ -116,7 +116,7 @@ public class Issue3081CompositeLiteralInheritedFieldTests
         }
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+    private static string Normalize(string text) => text.ReplaceLineEndings(Environment.NewLine);
 
     private readonly record struct DriverResult(int ExitCode, string Stdout, string Stderr);
 }

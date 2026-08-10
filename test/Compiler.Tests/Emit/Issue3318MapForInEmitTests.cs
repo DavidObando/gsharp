@@ -38,7 +38,7 @@ public class Issue3318MapForInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n60\n", output);
+        Assert.Equal($"6{Environment.NewLine}60{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue3318MapForInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue3318MapForInEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n3\n", output);
+        Assert.Equal($"7{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -152,7 +152,7 @@ public class Issue3318MapForInEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

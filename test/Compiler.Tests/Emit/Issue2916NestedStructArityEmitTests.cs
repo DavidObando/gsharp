@@ -36,7 +36,7 @@ public sealed class Issue2916NestedStructArityEmitTests
             EmitGSharpLibrary(libraryPath);
             EmitCSharpConsumer(libraryPath, consumerPath);
             AssertMetadataNames(libraryPath);
-            Assert.Equal("11\n22\n33\n", RunConsumer(directory, consumerPath));
+            Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}", RunConsumer(directory, consumerPath));
         }
         finally
         {
@@ -178,6 +178,6 @@ public sealed class Issue2916NestedStructArityEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"C# consumer exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

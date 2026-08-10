@@ -684,7 +684,7 @@ public class Issue2891TryRegionFlowEmitTests
                 Assert.True(process.WaitForExit(5_000), $"{name} child did not stop after kill");
             }
 
-            var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
+            var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
             var stderr = stderrTask.GetAwaiter().GetResult();
             if (expectedOutput == null)
             {

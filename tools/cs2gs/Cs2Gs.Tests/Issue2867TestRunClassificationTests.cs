@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -23,8 +24,8 @@ public class Issue2867TestRunClassificationTests
     [InlineData("Passed!  - Failed:     0, Passed:     7, Skipped:     0, Total:     7, Duration: 2 s")]
     public void ACompletedTestRunIsRecognised(string summary)
     {
-        string output = "Test run for /tmp/x/Some.Tests.dll (.NETCoreApp,Version=v10.0)\n"
-            + "A total of 1 test files matched the specified pattern.\n"
+        string output = $"Test run for /tmp/x/Some.Tests.dll (.NETCoreApp,Version=v10.0){Environment.NewLine}"
+            + $"A total of 1 test files matched the specified pattern.{Environment.NewLine}"
             + summary;
 
         Assert.True(TestParityStage.CompletedTestRun(output));

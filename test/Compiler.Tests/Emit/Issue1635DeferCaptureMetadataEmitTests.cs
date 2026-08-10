@@ -98,7 +98,7 @@ public class Issue1635DeferCaptureMetadataEmitTests
             """;
 
         var output = CompileVerifyAndRun(source);
-        Assert.Equal("body\n7\n", output);
+        Assert.Equal($"body{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     private static string CompileVerifyAndRun(string source)

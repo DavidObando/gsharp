@@ -219,7 +219,7 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("41\n", CompileAndRun(source, "imported-readonly", ImportedFixture));
+        Assert.Equal($"41{Environment.NewLine}", CompileAndRun(source, "imported-readonly", ImportedFixture));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source, "imported-get-only", ImportedFixture));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source, "imported-get-only", ImportedFixture));
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("43\n", CompileAndRun(source, "imported-if-let", ImportedFixture));
+        Assert.Equal($"43{Environment.NewLine}", CompileAndRun(source, "imported-if-let", ImportedFixture));
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("44\n", CompileAndRun(source, "imported-assertion", ImportedFixture));
+        Assert.Equal($"44{Environment.NewLine}", CompileAndRun(source, "imported-assertion", ImportedFixture));
     }
 
     [Theory]
@@ -425,7 +425,7 @@ public class Issue2885NullableDelegateReceiverTests
             }
             """;
 
-        Assert.Equal("1\n2\n", CompileAndRun(source, "nullsafe-invoke-remedy"));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source, "nullsafe-invoke-remedy"));
     }
 
     [Fact]
@@ -490,7 +490,7 @@ public class Issue2885NullableDelegateReceiverTests
             """;
 
         Assert.Equal(
-            "41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n",
+            $"41{Environment.NewLine}42{Environment.NewLine}43{Environment.NewLine}44{Environment.NewLine}45{Environment.NewLine}46{Environment.NewLine}47{Environment.NewLine}48{Environment.NewLine}49{Environment.NewLine}50{Environment.NewLine}51{Environment.NewLine}52{Environment.NewLine}",
             CompileAndRun(source, "remedies"));
     }
 
@@ -503,7 +503,7 @@ public class Issue2885NullableDelegateReceiverTests
     public void IfLetAndNullAssertion_RemediesRunForOriginalReceiverShapes(string receiverShape)
     {
         Assert.Equal(
-            "61\n62\n",
+            $"61{Environment.NewLine}62{Environment.NewLine}",
             CompileAndRun(BuildRemedySource(receiverShape), "remedy-" + receiverShape));
     }
 
@@ -1007,7 +1007,7 @@ public class Issue2885NullableDelegateReceiverTests
             var output = outputTask.GetAwaiter().GetResult();
             var error = errorTask.GetAwaiter().GetResult();
             Assert.True(process.ExitCode == 0, error);
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

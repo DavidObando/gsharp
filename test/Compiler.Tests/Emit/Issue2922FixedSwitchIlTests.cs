@@ -21,7 +21,12 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue2922FixedSwitchIlTests
 {
-    private const string ExpectedMatrixOutput = "2\n3\n12\n12\n3\n3\n2\n2\n2\n12\n3\n3\n2\n2\nSI\n";
+    private static readonly string ExpectedMatrixOutput =
+        $"2{Environment.NewLine}3{Environment.NewLine}12{Environment.NewLine}" +
+        $"12{Environment.NewLine}3{Environment.NewLine}3{Environment.NewLine}" +
+        $"2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}" +
+        $"12{Environment.NewLine}3{Environment.NewLine}3{Environment.NewLine}" +
+        $"2{Environment.NewLine}2{Environment.NewLine}SI{Environment.NewLine}";
 
     private const string MatrixSource = """
         package Issue2922.Matrix
@@ -332,7 +337,9 @@ public class Issue2922FixedSwitchIlTests
             ignoredErrorCodes: ignoredVerificationErrors,
             ignoredErrorScope: ignoredVerificationErrors.Length == 0 ? null : @"<Program>\.F$");
         program.AssertLoadable();
-        Assert.Equal(expectedOutput, program.Run());
+        Assert.Equal(
+            expectedOutput.Replace("\n", Environment.NewLine, StringComparison.Ordinal),
+            program.Run());
     }
 
     [Fact]
@@ -470,7 +477,7 @@ public class Issue2922FixedSwitchIlTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec exited {process.ExitCode}:\n{stderrTask.Result}");
-            return stdoutTask.Result.Replace("\r\n", "\n");
+            return stdoutTask.Result.ReplaceLineEndings(Environment.NewLine);
         }
 
         public void Dispose()

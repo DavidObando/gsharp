@@ -250,8 +250,8 @@ public class SampleConformanceTests
 
     private static DriverResult CaptureConsole(Func<int> action, bool compilerProtocol)
     {
-        using var stdout = new StringWriter { NewLine = "\n" };
-        using var stderr = new StringWriter { NewLine = "\n" };
+        using var stdout = new StringWriter { NewLine = Environment.NewLine };
+        using var stderr = new StringWriter { NewLine = Environment.NewLine };
         var previousOut = Console.Out;
         var previousError = Console.Error;
         Console.SetOut(stdout);
@@ -303,7 +303,7 @@ public class SampleConformanceTests
         string stderr,
         bool compilerProtocol)
     {
-        var diagnosticIds = DiagnosticIdPattern.Matches(stdout + "\n" + stderr)
+        var diagnosticIds = DiagnosticIdPattern.Matches(stdout + Environment.NewLine + stderr)
             .Select(match => match.Value)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
@@ -317,7 +317,7 @@ public class SampleConformanceTests
 
     private static string CleanCliStream(string value, bool compilerProtocol)
     {
-        var lines = SampleConformanceData.NormalizeLineEndings(value).Split('\n');
+        var lines = SampleConformanceData.NormalizeLineEndings(value).Split(Environment.NewLine);
         var diagnosticIndex = Array.FindIndex(lines, line => DiagnosticIdPattern.IsMatch(line));
         if (diagnosticIndex >= 0)
         {
@@ -325,7 +325,7 @@ public class SampleConformanceTests
         }
 
         return string.Join(
-            "\n",
+            Environment.NewLine,
             lines.Where(line => !compilerProtocol || line is not "Success." and not "Failed."));
     }
 

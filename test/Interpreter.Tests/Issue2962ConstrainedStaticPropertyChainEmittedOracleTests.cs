@@ -40,7 +40,7 @@ public class Issue2962ConstrainedStaticPropertyChainEmittedOracleTests
             Console.WriteLine(Read(C{}))
             """;
 
-        Assert.Equal("5\n", Evaluate(Source));
+        Assert.Equal($"5{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue2962ConstrainedStaticPropertyChainEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
-        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string RunSubmission(string source)
@@ -95,6 +95,6 @@ public class Issue2962ConstrainedStaticPropertyChainEmittedOracleTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

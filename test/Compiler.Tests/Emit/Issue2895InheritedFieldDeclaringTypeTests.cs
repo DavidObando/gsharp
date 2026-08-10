@@ -396,8 +396,8 @@ public class Issue2895InheritedFieldDeclaringTypeTests
             throw new Xunit.Sdk.XunitException("Child process timed out.");
         }
 
-        var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
-        var stderr = stderrTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
+        var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
+        var stderr = stderrTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
         Assert.True(
             process.ExitCode == 0,
             $"Child exited {process.ExitCode}.\nstdout:\n{stdout}\nstderr:\n{stderr}");

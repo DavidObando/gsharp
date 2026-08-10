@@ -198,8 +198,8 @@ public class Issue3010EntryPointDriverMatrixTests
 
         return (
             result.ExitCode,
-            result.StandardOutput.Replace("\r\n", "\n"),
-            result.StandardError.Replace("\r\n", "\n"));
+            result.StandardOutput.ReplaceLineEndings(Environment.NewLine),
+            result.StandardError.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(
@@ -215,8 +215,8 @@ public class Issue3010EntryPointDriverMatrixTests
         {
             return (
                 action(),
-                output.ToString().Replace("\r\n", "\n"),
-                error.ToString().Replace("\r\n", "\n"));
+                output.ToString().ReplaceLineEndings(Environment.NewLine),
+                error.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

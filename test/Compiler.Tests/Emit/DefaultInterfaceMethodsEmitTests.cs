@@ -281,7 +281,7 @@ public class DefaultInterfaceMethodsEmitTests
                 Console.SetError(prevErr);
             }
 
-            return stdoutWriter.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            return stdoutWriter.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         }
         finally
         {

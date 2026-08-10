@@ -51,13 +51,13 @@ public sealed class Issue3087GenericTupleCollectionTests
             Console.WriteLine("ok")
             """;
 
-        Assert.Equal("ok\n", CompileVerifyAndRun(Source));
+        Assert.Equal($"ok{Environment.NewLine}", CompileVerifyAndRun(Source));
     }
 
     [Fact]
     public void SymbolicTupleCollections_AllClrTupleNodes_CompileVerifyAndRun()
     {
-        Assert.Equal("ok\n", CompileVerifyAndRun(BuildSymbolicTupleMatrixSource()));
+        Assert.Equal($"ok{Environment.NewLine}", CompileVerifyAndRun(BuildSymbolicTupleMatrixSource()));
     }
 
     private static string BuildSymbolicTupleMatrixSource()
@@ -185,7 +185,7 @@ public sealed class Issue3087GenericTupleCollectionTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, error);
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

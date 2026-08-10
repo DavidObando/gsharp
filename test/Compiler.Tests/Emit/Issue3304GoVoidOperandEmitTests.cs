@@ -138,6 +138,6 @@ public class Issue3304GoVoidOperandEmitTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -77,7 +77,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class Issue1035FunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)

@@ -99,7 +99,7 @@ public class ProcessRunnerTests
 
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
-        string[] lines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        string[] lines = result.Stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(args, lines);
     }
 

@@ -71,7 +71,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Cancellation\n", output);
+        Assert.Equal($"Cancellation{Environment.NewLine}", output);
     }
 
     // (a') construct the same generic delegate from a METHOD GROUP (not a

@@ -87,7 +87,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "401\n402\n121\n122\n",
+            $"401{Environment.NewLine}402{Environment.NewLine}121{Environment.NewLine}122{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -115,7 +115,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "property\nfield\nobject-property\nobject-field\n",
+            $"property{Environment.NewLine}field{Environment.NewLine}object-property{Environment.NewLine}object-field{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -143,7 +143,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "501\n502\n121\n122\n",
+            $"501{Environment.NewLine}502{Environment.NewLine}121{Environment.NewLine}122{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -161,7 +161,7 @@ public class ImportedMemberMatrixTests
             var (exitCode, output) = RunCompiler(new[] { sourcePath });
 
             Assert.Equal(0, exitCode);
-            Assert.Equal(expected + "Success.\n", output.Replace("\r\n", "\n"));
+            Assert.Equal(expected + $"Success.{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -1291,7 +1291,7 @@ public class ImportedMemberMatrixTests
 
         var (exitCode, diagnostics) = RunCompiler(GscArgs(outPath, "exe", references, srcPath));
         Assert.True(exitCode != 0, "expected gsc to report errors but it succeeded");
-        return diagnostics.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+        return diagnostics.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).ToList();
     }
 
     private static List<string> GetDiagnosticIds(IEnumerable<string> diagnostics)

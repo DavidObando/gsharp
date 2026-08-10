@@ -62,7 +62,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi-1716\n", output);
+        Assert.Equal($"hi-1716{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("103\n", output);
+        Assert.Equal($"103{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
             source,
             ignoredIlVerifyErrorCodes: new[] { "LdftnNonFinalVirtual" },
             ignoredErrorScope: @"IConverter1716\.GetDoubler$");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(
@@ -272,7 +272,7 @@ public class Issue1716DelegateOverInterfaceRowReservationEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

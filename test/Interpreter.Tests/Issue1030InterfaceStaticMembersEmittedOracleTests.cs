@@ -38,7 +38,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(ICounter.Max)
             """;
 
-        Assert.Equal("7\n100\n", Evaluate(source));
+        Assert.Equal($"7{Environment.NewLine}100{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(ICounter.Count)
             """;
 
-        Assert.Equal("2\n2\n", Evaluate(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(Describe(Apple{}))
             """;
 
-        Assert.Equal("default-name\n", Evaluate(source));
+        Assert.Equal($"default-name{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(IBox[int32].Max)
             """;
 
-        Assert.Equal("7\n100\n50\n", Evaluate(source));
+        Assert.Equal($"7{Environment.NewLine}100{Environment.NewLine}50{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(IBox[string].Count)
             """;
 
-        Assert.Equal("5\n1\n", Evaluate(source));
+        Assert.Equal($"5{Environment.NewLine}1{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
             Console.WriteLine(ICounter.Count)
             """;
 
-        Assert.Equal("5\n", Evaluate(source));
+        Assert.Equal($"5{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -180,6 +180,6 @@ public class Issue1030InterfaceStaticMembersEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

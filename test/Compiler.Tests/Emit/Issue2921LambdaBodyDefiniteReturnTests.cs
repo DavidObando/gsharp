@@ -156,7 +156,7 @@ public class Issue2921LambdaBodyDefiniteReturnTests
         var result = InvokeCompiler(source, name);
 
         Assert.NotEqual(0, result.ExitCode);
-        var errors = result.Output.Split('\n')
+        var errors = result.Output.Split(Environment.NewLine)
             .Where(line => line.Contains("error GS", StringComparison.Ordinal))
             .ToArray();
         Assert.Single(errors);
@@ -265,6 +265,6 @@ public class Issue2921LambdaBodyDefiniteReturnTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

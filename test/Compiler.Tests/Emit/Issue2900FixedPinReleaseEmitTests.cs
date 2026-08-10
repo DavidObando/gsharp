@@ -112,7 +112,7 @@ public class Issue2900FixedPinReleaseEmitTests
             """;
 
         using var program = Compile(Source, "branches");
-        Assert.Equal("1\n3\n3\n4\n2\n", program.Run());
+        Assert.Equal($"1{Environment.NewLine}3{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}2{Environment.NewLine}", program.Run());
 
         AssertEscapingLeave(program.ReadMethod("BreakOut"), expectedFinallyCount: 1);
         AssertEscapingLeave(program.ReadMethod("ContinueOut"), expectedFinallyCount: 1);
@@ -237,7 +237,7 @@ public class Issue2900FixedPinReleaseEmitTests
             Source,
             "return_throw",
             ignoredErrorScope: @"(Box\.\.ctor|<Program>\.(ComputedReturn|MixedReturn))$");
-        Assert.Equal("42\n9\nvoid\n20\n5\n20\n2\n", program.Run());
+        Assert.Equal($"42{Environment.NewLine}9{Environment.NewLine}void{Environment.NewLine}20{Environment.NewLine}5{Environment.NewLine}20{Environment.NewLine}2{Environment.NewLine}", program.Run());
 
         var returned = program.ReadMethod("ComputedReturn");
         AssertEscapingLeave(returned, expectedFinallyCount: 1);
@@ -292,7 +292,7 @@ public class Issue2900FixedPinReleaseEmitTests
             Source,
             "static_initializer",
             ignoredErrorScope: @"Holder\.\.cctor$");
-        Assert.Equal("41\n", program.Run());
+        Assert.Equal($"41{Environment.NewLine}", program.Run());
         AssertEscapingLeave(program.ReadMethod(".cctor"), expectedFinallyCount: 1);
     }
 
@@ -344,7 +344,7 @@ public class Issue2900FixedPinReleaseEmitTests
             Source,
             "movement",
             ignoredErrorScope: @"<Program>\.Released$");
-        Assert.Equal("True\n", program.Run());
+        Assert.Equal($"True{Environment.NewLine}", program.Run());
         var method = program.ReadMethod("Released");
         var regions = method.Regions.Where(region => region.Kind == ExceptionRegionKind.Finally).ToArray();
         Assert.Equal(2, regions.Length);
@@ -545,7 +545,7 @@ public class Issue2900FixedPinReleaseEmitTests
             "shapes",
             ignoredErrorScope:
                 @"<Program>\.(ArrayPin|FixedArrayPin|EmptyPin|StringPin|SpanPin|TryInsideFixed|FixedInsideTry)$");
-        Assert.Equal("7\n8\n0\n65\n7\n7\n7\nTRCFBLESGUW1\n", program.Run());
+        Assert.Equal($"7{Environment.NewLine}8{Environment.NewLine}0{Environment.NewLine}65{Environment.NewLine}7{Environment.NewLine}7{Environment.NewLine}7{Environment.NewLine}TRCFBLESGUW1{Environment.NewLine}", program.Run());
 
         var spanPin = program.ReadMethod("SpanPin");
         var spanCleanup = Assert.Single(
@@ -607,7 +607,7 @@ public class Issue2900FixedPinReleaseEmitTests
             Source,
             "switch_return",
             ignoredErrorScope: @"<Program>\.FromSwitch$");
-        Assert.Equal("8\n", program.Run());
+        Assert.Equal($"8{Environment.NewLine}", program.Run());
         AssertEscapingLeave(program.ReadMethod("FromSwitch"), expectedFinallyCount: 1);
     }
 
@@ -643,7 +643,7 @@ public class Issue2900FixedPinReleaseEmitTests
             Source,
             "select_return",
             ignoredErrorScope: @"<Program>\.FromSelect$");
-        Assert.Equal("9\n", program.Run());
+        Assert.Equal($"9{Environment.NewLine}", program.Run());
         AssertEscapingLeave(program.ReadMethod("FromSelect"), expectedFinallyCount: 1);
     }
 
@@ -707,7 +707,7 @@ public class Issue2900FixedPinReleaseEmitTests
             "state_machines",
             ignoredErrorScope:
                 @"<(Values|AfterFixed|ReturnFromFixed)>d__\d+\.MoveNext$");
-        Assert.Equal("11\n10\n12\n10\n11\n", program.Run());
+        Assert.Equal($"11{Environment.NewLine}10{Environment.NewLine}12{Environment.NewLine}10{Environment.NewLine}11{Environment.NewLine}", program.Run());
         Assert.True(
             program.ReadAllMethods().Any(method =>
                 method.Regions.Any(region => region.Kind == ExceptionRegionKind.Finally)
@@ -779,7 +779,7 @@ public class Issue2900FixedPinReleaseEmitTests
             """;
 
         using var program = Compile(ValidSource, "nested_lambda");
-        Assert.Equal("7\n", program.Run());
+        Assert.Equal($"7{Environment.NewLine}", program.Run());
     }
 
     [Fact]
@@ -1020,7 +1020,7 @@ public class Issue2900FixedPinReleaseEmitTests
                 Assert.Fail("dotnet exec timed out");
             }
 
-            var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n");
+            var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
             var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(process.ExitCode == 0, $"dotnet exec exited {process.ExitCode}:\n{stderr}");
             return stdout;

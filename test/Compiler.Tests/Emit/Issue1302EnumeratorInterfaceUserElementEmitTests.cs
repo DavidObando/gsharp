@@ -48,7 +48,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     // The struct case prints the iteration count over a three-element list,
@@ -195,7 +195,7 @@ public class Issue1302EnumeratorInterfaceUserElementEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

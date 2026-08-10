@@ -31,7 +31,7 @@ public class Issue2951NestedGenericStructIteratorTests
             }
             """;
 
-        Assert.Equal("42\n", RunSubmission(Source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(Source));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue2951NestedGenericStructIteratorTests
             }
             """;
 
-        Assert.Equal("42x\ny7\n", RunSubmission(Source));
+        Assert.Equal($"42x{Environment.NewLine}y7{Environment.NewLine}", RunSubmission(Source));
     }
 
     private static string RunSubmission(string source)
@@ -77,6 +77,6 @@ public class Issue2951NestedGenericStructIteratorTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n");
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -196,7 +196,7 @@ public class Issue2278ImportedGenericDataClassTests
         var output = LoadInvokeCaptureStdout(peStream, libraryPath, "Issue2278-Runner");
         var lines = output
 .ReplaceLineEndings(Environment.NewLine)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(new[] { "1", "99", "1", "hi", "1", "bye" }, lines);
     }

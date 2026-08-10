@@ -135,7 +135,7 @@ public class Issue1124GenericUninferableOverloadEmitTests
             Console.WriteLine(C().Run(Formatter(), "x"))
             """;
 
-        Assert.Equal("object\n", CompileAndRun(source));
+        Assert.Equal($"object{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)

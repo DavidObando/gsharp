@@ -253,7 +253,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
 
         IlVerifier.Verify(assemblyPath);
         Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
-        Assert.Equal("ok\n", RunBounded(name, assemblyPath));
+        Assert.Equal($"ok{Environment.NewLine}", RunBounded(name, assemblyPath));
     }
 
     private static object[] Case(string name, string source, string expectedOutput)
@@ -414,7 +414,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
             Assert.True(process.WaitForExit(5_000), $"{name}: child did not stop after kill");
         }
 
-        var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
+        var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
         var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(exited, $"{name}: emitted program timed out");
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{stderr}");

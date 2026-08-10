@@ -66,7 +66,7 @@ public sealed class Issue3130DriverReferenceTests
 
                 var bareGsc = await RunAsync(directory, gscPath, "/nowarn:GS9100", sourcePath);
                 AssertSucceeded(bareGsc, sample + " bare gsc");
-                Assert.Equal(expected + "Success.\n", Normalize(bareGsc.StandardOutput));
+                Assert.Equal(expected + $"Success.{Environment.NewLine}", Normalize(bareGsc.StandardOutput));
 
                 var gsi = await RunAsync(directory, gsiPath, sourcePath);
                 AssertSucceeded(gsi, sample + " gsi");
@@ -117,15 +117,17 @@ public sealed class Issue3130DriverReferenceTests
                 Path.ChangeExtension(outputPath, ".runtimeconfig.json"),
                 outputPath);
             AssertSucceeded(emitted, "fully-qualified emitted execution");
-            Assert.Equal("11\n", Normalize(emitted.StandardOutput));
+            Assert.Equal($"11{Environment.NewLine}", Normalize(emitted.StandardOutput));
 
             var bareGsc = await RunAsync(directory, gscPath, sourcePath);
             AssertSucceeded(bareGsc, "fully-qualified bare gsc");
-            Assert.Equal("11\nSuccess.\n", Normalize(bareGsc.StandardOutput));
+            Assert.Equal(
+                $"11{Environment.NewLine}Success.{Environment.NewLine}",
+                Normalize(bareGsc.StandardOutput));
 
             var gsi = await RunAsync(directory, gsiPath, sourcePath);
             AssertSucceeded(gsi, "fully-qualified gsi");
-            Assert.Equal("11\n", Normalize(gsi.StandardOutput));
+            Assert.Equal($"11{Environment.NewLine}", Normalize(gsi.StandardOutput));
         }
         finally
         {
@@ -180,15 +182,17 @@ public sealed class Issue3130DriverReferenceTests
                 Path.ChangeExtension(outputPath, ".runtimeconfig.json"),
                 outputPath);
             AssertSucceeded(emitted, "explicit-reference emitted execution");
-            Assert.Equal("42\n", Normalize(emitted.StandardOutput));
+            Assert.Equal($"42{Environment.NewLine}", Normalize(emitted.StandardOutput));
 
             var bareGsc = await RunAsync(directory, gscPath, "/nowarn:GS9100", "/r:" + referencePath, sourcePath);
             AssertSucceeded(bareGsc, "explicit-reference bare gsc");
-            Assert.Equal("42\nSuccess.\n", Normalize(bareGsc.StandardOutput));
+            Assert.Equal(
+                $"42{Environment.NewLine}Success.{Environment.NewLine}",
+                Normalize(bareGsc.StandardOutput));
 
             var gsi = await RunAsync(directory, gsiPath, "/r:" + referencePath, sourcePath);
             AssertSucceeded(gsi, "explicit-reference gsi");
-            Assert.Equal("42\n", Normalize(gsi.StandardOutput));
+            Assert.Equal($"42{Environment.NewLine}", Normalize(gsi.StandardOutput));
 
             var help = await RunAsync(directory, gsiPath, "--help");
             AssertSucceeded(help, "gsi help");
@@ -276,7 +280,7 @@ public sealed class Issue3130DriverReferenceTests
                 Path.ChangeExtension(outputPath, ".runtimeconfig.json"),
                 outputPath);
             AssertSucceeded(emitted, "runtime extension execution");
-            Assert.Equal("2020\n", Normalize(emitted.StandardOutput));
+            Assert.Equal($"2020{Environment.NewLine}", Normalize(emitted.StandardOutput));
         }
         finally
         {
@@ -494,5 +498,5 @@ public sealed class Issue3130DriverReferenceTests
         }
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+    private static string Normalize(string text) => text.ReplaceLineEndings(Environment.NewLine);
 }

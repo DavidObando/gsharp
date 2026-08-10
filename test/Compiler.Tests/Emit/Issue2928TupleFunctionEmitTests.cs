@@ -30,7 +30,7 @@ public class Issue2928TupleFunctionEmitTests
     [Fact]
     public void TupleFunction_CompiledBackendExecutes()
     {
-        Assert.Equal("42\n", CompileAndRun(Source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -71,6 +71,6 @@ public class Issue2928TupleFunctionEmitTests
             Console.SetOut(previous);
         }
 
-        return writer.ToString().Replace("\r\n", "\n");
+        return writer.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -163,8 +163,8 @@ public class Issue3266InternalErrorSpanTests
             var exitCode = action();
             return (
                 exitCode,
-                stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
-                stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+                stdout.ToString().ReplaceLineEndings(Environment.NewLine),
+                stderr.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

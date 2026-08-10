@@ -51,7 +51,7 @@ public class Issue3214TopLevelAwaitForEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 0);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue3214TopLevelAwaitForEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 0);
-        Assert.Equal("body\ndisposed\nafter\n", output);
+        Assert.Equal($"body{Environment.NewLine}disposed{Environment.NewLine}after{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -185,7 +185,7 @@ public class Issue3214TopLevelAwaitForEmitTests
                 proc.ExitCode == expectedExitCode,
                 $"expected exit {expectedExitCode}, got {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

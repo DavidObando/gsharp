@@ -121,6 +121,6 @@ public class Issue3004PointerBoundaryInterpreterTests
         var result = EmittedOracle.Evaluate(source);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-        Assert.Equal(expected, result.Output.Replace("\r\n", "\n"));
+        Assert.Equal(expected, result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 }

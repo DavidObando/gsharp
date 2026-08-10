@@ -23,7 +23,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(selected)
             """);
 
-        Assert.Equal("20\n", output);
+        Assert.Equal($"20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(selected)
             """);
 
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class Issue2924TupleElementDelegateCallTests
             Show(t.0)
             """);
 
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(Make().0)
             """);
 
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(holder.Value.0)
             """);
 
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(factory.Make()(41))
             """);
 
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(functions.0(41))
             """);
 
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(factory?.Make(40)(2))
             """);
 
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine("end")
             """);
 
-        Assert.Equal("end\n", output);
+        Assert.Equal($"end{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine("end")
             """);
 
-        Assert.Equal("end\n", output);
+        Assert.Equal($"end{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine("end")
             """);
 
-        Assert.Equal("42\n42\nend\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}end{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(compounded.0)
             """);
 
-        Assert.Equal("5\n7\n", output);
+        Assert.Equal($"5{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -233,7 +233,7 @@ public class Issue2924TupleElementDelegateCallTests
             Console.WriteLine(t.Item1)
             """);
 
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Issue2924TupleElementDelegateCallTests
     {
         var output = RunSubmission("Console.WriteLine(.5 + .25)");
 
-        Assert.Equal("0.75\n", output);
+        Assert.Equal($"0.75{Environment.NewLine}", output);
     }
 
     private static string RunSubmission(string text)
@@ -259,6 +259,6 @@ public class Issue2924TupleElementDelegateCallTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n");
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

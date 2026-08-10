@@ -293,7 +293,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 DataValue(Number=7)
                 Issue2896.DefaultValue
                 Issue2896.DefaultValue
-                """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+                """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
                 Run(result.OutputPath));
 
             var assembly = Assembly.Load(File.ReadAllBytes(result.OutputPath));

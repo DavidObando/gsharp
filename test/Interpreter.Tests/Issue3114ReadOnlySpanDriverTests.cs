@@ -70,8 +70,9 @@ public class Issue3114ReadOnlySpanDriverTests
             };
 
             Assert.Equal(0, result.ExitCode);
+            expected = expected.Replace("\n", Environment.NewLine, StringComparison.Ordinal);
             Assert.Equal(
-                driver == Driver.CompilerEmitToMemory ? expected + "Success.\n" : expected,
+                driver == Driver.CompilerEmitToMemory ? expected + $"Success.{Environment.NewLine}" : expected,
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -121,7 +122,7 @@ public class Issue3114ReadOnlySpanDriverTests
         {
             var emitted = CompileAndRun(root, "span-operations.gs", sourcePath);
             Assert.Equal(
-                "3\n44\n33\nSystem.Span<Int32>[3]\nSystem.ReadOnlySpan<Int32>[3]\nSystem.ReadOnlySpan<Int32>[2]\nabcde\nabcde\nbcd\n",
+                $"3{Environment.NewLine}44{Environment.NewLine}33{Environment.NewLine}System.Span<Int32>[3]{Environment.NewLine}System.ReadOnlySpan<Int32>[3]{Environment.NewLine}System.ReadOnlySpan<Int32>[2]{Environment.NewLine}abcde{Environment.NewLine}abcde{Environment.NewLine}bcd{Environment.NewLine}",
                 emitted.StandardOutput);
 
             var result = driver switch
@@ -137,7 +138,7 @@ public class Issue3114ReadOnlySpanDriverTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEmitToMemory
-                    ? emitted.StandardOutput + "Success.\n"
+                    ? emitted.StandardOutput + $"Success.{Environment.NewLine}"
                     : emitted.StandardOutput,
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
@@ -200,8 +201,8 @@ public class Issue3114ReadOnlySpanDriverTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEmitToMemory
-                    ? "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nformat=hello\nalignedFormat=   hello\nleft=hello   \nSuccess.\n"
-                    : "writable=System.Span<Int32>[3]\nreadonly=System.ReadOnlySpan<Int32>[3]\nwritableChars=hello\nchars=hello\naligned=   hello\nformat=hello\nalignedFormat=   hello\nleft=hello   \n",
+                    ? $"writable=System.Span<Int32>[3]{Environment.NewLine}readonly=System.ReadOnlySpan<Int32>[3]{Environment.NewLine}writableChars=hello{Environment.NewLine}chars=hello{Environment.NewLine}aligned=   hello{Environment.NewLine}format=hello{Environment.NewLine}alignedFormat=   hello{Environment.NewLine}left=hello   {Environment.NewLine}Success.{Environment.NewLine}"
+                    : $"writable=System.Span<Int32>[3]{Environment.NewLine}readonly=System.ReadOnlySpan<Int32>[3]{Environment.NewLine}writableChars=hello{Environment.NewLine}chars=hello{Environment.NewLine}aligned=   hello{Environment.NewLine}format=hello{Environment.NewLine}alignedFormat=   hello{Environment.NewLine}left=hello   {Environment.NewLine}",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -245,8 +246,8 @@ public class Issue3114ReadOnlySpanDriverTests
             Assert.Equal(0, result.ExitCode);
             Assert.Equal(
                 driver == Driver.CompilerEmitToMemory
-                    ? "value=42\nSuccess.\n"
-                    : "value=42\n",
+                    ? $"value=42{Environment.NewLine}Success.{Environment.NewLine}"
+                    : $"value=42{Environment.NewLine}",
                 result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
@@ -281,8 +282,7 @@ public class Issue3114ReadOnlySpanDriverTests
                 Console.WriteLine("inbody=${inBody}")
             }
             """;
-
-        const string Expected = "receiver=Receiver#42\ninbody=InBody#43\n";
+        string Expected = $"receiver=Receiver#42{Environment.NewLine}inbody=InBody#43{Environment.NewLine}";
         var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         Assert.Empty(Directory.EnumerateFileSystemEntries(root));
@@ -306,7 +306,7 @@ public class Issue3114ReadOnlySpanDriverTests
             {
                 Assert.StartsWith(Expected, result.StandardOutput, StringComparison.Ordinal);
                 Assert.Contains("warning GS0314:", result.StandardOutput, StringComparison.Ordinal);
-                Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
+                Assert.EndsWith($"Success.{Environment.NewLine}", result.StandardOutput, StringComparison.Ordinal);
                 Assert.Equal(string.Empty, result.StandardError);
             }
             else
@@ -353,7 +353,7 @@ public class Issue3114ReadOnlySpanDriverTests
         {
             var result = CompileAndRun(root, "imported-overloaded-tostring.gs", sourcePath, referencePath);
             Assert.Equal(0, result.ExitCode);
-            Assert.Equal("interp=ExtTok!\n", result.StandardOutput);
+            Assert.Equal($"interp=ExtTok!{Environment.NewLine}", result.StandardOutput);
             Assert.Equal(string.Empty, result.StandardError);
         }
         finally
@@ -400,11 +400,11 @@ public class Issue3114ReadOnlySpanDriverTests
                 ? result.StandardError
                 : result.StandardOutput;
             Assert.Equal(
-                driver == Driver.ReplEmitToMemory ? string.Empty : "Failed.\n",
+                driver == Driver.ReplEmitToMemory ? string.Empty : $"Failed.{Environment.NewLine}",
                 driver == Driver.ReplEmitToMemory ? result.StandardOutput : result.StandardError);
 
             var diagnostic = Assert.Single(
-                diagnosticStream.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                diagnosticStream.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
                 line => line.Contains("error GS0519:", StringComparison.Ordinal));
             AssertByRefLikeInterpolationDiagnostic(diagnostic, sourcePath, 7, "Token");
         }
@@ -454,7 +454,7 @@ public class Issue3114ReadOnlySpanDriverTests
                 ? result.StandardError
                 : result.StandardOutput;
             Assert.Equal(
-                driver == Driver.ReplEmitToMemory ? string.Empty : "Failed.\n",
+                driver == Driver.ReplEmitToMemory ? string.Empty : $"Failed.{Environment.NewLine}",
                 driver == Driver.ReplEmitToMemory ? result.StandardOutput : result.StandardError);
 
             var boundDiagnostic = Assert.Single(
@@ -468,7 +468,7 @@ public class Issue3114ReadOnlySpanDriverTests
                     Text: location.Text.ToString(location.Span)));
 
             var diagnostic = Assert.Single(
-                diagnosticStream.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                diagnosticStream.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
                 line => line.Contains("error GS0519:", StringComparison.Ordinal));
             Assert.StartsWith($"{sourcePath}(9,33,9,38): error GS0519:", diagnostic, StringComparison.Ordinal);
             AssertByRefLikeInterpolationDiagnostic(diagnostic, sourcePath, 9, "Token");
@@ -542,8 +542,8 @@ public class Issue3114ReadOnlySpanDriverTests
 
         return (
             result.ExitCode,
-            result.StandardOutput.Replace("\r\n", "\n"),
-            result.StandardError.Replace("\r\n", "\n"));
+            result.StandardOutput.ReplaceLineEndings(Environment.NewLine),
+            result.StandardError.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static void EmitOverloadedToStringRefStructAssembly(string outputPath)
@@ -595,8 +595,8 @@ public class Issue3114ReadOnlySpanDriverTests
         {
             return (
                 action(),
-                output.ToString().Replace("\r\n", "\n"),
-                error.ToString().Replace("\r\n", "\n"));
+                output.ToString().ReplaceLineEndings(Environment.NewLine),
+                error.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

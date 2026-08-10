@@ -48,7 +48,8 @@ internal static class Issue3081CompositeLiteralCases
         RunControls()
         """;
 
-    public const string ControlsOutput = "511\n522\n533\n544\n555\n566\n577\n";
+    public static readonly string ControlsOutput =
+        $"511{Environment.NewLine}522{Environment.NewLine}533{Environment.NewLine}544{Environment.NewLine}555{Environment.NewLine}566{Environment.NewLine}577{Environment.NewLine}";
 
     public const string ObjectInitializer = """
         package Issue3081ObjectInitializer
@@ -65,7 +66,7 @@ internal static class Issue3081CompositeLiteralCases
         Console.WriteLine(value.inherited)
         """;
 
-    public const string ObjectInitializerOutput = "611\n";
+    public static readonly string ObjectInitializerOutput = $"611{Environment.NewLine}";
 
     public const string Lowering = """
         package Issue3081Lowering
@@ -87,7 +88,7 @@ internal static class Issue3081CompositeLiteralCases
         Console.WriteLine(owner.Build().inherited)
         """;
 
-    public const string LoweringOutput = "711\n";
+    public static readonly string LoweringOutput = $"711{Environment.NewLine}";
 
     public const string AsyncSpill = """
         package Issue3081AsyncSpill
@@ -109,7 +110,7 @@ internal static class Issue3081CompositeLiteralCases
         Console.WriteLine(value.inherited)
         """;
 
-    public const string AsyncSpillOutput = "811\n";
+    public static readonly string AsyncSpillOutput = $"811{Environment.NewLine}";
 
     public static string BuildMatrixSource(bool inFunction)
     {
@@ -200,7 +201,7 @@ internal static class Issue3081CompositeLiteralCases
             }
         }
 
-        return writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return writer.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string Indent(string text) => "    " + text.Replace("\n", "\n    ", StringComparison.Ordinal);

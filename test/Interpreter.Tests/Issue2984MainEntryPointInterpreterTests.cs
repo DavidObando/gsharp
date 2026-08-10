@@ -39,7 +39,7 @@ public class Issue2984MainEntryPointInterpreterTests
         var (diagnostics, output) = Run(Source);
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
-        Assert.Equal("package-main\n", output);
+        Assert.Equal($"package-main{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue2984MainEntryPointInterpreterTests
         var (diagnostics, output) = Run(Source);
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
-        Assert.Equal("class-main\n", output);
+        Assert.Equal($"class-main{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue2984MainEntryPointInterpreterTests
         var (diagnostics, output) = Run(Source);
 
         Assert.Empty(diagnostics);
-        Assert.Equal("top-level\n", output);
+        Assert.Equal($"top-level{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue2984MainEntryPointInterpreterTests
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
         Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0166");
-        Assert.Equal("top-level\n", output);
+        Assert.Equal($"top-level{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue2984MainEntryPointInterpreterTests
         var (diagnostics, output) = Run(Source);
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue2984MainEntryPointInterpreterTests
         {
             var compilation = new Compilation(SyntaxTree.Parse(source));
             var result = EmittedProgramHost.Run(compilation);
-            return (result.Diagnostics, output.ToString().Replace("\r\n", "\n"));
+            return (result.Diagnostics, output.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

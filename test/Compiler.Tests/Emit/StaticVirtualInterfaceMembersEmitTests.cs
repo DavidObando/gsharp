@@ -247,7 +247,7 @@ public class StaticVirtualInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Compute$");
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class StaticVirtualInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
-        Assert.Equal("default-hello\n", output);
+        Assert.Equal($"default-hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -328,7 +328,7 @@ public class StaticVirtualInterfaceMembersEmitTests
             """;
 
         var output = CompileGsharpLibAndRunCsharpConsumer(gsource, consumerCs);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileLibrary(string source)
@@ -450,7 +450,7 @@ public class StaticVirtualInterfaceMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -553,7 +553,7 @@ public class StaticVirtualInterfaceMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

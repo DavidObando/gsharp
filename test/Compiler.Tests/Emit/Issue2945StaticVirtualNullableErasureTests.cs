@@ -203,7 +203,7 @@ public class Issue2945StaticVirtualNullableErasureTests
             var libraryPath = CompileGSharp(source, directory, "Issue2945Matrix.dll", target: "library");
             _ = Assembly.Load(File.ReadAllBytes(libraryPath)).GetTypes();
             var consumerPath = CompileCSharpConsumer(consumer, libraryPath, directory);
-            Assert.Equal(expected + "\n", RunChild(consumerPath, directory));
+            Assert.Equal(expected + Environment.NewLine, RunChild(consumerPath, directory));
             IlVerifier.Verify(libraryPath);
         }
         finally
@@ -242,7 +242,7 @@ public class Issue2945StaticVirtualNullableErasureTests
         {
             var outputPath = CompileGSharp(source, directory, "Issue2945GSharp.dll", target: "exe");
             _ = Assembly.Load(File.ReadAllBytes(outputPath)).GetTypes();
-            Assert.Equal("ok\n", RunChild(outputPath, directory));
+            Assert.Equal($"ok{Environment.NewLine}", RunChild(outputPath, directory));
             IlVerifier.Verify(
                 outputPath,
                 ignoredErrorCodes: IlVerifier.KnownIssues.StaticVirtualInterface,
@@ -418,7 +418,7 @@ public class Issue2945StaticVirtualNullableErasureTests
         Assert.True(
             process.ExitCode == 0,
             $"dotnet child exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void WriteRuntimeConfig(string assemblyPath)

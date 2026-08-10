@@ -138,7 +138,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
             }
             """;
 
-        Assert.Equal("11\n22\n33\n", CompileAndRun(source, $"non-null-after-use-{shape}-{scope}"));
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}", CompileAndRun(source, $"non-null-after-use-{shape}-{scope}"));
     }
 
     [Theory]
@@ -359,7 +359,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
             }
             """;
 
-        Assert.Equal("11\n22\n33\n", CompileAndRun(Source, "non-null-with-member-invalidation"));
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}", CompileAndRun(Source, "non-null-with-member-invalidation"));
     }
 
     [Fact]
@@ -1001,7 +1001,7 @@ public class Issue2943LoopBackEdgeNarrowingTests
             };
             var (processExitCode, output, error) = IlVerifier.RunProcess(startInfo, assemblyPath, 30_000);
             Assert.True(processExitCode == 0, error);
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

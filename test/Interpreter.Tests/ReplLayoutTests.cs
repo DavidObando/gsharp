@@ -296,7 +296,7 @@ public class ReplLayoutTests
         {
             Ansi = AnsiSupport.No,
             ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter { NewLine = "\n" }),
+            Out = new AnsiConsoleOutput(new StringWriter { NewLine = Environment.NewLine }),
             Interactive = InteractionSupport.No,
         });
         console.Profile.Width = 80;
@@ -325,7 +325,7 @@ public class ReplLayoutTests
 
     private static string RenderToAnsi(Spectre.Console.Rendering.IRenderable renderable, int width)
     {
-        var sw = new StringWriter { NewLine = "\n" };
+        var sw = new StringWriter { NewLine = Environment.NewLine };
         var console = AnsiConsole.Create(new AnsiConsoleSettings
         {
             Ansi = AnsiSupport.Yes,

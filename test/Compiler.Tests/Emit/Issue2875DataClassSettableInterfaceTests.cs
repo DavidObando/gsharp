@@ -63,7 +63,7 @@ public class Issue2875DataClassSettableInterfaceTests
             }
             """;
 
-        Assert.Equal("7\n", CompileVerifyAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue2875DataClassSettableInterfaceTests
             }
             """;
 
-        Assert.Equal("11\n", CompileVerifyAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -404,7 +404,7 @@ public class Issue2875DataClassSettableInterfaceTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "Emitted program timed out.");
             Assert.True(process.ExitCode == 0, $"Program exited {process.ExitCode}:\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

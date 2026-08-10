@@ -53,7 +53,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n[]\n", output);    }
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}[]{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_StructStringField_DefaultsToNull()
@@ -73,7 +73,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n5\n", output);    }
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}5{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_ClassStringField_DefaultsToNull()
@@ -92,7 +92,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);    }
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_ClassStringAutoProperty_DefaultsToNull()
@@ -111,7 +111,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);    }
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_DefaultStringExpression_IsNull()
@@ -128,7 +128,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\n", output);    }
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_LocalStringDeclaration_LenIsZero()
@@ -148,7 +148,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue1714StringZeroValueEmitTests
         // non-null. `s` (`default(string)`, unchanged by #3324) stays the
         // CLR-default `null` — same source, two different initializer forms,
         // two different documented contracts.
-        Assert.Equal("True\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n[]\n<>\n", output);
+        Assert.Equal($"True{Environment.NewLine}[]{Environment.NewLine}<>{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -246,7 +246,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\nFalse\nTrue\n[][]\n", output);    }
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}[][]{Environment.NewLine}", output);    }
 
     [Fact]
     public void EndToEnd_InstanceAndStaticReferenceFields_MatchClrDefaults()
@@ -293,7 +293,7 @@ public class Issue1714StringZeroValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nTrue\n", output);    }
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);    }
 
     [Fact]
     public void Reflection_ReferenceFields_UseClrNullAndPreserveAnnotationsAndInitializer()
@@ -521,7 +521,7 @@ public class Issue1714StringZeroValueEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

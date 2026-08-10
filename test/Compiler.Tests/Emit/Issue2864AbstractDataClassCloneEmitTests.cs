@@ -49,7 +49,7 @@ public class Issue2864AbstractDataClassCloneEmitTests
             }
             """;
 
-        Assert.Equal("derived:7\n", CompileAndRun(source));
+        Assert.Equal($"derived:7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue2864AbstractDataClassCloneEmitTests
             }
             """;
 
-        Assert.Equal("shape:square/shape:square|16\n", CompileAndRun(source));
+        Assert.Equal($"shape:square/shape:square|16{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue2864AbstractDataClassCloneEmitTests
         // matters here is that `Base` reserves 10 - 1 (ToString) rows,
         // including its abstract Clone row, so `Describe` and `Shout` still
         // resolve to the right tokens.
-        Assert.Equal("kind=leaf!|Leaf(Id=3)|3\n", CompileAndRun(source));
+        Assert.Equal($"kind=leaf!|Leaf(Id=3)|3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class Issue2864AbstractDataClassCloneEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -195,7 +195,7 @@ public class Issue2228DataClassWithEmitTests
 
             var combined = compileOut.ToString() + compileErr.ToString();
             return new System.Collections.Generic.List<string>(
-                combined.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+                combined.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
         finally
         {

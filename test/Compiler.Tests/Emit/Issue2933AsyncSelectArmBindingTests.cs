@@ -227,7 +227,7 @@ public class Issue2933AsyncSelectArmBindingTests
             """;
 
         var output = CompileLoadAndRun(Source, nameof(AsyncAndSynchronousReceiveBindingsAreEqualAtRuntime));
-        var values = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        var values = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
             .Select(int.Parse)
             .ToArray();
 
@@ -284,7 +284,7 @@ public class Issue2933AsyncSelectArmBindingTests
             """;
 
         var output = CompileLoadAndRun(Source, nameof(AsyncIteratorReceiveBindingsMatchAsyncFunctionAtRuntime));
-        var values = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        var values = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
             .Select(int.Parse)
             .ToArray();
 
@@ -317,7 +317,7 @@ public class Issue2933AsyncSelectArmBindingTests
             """;
 
         Assert.Equal(
-            "11\n33\n22\n",
+            $"11{Environment.NewLine}33{Environment.NewLine}22{Environment.NewLine}",
             CompileLoadAndRun(
                 Source,
                 nameof(SynchronousIteratorReceiveBindingSurvivesYieldAtRuntime)));
@@ -350,7 +350,7 @@ public class Issue2933AsyncSelectArmBindingTests
             """;
 
         Assert.Equal(
-            "100\n101\n44\n",
+            $"100{Environment.NewLine}101{Environment.NewLine}44{Environment.NewLine}",
             CompileLoadAndRun(
                 Source,
                 nameof(SynchronousIteratorReceiveBindingSurvivesLoopedYieldsAtRuntime)));
@@ -389,7 +389,7 @@ public class Issue2933AsyncSelectArmBindingTests
             """;
 
         Assert.Equal(
-            "1\n2\n66\n55\n",
+            $"1{Environment.NewLine}2{Environment.NewLine}66{Environment.NewLine}55{Environment.NewLine}",
             CompileLoadAndRun(
                 Source,
                 nameof(NestedSynchronousIteratorReceiveBindingsSurviveYieldsAtRuntime)));
@@ -435,7 +435,7 @@ public class Issue2933AsyncSelectArmBindingTests
             Console.WriteLine(Run().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("5,3,2\n", CompileLoadAndRun(Source, nameof(SiblingAsyncBindingFormsRemainCorrect)));
+        Assert.Equal($"5,3,2{Environment.NewLine}", CompileLoadAndRun(Source, nameof(SiblingAsyncBindingFormsRemainCorrect)));
     }
 
     private static object[] Case(string name, string expectedOutput, string source) =>
@@ -514,6 +514,6 @@ public class Issue2933AsyncSelectArmBindingTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

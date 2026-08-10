@@ -42,7 +42,7 @@ public class Issue2993StructLiteralConstructionTests
             Console.WriteLine(c.M)
             """;
 
-        Assert.Equal("ctor-ran\n7\n1\n", Evaluate(Source));
+        Assert.Equal($"ctor-ran{Environment.NewLine}7{Environment.NewLine}1{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue2993StructLiteralConstructionTests
             Console.WriteLine(b.Items.Count)
             """;
 
-        Assert.Equal("0\n", Evaluate(Source));
+        Assert.Equal($"0{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class Issue2993StructLiteralConstructionTests
             Console.WriteLine(b.CanRead)
             """;
 
-        Assert.Equal("True\n", Evaluate(Source));
+        Assert.Equal($"True{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue2993StructLiteralConstructionTests
             Console.WriteLine(b.CanRead)
             """;
 
-        Assert.Equal("True\n", Evaluate(Source));
+        Assert.Equal($"True{Environment.NewLine}", Evaluate(Source));
     }
 
     private static string Evaluate(string source)
@@ -112,6 +112,6 @@ public class Issue2993StructLiteralConstructionTests
             errors.Length == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
 
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

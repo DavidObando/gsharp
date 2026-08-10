@@ -40,7 +40,7 @@ public sealed class Issue3084TupleAsyncFunctionMemberTests
             Console.WriteLine(RunAsync().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("first\nresult\n", CompileVerifyAndRun(source));
+        Assert.Equal($"first{Environment.NewLine}result{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     private static string CompileVerifyAndRun(string source)
@@ -102,7 +102,7 @@ public sealed class Issue3084TupleAsyncFunctionMemberTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, error);
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

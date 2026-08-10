@@ -30,7 +30,7 @@ public class Issue818AnonymousFunctionTypeVariadicEmittedOracleTests
             Console.WriteLine(f(1, "a", "b", "c"))
             """;
 
-        Assert.Equal("4\n", Evaluate(source));
+        Assert.Equal($"4{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class Issue818AnonymousFunctionTypeVariadicEmittedOracleTests
             Console.WriteLine(f(10, []string{"x", "y"}))
             """;
 
-        Assert.Equal("12\n", Evaluate(source));
+        Assert.Equal($"12{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue818AnonymousFunctionTypeVariadicEmittedOracleTests
             Console.WriteLine(f(7))
             """;
 
-        Assert.Equal("7\n", Evaluate(source));
+        Assert.Equal($"7{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue818AnonymousFunctionTypeVariadicEmittedOracleTests
             Console.WriteLine(g())
             """;
 
-        Assert.Equal("5\n0\n", Evaluate(source));
+        Assert.Equal($"5{Environment.NewLine}0{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -84,6 +84,6 @@ public class Issue818AnonymousFunctionTypeVariadicEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

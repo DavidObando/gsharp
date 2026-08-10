@@ -111,7 +111,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
         {
             var result = RunBounded(assemblyPath);
             Assert.True(result.ExitCode == 0, $"emitted program failed:\n{result.Error}");
-            Assert.Equal("11\n22\n31\n42\n51\n62\n", result.Output);
+            Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}31{Environment.NewLine}42{Environment.NewLine}51{Environment.NewLine}62{Environment.NewLine}", result.Output);
         }
 
         IlVerifier.Verify(assemblyPath);
@@ -203,7 +203,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
         var error = errorTask.GetAwaiter().GetResult();
         return (
             process.ExitCode,
-            output.Replace("\r\n", "\n", StringComparison.Ordinal),
-            error.Replace("\r\n", "\n", StringComparison.Ordinal));
+            output.ReplaceLineEndings(Environment.NewLine),
+            error.ReplaceLineEndings(Environment.NewLine));
     }
 }

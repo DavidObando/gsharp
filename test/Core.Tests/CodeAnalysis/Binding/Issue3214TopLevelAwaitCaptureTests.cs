@@ -66,7 +66,7 @@ public class Issue3214TopLevelAwaitCaptureTests
             """);
 
         Assert.Empty(result.Diagnostics);
-        Assert.Equal("body\ndisposed\nafter\n", result.Output.Replace("\r\n", "\n"));
+        Assert.Equal($"body{Environment.NewLine}disposed{Environment.NewLine}after{Environment.NewLine}", result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

@@ -44,7 +44,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             c.Raise(41)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             Console.WriteLine(c.Run(21))
             """;
 
-        Assert.Equal("True\n42\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             Console.WriteLine("${box.reads}:${argumentCalls}:${box.calls}")
             """;
 
-        Assert.Equal("-1\n1:0:0\n42\n2:1:1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}1:0:0{Environment.NewLine}42{Environment.NewLine}2:1:1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             Console.WriteLine(box.Imported?() ?? -1)
             """;
 
-        Assert.Equal("-1\n7\nmissing\nnamed\n-1\n9\nproperty-missing\n-1\nnamed\n11\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}7{Environment.NewLine}missing{Environment.NewLine}named{Environment.NewLine}-1{Environment.NewLine}9{Environment.NewLine}property-missing{Environment.NewLine}-1{Environment.NewLine}named{Environment.NewLine}11{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             Console.WriteLine(full.Text?() ?? "fallback")
             """;
 
-        Assert.Equal("fallback\ncalled\nvalue\n", CompileAndRun(source));
+        Assert.Equal($"fallback{Environment.NewLine}called{Environment.NewLine}value{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
             Console.WriteLine(Read(full).GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("idle\nbusy\n", CompileAndRun(source));
+        Assert.Equal($"idle{Environment.NewLine}busy{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -306,7 +306,7 @@ public class Issue1410NullableDelegatePropertyEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

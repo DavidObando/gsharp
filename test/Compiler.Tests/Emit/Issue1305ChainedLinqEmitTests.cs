@@ -57,7 +57,7 @@ public class Issue1305ChainedLinqEmitTests
             """;
 
         // Keeps V>1 → 5 + 9 = 14.
-        Assert.Equal("14\n", CompileAndRun(source));
+        Assert.Equal($"14{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1305ChainedLinqEmitTests
             """;
 
         // V>0 keeps all three; V>3 keeps 5 and 9 → 2.
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue1305ChainedLinqEmitTests
             """;
 
         // Keeps 5,9 then doubles → 10 + 18 = 28.
-        Assert.Equal("28\n", CompileAndRun(source));
+        Assert.Equal($"28{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -182,7 +182,7 @@ public class Issue1305ChainedLinqEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

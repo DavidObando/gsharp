@@ -131,7 +131,7 @@ public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
             Console.WriteLine(constructedStructSet[7])
             """;
 
-        Assert.Equal("11\n42\n17\n43\n19\n35\n44\n46\n47\n", RunSubmission(source));
+        Assert.Equal($"11{Environment.NewLine}42{Environment.NewLine}17{Environment.NewLine}43{Environment.NewLine}19{Environment.NewLine}35{Environment.NewLine}44{Environment.NewLine}46{Environment.NewLine}47{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
             Console.WriteLine(value[7])
             """;
 
-        Assert.Equal("2\n1\n4\n12\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}12{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
             }
             """;
 
-        Assert.Equal("5\nnil\n", RunSubmission(source));
+        Assert.Equal($"5{Environment.NewLine}nil{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
             Console.WriteLine(value[0])
             """;
 
-        Assert.Equal("7\n9\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}9{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -241,6 +241,6 @@ public class Issue2915ImplicitInterfaceIndexerEmittedSessionTests
             Console.SetOut(previousOutput);
         }
 
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

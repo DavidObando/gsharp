@@ -41,7 +41,7 @@ public class Issue2894LambdaBodyGenericClosureEmittedOracleTests
             Console.WriteLine(factory().Value)
             """;
 
-        Assert.Equal("99\n", Evaluate(Source));
+        Assert.Equal($"99{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -70,13 +70,13 @@ public class Issue2894LambdaBodyGenericClosureEmittedOracleTests
             Console.WriteLine(Run())
             """;
 
-        Assert.Equal("111\n", Evaluate(Source));
+        Assert.Equal($"111{Environment.NewLine}", Evaluate(Source));
     }
 
     private static string Evaluate(string source)
     {
         var result = EmittedOracle.Evaluate(source);
         Assert.Empty(result.Diagnostics);
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

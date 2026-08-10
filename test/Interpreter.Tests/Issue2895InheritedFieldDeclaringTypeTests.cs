@@ -67,7 +67,7 @@ public class Issue2895InheritedFieldDeclaringTypeTests
         }
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(expected, stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(expected, stdout.ToString().ReplaceLineEndings(Environment.NewLine));
         Assert.Equal(string.Empty, stderr.ToString());
     }
 }

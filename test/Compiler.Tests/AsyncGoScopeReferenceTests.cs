@@ -134,7 +134,7 @@ Console.WriteLine(""done"")
 
             var lines = stdout
 .ReplaceLineEndings(Environment.NewLine)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
             // Both spawned async tasks must have run to completion (structured join)...
             Assert.Contains("read=payload", lines);

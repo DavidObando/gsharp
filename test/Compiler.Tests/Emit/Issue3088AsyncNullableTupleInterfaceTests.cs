@@ -74,7 +74,7 @@ public sealed class Issue3088AsyncNullableTupleInterfaceTests
             Verify(Store()).GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("True\n42\nTrue\n", CompileVerifyAndRun(ContractSource, Source));
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileVerifyAndRun(ContractSource, Source));
     }
 
     private static string CompileVerifyAndRun(string contractSource, string source)
@@ -140,7 +140,7 @@ public sealed class Issue3088AsyncNullableTupleInterfaceTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

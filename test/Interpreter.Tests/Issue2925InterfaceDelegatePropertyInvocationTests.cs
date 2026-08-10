@@ -62,7 +62,7 @@ public class Issue2925InterfaceDelegatePropertyInvocationTests
             Console.WriteLine(structMapper.P(40))
             """);
 
-        Assert.Equal("1\n2\n42\n42\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     private static string RunSubmission(string text)
@@ -79,6 +79,6 @@ public class Issue2925InterfaceDelegatePropertyInvocationTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n");
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

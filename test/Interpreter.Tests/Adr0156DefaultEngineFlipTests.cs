@@ -107,17 +107,17 @@ public sealed class Adr0156DefaultEngineFlipTests
             "website",
             "docs",
             "tooling",
-            "repl.md")).Replace("\r\n", "\n", StringComparison.Ordinal);
-        const string opening = "```text\nUsage: gsi ";
+            "repl.md")).ReplaceLineEndings(Environment.NewLine);
+        var opening = $"```text{Environment.NewLine}Usage: gsi ";
         var blockStart = documentation.IndexOf(opening, StringComparison.Ordinal);
         Assert.True(blockStart >= 0, "website/docs/tooling/repl.md has no gsi --help transcript.");
-        blockStart += "```text\n".Length;
+        blockStart += $"```text{Environment.NewLine}".Length;
         var blockEnd = documentation.IndexOf("\n```", blockStart, StringComparison.Ordinal);
         Assert.True(blockEnd >= 0, "gsi --help transcript has no closing code fence.");
 
         Assert.Equal(0, exitCode);
         Assert.Equal(
-            stdout.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd(),
+            stdout.ReplaceLineEndings(Environment.NewLine).TrimEnd(),
             documentation[blockStart..blockEnd].TrimEnd());
     }
 

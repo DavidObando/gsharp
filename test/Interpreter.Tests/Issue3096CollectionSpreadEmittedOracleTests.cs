@@ -50,7 +50,7 @@ public sealed class Issue3096CollectionSpreadEmittedOracleTests
             Console.WriteLine(values[3])
             """;
 
-        Assert.Equal("ABC\n1\n4\n1\n2\n3\n4\n", Evaluate(Source));
+        Assert.Equal($"ABC{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public sealed class Issue3096CollectionSpreadEmittedOracleTests
             Console.WriteLine(holder.Values[1])
             """;
 
-        Assert.Equal("4\n0\n3\n7\n2\n2\n5\n1\n11\n2\n6\n", Evaluate(Source));
+        Assert.Equal($"4{Environment.NewLine}0{Environment.NewLine}3{Environment.NewLine}7{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}5{Environment.NewLine}1{Environment.NewLine}11{Environment.NewLine}2{Environment.NewLine}6{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public sealed class Issue3096CollectionSpreadEmittedOracleTests
             Console.WriteLine(attempts)
             """;
 
-        Assert.Equal("True\nTrue\n1\n", Evaluate(Source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}1{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -187,6 +187,6 @@ public sealed class Issue3096CollectionSpreadEmittedOracleTests
             errors.Length == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
 
-        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

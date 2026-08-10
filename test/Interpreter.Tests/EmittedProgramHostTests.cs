@@ -38,7 +38,7 @@ public class EmittedProgramHostTests
         Assert.True(result.Success);
         Assert.Null(result.UnhandledException);
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal("tls-11\n", stdout);
+        Assert.Equal($"tls-11{Environment.NewLine}", stdout);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class EmittedProgramHostTests
 
         Assert.True(result.Success);
         Assert.Equal(9, result.ExitCode);
-        Assert.Equal("unsigned-22\n", stdout);
+        Assert.Equal($"unsigned-22{Environment.NewLine}", stdout);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class EmittedProgramHostTests
         Assert.True(result.Success);
         Assert.Null(result.UnhandledException);
         Assert.Equal(6, result.ExitCode);
-        Assert.Equal("6\n", stdout);
+        Assert.Equal($"6{Environment.NewLine}", stdout);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class EmittedProgramHostTests
 
         Assert.True(result.Success);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("void-33\n", stdout);
+        Assert.Equal($"void-33{Environment.NewLine}", stdout);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class EmittedProgramHostTests
             """);
 
         Assert.True(result.Success);
-        Assert.Equal("before-44\n", stdout);
+        Assert.Equal($"before-44{Environment.NewLine}", stdout);
         var exception = Assert.IsType<InvalidOperationException>(result.UnhandledException);
         Assert.Equal("boom-44", exception.Message);
 
@@ -198,7 +198,7 @@ public class EmittedProgramHostTests
             """);
 
         Assert.True(result.Success);
-        Assert.Equal("collect-55\n", stdout);
+        Assert.Equal($"collect-55{Environment.NewLine}", stdout);
         Assert.NotNull(result.LoadContext);
         for (var i = 0; result.LoadContext.IsAlive && i < 10; i++)
         {
@@ -234,7 +234,7 @@ public class EmittedProgramHostTests
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));
         Assert.Null(result.UnhandledException);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("ADA\n", stdout);
+        Assert.Equal($"ADA{Environment.NewLine}", stdout);
     }
 
     private static Compilation Compile(string source)
@@ -254,8 +254,8 @@ public class EmittedProgramHostTests
 
     private static (string Stdout, string Stderr) CaptureConsole(Func<int> action)
     {
-        using var stdout = new StringWriter { NewLine = "\n" };
-        using var stderr = new StringWriter { NewLine = "\n" };
+        using var stdout = new StringWriter { NewLine = Environment.NewLine };
+        using var stderr = new StringWriter { NewLine = Environment.NewLine };
         var previousOut = Console.Out;
         var previousError = Console.Error;
         Console.SetOut(stdout);
@@ -271,7 +271,7 @@ public class EmittedProgramHostTests
         }
 
         return (
-            stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
-            stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            stdout.ToString().ReplaceLineEndings(Environment.NewLine),
+            stderr.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 }

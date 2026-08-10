@@ -23,9 +23,9 @@ public class Issue2544LiftedUnaryOperatorTests
         // Historically the interpreter twin of this file's emit tests; runs
         // through the emitted oracle since the tree-walking evaluator retired
         // (ADR-0156 Phase 3c, #3176). Same sources, same expected values.
-        Assert.Equal(true, Evaluate("var value bool? = nil\n(!value) ?? true"));
-        Assert.Equal(false, Evaluate("var value bool? = true\n(!value) ?? true"));
-        Assert.Equal(-5, Evaluate("var value int32? = 5\n(-value) ?? 0"));
+        Assert.Equal(true, Evaluate($"var value bool? = nil{Environment.NewLine}(!value) ?? true"));
+        Assert.Equal(false, Evaluate($"var value bool? = true{Environment.NewLine}(!value) ?? true"));
+        Assert.Equal(-5, Evaluate($"var value int32? = 5{Environment.NewLine}(-value) ?? 0"));
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class Issue2544LiftedUnaryOperatorTests
             Console.WriteLine((+five) ?? 0)
             """;
 
-        Assert.Equal("False\nFalse\n-5\n42\n-6\n5\n", CompileAndRun(Source));
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}-5{Environment.NewLine}42{Environment.NewLine}-6{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Theory]
@@ -99,7 +99,7 @@ public class Issue2544LiftedUnaryOperatorTests
                 Console.SetOut(previous);
             }
 
-            return output.ToString().Replace("\r\n", "\n");
+            return output.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

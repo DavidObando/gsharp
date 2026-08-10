@@ -495,7 +495,7 @@ namespace Demo
 }");
 
         string stdout = CompileAndRun(printed, "AudibleClient().Fire()");
-        string[] lines = stdout.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string[] lines = stdout.Trim().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         // `Fire` returns (and prints "fire-returned") BEFORE the awaited
         // continuation inside the handler completes (proves the handler call

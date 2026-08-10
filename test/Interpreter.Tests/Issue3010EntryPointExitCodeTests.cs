@@ -29,7 +29,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal("main\n", result.StandardOutput);
+        Assert.Equal($"main{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -46,7 +46,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal("tls\n", result.StandardOutput);
+        Assert.Equal($"tls{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -65,7 +65,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("zero\n", result.StandardOutput);
+        Assert.Equal($"zero{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -84,7 +84,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal("unsigned\n", result.StandardOutput);
+        Assert.Equal($"unsigned{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -123,7 +123,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("void-int\n", result.StandardOutput);
+        Assert.Equal($"void-int{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -142,7 +142,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("void-string\n", result.StandardOutput);
+        Assert.Equal($"void-string{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -165,7 +165,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("void-call-int\n", result.StandardOutput);
+        Assert.Equal($"void-call-int{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -192,7 +192,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("void-call-type\n", result.StandardOutput);
+        Assert.Equal($"void-call-type{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -259,7 +259,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("top-int\n", result.StandardOutput);
+        Assert.Equal($"top-int{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -276,7 +276,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("top-string\n", result.StandardOutput);
+        Assert.Equal($"top-string{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -297,7 +297,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("top-call-int\n", result.StandardOutput);
+        Assert.Equal($"top-call-int{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -313,7 +313,7 @@ public class Issue3010EntryPointExitCodeTests
         var result = RunScript(Source);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("top-no-result\n", result.StandardOutput);
+        Assert.Equal($"top-no-result{Environment.NewLine}", result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
@@ -343,8 +343,8 @@ public class Issue3010EntryPointExitCodeTests
             var exitCode = GSharp.Repl.Program.Main(new[] { path });
             return (
                 exitCode,
-                output.ToString().Replace("\r\n", "\n"),
-                error.ToString().Replace("\r\n", "\n"));
+                output.ToString().ReplaceLineEndings(Environment.NewLine),
+                error.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

@@ -104,7 +104,7 @@ public sealed class Issue3096CollectionSpreadEmitTests
             """;
 
         Assert.Equal(
-            "2\na\nb\n4\nhead\nmiddle-1\nmiddle-2\ntail\nABC\n1\n0\n4\n2\n3\n2\n4\nuser\n12\n9\n2\n42\n",
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}4{Environment.NewLine}head{Environment.NewLine}middle-1{Environment.NewLine}middle-2{Environment.NewLine}tail{Environment.NewLine}ABC{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}4{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}2{Environment.NewLine}4{Environment.NewLine}user{Environment.NewLine}12{Environment.NewLine}9{Environment.NewLine}2{Environment.NewLine}42{Environment.NewLine}",
             CompileVerifyAndRun(Source));
     }
 
@@ -142,7 +142,7 @@ public sealed class Issue3096CollectionSpreadEmitTests
             Console.WriteLine(Attempts)
             """;
 
-        Assert.Equal("True\nTrue\n1\n", CompileVerifyAndRun(Source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}1{Environment.NewLine}", CompileVerifyAndRun(Source));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public sealed class Issue3096CollectionSpreadEmitTests
             """;
 
         Assert.Equal(
-            "4\n2.5\n3.5\n2\n2.5\n3.5\n",
+            $"4{Environment.NewLine}2.5{Environment.NewLine}3.5{Environment.NewLine}2{Environment.NewLine}2.5{Environment.NewLine}3.5{Environment.NewLine}",
             CompileVerifyAndRun(Source));
     }
 
@@ -238,7 +238,7 @@ public sealed class Issue3096CollectionSpreadEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

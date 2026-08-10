@@ -306,7 +306,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("sg\ndone\n", CompileAndRun(source));
+        Assert.Equal($"sg{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]

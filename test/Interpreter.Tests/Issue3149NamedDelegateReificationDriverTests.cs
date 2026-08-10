@@ -94,8 +94,8 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
                 Probe.Run()
                 """);
             var expectedOutput = selectOpen
-                ? $"{typeof(Func<string, int>).FullName}\n53\n"
-                : $"{typeof(Issue3149Greeter).FullName}\n43\n";
+                ? $"{typeof(Func<string, int>).FullName}{Environment.NewLine}53{Environment.NewLine}"
+                : $"{typeof(Issue3149Greeter).FullName}{Environment.NewLine}43{Environment.NewLine}";
 
             var bare = RunCompiler("/nowarn:GS9100", "/r:" + referencePath, sourcePath);
             var assemblyPath = Path.Combine(directory, consumerPackage + ".dll");
@@ -142,8 +142,8 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
                 "consumer.gs",
                 consumerSource);
             var expectedOutput = generic
-                ? $"{typeof(Issue3149Mapper<>).FullName}\n{typeof(Issue3149Item).FullName}\n24\n"
-                : $"{typeof(Issue3149Greeter).FullName}\n13\n";
+                ? $"{typeof(Issue3149Mapper<>).FullName}{Environment.NewLine}{typeof(Issue3149Item).FullName}{Environment.NewLine}24{Environment.NewLine}"
+                : $"{typeof(Issue3149Greeter).FullName}{Environment.NewLine}13{Environment.NewLine}";
 
             var bare = RunCompiler(
                 "/nowarn:GS9100",
@@ -462,7 +462,7 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     }
 
     private static string Normalize(string value) =>
-        value.Replace("\r\n", "\n", StringComparison.Ordinal);
+        value.ReplaceLineEndings(Environment.NewLine);
 
     private sealed record DriverResult(int ExitCode, string StandardOutput, string StandardError);
 

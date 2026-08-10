@@ -64,7 +64,8 @@ public class Issue2988DeinitInterpreterTests
             GC.WaitForPendingFinalizers()
             Console.WriteLine("end-55")
             """;
-        const string EmittedOutput = "body-44\nderived-deinit-22\nbase-deinit-11\nend-55\n";
+        var emittedOutput =
+            $"body-44{Environment.NewLine}derived-deinit-22{Environment.NewLine}base-deinit-11{Environment.NewLine}end-55{Environment.NewLine}";
 
         var result = Issue3010EntryPointDriverMatrixTests.Run(
             "inherited-deinit-" + driver,
@@ -73,8 +74,8 @@ public class Issue2988DeinitInterpreterTests
         Assert.Equal(0, result.ExitCode);
 
         var expectedOutput = driver == Issue3010EntryPointDriverMatrixTests.Driver.BareCompiler
-            ? EmittedOutput + "Success.\n"
-            : EmittedOutput;
+            ? emittedOutput + $"Success.{Environment.NewLine}"
+            : emittedOutput;
         Assert.Equal(expectedOutput, result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
         Assert.DoesNotContain("GS0510", result.StandardOutput + result.StandardError, StringComparison.Ordinal);
@@ -121,7 +122,9 @@ public class Issue2988DeinitInterpreterTests
         var cell = engine.Evaluate(source);
 
         Assert.False(cell.HasError);
-        Assert.Equal("made-22\nafter-collect-33\nkept\n", cell.Output);
+        Assert.Equal(
+            $"made-22{Environment.NewLine}after-collect-33{Environment.NewLine}kept{Environment.NewLine}",
+            cell.Output.ReplaceLineEndings(Environment.NewLine));
         Assert.DoesNotContain(cell.Diagnostics, diagnostic => diagnostic.Id == "GS0510");
 
         var counterRead = engine.Evaluate("Res.Runs");
@@ -162,8 +165,8 @@ public class Issue2988DeinitInterpreterTests
 
         var previousOut = Console.Out;
         var previousError = Console.Error;
-        using var output = new StringWriter { NewLine = "\n" };
-        using var error = new StringWriter { NewLine = "\n" };
+        using var output = new StringWriter { NewLine = Environment.NewLine };
+        using var error = new StringWriter { NewLine = Environment.NewLine };
         Console.SetOut(output);
         Console.SetError(error);
         try
@@ -171,7 +174,7 @@ public class Issue2988DeinitInterpreterTests
             var exitCode = GSharp.Repl.Program.Main([sourcePath]);
 
             Assert.Equal(0, exitCode);
-            Assert.Equal("deinit-ran-22\nbody-33\n", output.ToString());
+            Assert.Equal($"deinit-ran-22{Environment.NewLine}body-33{Environment.NewLine}", output.ToString());
             Assert.Equal(string.Empty, error.ToString());
         }
         finally

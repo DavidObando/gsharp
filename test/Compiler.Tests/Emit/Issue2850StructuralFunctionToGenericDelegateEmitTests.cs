@@ -79,10 +79,10 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
             """;
 
         Assert.Equal(
-            "generic-class:" + suffix + "\n"
-            + "generic-method:" + suffix + "\n"
-            + "static-function:" + suffix + "\n"
-            + "done\n",
+            "generic-class:" + suffix + Environment.NewLine
+            + "generic-method:" + suffix + Environment.NewLine
+            + "static-function:" + suffix + Environment.NewLine
+            + $"done{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -119,7 +119,7 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
             }
             """;
 
-        Assert.Equal("inner:fwd\ndone\n", CompileAndRun(source));
+        Assert.Equal($"inner:fwd{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class Issue2850StructuralFunctionToGenericDelegateEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
