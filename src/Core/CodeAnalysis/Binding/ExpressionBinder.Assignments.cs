@@ -43,17 +43,19 @@ internal sealed partial class ExpressionBinder
             // property/field of a metadata base resolves to `this.member =
             // value`, mirroring the qualified path and the bare-name READ
             // fallback in BindNameExpression.
-            if (TryBindInheritedClrInstanceMemberWriteByBareName(name, syntax.Expression, syntax.EqualsToken.Location, out var inheritedWrite))
+            if (TryBindInheritedClrInstanceMemberWriteByBareName(name, syntax.Expression, syntax.EqualsToken.Location, out var inheritedWrite)
+                && inheritedWrite is { } resolvedInheritedWrite)
             {
-                return inheritedWrite;
+                return resolvedInheritedWrite;
             }
 
             // ADR-0156 Phase 2: a bare write to a top-level global declared by
             // a prior interactive submission stores to the static field on
             // that submission's <Program> container (newest submission first).
-            if (TryBindSubmissionStaticFieldWrite(name, syntax.Expression, syntax.EqualsToken.Location, out var submissionWrite))
+            if (TryBindSubmissionStaticFieldWrite(name, syntax.Expression, syntax.EqualsToken.Location, out var submissionWrite)
+                && submissionWrite is { } resolvedSubmissionWrite)
             {
-                return submissionWrite;
+                return resolvedSubmissionWrite;
             }
 
             // Surface the diagnostic suppressed above (GS0125) only when the
@@ -102,9 +104,17 @@ internal sealed partial class ExpressionBinder
                 $"{implicitStaticField.OwnerName}.{implicitStaticField.Field.Name}");
 
             var convertedValue = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitStaticField.Field.Type);
-            return implicitStaticField.InterfaceType != null
-                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedValue)
-                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedValue);
+            if (implicitStaticField.InterfaceType is InterfaceSymbol interfaceType)
+            {
+                return new BoundFieldAssignmentExpression(null, implicitStaticField.Field, interfaceType, convertedValue);
+            }
+
+            if (implicitStaticField.StructType is StructSymbol structType)
+            {
+                return new BoundFieldAssignmentExpression(null, null, structType, implicitStaticField.Field, convertedValue);
+            }
+
+            throw new InvalidOperationException("Static field symbol has no owning type.");
         }
 
         // ADR-0053: bare static property assignment inside a method body
@@ -184,7 +194,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="variable">The resolved assignment-target symbol.</param>
     /// <returns>The target's declared type, or <see langword="null"/> when unknown.</returns>
-    private static TypeSymbol GetAssignmentTargetType(VariableSymbol variable)
+    private static TypeSymbol? GetAssignmentTargetType(VariableSymbol variable)
     {
         return variable switch
         {
@@ -209,20 +219,21 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The RHS expression syntax.</param>
     /// <param name="targetType">The resolved LHS declared type, or <see langword="null"/>.</param>
     /// <returns>The bound RHS expression.</returns>
-    private BoundExpression BindAssignmentRhs(ExpressionSyntax syntax, TypeSymbol targetType)
+    private BoundExpression BindAssignmentRhs(ExpressionSyntax syntax, TypeSymbol? targetType)
     {
-        if (TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda))
+        if (targetType is { } nonNullTargetTypeForLambda
+            && TryBindLambdaExpressionWithTargetType(syntax, nonNullTargetTypeForLambda, out var targetTypedLambda))
         {
             return targetTypedLambda;
         }
 
-        if (targetType != null
+        if (targetType is { } nonNullTargetType
             && (syntax is IfExpressionSyntax
                 || syntax is IfLetExpressionSyntax
                 || syntax is ConditionalExpressionSyntax
                 || syntax is SwitchExpressionSyntax))
         {
-            return BindExpression(syntax, targetType);
+            return BindExpression(syntax, nonNullTargetType);
         }
 
         return BindExpression(syntax);
@@ -241,7 +252,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="prop">The property being assigned.</param>
     /// <param name="receiver">The bound receiver expression, or <see langword="null"/> for an implicit <c>this</c> receiver.</param>
     /// <param name="location">The location to report a diagnostic against.</param>
-    private void EnforceInitOnlyAssignment(PropertySymbol prop, BoundExpression receiver, TextLocation location)
+    private void EnforceInitOnlyAssignment(PropertySymbol prop, BoundExpression? receiver, TextLocation location)
     {
         if (prop == null || !prop.IsInitOnly)
         {
@@ -445,9 +456,10 @@ internal sealed partial class ExpressionBinder
         }
 
         if (fieldAccess.Field.IsReadOnly
+            && fieldAccess.StructType is { } fieldDeclaringType
             && !IsReadOnlyFieldAssignmentAllowed(
                 fieldAccess.Field,
-                fieldAccess.StructType,
+                fieldDeclaringType,
                 ReceiverExpressionIsThis(fieldAccess.Receiver)))
         {
             return false;
@@ -476,7 +488,7 @@ internal sealed partial class ExpressionBinder
             || (receiver is BoundVariableExpression bve && ReferenceEquals(bve.Variable, fn.ThisParameter));
     }
 
-    private BoundExpression BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
+    private BoundExpression? BindObjectInitializerAssignment(LocalVariableSymbol receiverLocal, TypeSymbol receiverType, PropertyInitializerSyntax initSyntax)
     {
         var propertyName = initSyntax.PropertyIdentifier.Text;
 
@@ -487,7 +499,7 @@ internal sealed partial class ExpressionBinder
         if (receiverType is not StructSymbol && receiverType is not NullableTypeSymbol && receiverType.ClrType != null)
         {
             var clrReceiverType = receiverType.ClrType;
-            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, propertyName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
@@ -533,6 +545,7 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.TryGetProperty(structSymbol, propertyName, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(initSyntax.EqualsToken.Location, propertyName);
@@ -558,7 +571,7 @@ internal sealed partial class ExpressionBinder
             // protected members.
             if (GetInheritedClrBaseType(structSymbol) is Type inheritedBaseClr)
             {
-                MemberInfo inhMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, propertyName);
+                MemberInfo? inhMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, propertyName);
                 inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, propertyName);
                 if (inhMember != null)
                 {
@@ -702,9 +715,10 @@ internal sealed partial class ExpressionBinder
         // Consulted before the imported-class probe so a prior cell's global
         // shadows a same-named imported type, mirroring the read fallback's
         // ordering in BindAccessorExpression.
-        if (TryBindSubmissionGlobalMemberAssignment(syntax, out var submissionMemberWrite))
+        if (TryBindSubmissionGlobalMemberAssignment(syntax, out var submissionMemberWrite)
+            && submissionMemberWrite is { } resolvedSubmissionMemberWrite)
         {
-            return submissionMemberWrite;
+            return resolvedSubmissionMemberWrite;
         }
 
         // Stream B: imported class name on LHS → static field/property write.
@@ -744,7 +758,7 @@ internal sealed partial class ExpressionBinder
         // nil-&gt;`T?` / branch-unification adaptation a `let x T? = ...`
         // initializer already gets. The first conversion site below binds it
         // (exactly once); non-target-typed forms still bind context-free.
-        BoundExpression value = null;
+        BoundExpression? value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // Issue #689 (follow-up to #655): when the receiver name resolves to an
@@ -757,7 +771,7 @@ internal sealed partial class ExpressionBinder
         // Expression and substitute the `this` parameter with the hoisted
         // `<>4__this` proxy field — routing through an expression receiver
         // makes the write path symmetric with the read path fixed in #655.
-        BoundExpression implicitFieldReceiverExpr = null;
+        BoundExpression? implicitFieldReceiverExpr = null;
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
             implicitFieldReceiverExpr = new BoundFieldAccessExpression(
@@ -798,7 +812,7 @@ internal sealed partial class ExpressionBinder
         {
             var clrReceiverType = assignmentReceiverType.ClrType;
             var fieldName = syntax.FieldIdentifier.Text;
-            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo prop && prop.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
@@ -946,6 +960,7 @@ internal sealed partial class ExpressionBinder
             // ADR-0051: check if it's a property.
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.Text, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.Text);
@@ -982,7 +997,7 @@ internal sealed partial class ExpressionBinder
             if (GetInheritedClrBaseType(structSymbol) is System.Type inheritedBaseClr)
             {
                 var memberName = syntax.FieldIdentifier.Text;
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
                 if (clrMember != null)
                 {
@@ -1086,7 +1101,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="boundRhs">The bound right-hand-side operand.</param>
     /// <param name="rhsLocation">The source location used for operand diagnostics.</param>
     /// <returns>The bound binary/user/CLR operator, or <see langword="null"/>.</returns>
-    private BoundExpression TryBindCompoundBinaryOperation(
+    private BoundExpression? TryBindCompoundBinaryOperation(
         SyntaxKind baseOperatorKind,
         BoundExpression leftRead,
         BoundExpression boundRhs,
@@ -1134,7 +1149,7 @@ internal sealed partial class ExpressionBinder
         return TryBindBinaryWithUserAndClrFallback(baseOperatorKind, ref left, ref right, rhsLocation, rhsLocation, out _);
     }
 
-    private BoundExpression BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)
+    private BoundExpression? BindBareEventOrCompoundAssignment(NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax)
     {
         var name = bareName.IdentifierToken.Text;
         var isAdd = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken;
@@ -1192,9 +1207,10 @@ internal sealed partial class ExpressionBinder
             // top-level global declared by a prior interactive submission
             // reads and stores the static field on that submission's
             // <Program> container (newest submission first).
-            if (TryBindSubmissionStaticFieldCompound(name, bareName, syntax, out var submissionCompound))
+            if (TryBindSubmissionStaticFieldCompound(name, bareName, syntax, out var submissionCompound)
+                && submissionCompound is { } resolvedSubmissionCompound)
             {
-                return submissionCompound;
+                return resolvedSubmissionCompound;
             }
 
             // Surface the diagnostic suppressed above (GS0125) only when the
@@ -1253,9 +1269,17 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
 
-            return implicitStaticField.InterfaceType != null
-                ? new BoundFieldAssignmentExpression(null, implicitStaticField.Field, implicitStaticField.InterfaceType, convertedResult)
-                : new BoundFieldAssignmentExpression(null, null, implicitStaticField.StructType, implicitStaticField.Field, convertedResult);
+            if (implicitStaticField.InterfaceType is InterfaceSymbol interfaceType)
+            {
+                return new BoundFieldAssignmentExpression(null, implicitStaticField.Field, interfaceType, convertedResult);
+            }
+
+            if (implicitStaticField.StructType is StructSymbol structType)
+            {
+                return new BoundFieldAssignmentExpression(null, null, structType, implicitStaticField.Field, convertedResult);
+            }
+
+            throw new InvalidOperationException("Static field symbol has no owning type.");
         }
 
         // ADR-0053: bare static property compound assignment inside a method
@@ -1322,7 +1346,7 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
         SyntaxKind baseOpSyntaxKind,
-        out BoundExpression result)
+        out BoundExpression? result)
     {
         var memberName = memberNameSyntax.IdentifierToken.Text;
         var boundRhs = BindExpression(syntax.Value);
@@ -1429,7 +1453,7 @@ internal sealed partial class ExpressionBinder
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
         SyntaxKind baseOpSyntaxKind,
-        out BoundExpression result)
+        out BoundExpression? result)
     {
         var memberName = memberNameSyntax.IdentifierToken.Text;
         var fieldOwner = interfaceSym.Definition ?? interfaceSym;
@@ -1466,7 +1490,7 @@ internal sealed partial class ExpressionBinder
     /// <c>a.B.C += 1</c>, <c>a.B.C *= 2</c>). Synthesizes
     /// <c>receiver.field = receiver.field op rhs</c>.
     /// </summary>
-    private BoundExpression TryBindChainedCompoundAssignment(
+    private BoundExpression? TryBindChainedCompoundAssignment(
         StructSymbol structSym,
         BoundExpression boundReceiver,
         string memberName,
@@ -1536,6 +1560,8 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
+            propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
+
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the property's *value* in place, so it needs only a getter — no
             // setter, no accessibility-of-setter check, and no write-back. This
@@ -1602,7 +1628,7 @@ internal sealed partial class ExpressionBinder
     /// for chained CLR member access (e.g. <c>obj.Prop += 1</c>, <c>obj.Prop *=
     /// 2</c> where Prop is a property/field on a CLR type).
     /// </summary>
-    private BoundExpression TryBindChainedClrCompoundAssignment(
+    private BoundExpression? TryBindChainedClrCompoundAssignment(
         BoundExpression boundReceiver,
         Type clrReceiverType,
         string memberName,
@@ -1611,7 +1637,7 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         bool includeInherited = false)
     {
-        MemberInfo instanceMember;
+        MemberInfo? instanceMember;
         if (includeInherited)
         {
             // Issue #1582: the receiver is a derived G# type reaching into its
@@ -1815,7 +1841,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The ref-kind argument syntax.</param>
     /// <param name="parameter">The callee parameter this argument binds to (may be <see langword="null"/> when unresolved).</param>
     /// <returns>The bound address-of expression, or an error expression on failure.</returns>
-    internal BoundExpression BindRefArgumentExpression(RefArgumentExpressionSyntax syntax, ParameterSymbol parameter)
+    internal BoundExpression BindRefArgumentExpression(RefArgumentExpressionSyntax syntax, ParameterSymbol? parameter)
     {
         if (syntax.IsInlineDeclaration)
         {
@@ -1827,7 +1853,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            TypeSymbol declaredType = null;
+            TypeSymbol? declaredType = null;
             if (syntax.DeclaredType != null)
             {
                 declaredType = bindTypeClause(syntax.DeclaredType);
@@ -1857,16 +1883,28 @@ internal sealed partial class ExpressionBinder
             {
                 localName = $"<>out_discard_{binderCtx.OutDiscardCounter++}";
             }
+            else if (syntax.DeclarationIdentifier is { } identifierForName)
+            {
+                localName = identifierForName.Text;
+            }
             else
             {
-                localName = syntax.DeclarationIdentifier.Text;
+                return new BoundErrorExpression(null);
             }
 
             var local = new LocalVariableSymbol(localName, isReadOnly, declaredType, declaringSyntax: syntax);
-            if (syntax.DiscardToken == null && !scope.TryDeclareVariable(local))
+            if (syntax.DiscardToken == null)
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.DeclarationIdentifier.Location, localName);
-                return new BoundErrorExpression(null);
+                if (syntax.DeclarationIdentifier is not { } resolvedDeclarationIdentifier)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                if (!scope.TryDeclareVariable(local))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(resolvedDeclarationIdentifier.Location, localName);
+                    return new BoundErrorExpression(null);
+                }
             }
             else if (syntax.DiscardToken != null)
             {
@@ -1883,7 +1921,12 @@ internal sealed partial class ExpressionBinder
         // (`cond ? a : b`); dispatch to the dedicated binder which produces
         // a BoundConditionalAddressExpression (also typed `T&`). The
         // operand may be wrapped in parens (`ref (cond ? a : b)`); unwrap.
-        var rawExpr = syntax.Expression;
+        if (syntax.Expression is not { } expression)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var rawExpr = expression;
         while (rawExpr is ParenthesizedExpressionSyntax pen)
         {
             rawExpr = pen.Expression;
@@ -1902,7 +1945,7 @@ internal sealed partial class ExpressionBinder
             return BindConditionalAddressFromGeneral(generalCondSyntax, syntax.RefKindModifier);
         }
 
-        var operand = BindExpression(syntax.Expression);
+        var operand = BindExpression(expression);
         if (operand is BoundErrorExpression)
         {
             return operand;
@@ -1953,9 +1996,9 @@ internal sealed partial class ExpressionBinder
     /// <returns>The rebound address-of expression when <paramref name="boundArg"/>
     /// is an inline out-var placeholder; otherwise <see langword="null"/> so the
     /// caller keeps its normal conversion path.</returns>
-    internal BoundExpression TryRebindInlineOutVarPlaceholder(
+    internal BoundExpression? TryRebindInlineOutVarPlaceholder(
         BoundExpression boundArg,
-        ExpressionSyntax slotSyntax,
+        ExpressionSyntax? slotSyntax,
         ParameterSymbol resolvedParameter,
         TypeSymbol substitutedPointeeType)
     {
@@ -1990,9 +2033,10 @@ internal sealed partial class ExpressionBinder
             // (read, whole-variable write, compound `name[i] op= v` via the
             // chain path) already consults the submission fallback; without
             // this the shape reports a spurious GS0125.
-            if (TryBindSubmissionGlobalIndexAssignment(syntax, out var submissionIndexWrite))
+            if (TryBindSubmissionGlobalIndexAssignment(syntax, out var submissionIndexWrite)
+                && submissionIndexWrite is { } resolvedSubmissionIndexWrite)
             {
-                return submissionIndexWrite;
+                return resolvedSubmissionIndexWrite;
             }
 
             Diagnostics.ReportUndefinedVariable(syntax.TargetIdentifier.Location, name);
@@ -2160,7 +2204,7 @@ internal sealed partial class ExpressionBinder
         var fieldName = receiverType is TupleTypeSymbol tupleType
             ? GetTupleFieldName(syntax.FieldIdentifier.Text, tupleType)
             : syntax.FieldIdentifier.Text;
-        BoundExpression value = null;
+        BoundExpression? value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // User-defined struct/class receiver → field or property write.
@@ -2206,6 +2250,7 @@ internal sealed partial class ExpressionBinder
             // ADR-0051: check properties before reporting "unable to find member".
             if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
             {
+                propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
@@ -2228,7 +2273,7 @@ internal sealed partial class ExpressionBinder
             // base chain and include inherited protected members).
             if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
             {
-                MemberInfo clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
                 clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
                 if (clrMember != null)
                 {
@@ -2315,8 +2360,8 @@ internal sealed partial class ExpressionBinder
         // CLR receiver → property/field write via reflection.
         if (CanBindClrInstanceMember(receiver))
         {
-            var clrReceiverType = receiverType.ClrType;
-            MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
+            var clrReceiverType = Invariant.Required(receiverType.ClrType, "a CLR member receiver has a CLR type");
+            MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, fieldName, BindingFlags.Public | BindingFlags.Instance);
             if (instanceMember is PropertyInfo propInfo && propInfo.GetIndexParameters().Length != 0)
             {
                 instanceMember = null;
@@ -2370,12 +2415,12 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindConstructedGenericStaticFieldWrite(
         MemberFieldAssignmentExpressionSyntax syntax,
-        StructSymbol constructedStruct,
-        InterfaceSymbol constructedInterface,
-        ImportedClassSymbol constructedImported)
+        StructSymbol? constructedStruct,
+        InterfaceSymbol? constructedInterface,
+        ImportedClassSymbol? constructedImported)
     {
         var fieldName = syntax.FieldIdentifier.Text;
-        BoundExpression value = null;
+        BoundExpression? value = null;
         BoundExpression BindValue(TypeSymbol targetType) => value ??= BindAssignmentRhs(syntax.Value, targetType);
 
         // User class/struct → static field or static property write.
@@ -2442,7 +2487,8 @@ internal sealed partial class ExpressionBinder
         // Imported CLR generic → static field/property write via reflection on
         // the closed construction (mirrors the non-generic imported-class write
         // in BindFieldAssignmentExpression).
-        if (constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
+        if (constructedImported != null
+            && constructedImported.TryLookupMember(fieldName, ne: null, out var staticMember)
             && TryGetWritableClrMember(staticMember, out _, out var staticTargetSymbol, out _))
         {
             var staticConverted = conversions.BindConversion(syntax.Value.Location, BindValue(staticTargetSymbol), staticTargetSymbol);
@@ -2495,17 +2541,19 @@ internal sealed partial class ExpressionBinder
     /// <param name="operatorLocation">The assignment operator's location for diagnostics.</param>
     /// <param name="result">The bound assignment, when the name matched a prior submission's global.</param>
     /// <returns><c>true</c> when a prior submission declared the global.</returns>
-    private bool TryBindSubmissionStaticFieldWrite(string name, ExpressionSyntax valueSyntax, TextLocation operatorLocation, out BoundExpression result)
+    private bool TryBindSubmissionStaticFieldWrite(string name, ExpressionSyntax valueSyntax, TextLocation operatorLocation, out BoundExpression? result)
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
         if (submissionImports is null
-            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared)
+            || programType is not { } resolvedProgramType
+            || declared is not { } resolvedDeclared)
         {
             return false;
         }
 
-        var classSymbol = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        var classSymbol = new ImportedClassSymbol(resolvedProgramType, declaration: null, references: scope.References);
         if (!classSymbol.TryLookupMember(name, ne: null, out var member)
             || !TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
         {
@@ -2514,7 +2562,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (declared.IsReadOnly)
+        if (resolvedDeclared.IsReadOnly)
         {
             Diagnostics.ReportCannotAssign(operatorLocation, name);
         }
@@ -2525,7 +2573,7 @@ internal sealed partial class ExpressionBinder
         // declaring cell assigned under (e.g. `ch = make(chan int32, 2)`).
         if (member is System.Reflection.FieldInfo globalField)
         {
-            targetSymbol = SubmissionGlobalTypeProjection.ReverseProject(targetSymbol, globalField.FieldType, declared.Type, scope.References);
+            targetSymbol = SubmissionGlobalTypeProjection.ReverseProject(targetSymbol, globalField.FieldType, resolvedDeclared.Type, scope.References);
         }
 
         var value = BindAssignmentRhs(valueSyntax, targetSymbol);
@@ -2545,17 +2593,19 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The compound assignment syntax.</param>
     /// <param name="result">The bound assignment, when the name matched a prior submission's global.</param>
     /// <returns><c>true</c> when a prior submission declared the global.</returns>
-    private bool TryBindSubmissionStaticFieldCompound(string name, NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindSubmissionStaticFieldCompound(string name, NameExpressionSyntax bareName, EventSubscriptionExpressionSyntax syntax, out BoundExpression? result)
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
         if (submissionImports is null
-            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared)
+            || programType is not { } resolvedProgramType
+            || declared is not { } resolvedDeclared)
         {
             return false;
         }
 
-        var classSymbol = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        var classSymbol = new ImportedClassSymbol(resolvedProgramType, declaration: null, references: scope.References);
         if (!classSymbol.TryLookupMember(name, ne: null, out var member)
             || !TryGetWritableClrMember(member, out _, out var targetSymbol, out _))
         {
@@ -2564,7 +2614,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (declared.IsReadOnly)
+        if (resolvedDeclared.IsReadOnly)
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
         }
@@ -2617,7 +2667,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The <c>name[index] = value</c> assignment syntax.</param>
     /// <param name="result">The bound assignment when the target named a prior submission's global.</param>
     /// <returns><c>true</c> when a prior submission declared the global (and the current cell does not shadow it).</returns>
-    private bool TryBindSubmissionGlobalIndexAssignment(IndexAssignmentExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindSubmissionGlobalIndexAssignment(IndexAssignmentExpressionSyntax syntax, out BoundExpression? result)
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
@@ -2675,13 +2725,15 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The <c>name.field = value</c> assignment syntax.</param>
     /// <param name="result">The bound assignment when the receiver named a prior submission's global.</param>
     /// <returns><c>true</c> when a prior submission declared the global (and the current cell does not shadow it).</returns>
-    private bool TryBindSubmissionGlobalMemberAssignment(FieldAssignmentExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindSubmissionGlobalMemberAssignment(FieldAssignmentExpressionSyntax syntax, out BoundExpression? result)
     {
         result = null;
         var submissionImports = scope.SubmissionImports;
         var name = syntax.Receiver.Text;
         if (submissionImports is null
-            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared))
+            || !submissionImports.TryFindGlobalVariable(scope.References, name, out var programType, out var declared)
+            || programType is not { } resolvedProgramType
+            || declared is not { } resolvedDeclared)
         {
             return false;
         }
@@ -2694,7 +2746,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var container = new ImportedClassSymbol(programType, declaration: null, references: scope.References);
+        var container = new ImportedClassSymbol(resolvedProgramType, declaration: null, references: scope.References);
         if (!container.TryLookupMember(name, ne: null, out var globalMember) || globalMember is not FieldInfo globalField)
         {
             return false;
@@ -2712,11 +2764,11 @@ internal sealed partial class ExpressionBinder
             globalField,
             globalType,
             isAddressableStaticField: true,
-            isReadOnlySubmissionGlobal: declared?.IsReadOnly == true);
+            isReadOnlySubmissionGlobal: resolvedDeclared.IsReadOnly);
 
         var clrReceiverType = globalType.ClrType;
         var memberName = syntax.FieldIdentifier.Text;
-        MemberInfo instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
+        MemberInfo? instanceMember = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrReceiverType, memberName, BindingFlags.Public | BindingFlags.Instance);
         if (instanceMember is PropertyInfo indexedProperty && indexedProperty.GetIndexParameters().Length != 0)
         {
             instanceMember = null;
@@ -2784,9 +2836,10 @@ internal sealed partial class ExpressionBinder
         // crossing the element link is heap-rooted, so the root's read-only
         // flag no longer applies (same rule as a reference-typed link). An
         // indexer/map element load stays a struct temporary.
-        if (TryGetElementAccessTarget(receiver, out var elementCollection))
+        if (TryGetElementAccessTarget(receiver, out var elementCollection)
+            && elementCollection is { } resolvedElementCollection)
         {
-            if (!ChainHasSubmissionGlobalRoot(elementCollection))
+            if (!ChainHasSubmissionGlobalRoot(resolvedElementCollection))
             {
                 return SubmissionWriteReceiverKind.None;
             }
@@ -2850,9 +2903,10 @@ internal sealed partial class ExpressionBinder
             // element in place; an indexer/map element (or a computed link
             // above the element) still bottoms out in a copy and stays
             // blocked.
-            if (TryGetElementAccessTarget(access.Receiver, out var linkCollection))
+            if (TryGetElementAccessTarget(access.Receiver, out var linkCollection)
+                && linkCollection is { } resolvedLinkCollection)
             {
-                if (!ChainHasSubmissionGlobalRoot(linkCollection))
+                if (!ChainHasSubmissionGlobalRoot(resolvedLinkCollection))
                 {
                     return SubmissionWriteReceiverKind.None;
                 }
@@ -2880,7 +2934,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="expression">The candidate element-access expression.</param>
     /// <param name="collection">The indexed collection expression, when <paramref name="expression"/> is an element load.</param>
     /// <returns><c>true</c> when <paramref name="expression"/> is an element load.</returns>
-    private static bool TryGetElementAccessTarget(BoundExpression expression, out BoundExpression collection)
+    private static bool TryGetElementAccessTarget(BoundExpression expression, out BoundExpression? collection)
     {
         switch (expression)
         {

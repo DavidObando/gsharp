@@ -77,20 +77,20 @@ internal sealed partial class StatementBinder
     private readonly PatternBinder patterns;
     private readonly BindExpressionDelegate bindExpression;
     private readonly BindExpressionWithTargetTypeDelegate bindExpressionWithTargetType;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly BindLocalVariableDelegate bindLocalVariable;
     private readonly BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility;
-    private readonly Func<string, TextLocation, VariableSymbol> bindVariableReference;
+    private readonly Func<string, TextLocation, VariableSymbol?> bindVariableReference;
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
     private readonly Func<TypeSymbol, bool> isFormattableStringTargetType;
     private readonly Func<BoundExpression, bool> isLvalue;
     private readonly Func<TypeSymbol, bool> isIteratorReturnType;
-    private readonly Func<SyntaxToken, Accessibility> resolveAccessibility;
+    private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
     private readonly BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType;
-    private readonly Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration;
-    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
+    private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType;
+    private readonly Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration;
+    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
@@ -104,20 +104,20 @@ internal sealed partial class StatementBinder
         PatternBinder patterns,
         BindExpressionDelegate bindExpression,
         BindExpressionWithTargetTypeDelegate bindExpressionWithTargetType,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         BindLocalVariableDelegate bindLocalVariable,
         BindLocalVariableWithAccessibilityDelegate bindLocalVariableWithAccessibility,
-        Func<string, TextLocation, VariableSymbol> bindVariableReference,
+        Func<string, TextLocation, VariableSymbol?> bindVariableReference,
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
         Func<TypeSymbol, bool> isFormattableStringTargetType,
         Func<BoundExpression, bool> isLvalue,
         Func<TypeSymbol, bool> isIteratorReturnType,
-        Func<SyntaxToken, Accessibility> resolveAccessibility,
+        Func<SyntaxToken?, Accessibility> resolveAccessibility,
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
-        Func<FunctionSymbol> getCurrentFunction,
-        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression> bindLambdaWithTargetType = null,
-        Func<VariableDeclarationSyntax, BoundStatement> bindGenericLocalFunctionDeclaration = null,
-        Action<TextLocation, string, BoundFunctionLiteralExpression> checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
+        Func<FunctionSymbol?> getCurrentFunction,
+        Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
+        Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration = null,
+        Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -151,7 +151,7 @@ internal sealed partial class StatementBinder
     }
 
 #pragma warning disable SA1300 // Element should begin with an uppercase letter
-    private FunctionSymbol function => getCurrentFunction();
+    private FunctionSymbol? function => getCurrentFunction();
 #pragma warning restore SA1300
 
     private BoundStatement BindErrorStatement()
@@ -159,7 +159,7 @@ internal sealed partial class StatementBinder
         return new BoundExpressionStatement(null, new BoundErrorExpression(null));
     }
 
-    internal BoundStatement BindStatement(StatementSyntax syntax)
+    internal BoundStatement? BindStatement(StatementSyntax syntax)
     {
         switch (syntax.Kind)
         {
@@ -269,15 +269,15 @@ internal sealed partial class StatementBinder
             BindBlockStatements(syntax.Statements, 0, statements);
         }
 
-        scope = scope.Parent;
+        scope = scope.Pop();
 
         return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     internal ImmutableArray<BoundStatement> BindStatementList(
         ImmutableArray<StatementSyntax> statementSyntaxes,
-        Action<StatementSyntax> beforeBind = null,
-        Func<BoundStatement> trailingStatement = null)
+        Action<StatementSyntax>? beforeBind = null,
+        Func<BoundStatement>? trailingStatement = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
@@ -288,8 +288,8 @@ internal sealed partial class StatementBinder
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
         ImmutableArray<BoundStatement>.Builder statements,
-        Action<StatementSyntax> beforeBind = null,
-        Func<BoundStatement> trailingStatement = null)
+        Action<StatementSyntax>? beforeBind = null,
+        Func<BoundStatement>? trailingStatement = null)
     {
         // Issue #208: push a persistent narrowing frame for this statement list.
         // After each call statement whose method carries [MemberNotNull], the
@@ -310,7 +310,7 @@ internal sealed partial class StatementBinder
                     statements.AddRange(defer.PrefixStatements);
                     if (defer.Cleanup == null)
                     {
-                        statements.Add(defer.ErrorStatement);
+                        statements.Add(Invariant.Required(defer.ErrorStatement, "an invalid defer lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
@@ -337,12 +337,13 @@ internal sealed partial class StatementBinder
 
                     if (usingLowering.Cleanup == null)
                     {
-                        statements.Add(usingLowering.ErrorStatement);
+                        statements.Add(Invariant.Required(usingLowering.ErrorStatement, "an invalid using lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
 
-                    statements.Add(BuildInitializedAssignment(usingLowering.Initialized));
+                    statements.Add(BuildInitializedAssignment(
+                        Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
@@ -368,12 +369,13 @@ internal sealed partial class StatementBinder
 
                     if (awaitUsingLowering.Cleanup == null)
                     {
-                        statements.Add(awaitUsingLowering.ErrorStatement);
+                        statements.Add(Invariant.Required(awaitUsingLowering.ErrorStatement, "an invalid await using lowering has an error statement"));
                         InvalidateNarrowingsForAssignedVariables(statementSyntax);
                         continue;
                     }
 
-                    statements.Add(BuildInitializedAssignment(awaitUsingLowering.Initialized));
+                    statements.Add(BuildInitializedAssignment(
+                        Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
@@ -398,6 +400,11 @@ internal sealed partial class StatementBinder
                 }
 
                 var statement = BindStatement(statementSyntax);
+                if (statement == null)
+                {
+                    continue;
+                }
+
                 statements.Add(statement);
 
                 // Issue #208: after binding a call statement, apply any
@@ -459,7 +466,7 @@ internal sealed partial class StatementBinder
     private BoundTryStatement BuildCleanupTryStatement(
         ImmutableArray<BoundStatement> protectedStatements,
         BoundExpression cleanup,
-        VariableSymbol initialized = null)
+        VariableSymbol? initialized = null)
     {
         var tryBlock = new BoundBlockStatement(null, protectedStatements);
         BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);

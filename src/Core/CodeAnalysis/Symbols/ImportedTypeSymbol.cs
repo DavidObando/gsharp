@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -29,7 +30,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         TypeArguments = ImmutableArray<TypeSymbol>.Empty;
     }
 
-    private ImportedTypeSymbol(string name, Type erasedClosedType, Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+    private ImportedTypeSymbol(string name, Type erasedClosedType, Type? openDefinition, ImmutableArray<TypeSymbol> typeArguments)
         : base(name, erasedClosedType)
     {
         OpenDefinition = openDefinition;
@@ -42,14 +43,14 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// (e.g. <c>List&lt;object&gt;</c> for <c>List[T]</c>) so member, index, and
     /// conversion resolution keep working.
     /// </summary>
-    public Type Type => ClrType;
+    public Type Type => Invariant.Required(ClrType, "an imported type always has a CLR representation");
 
     /// <summary>
     /// Gets the open generic CLR definition this symbol was constructed from
     /// (e.g. <c>List&lt;&gt;</c>), or <c>null</c> when this is a plain imported
     /// type rather than a #313 type-parameter construction.
     /// </summary>
-    public Type OpenDefinition { get; }
+    public Type? OpenDefinition { get; }
 
     /// <summary>
     /// Gets the symbolic type arguments this generic type was constructed with
@@ -121,7 +122,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// <param name="openDefinition">The open generic CLR definition (e.g. <c>List&lt;&gt;</c>).</param>
     /// <param name="typeArguments">The symbolic type arguments, possibly containing <see cref="TypeParameterSymbol"/>.</param>
     /// <returns>A fresh constructed <see cref="ImportedTypeSymbol"/>.</returns>
-    public static ImportedTypeSymbol GetConstructed(Type erasedClosedType, Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+    public static ImportedTypeSymbol GetConstructed(Type erasedClosedType, Type? openDefinition, ImmutableArray<TypeSymbol> typeArguments)
     {
         if (erasedClosedType == null)
         {
@@ -171,7 +172,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         if (OpenDefinition == null || TypeArguments.IsDefaultOrEmpty || HasTypeParameterArgument)
         {
-            return ClrType;
+            return Invariant.Required(ClrType, "an imported type always has a CLR representation");
         }
 
         var contextObject = OpenDefinition.GetGenericArguments()
@@ -194,10 +195,12 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 // Some argument still lacks a concrete CLR type (e.g. its own
                 // TypeBuilder has not been created yet); degrade to the
                 // cached erased shape rather than fail outright.
-                return ClrType;
+                return Invariant.Required(ClrType, "an imported type always has a CLR representation");
             }
 
-            args[i] = ClrTypeUtilities.RemapHostCoreTypeToContext(argClr, contextObject);
+            args[i] = Invariant.Required(
+                ClrTypeUtilities.RemapHostCoreTypeToContext(argClr, contextObject),
+                "a concrete generic argument remains available after CLR context remapping");
         }
 
         try
@@ -209,17 +212,17 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             // MakeGenericType can legitimately reject the reconstructed
             // arguments for CLR generic-constraint reasons; degrade to the
             // erased shape instead of throwing.
-            return ClrType;
+            return Invariant.Required(ClrType, "an imported type always has a CLR representation");
         }
     }
 
     /// <inheritdoc/>
-    public override DocumentationComment GetDocumentation()
+    public override DocumentationComment? GetDocumentation()
     {
         return AssemblyDocumentationProvider.Resolve(OpenDefinition ?? Type) ?? base.GetDocumentation();
     }
 
-    internal static bool TryCreateSemanticAggregate(Type type, ReferenceResolver references, out StructSymbol aggregate)
+    internal static bool TryCreateSemanticAggregate(Type? type, ReferenceResolver? references, [NotNullWhen(true)] out StructSymbol? aggregate)
     {
         aggregate = null;
         if (type == null
@@ -290,12 +293,17 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         // ImportedClassSymbol), build uncached — the aggregate is structurally
         // determined by `type`, so identity still holds within that scope.
         aggregate = references != null
-            ? references.GetOrAddSemanticAggregate(type, consumerAssemblyName, static (t, consumer) => BuildSemanticAggregate(t, consumer))
+            ? references.GetOrAddSemanticAggregate(
+                type,
+                consumerAssemblyName,
+                static (t, consumer) => Invariant.Required(
+                    BuildSemanticAggregate(t, consumer),
+                    "a marked imported type has a semantic aggregate"))
             : BuildSemanticAggregate(type, consumerAssemblyName);
         return aggregate != null;
     }
 
-    internal static TypeSymbol NormalizeSemanticAggregate(TypeSymbol type, Type clrType, ReferenceResolver references)
+    internal static TypeSymbol NormalizeSemanticAggregate(TypeSymbol type, Type? clrType, ReferenceResolver? references)
     {
         var nullable = type is NullableTypeSymbol;
         var unwrapped = nullable ? ((NullableTypeSymbol)type).UnderlyingType : type;
@@ -335,7 +343,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         }
     }
 
-    private static StructSymbol BuildSemanticAggregate(Type type, string consumerAssemblyName)
+    private static StructSymbol? BuildSemanticAggregate(Type type, string consumerAssemblyName)
     {
         if (!ImportedAssemblySemantics.TryGetTypeSemantics(type, out var semantics)
             && !ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(type, out semantics))
@@ -388,7 +396,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 hasSetter: setter != null && IsVisible(setter, includeInternal),
                 isAutoProperty: false,
                 isVirtual: (getter ?? setter)?.IsVirtual == true,
-                isOverride: ClrTypeUtilities.SafeIsOverride(getter ?? setter),
+                isOverride: (getter ?? setter) is { } accessor && ClrTypeUtilities.SafeIsOverride(accessor),
                 isStatic: (getter ?? setter)?.IsStatic == true,
                 isInitOnly: setter != null && IsInitOnlySetter(setter),
                 metadataIsAbstract: (getter ?? setter)?.IsAbstract == true));
@@ -406,7 +414,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             fields: fieldBuilder.ToImmutable(),
             accessibility: MapTypeAccessibility(type),
             declaration: null,
-            packageName: type.Namespace,
+            packageName: type.Namespace ?? string.Empty,
             isData: semantics.IsData,
             isInline: false,
             isClass: !semantics.IsValueType,
@@ -509,7 +517,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         for (var i = 0; i < semantics.PrimaryConstructorParameterNames.Length; i++)
         {
             var name = semantics.PrimaryConstructorParameterNames[i];
-            ParameterSymbol parameter = null;
+            ParameterSymbol? parameter = null;
 
             // Prefer the exact backing field recorded by metadata token
             // (issue #1953 follow-up) — this is immune to the parameter name
@@ -574,7 +582,7 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         return Array.Empty<ParameterInfo>();
     }
 
-    private static bool TryGetOptionalDefault(ParameterInfo parameter, out object value)
+    private static bool TryGetOptionalDefault(ParameterInfo parameter, out object? value)
     {
         value = null;
         try

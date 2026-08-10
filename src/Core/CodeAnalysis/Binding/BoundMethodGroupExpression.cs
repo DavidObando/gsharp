@@ -20,27 +20,27 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundMethodGroupExpression : BoundExpression
 {
-    public BoundMethodGroupExpression(SyntaxNode syntax, FunctionSymbol function, FunctionTypeSymbol type)
+    public BoundMethodGroupExpression(SyntaxNode? syntax, FunctionSymbol function, FunctionTypeSymbol type)
         : this(syntax, receiver: null, function, type)
     {
     }
 
-    public BoundMethodGroupExpression(SyntaxNode syntax, ImmutableArray<FunctionSymbol> candidates)
+    public BoundMethodGroupExpression(SyntaxNode? syntax, ImmutableArray<FunctionSymbol> candidates)
         : this(syntax, receiver: null, candidates)
     {
     }
 
-    public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol function, FunctionTypeSymbol type)
+    public BoundMethodGroupExpression(SyntaxNode? syntax, BoundExpression? receiver, FunctionSymbol function, FunctionTypeSymbol type)
         : this(syntax, receiver, function, type, staticOwnerType: null)
     {
     }
 
     public BoundMethodGroupExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         FunctionSymbol function,
         FunctionTypeSymbol type,
-        StructSymbol staticOwnerType,
+        StructSymbol? staticOwnerType,
         ImmutableArray<TypeSymbol> methodTypeArguments = default)
         : base(syntax)
     {
@@ -52,16 +52,16 @@ public sealed class BoundMethodGroupExpression : BoundExpression
         MethodTypeArguments = methodTypeArguments;
     }
 
-    public BoundMethodGroupExpression(SyntaxNode syntax, BoundExpression receiver, ImmutableArray<FunctionSymbol> candidates)
+    public BoundMethodGroupExpression(SyntaxNode? syntax, BoundExpression? receiver, ImmutableArray<FunctionSymbol> candidates)
         : this(syntax, receiver, candidates, staticOwnerType: null)
     {
     }
 
     public BoundMethodGroupExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         ImmutableArray<FunctionSymbol> candidates,
-        StructSymbol staticOwnerType)
+        StructSymbol? staticOwnerType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -77,11 +77,11 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     /// non-null, the emitter binds the resulting delegate's <c>Target</c> to
     /// this receiver (<c>ldarg/ldfld; ldftn</c> or <c>dup; ldvirtftn</c>).
     /// </summary>
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
-    public FunctionSymbol Function { get; }
+    public FunctionSymbol? Function { get; }
 
-    public FunctionTypeSymbol FunctionType { get; }
+    public FunctionTypeSymbol? FunctionType { get; }
 
     /// <summary>
     /// Gets every candidate overload sharing the source name. Equals
@@ -90,7 +90,7 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     public ImmutableArray<FunctionSymbol> Candidates { get; }
 
     /// <summary>Gets the type used to qualify a static method group.</summary>
-    public StructSymbol StaticOwnerType { get; }
+    public StructSymbol? StaticOwnerType { get; }
 
     /// <summary>Gets the inferred type arguments for a generic source method.</summary>
     public ImmutableArray<TypeSymbol> MethodTypeArguments { get; }

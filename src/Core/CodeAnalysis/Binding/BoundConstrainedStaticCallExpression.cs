@@ -26,7 +26,7 @@ public sealed class BoundConstrainedStaticCallExpression : BoundExpression
     /// <param name="arguments">The bound argument expressions in declared order.</param>
     /// <param name="returnType">The call-site (post-substitution) return type.</param>
     public BoundConstrainedStaticCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         TypeParameterSymbol typeParameter,
         FunctionSymbol interfaceMethod,
         ImmutableArray<BoundExpression> arguments,

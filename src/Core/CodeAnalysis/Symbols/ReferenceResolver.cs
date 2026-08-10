@@ -8,6 +8,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -56,8 +57,8 @@ public sealed class ReferenceResolver : IDisposable
     };
 
     private readonly ImmutableArray<Assembly> assemblies;
-    private readonly MetadataLoadContext metadataContext;
-    private readonly AssemblyLoadContext runtimeContext;
+    private readonly MetadataLoadContext? metadataContext;
+    private readonly AssemblyLoadContext? runtimeContext;
     private readonly ImmutableArray<string> missingTransitiveReferences;
 
     // Process-wide registry of original on-disk paths for assemblies loaded
@@ -134,14 +135,14 @@ public sealed class ReferenceResolver : IDisposable
     // ExportMetadataIndex), so warm resolution is a superset of cold resolution.
     // Null in the default/opt-out path, where the eager `typeNameIndex` is used
     // and behaviour is byte-for-byte identical to before this ADR.
-    private Dictionary<string, int> warmNameIndex;
+    private Dictionary<string, int>? warmNameIndex;
 
     /// <summary>
     /// Gets or sets the simple name of the assembly currently being compiled.
     /// When populated, imported-member lookup may honor
     /// <c>InternalsVisibleTo</c> friendship on referenced assemblies.
     /// </summary>
-    public string CurrentAssemblyName { get; set; }
+    public string? CurrentAssemblyName { get; set; }
 
     /// <summary>
     /// Returns the cached imported data-type semantic aggregate for
@@ -162,16 +163,16 @@ public sealed class ReferenceResolver : IDisposable
     internal StructSymbol GetOrAddSemanticAggregate(Type type, string consumerAssemblyName, Func<Type, string, StructSymbol> factory)
         => semanticAggregateCache.GetOrAdd(type, factory, consumerAssemblyName);
 
-    private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext metadataContext)
+    private ReferenceResolver(ImmutableArray<Assembly> assemblies, MetadataLoadContext? metadataContext)
         : this(assemblies, metadataContext, ImmutableArray<string>.Empty)
     {
     }
 
     private ReferenceResolver(
         ImmutableArray<Assembly> assemblies,
-        MetadataLoadContext metadataContext,
+        MetadataLoadContext? metadataContext,
         ImmutableArray<string> missingTransitiveReferences,
-        AssemblyLoadContext runtimeContext = null)
+        AssemblyLoadContext? runtimeContext = null)
     {
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
@@ -201,7 +202,7 @@ public sealed class ReferenceResolver : IDisposable
             return LoadFromAssemblyPath(path);
         }
 
-        protected override Assembly Load(AssemblyName assemblyName)
+        protected override Assembly? Load(AssemblyName assemblyName)
         {
             foreach (var directory in directories)
             {
@@ -317,7 +318,7 @@ public sealed class ReferenceResolver : IDisposable
     /// </summary>
     /// <param name="assembly">The referenced assembly to inspect.</param>
     /// <returns><see langword="true"/> when internal members are visible.</returns>
-    public bool CanAccessInternalMembers(Assembly assembly)
+    public bool CanAccessInternalMembers(Assembly? assembly)
         => ImportedAssemblySemantics.GrantsInternalAccessTo(assembly, CurrentAssemblyName);
 
     /// <summary>
@@ -336,7 +337,7 @@ public sealed class ReferenceResolver : IDisposable
     /// <param name="assembly">An assembly returned by a resolver.</param>
     /// <param name="path">The original on-disk path on success.</param>
     /// <returns><see langword="true"/> when a non-empty path was recovered.</returns>
-    public static bool TryGetAssemblyPath(Assembly assembly, out string path)
+    public static bool TryGetAssemblyPath(Assembly? assembly, [NotNullWhen(true)] out string? path)
     {
         path = null;
         if (assembly == null)
@@ -695,7 +696,7 @@ public sealed class ReferenceResolver : IDisposable
     /// must use the <see cref="TryResolveType(string, bool, out Type)"/> overload
     /// with <c>requireExternalVisibility: false</c> to bypass the gate.
     /// </remarks>
-    public bool TryResolveType(string fullName, out Type type)
+    public bool TryResolveType(string fullName, [NotNullWhen(true)] out Type? type)
         => TryResolveType(fullName, requireExternalVisibility: true, out type);
 
     /// <summary>
@@ -710,7 +711,7 @@ public sealed class ReferenceResolver : IDisposable
     /// </param>
     /// <param name="type">The resolved <see cref="Type"/>, if found.</param>
     /// <returns><c>true</c> if a matching type was found; otherwise <c>false</c>.</returns>
-    public bool TryResolveType(string fullName, bool requireExternalVisibility, out Type type)
+    public bool TryResolveType(string fullName, bool requireExternalVisibility, [NotNullWhen(true)] out Type? type)
     {
         type = null;
         if (!TryResolveTypeRaw(fullName, out var resolved))
@@ -746,7 +747,7 @@ public sealed class ReferenceResolver : IDisposable
     /// <param name="fullName">The fully-qualified type name (e.g. <c>foo.&lt;Program&gt;</c>).</param>
     /// <param name="type">The resolved <see cref="Type"/>, if found.</param>
     /// <returns><c>true</c> if the named assembly defines a matching, externally visible type; otherwise <c>false</c>.</returns>
-    public bool TryResolveTypeInAssembly(string assemblySimpleName, string fullName, out Type type)
+    public bool TryResolveTypeInAssembly(string assemblySimpleName, string fullName, [NotNullWhen(true)] out Type? type)
     {
         type = null;
         if (string.IsNullOrEmpty(assemblySimpleName) || string.IsNullOrEmpty(fullName))
@@ -769,7 +770,7 @@ public sealed class ReferenceResolver : IDisposable
             return true;
         }
 
-        Type resolved = null;
+        Type? resolved = null;
         foreach (var asm in assemblies)
         {
             if (!string.Equals(asm.GetName().Name, assemblySimpleName, StringComparison.Ordinal))
@@ -808,7 +809,7 @@ public sealed class ReferenceResolver : IDisposable
     /// <param name="nestedName">The simple name of the nested type to look up.</param>
     /// <param name="nestedType">The resolved nested type on success.</param>
     /// <returns><see langword="true"/> when a public or non-public nested type with the requested name exists; otherwise <see langword="false"/>.</returns>
-    public bool TryResolveNestedType(Type containingType, string nestedName, out Type nestedType)
+    public bool TryResolveNestedType(Type containingType, string nestedName, [NotNullWhen(true)] out Type? nestedType)
     {
         nestedType = null;
         if (containingType == null || string.IsNullOrEmpty(nestedName))
@@ -865,7 +866,8 @@ public sealed class ReferenceResolver : IDisposable
     /// set's <see cref="MetadataLoadContext"/> (it is not resolvable by name and
     /// is not a recognised array/byref/pointer/generic shape).
     /// </exception>
-    public Type MapClrTypeToReferences(Type hostType)
+    [return: NotNullIfNotNull(nameof(hostType))]
+    public Type? MapClrTypeToReferences(Type? hostType)
     {
         if (hostType == null)
         {
@@ -901,7 +903,11 @@ public sealed class ReferenceResolver : IDisposable
 
         if (hostType.IsArray)
         {
-            var mappedElement = MapClrTypeToReferences(hostType.GetElementType());
+            // Type.GetElementType() is documented to return non-null exactly
+            // when IsArray/IsByRef/IsPointer is true (or the type is a generic
+            // parameter, handled separately below) — guaranteed here by the
+            // IsArray check on this line.
+            var mappedElement = MapClrTypeToReferences(hostType.GetElementType()!);
             var rank = hostType.GetArrayRank();
             return rank == 1 ? mappedElement.MakeArrayType() : mappedElement.MakeArrayType(rank);
         }
@@ -913,18 +919,22 @@ public sealed class ReferenceResolver : IDisposable
         // context.
         if (hostType.IsByRef)
         {
-            return MapClrTypeToReferences(hostType.GetElementType()).MakeByRefType();
+            // See the IsArray branch above: GetElementType() is non-null here
+            // because IsByRef is true.
+            return MapClrTypeToReferences(hostType.GetElementType()!).MakeByRefType();
         }
 
         if (hostType.IsPointer)
         {
-            return MapClrTypeToReferences(hostType.GetElementType()).MakePointerType();
+            // See the IsArray branch above: GetElementType() is non-null here
+            // because IsPointer is true.
+            return MapClrTypeToReferences(hostType.GetElementType()!).MakePointerType();
         }
 
         if (hostType.IsGenericType && !hostType.IsGenericTypeDefinition)
         {
             var mappedDefinition = MapClrTypeToReferences(hostType.GetGenericTypeDefinition());
-            var mappedArgs = hostType.GetGenericArguments().Select(MapClrTypeToReferences).ToArray();
+            var mappedArgs = hostType.GetGenericArguments().Select(t => MapClrTypeToReferences(t)).ToArray();
             return mappedDefinition.MakeGenericType(mappedArgs);
         }
 
@@ -1046,7 +1056,7 @@ public sealed class ReferenceResolver : IDisposable
         return true;
     }
 
-    internal static string FindBundledExtensionPath(string baseDirectory)
+    internal static string? FindBundledExtensionPath(string baseDirectory)
     {
         // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
         // build already references Compiler; solution and SDK layouts provide it.
@@ -1065,7 +1075,7 @@ public sealed class ReferenceResolver : IDisposable
     // Raw resolution shared by the public/internal TryResolveType overloads: it
     // performs the reference-set name lookup (warm/cold index + cache) without
     // applying the external-visibility gate, which the callers layer on top.
-    private bool TryResolveTypeRaw(string fullName, out Type type)
+    private bool TryResolveTypeRaw(string fullName, [NotNullWhen(true)] out Type? type)
     {
         type = null;
         if (string.IsNullOrEmpty(fullName))
@@ -1169,7 +1179,7 @@ public sealed class ReferenceResolver : IDisposable
     // of every assembly so resolution still finds the first declarer — exactly the
     // precedence the eager index encodes. Returns false only if no assembly can
     // produce the type, in which case the caller records a (conservative) miss.
-    private static Type SafeGetType(Assembly assembly, string fullName)
+    private static Type? SafeGetType(Assembly assembly, string fullName)
     {
         try
         {
@@ -1189,7 +1199,7 @@ public sealed class ReferenceResolver : IDisposable
         }
     }
 
-    private bool TryMaterializeWarmType(string fullName, int assemblyIndex, out Type type)
+    private bool TryMaterializeWarmType(string fullName, int assemblyIndex, [NotNullWhen(true)] out Type? type)
     {
         type = null;
         if (assemblyIndex >= 0 && assemblyIndex < assemblies.Length)
@@ -1238,13 +1248,16 @@ public sealed class ReferenceResolver : IDisposable
     // precedence) are guaranteed to match.
     private static IEnumerable<Type> EnumerateDefinedAndForwardedTypes(Assembly asm)
     {
-        Type[] definedTypes;
+        Type?[] definedTypes;
         try
         {
             definedTypes = asm.GetTypes();
         }
         catch (ReflectionTypeLoadException ex)
         {
+            // ex.Types carries a null entry for every type that failed to
+            // load, alongside the successfully loaded ones; the null filter
+            // in the loop below is precisely what strips those entries.
             definedTypes = ex.Types;
         }
         catch (FileNotFoundException)
@@ -1264,13 +1277,14 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        Type[] forwardedTypes;
+        Type?[] forwardedTypes;
         try
         {
             forwardedTypes = asm.GetForwardedTypes();
         }
         catch (ReflectionTypeLoadException ex)
         {
+            // Same rationale as the definedTypes catch above.
             forwardedTypes = ex.Types;
         }
         catch (Exception)
@@ -1349,7 +1363,7 @@ public sealed class ReferenceResolver : IDisposable
         return builder.ToImmutable();
     }
 
-    private static string ChooseCoreAssemblyName(string[] paths)
+    private static string? ChooseCoreAssemblyName(string[] paths)
     {
         // MetadataLoadContext needs a "core assembly" — the one declaring the
         // primitive types (Object, String, etc.). For modern .NET reference
@@ -1622,7 +1636,7 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        public bool TryGetOriginalPath(string simpleName, out string path)
+        public bool TryGetOriginalPath(string simpleName, [NotNullWhen(true)] out string? path)
         {
             if (!string.IsNullOrEmpty(simpleName))
             {
@@ -1669,7 +1683,7 @@ public sealed class ReferenceResolver : IDisposable
             return asm;
         }
 
-        public override Assembly Resolve(MetadataLoadContext context, AssemblyName assemblyName)
+        public override Assembly? Resolve(MetadataLoadContext context, AssemblyName assemblyName)
         {
             var simpleName = assemblyName?.Name;
             if (!string.IsNullOrEmpty(simpleName) && assemblyBytes.TryGetValue(simpleName, out var bytes))

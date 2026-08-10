@@ -24,11 +24,11 @@ public sealed class ForClauseStatementSyntax : StatementSyntax
     public ForClauseStatementSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
-        StatementSyntax initializer,
+        StatementSyntax? initializer,
         SyntaxToken firstSemicolon,
-        ExpressionSyntax condition,
+        ExpressionSyntax? condition,
         SyntaxToken secondSemicolon,
-        StatementSyntax post,
+        StatementSyntax? post,
         StatementSyntax body)
         : base(syntaxTree)
     {
@@ -52,7 +52,7 @@ public sealed class ForClauseStatementSyntax : StatementSyntax
     /// <summary>
     /// Gets the optional initializer statement.
     /// </summary>
-    public StatementSyntax Initializer { get; }
+    public StatementSyntax? Initializer { get; }
 
     /// <summary>
     /// Gets the first semicolon separator.
@@ -62,7 +62,7 @@ public sealed class ForClauseStatementSyntax : StatementSyntax
     /// <summary>
     /// Gets the optional loop condition expression.
     /// </summary>
-    public ExpressionSyntax Condition { get; }
+    public ExpressionSyntax? Condition { get; }
 
     /// <summary>
     /// Gets the second semicolon separator.
@@ -72,7 +72,7 @@ public sealed class ForClauseStatementSyntax : StatementSyntax
     /// <summary>
     /// Gets the optional post statement.
     /// </summary>
-    public StatementSyntax Post { get; }
+    public StatementSyntax? Post { get; }
 
     /// <summary>
     /// Gets the body statement.

@@ -16,7 +16,7 @@ public sealed class BoundErrorExpression : BoundExpression
     /// Initializes a new instance of the <see cref="BoundErrorExpression"/> class.
     /// </summary>
     /// <param name="syntax">The originating syntax (may be <see langword="null"/> for synthesised nodes).</param>
-    public BoundErrorExpression(SyntaxNode syntax)
+    public BoundErrorExpression(SyntaxNode? syntax)
         : base(syntax)
     {
     }

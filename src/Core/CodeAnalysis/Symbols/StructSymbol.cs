@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -59,7 +60,7 @@ public sealed class StructSymbol : TypeSymbol
     // definition's body is bound — so a construction materialized before the
     // definition's body still observes the substituted members afterward,
     // making member lookup independent of source-file binding order.
-    private Dictionary<TypeParameterSymbol, TypeSymbol> substitutionMap;
+    private Dictionary<TypeParameterSymbol, TypeSymbol>? substitutionMap;
 
     // Issue #1537: for a constructed reference to a GENERIC type nested inside a
     // generic enclosing type (`Outer[int32].Middle[string]`), the nested
@@ -77,7 +78,7 @@ public sealed class StructSymbol : TypeSymbol
     // close constructed-generic member types in the right reflection context.
     // Null for definitions and for constructed instances built without a
     // projector (single-context callers; unchanged behavior).
-    private Func<Type, Type> mapClrType;
+    private Func<Type, Type>? mapClrType;
     private ImmutableArray<FieldSymbol> substitutedFields;
     private ImmutableArray<FieldSymbol> substitutedFieldsSource;
     private bool substitutedFieldsComputed;
@@ -91,13 +92,13 @@ public sealed class StructSymbol : TypeSymbol
     private ImmutableArray<InterfaceSymbol> interfacesStore = ImmutableArray<InterfaceSymbol>.Empty;
     private ImmutableArray<TypeSymbol> implementedClrInterfacesStore = ImmutableArray<TypeSymbol>.Empty;
     private ImmutableArray<EventSymbol> eventsStore = ImmutableArray<EventSymbol>.Empty;
-    private TypeSymbol importedBaseTypeStore;
-    private StructSymbol baseClassStore;
-    private BaseClassSnapshot substitutedBaseClass;
-    private ParameterArraySnapshot substitutedPrimaryConstructorParameters;
-    private InterfaceArraySnapshot substitutedInterfaces;
-    private TypeArraySnapshot substitutedImplementedClrInterfaces;
-    private TypeSnapshot substitutedImportedBaseType;
+    private TypeSymbol? importedBaseTypeStore;
+    private StructSymbol? baseClassStore;
+    private BaseClassSnapshot? substitutedBaseClass;
+    private ParameterArraySnapshot? substitutedPrimaryConstructorParameters;
+    private InterfaceArraySnapshot? substitutedInterfaces;
+    private TypeArraySnapshot? substitutedImplementedClrInterfaces;
+    private TypeSnapshot? substitutedImportedBaseType;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructSymbol"/> class.
@@ -111,7 +112,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName)
         : this(name, fields, accessibility, declaration, packageName, isData: false, isInline: false)
     {
@@ -131,7 +132,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline = false)
@@ -154,7 +155,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -179,7 +180,7 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
@@ -207,14 +208,14 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
-        StructSymbol baseClass)
+        StructSymbol? baseClass)
         : this(name, fields, accessibility, declaration, packageName, isData, isInline, isClass, primaryConstructorParameters, isOpen, baseClass, clrType: null)
     {
     }
@@ -240,15 +241,15 @@ public sealed class StructSymbol : TypeSymbol
         string name,
         ImmutableArray<FieldSymbol> fields,
         Accessibility accessibility,
-        StructDeclarationSyntax declaration,
+        StructDeclarationSyntax? declaration,
         string packageName,
         bool isData,
         bool isInline,
         bool isClass,
         ImmutableArray<ParameterSymbol> primaryConstructorParameters,
         bool isOpen,
-        StructSymbol baseClass,
-        Type clrType)
+        StructSymbol? baseClass,
+        Type? clrType)
         : base(name, clrType)
     {
         Fields = fields;
@@ -277,7 +278,7 @@ public sealed class StructSymbol : TypeSymbol
     public Accessibility Accessibility { get; }
 
     /// <summary>Gets the declaring syntax node.</summary>
-    public StructDeclarationSyntax Declaration { get; private set; }
+    public StructDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>Gets the package the struct lives in.</summary>
     public string PackageName { get; }
@@ -363,7 +364,7 @@ public sealed class StructSymbol : TypeSymbol
     }
 
     /// <summary>Gets the immediate base class (Phase 3.B.3 sub-step 3), or <c>null</c> when this class derives directly from <c>System.Object</c>. Always null for structs.</summary>
-    public StructSymbol BaseClass
+    public StructSymbol? BaseClass
     {
         get
         {
@@ -564,7 +565,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <c>.ctor()</c>; member lookup walks into this type so inherited CLR
     /// members are accessible on instances of the derived GSharp class.
     /// </summary>
-    public TypeSymbol ImportedBaseType
+    public TypeSymbol? ImportedBaseType
     {
         get => Definition != null && !ReferenceEquals(Definition, this)
             ? GetSubstitutedImportedBaseType()
@@ -578,7 +579,7 @@ public sealed class StructSymbol : TypeSymbol
     /// bound arguments to the resolved base <c>.ctor</c> and suppresses the
     /// auto-generated parameterless constructor.
     /// </summary>
-    public BaseConstructorInitializer BaseConstructorInitializer { get; private set; }
+    public BaseConstructorInitializer? BaseConstructorInitializer { get; private set; }
 
     /// <summary>
     /// Gets the resolved <see cref="StructLayoutMetadata"/> derived from a
@@ -588,7 +589,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <see cref="System.Reflection.TypeAttributes"/> layout flag and to
     /// write the optional <c>ClassLayout</c> row.
     /// </summary>
-    public StructLayoutMetadata LayoutMetadata { get; private set; }
+    public StructLayoutMetadata? LayoutMetadata { get; private set; }
 
     /// <summary>
     /// Gets a value indicating whether this is a compiler-generated fixed-size
@@ -599,7 +600,7 @@ public sealed class StructSymbol : TypeSymbol
     public bool IsFixedBufferBacking { get; private set; }
 
     /// <summary>Gets the fixed-size buffer element type for a fixed-buffer backing struct (ADR-0122 §10 / issue #1035), or <c>null</c>.</summary>
-    public TypeSymbol FixedBufferElementType { get; private set; }
+    public TypeSymbol? FixedBufferElementType { get; private set; }
 
     /// <summary>
     /// Gets the standalone user-defined constructor (<c>init(...)</c>) declared on
@@ -613,7 +614,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <em>first</em> declaration so single-constructor callers keep working;
     /// the full overload set lives on <see cref="ExplicitConstructors"/>.
     /// </remarks>
-    public ConstructorSymbol ExplicitConstructor { get; private set; }
+    public ConstructorSymbol? ExplicitConstructor { get; private set; }
 
     /// <summary>
     /// Gets every user-defined <c>init(...)</c> constructor declared on
@@ -647,7 +648,7 @@ public sealed class StructSymbol : TypeSymbol
     /// Populated by the binder; consumed by the emitter to materialise the
     /// CLR <c>Finalize</c> override.
     /// </summary>
-    public DeinitSymbol Deinitializer { get; private set; }
+    public DeinitSymbol? Deinitializer { get; private set; }
 
     /// <summary>
     /// Gets the enclosing user-defined type when this type is a nested type
@@ -656,7 +657,7 @@ public sealed class StructSymbol : TypeSymbol
     /// emit a CLR nested <c>TypeDef</c> with the corresponding
     /// <c>NestedClass</c> row and nested accessibility.
     /// </summary>
-    public TypeSymbol ContainingType { get; private set; }
+    public TypeSymbol? ContainingType { get; private set; }
 
     /// <summary>Sets <see cref="ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
@@ -745,7 +746,7 @@ public sealed class StructSymbol : TypeSymbol
     /// be called exactly once by the binder during <c>BindStructDeclaration</c>.
     /// </summary>
     /// <param name="baseClass">The resolved base class symbol, or <c>null</c>.</param>
-    public void SetBaseClass(StructSymbol baseClass)
+    public void SetBaseClass(StructSymbol? baseClass)
     {
         Volatile.Write(ref baseClassStore, baseClass);
     }
@@ -843,7 +844,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The field name.</param>
     /// <param name="field">The found static field on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetStaticField(string name, out FieldSymbol field)
+    public bool TryGetStaticField(string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (!StaticFields.IsDefaultOrEmpty)
         {
@@ -879,7 +880,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found static method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetStaticMethod(string name, out FunctionSymbol method)
+    public bool TryGetStaticMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         if (!StaticMethods.IsDefaultOrEmpty)
         {
@@ -1015,7 +1016,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetInheritedMethod(string name, out FunctionSymbol method)
+    public bool TryGetInheritedMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         for (var c = this.BaseClass; c != null; c = c.BaseClass)
         {
@@ -1033,7 +1034,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetMethodIncludingInherited(string name, out FunctionSymbol method)
+    public bool TryGetMethodIncludingInherited(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         for (var c = this; c != null; c = c.BaseClass)
         {
@@ -1051,7 +1052,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetMethod(string name, out FunctionSymbol method)
+    public bool TryGetMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         if (!Methods.IsDefaultOrEmpty)
         {
@@ -1104,7 +1105,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The merged overload set; empty if none found.</returns>
     public System.Collections.Immutable.ImmutableArray<FunctionSymbol> GetMethodsIncludingInherited(string name)
     {
-        System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder builder = null;
+        System.Collections.Immutable.ImmutableArray<FunctionSymbol>.Builder? builder = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
             if (c.Methods.IsDefaultOrEmpty)
@@ -1175,8 +1176,8 @@ public sealed class StructSymbol : TypeSymbol
         // type arguments seen in THIS class's context. A deeper base's type arguments
         // are expressed in terms of a shallower base's type parameters, so resolving
         // each argument through the running map composes the substitution across hops.
-        var levels = new List<(StructSymbol Cls, Dictionary<TypeParameterSymbol, TypeSymbol> Subst)>();
-        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
+        var levels = new List<(StructSymbol Cls, Dictionary<TypeParameterSymbol, TypeSymbol>? Subst)>();
+        Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
             if (c.Definition != null
@@ -1201,7 +1202,7 @@ public sealed class StructSymbol : TypeSymbol
             levels.Add((c, running == null ? null : new Dictionary<TypeParameterSymbol, TypeSymbol>(running)));
         }
 
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        ImmutableArray<FunctionSymbol>.Builder? builder = null;
         for (var k = 0; k < levels.Count; k++)
         {
             var (cls, subst) = levels[k];
@@ -1284,7 +1285,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="name">The field name.</param>
     /// <param name="field">The found field on success.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetField(string name, out FieldSymbol field)
+    public bool TryGetField(string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         foreach (var f in Fields)
         {
@@ -1304,7 +1305,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="field">The found field on success.</param>
     /// <param name="declaringType">The class that actually declares the field.</param>
     /// <returns>True if found.</returns>
-    public bool TryGetFieldIncludingInherited(string name, out FieldSymbol field, out StructSymbol declaringType)
+    public bool TryGetFieldIncludingInherited(string name, [NotNullWhen(true)] out FieldSymbol? field, [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var c = this; c != null; c = c.BaseClass)
         {
@@ -1336,7 +1337,8 @@ public sealed class StructSymbol : TypeSymbol
     /// Pass <see langword="null"/> (the default) for single-context callers.
     /// </param>
     /// <returns>A constructed <see cref="StructSymbol"/> whose <see cref="Definition"/> is the original.</returns>
-    public static StructSymbol Construct(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type> mapClrType = null)
+    [return: NotNullIfNotNull(nameof(definition))]
+    public static StructSymbol? Construct(StructSymbol? definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type>? mapClrType = null)
     {
         if (definition == null || !definition.IsGenericDefinition)
         {
@@ -1365,7 +1367,8 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="enclosingTypeArguments">The flattened enclosing construction arguments in CLR order (outermost first), aligned with <see cref="CollectEnclosingTypeParameters(TypeSymbol)"/>.</param>
     /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested reference, or <paramref name="nestedDefinition"/> unchanged when no enclosing arguments apply.</returns>
-    public static StructSymbol ConstructNested(StructSymbol nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type> mapClrType = null)
+    [return: NotNullIfNotNull(nameof(nestedDefinition))]
+    public static StructSymbol? ConstructNested(StructSymbol? nestedDefinition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type>? mapClrType = null)
     {
         if (nestedDefinition == null || enclosingTypeArguments.IsDefaultOrEmpty)
         {
@@ -1398,11 +1401,12 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="ownTypeArguments">The nested type's own type arguments.</param>
     /// <param name="mapClrType">Issue #1958: see <see cref="Construct(StructSymbol, ImmutableArray{TypeSymbol}, Func{Type, Type})"/>.</param>
     /// <returns>A constructed nested-generic reference, or <paramref name="nestedDefinition"/> unchanged when neither vector applies.</returns>
-    public static StructSymbol ConstructNestedGeneric(
-        StructSymbol nestedDefinition,
+    [return: NotNullIfNotNull(nameof(nestedDefinition))]
+    public static StructSymbol? ConstructNestedGeneric(
+        StructSymbol? nestedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
         ImmutableArray<TypeSymbol> ownTypeArguments,
-        Func<Type, Type> mapClrType = null)
+        Func<Type, Type>? mapClrType = null)
     {
         if (nestedDefinition == null)
         {
@@ -1446,7 +1450,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The flattened enclosing type parameters, or empty when not nested in a generic.</returns>
     public static ImmutableArray<TypeParameterSymbol> CollectEnclosingTypeParameters(TypeSymbol nested)
     {
-        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        List<ImmutableArray<TypeParameterSymbol>>? levels = null;
         for (var c = EnclosingTypeOf(nested); c != null; c = EnclosingTypeOf(c))
         {
             var tps = EnclosingTypeParametersOf(c);
@@ -1491,14 +1495,14 @@ public sealed class StructSymbol : TypeSymbol
     /// </remarks>
     /// <param name="declaringDefinitionPredicate">Predicate matched against each ancestor's definition (or itself when non-generic).</param>
     /// <returns>The constructed generic base instantiation, or null.</returns>
-    public StructSymbol FindConstructedGenericBase(Func<StructSymbol, bool> declaringDefinitionPredicate)
+    public StructSymbol? FindConstructedGenericBase(Func<StructSymbol, bool> declaringDefinitionPredicate)
     {
         if (declaringDefinitionPredicate == null)
         {
             return null;
         }
 
-        Dictionary<TypeParameterSymbol, TypeSymbol> running = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
         for (var c = this; c != null; c = c.BaseClass)
         {
             // A constructed nested receiver already carries the argument shape
@@ -1613,7 +1617,7 @@ public sealed class StructSymbol : TypeSymbol
     /// clone slot, skipping non-data intermediary classes.
     /// </summary>
     /// <returns>The nearest data-class ancestor, or null when none exists.</returns>
-    internal StructSymbol GetDataCloneAncestor()
+    internal StructSymbol? GetDataCloneAncestor()
     {
         for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
         {
@@ -1641,8 +1645,9 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="substitution">The original → replacement type-parameter map.</param>
     /// <param name="eraseReferenceNullability">Whether reference-nullable wrappers are erased before substitution.</param>
     /// <returns>The substituted type, or <paramref name="type"/> when unchanged.</returns>
-    internal static TypeSymbol SubstituteTypeParameters(
-        TypeSymbol type,
+    [return: NotNullIfNotNull(nameof(type))]
+    internal static TypeSymbol? SubstituteTypeParameters(
+        TypeSymbol? type,
         Dictionary<TypeParameterSymbol, TypeSymbol> substitution,
         bool eraseReferenceNullability = false)
     {
@@ -1735,7 +1740,8 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     /// <param name="type">The open member type to close.</param>
     /// <returns>The member type in this construction's context.</returns>
-    internal TypeSymbol SubstituteMemberType(TypeSymbol type)
+    [return: NotNullIfNotNull(nameof(type))]
+    internal TypeSymbol? SubstituteMemberType(TypeSymbol? type)
     {
         if (type == null || Definition == null || ReferenceEquals(Definition, this))
         {
@@ -1747,7 +1753,7 @@ public sealed class StructSymbol : TypeSymbol
 
     private static TypeArgsKey BuildArgsKey(ImmutableArray<TypeSymbol> typeArguments) => new(typeArguments);
 
-    private static TypeSymbol EnclosingTypeOf(TypeSymbol type) => type switch
+    private static TypeSymbol? EnclosingTypeOf(TypeSymbol type) => type switch
     {
         StructSymbol s => (s.Definition ?? s).ContainingType,
         InterfaceSymbol i => i.ContainingType,
@@ -1762,7 +1768,7 @@ public sealed class StructSymbol : TypeSymbol
         _ => ImmutableArray<TypeParameterSymbol>.Empty,
     };
 
-    private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type> mapClrType)
+    private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type>? mapClrType)
     {
         var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
         for (var i = 0; i < definition.TypeParameters.Length; i++)
@@ -1846,7 +1852,7 @@ public sealed class StructSymbol : TypeSymbol
     // definition and substitute lazily against that map, so a field/property/
     // return of the nested type whose type is an enclosing parameter surfaces
     // closed (e.g. `Tag.V : int32` on `Box[int32].Tag`).
-    private static StructSymbol CreateConstructedNested(StructSymbol definition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type> mapClrType)
+    private static StructSymbol CreateConstructedNested(StructSymbol definition, ImmutableArray<TypeSymbol> enclosingTypeArguments, Func<Type, Type>? mapClrType)
     {
         var constructed = new StructSymbol(
             definition.Name,
@@ -1883,7 +1889,7 @@ public sealed class StructSymbol : TypeSymbol
         StructSymbol definition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments,
         ImmutableArray<TypeSymbol> ownTypeArguments,
-        Func<Type, Type> mapClrType)
+        Func<Type, Type>? mapClrType)
     {
         var constructed = new StructSymbol(
             definition.Name,
@@ -1964,7 +1970,7 @@ public sealed class StructSymbol : TypeSymbol
         return Interlocked.CompareExchange(ref substitutionMap, map, null) ?? map;
     }
 
-    private StructSymbol GetSubstitutedBaseClass()
+    private StructSymbol? GetSubstitutedBaseClass()
     {
         var source = Definition.BaseClass;
         var snapshot = Volatile.Read(ref substitutedBaseClass);
@@ -2079,9 +2085,19 @@ public sealed class StructSymbol : TypeSymbol
         return value;
     }
 
-    private TypeSymbol GetSubstitutedImportedBaseType()
+    private TypeSymbol? GetSubstitutedImportedBaseType()
     {
         var source = Definition.ImportedBaseType;
+
+        // Most constructed types have no imported CLR base (they derive from
+        // another G# class or System.Object): short-circuit before touching
+        // the snapshot cache or SubstituteTypeForConstruction, both of which
+        // operate on a non-null source type.
+        if (source == null)
+        {
+            return null;
+        }
+
         var snapshot = Volatile.Read(ref substitutedImportedBaseType);
         if (snapshot != null && ReferenceEquals(snapshot.Source, source))
         {
@@ -2144,8 +2160,11 @@ public sealed class StructSymbol : TypeSymbol
 
                 if (f.IsFixedBuffer)
                 {
+                    // FixedBufferElementType is always non-null when IsFixedBuffer is
+                    // true: FieldSymbol.SetFixedBuffer sets both together from its
+                    // non-nullable `elementType` parameter (FieldSymbol.cs).
                     substituted.SetFixedBuffer(
-                        SubstituteTypeForConstruction(f.FixedBufferElementType, subst, mapClrType),
+                        SubstituteTypeForConstruction(f.FixedBufferElementType!, subst, mapClrType),
                         f.FixedBufferLength);
                 }
 
@@ -2200,7 +2219,7 @@ public sealed class StructSymbol : TypeSymbol
     private static ImmutableArray<PropertySymbol> SubstituteProperties(
         ImmutableArray<PropertySymbol> properties,
         Dictionary<TypeParameterSymbol, TypeSymbol> subst,
-        Func<Type, Type> mapClrType)
+        Func<Type, Type>? mapClrType)
     {
         if (properties.IsDefaultOrEmpty)
         {
@@ -2276,9 +2295,9 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     private static bool AbstractMethodSatisfiedBy(
         FunctionSymbol abstractMethod,
-        Dictionary<TypeParameterSymbol, TypeSymbol> subst,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? subst,
         FunctionSymbol candidate,
-        Dictionary<TypeParameterSymbol, TypeSymbol> candidateSubst)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? candidateSubst)
     {
         if (!string.Equals(abstractMethod.Name, candidate.Name, System.StringComparison.Ordinal))
         {
@@ -2353,10 +2372,18 @@ public sealed class StructSymbol : TypeSymbol
     private static ImmutableArray<ParameterSymbol> CallableParametersOf(FunctionSymbol method)
         => method.ExplicitReceiverParameter == null ? method.Parameters : method.Parameters.RemoveAt(0);
 
+    // Every recursive call below feeds this a sub-part of an already-non-null
+    // constructed type (element/underlying/parameter/argument types, which are
+    // never null on a well-formed TypeSymbol), so `type` is non-nullable here
+    // by construction. The one call site that can genuinely hold a null type
+    // (GetSubstitutedImportedBaseType, when a class has no imported base)
+    // short-circuits before reaching this method instead of passing null
+    // through, so the recursive `is` pattern chain below never needs to
+    // reason about a null `type`.
     private static TypeSymbol SubstituteTypeForConstruction(
         TypeSymbol type,
         Dictionary<TypeParameterSymbol, TypeSymbol> subst,
-        Func<Type, Type> mapClrType = null,
+        Func<Type, Type>? mapClrType = null,
         bool eraseReferenceNullability = false)
     {
         // Keep recursive arms on this closure so optional substitution modes propagate.
@@ -2600,15 +2627,15 @@ public sealed class StructSymbol : TypeSymbol
 
     private sealed class BaseClassSnapshot
     {
-        public BaseClassSnapshot(StructSymbol source, StructSymbol value)
+        public BaseClassSnapshot(StructSymbol? source, StructSymbol? value)
         {
             Source = source;
             Value = value;
         }
 
-        public StructSymbol Source { get; }
+        public StructSymbol? Source { get; }
 
-        public StructSymbol Value { get; }
+        public StructSymbol? Value { get; }
     }
 
     private sealed class ParameterArraySnapshot

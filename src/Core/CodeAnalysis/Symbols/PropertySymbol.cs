@@ -45,7 +45,7 @@ public sealed class PropertySymbol : Symbol
         bool isOverride,
         string setterParameterName = "value",
         bool isStatic = false,
-        PropertyDeclarationSyntax declaration = null,
+        PropertyDeclarationSyntax? declaration = null,
         bool isInitOnly = false,
         Accessibility? getterAccessibility = null,
         Accessibility? setterAccessibility = null,
@@ -138,34 +138,34 @@ public sealed class PropertySymbol : Symbol
     public bool IsStatic { get; }
 
     /// <summary>Gets the declaring syntax node, or <see langword="null"/> for synthesized properties.</summary>
-    public PropertyDeclarationSyntax Declaration { get; private set; }
+    public PropertyDeclarationSyntax? Declaration { get; private set; }
 
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
-    public FieldSymbol BackingField { get; set; }
+    public FieldSymbol? BackingField { get; set; }
 
     /// <summary>Gets or sets the synthesized getter function symbol.</summary>
-    public FunctionSymbol GetterSymbol { get; set; }
+    public FunctionSymbol? GetterSymbol { get; set; }
 
     /// <summary>Gets or sets the synthesized setter function symbol.</summary>
-    public FunctionSymbol SetterSymbol { get; set; }
+    public FunctionSymbol? SetterSymbol { get; set; }
 
     /// <summary>Gets or sets the imported CLR getter slot overridden by this property.</summary>
-    public MethodInfo ExternalOverriddenGetter { get; set; }
+    public MethodInfo? ExternalOverriddenGetter { get; set; }
 
     /// <summary>Gets or sets the imported CLR setter slot overridden by this property.</summary>
-    public MethodInfo ExternalOverriddenSetter { get; set; }
+    public MethodInfo? ExternalOverriddenSetter { get; set; }
 
     /// <summary>Gets or sets the imported interface getter slot explicitly implemented by this property.</summary>
-    public MethodInfo ExplicitInterfaceGetterSlot { get; set; }
+    public MethodInfo? ExplicitInterfaceGetterSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface setter slot explicitly implemented by this property.</summary>
-    public MethodInfo ExplicitInterfaceSetterSlot { get; set; }
+    public MethodInfo? ExplicitInterfaceSetterSlot { get; set; }
 
     /// <summary>Gets or sets the imported interface type that owns the explicit accessor slots.</summary>
-    public TypeSymbol ExplicitInterfaceSlotContainingType { get; set; }
+    public TypeSymbol? ExplicitInterfaceSlotContainingType { get; set; }
 
     /// <summary>Gets or sets the imported constructed base type that owns the overridden accessors.</summary>
-    public TypeSymbol ExternalOverrideContainingType { get; set; }
+    public TypeSymbol? ExternalOverrideContainingType { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether this property is an indexer member
@@ -182,10 +182,10 @@ public sealed class PropertySymbol : Symbol
         = System.Collections.Immutable.ImmutableArray<ParameterSymbol>.Empty;
 
     /// <summary>Gets or sets the getter accessor body syntax (for computed properties). Null for auto-properties.</summary>
-    public Syntax.BlockStatementSyntax GetterBodySyntax { get; set; }
+    public Syntax.BlockStatementSyntax? GetterBodySyntax { get; set; }
 
     /// <summary>Gets or sets the setter accessor body syntax (for computed properties). Null for auto-properties.</summary>
-    public Syntax.BlockStatementSyntax SetterBodySyntax { get; set; }
+    public Syntax.BlockStatementSyntax? SetterBodySyntax { get; set; }
 
     /// <summary>
     /// Gets or sets the in-compilation (G#) interface member this property
@@ -209,7 +209,7 @@ public sealed class PropertySymbol : Symbol
     /// <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
     /// Defaults to <see langword="null"/> for ordinary properties.
     /// </summary>
-    public PropertySymbol ExplicitInterfaceMember { get; set; }
+    public PropertySymbol? ExplicitInterfaceMember { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether this property's declaration carries a
@@ -226,7 +226,7 @@ public sealed class PropertySymbol : Symbol
     /// to, bound by <see cref="Binding.DeclarationBinder.ResolveExplicitInterfaceClauses"/>.
     /// <c>null</c> until resolved.
     /// </summary>
-    public TypeSymbol ExplicitInterfaceClauseTarget { get; set; }
+    public TypeSymbol? ExplicitInterfaceClauseTarget { get; set; }
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) property at the declaration

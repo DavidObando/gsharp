@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -65,7 +66,7 @@ public sealed class SubmissionImports
     /// <param name="name">The bare function name.</param>
     /// <param name="programType">The container CLR type on success.</param>
     /// <returns>Whether a prior submission declares the function.</returns>
-    public bool TryFindFunctionContainer(ReferenceResolver references, string name, out Type programType)
+    public bool TryFindFunctionContainer(ReferenceResolver references, string name, out Type? programType)
     {
         programType = null;
         foreach (var submission in NewestFirst)
@@ -97,7 +98,7 @@ public sealed class SubmissionImports
     /// <param name="programType">The container CLR type on success.</param>
     /// <param name="declared">The submission's source-side variable symbol.</param>
     /// <returns>Whether a prior submission declares the global.</returns>
-    public bool TryFindGlobalVariable(ReferenceResolver references, string name, out Type programType, out VariableSymbol declared)
+    public bool TryFindGlobalVariable(ReferenceResolver references, string name, out Type? programType, out VariableSymbol? declared)
     {
         programType = null;
         declared = null;
@@ -131,7 +132,7 @@ public sealed class SubmissionImports
     /// <param name="name">The bare member name.</param>
     /// <param name="programType">The container CLR type on success.</param>
     /// <returns>Whether a prior submission declares the member.</returns>
-    public bool TryFindMemberContainer(ReferenceResolver references, string name, out Type programType)
+    public bool TryFindMemberContainer(ReferenceResolver references, string name, out Type? programType)
     {
         programType = null;
         foreach (var submission in NewestFirst)
@@ -155,7 +156,7 @@ public sealed class SubmissionImports
     /// <param name="preferredArity">The preferred generic arity, or -1/0 for a non-generic use site.</param>
     /// <param name="clrType">The resolved CLR type on success.</param>
     /// <returns>Whether a prior submission declares the type.</returns>
-    public bool TryResolveType(ReferenceResolver references, string name, int preferredArity, out Type clrType)
+    public bool TryResolveType(ReferenceResolver references, string name, int preferredArity, [NotNullWhen(true)] out Type? clrType)
     {
         clrType = null;
         foreach (var submission in NewestFirst)
@@ -184,7 +185,7 @@ public sealed class SubmissionImports
     private static bool DeclaresGlobal(SubmissionReference submission, string name)
         => FindGlobal(submission, name) is not null;
 
-    private static VariableSymbol FindGlobal(SubmissionReference submission, string name)
+    private static VariableSymbol? FindGlobal(SubmissionReference submission, string name)
         => string.Equals(name, ResultFieldName, StringComparison.Ordinal)
             ? null
             : submission.GlobalScope.Variables.FirstOrDefault(v =>
@@ -231,7 +232,7 @@ public sealed class SubmissionImports
     // submission assembly (`gsi$1`, `gsi$2`); the flat lookup collides on the
     // newest, which made the older cell's declarations unreachable even
     // though the newest-first declaration walk had correctly found them.
-    private static bool TryResolveProgramType(ReferenceResolver references, SubmissionReference submission, out Type programType)
+    private static bool TryResolveProgramType(ReferenceResolver references, SubmissionReference submission, out Type? programType)
         => references.TryResolveTypeInAssembly(submission.AssemblyName, submission.PackageName + "." + ProgramTypeName, out programType);
 }
 
@@ -275,14 +276,14 @@ public sealed class SubmissionReference
 public sealed class SubmissionBindingOptions
 {
     /// <summary>Gets or sets the prior-submission import set (may be <see langword="null"/> for the first cell).</summary>
-    public SubmissionImports Imports { get; set; }
+    public SubmissionImports? Imports { get; set; }
 
     /// <summary>
     /// Gets or sets the package name used for syntax trees without a
     /// <c>package</c> declaration (each submission gets a distinct default
     /// package so its emitted members have a unique namespace).
     /// </summary>
-    public string DefaultPackageName { get; set; }
+    public string? DefaultPackageName { get; set; }
 
     /// <summary>
     /// Gets or sets the imports accumulated by earlier submissions, replayed

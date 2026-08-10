@@ -16,7 +16,10 @@ public sealed class SequenceTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, SequenceTypeSymbol> Cache = new();
 
     private SequenceTypeSymbol(TypeSymbol elementType)
-        : base($"sequence[{elementType.Name}]", MakeClrType(elementType))
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation element types.
+        : base($"sequence[{elementType.Name}]", MakeClrType(elementType)!)
     {
         ElementType = elementType;
     }
@@ -60,7 +63,7 @@ public sealed class SequenceTypeSymbol : TypeSymbol
     /// <returns><see langword="true"/> when <paramref name="type"/> has a sequence-interface shape.</returns>
     internal static bool TryGetEnumerableInterfaceShape(
         TypeSymbol type,
-        out Type openDefinition,
+        out Type? openDefinition,
         out TypeSymbol elementType)
     {
         switch (type)
@@ -95,11 +98,13 @@ public sealed class SequenceTypeSymbol : TypeSymbol
         }
 
         openDefinition = null;
-        elementType = null;
+
+        // The value is ignored when the shape probe returns false.
+        elementType = TypeSymbol.Error;
         return false;
     }
 
-    private static Type MakeClrType(TypeSymbol elementType)
+    private static Type? MakeClrType(TypeSymbol elementType)
     {
         var elementClrType = NullableTypeSymbol.GetEffectiveClrType(elementType);
         if (elementClrType == null)
@@ -110,7 +115,7 @@ public sealed class SequenceTypeSymbol : TypeSymbol
         return typeof(IEnumerable<>).MakeGenericType(elementClrType);
     }
 
-    private static bool IsEnumerableInterfaceDefinition(Type type)
+    private static bool IsEnumerableInterfaceDefinition(Type? type)
         => type?.FullName == "System.Collections.Generic.IEnumerable`1"
             || type?.FullName == "System.Collections.Generic.IAsyncEnumerable`1";
 }

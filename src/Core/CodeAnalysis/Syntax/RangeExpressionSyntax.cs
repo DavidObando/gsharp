@@ -23,9 +23,9 @@ public sealed class RangeExpressionSyntax : ExpressionSyntax
     /// <see langword="null"/> for the open form (<c>lo..</c>).</param>
     public RangeExpressionSyntax(
         SyntaxTree syntaxTree,
-        ExpressionSyntax lowerBound,
+        ExpressionSyntax? lowerBound,
         SyntaxToken dotDotToken,
-        ExpressionSyntax upperBound)
+        ExpressionSyntax? upperBound)
         : base(syntaxTree)
     {
         LowerBound = lowerBound;
@@ -37,11 +37,11 @@ public sealed class RangeExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.RangeExpression;
 
     /// <summary>Gets the inclusive lower bound, or <see langword="null"/> when open.</summary>
-    public ExpressionSyntax LowerBound { get; }
+    public ExpressionSyntax? LowerBound { get; }
 
     /// <summary>Gets the <c>..</c> operator token.</summary>
     public SyntaxToken DotDotToken { get; }
 
     /// <summary>Gets the exclusive upper bound, or <see langword="null"/> when open.</summary>
-    public ExpressionSyntax UpperBound { get; }
+    public ExpressionSyntax? UpperBound { get; }
 }

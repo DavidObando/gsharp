@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -37,13 +38,18 @@ public sealed class AsyncStateMachineFieldMap
     public StructSymbol StructType { get; }
 
     /// <summary>Gets the hoisted state field.</summary>
-    public FieldSymbol StateField => StateMachine.StateField;
+    public FieldSymbol StateField => Invariant.Required(
+        StateMachine.StateField,
+        "a field map is only created from a state machine AsyncStateMachineTypeBuilder has already populated, and it always adds the state field");
 
     /// <summary>Gets the hoisted async method builder field.</summary>
-    public FieldSymbol BuilderField => StateMachine.BuilderField;
+    public FieldSymbol BuilderField => Invariant.Required(
+        StateMachine.BuilderField,
+        "a field map is only created from a state machine AsyncStateMachineTypeBuilder has already populated, and it always adds the builder field");
 
-    /// <summary>Gets the optional hoisted <c>this</c> field.</summary>
-    public FieldSymbol ThisField => StateMachine.ThisField;
+    /// <summary>Gets the hoisted <c>this</c> field, or <c>null</c> when the
+    /// kickoff method does not capture a receiver.</summary>
+    public FieldSymbol? ThisField => StateMachine.ThisField;
 
     /// <summary>
     /// Creates a field map for <paramref name="stateMachine"/> using the same
@@ -180,7 +186,7 @@ public sealed class AsyncStateMachineFieldMap
     /// <param name="variable">The variable to look up.</param>
     /// <param name="field">The hoisted field, if found.</param>
     /// <returns><c>true</c> if the variable is hoisted; otherwise <c>false</c>.</returns>
-    public bool TryGetHoistedField(VariableSymbol variable, out FieldSymbol field)
+    public bool TryGetHoistedField(VariableSymbol variable, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (variable is ParameterSymbol ps)
         {
@@ -196,7 +202,7 @@ public sealed class AsyncStateMachineFieldMap
         return localFields.TryGetValue(variable, out field);
     }
 
-    private static FieldSymbol RequireField(System.Collections.Immutable.ImmutableArray<FieldSymbol> fields, int index, string expectedName)
+    private static FieldSymbol RequireField(System.Collections.Immutable.ImmutableArray<FieldSymbol> fields, int index, string? expectedName)
     {
         if (index < 0 || index >= fields.Length)
         {

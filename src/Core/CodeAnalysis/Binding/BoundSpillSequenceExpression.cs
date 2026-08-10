@@ -24,7 +24,7 @@ public sealed class BoundSpillSequenceExpression : BoundExpression
     /// <param name="sideEffects">Statements that must run before the value is observed.</param>
     /// <param name="value">The final value expression.</param>
     public BoundSpillSequenceExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         ImmutableArray<LocalVariableSymbol> locals,
         ImmutableArray<BoundStatement> sideEffects,
         BoundExpression value)

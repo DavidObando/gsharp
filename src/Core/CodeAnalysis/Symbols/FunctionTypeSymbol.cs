@@ -228,7 +228,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="builder">The key builder to append to.</param>
     /// <param name="type">The type whose identity-key fragment to append.</param>
-    internal static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    internal static void AppendIdentityKey(System.Text.StringBuilder builder, TypeSymbol? type)
     {
         // Issue #1457: any slot that references a same-compilation user type
         // (directly or nested, e.g. `Item`, `List[Item]`, `(Item, int)`) must be
@@ -495,7 +495,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="builder">The key builder to append to.</param>
     /// <param name="type">The type whose fallback key fragment to append.</param>
-    private static void AppendNameOrClrIdentityKey(System.Text.StringBuilder builder, TypeSymbol type)
+    private static void AppendNameOrClrIdentityKey(System.Text.StringBuilder builder, TypeSymbol? type)
     {
         if (type?.ClrType is System.Type clrType)
         {
@@ -513,7 +513,7 @@ public sealed class FunctionTypeSymbol : TypeSymbol
         return System.Threading.Interlocked.Increment(ref typeParameterIdSeed);
     }
 
-    private static System.Type BuildClrType(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
+    private static System.Type? BuildClrType(ImmutableArray<TypeSymbol> parameterTypes, TypeSymbol returnType)
     {
         // Phase 4 emit parity (E): map func(T1, ..., Tn) R to the matching
         // System.Func<T1, ..., Tn, R> shape (or System.Action<...> when R

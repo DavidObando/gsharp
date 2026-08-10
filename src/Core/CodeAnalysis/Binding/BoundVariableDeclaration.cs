@@ -17,7 +17,8 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
-    /// <param name="initializer">The bound expression.</param>
+    /// <param name="initializer">The bound initializer expression, or
+    /// <c>null</c> for a declaration with no initializer.</param>
     /// <param name="constantValue">
     /// The compile-time constant value when this is a <c>const</c> declaration
     /// whose initializer folds to a literal; <see langword="null"/> otherwise.
@@ -25,7 +26,7 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// and will instead inline the value at every read site, emitting a
     /// <c>LocalConstant</c> row in the Portable PDB.
     /// </param>
-    public BoundVariableDeclaration(SyntaxNode syntax, VariableSymbol variable, BoundExpression initializer, object constantValue = null)
+    public BoundVariableDeclaration(SyntaxNode? syntax, VariableSymbol variable, BoundExpression? initializer, object? constantValue = null)
         : base(syntax)
     {
         Variable = variable;
@@ -44,7 +45,7 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// <summary>
     /// Gets the bound expression.
     /// </summary>
-    public BoundExpression Initializer { get; }
+    public BoundExpression? Initializer { get; }
 
     /// <summary>
     /// Gets the compile-time constant value for this declaration, or
@@ -54,5 +55,5 @@ public sealed class BoundVariableDeclaration : BoundStatement
     /// no IL local slot is allocated and the value is inlined at every read
     /// site, with a <c>LocalConstant</c> row emitted in the Portable PDB.
     /// </summary>
-    public object ConstantValue { get; }
+    public object? ConstantValue { get; }
 }

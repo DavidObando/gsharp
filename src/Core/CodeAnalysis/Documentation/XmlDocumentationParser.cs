@@ -135,7 +135,7 @@ public static class XmlDocumentationParser
                 return new DocInline.Code(element.Value);
             case "code":
                 return new DocInline.CodeBlock(
-                    (string)element.Attribute("language"),
+                    (string?)element.Attribute("language"),
                     element.Value);
             case "para":
                 return new DocInline.Para(ParseInline(element));
@@ -161,14 +161,14 @@ public static class XmlDocumentationParser
             return new DocInline.SymbolRef(cref, ParseInline(element));
         }
 
-        var href = (string)element.Attribute("href");
+        var href = (string?)element.Attribute("href");
         if (href != null)
         {
             return new DocInline.Link(href, ParseInline(element));
         }
 
         // <see langword="null"/> renders as inline code, like its IDE presentation.
-        var langword = (string)element.Attribute("langword");
+        var langword = (string?)element.Attribute("langword");
         if (langword != null)
         {
             return new DocInline.Code(langword);
@@ -179,7 +179,7 @@ public static class XmlDocumentationParser
 
     private static DocInline ParseList(XElement element)
     {
-        var listType = (string)element.Attribute("type");
+        var listType = (string?)element.Attribute("type");
         var items = ImmutableArray.CreateBuilder<DocListItem>();
 
         // <listheader> describes the columns; model it as the first item's term/description.
@@ -207,7 +207,7 @@ public static class XmlDocumentationParser
     {
         return new DocReference(
             CrefAttribute(element),
-            (string)element.Attribute("href"),
+            (string?)element.Attribute("href"),
             ParseInline(element));
     }
 
@@ -221,12 +221,12 @@ public static class XmlDocumentationParser
 
     private static string NameAttribute(XElement element)
     {
-        return (string)element.Attribute("name") ?? string.Empty;
+        return (string?)element.Attribute("name") ?? string.Empty;
     }
 
-    private static string CrefAttribute(XElement element)
+    private static string? CrefAttribute(XElement element)
     {
-        return (string)element.Attribute("cref");
+        return (string?)element.Attribute("cref");
     }
 
     // Collapse the runs of whitespace (including the newlines and leading indentation

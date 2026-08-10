@@ -47,14 +47,14 @@ public static class ProjectDiscovery
     /// </summary>
     /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
     /// <returns>The discovered project, or null if the file could not be read.</returns>
-    public static DiscoveredProject DiscoverProject(string projectFilePath)
+    public static DiscoveredProject? DiscoverProject(string projectFilePath)
     {
         if (!File.Exists(projectFilePath))
         {
             return null;
         }
 
-        var projectDir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
+        var projectDir = Path.GetDirectoryName(Path.GetFullPath(projectFilePath)) ?? string.Empty;
         var sourceFiles = DiscoverSourceFiles(projectFilePath, projectDir);
         var projectReferences = DiscoverProjectReferences(projectFilePath, projectDir);
         var (references, referenceSourcePath) = DiscoverReferences(projectFilePath, projectDir);
@@ -383,7 +383,15 @@ public static class ProjectDiscovery
             var refs = doc.Descendants()
                 .Where(e => e.Name.LocalName == "ProjectReference")
                 .Select(e => e.Attribute("Include")?.Value)
-                .Where(v => !string.IsNullOrEmpty(v))
+                .OfType<string>()
+
+                // OfType drops a missing Include attribute but keeps an empty
+                // one, and Path.Combine(dir, "") resolves to dir itself -- so
+                // `<ProjectReference Include="" />` would be reported as a
+                // reference to the project's own directory. Nothing downstream
+                // checks the path exists, so the emptiness filter this replaced
+                // has to stay.
+                .Where(v => v.Length > 0)
                 .Select(v => Path.GetFullPath(Path.Combine(projectDir, v)))
                 .ToList();
             return refs;
@@ -405,7 +413,7 @@ public static class ProjectDiscovery
     /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
     /// <param name="projectDir">The project directory.</param>
     /// <returns>The discovered references plus the source <c>.rsp</c> path. Both are empty/null when no response file has been produced (e.g. the project has not been built or restored yet).</returns>
-    private static (IReadOnlyList<string> References, string ReferenceSourcePath) DiscoverReferences(string projectFilePath, string projectDir)
+    private static (IReadOnlyList<string> References, string? ReferenceSourcePath) DiscoverReferences(string projectFilePath, string projectDir)
     {
         if (!Directory.Exists(projectDir))
         {
@@ -481,7 +489,7 @@ public static class ProjectDiscovery
             return doc.Descendants()
                 .Where(e => e.Name.LocalName == "Compile")
                 .Select(e => e.Attribute("Include")?.Value)
-                .Where(v => !string.IsNullOrEmpty(v))
+                .OfType<string>()
                 .Select(v => Path.GetFullPath(Path.Combine(projectDir, v)))
                 .Where(File.Exists)
                 .ToList();

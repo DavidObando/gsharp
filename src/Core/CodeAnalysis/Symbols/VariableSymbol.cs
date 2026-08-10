@@ -25,7 +25,7 @@ public abstract class VariableSymbol : Symbol
     /// IL local slots back to source for stepping and locals display per
     /// ADR-0027 §7.7a.
     /// </param>
-    public VariableSymbol(string name, bool isReadOnly, TypeSymbol type, SyntaxNode declaringSyntax = null)
+    public VariableSymbol(string name, bool isReadOnly, TypeSymbol type, SyntaxNode? declaringSyntax = null)
         : base(name)
     {
         IsReadOnly = isReadOnly;
@@ -50,7 +50,7 @@ public abstract class VariableSymbol : Symbol
     /// to anchor <c>LocalVariable</c> rows and (for hoisted async/iterator
     /// state-machine locals) the hoisted-local-scope <c>CustomDebugInformation</c>.
     /// </summary>
-    public SyntaxNode DeclaringSyntax { get; }
+    public SyntaxNode? DeclaringSyntax { get; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this read-only variable's

@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -81,7 +82,7 @@ public static class TypeMemberModel
     /// <param name="name">The member name.</param>
     /// <param name="query">The static/instance/inherited/kind filter.</param>
     /// <returns>The first matching member, or <c>null</c> when none matches.</returns>
-    public static Symbol LookupMember(TypeSymbol type, string name, MemberQuery query)
+    public static Symbol? LookupMember(TypeSymbol type, string name, MemberQuery query)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -128,7 +129,7 @@ public static class TypeMemberModel
 
         if (type is StructSymbol structSymbol)
         {
-            ImmutableArray<FunctionSymbol>.Builder builder = null;
+            ImmutableArray<FunctionSymbol>.Builder? builder = null;
             for (var c = structSymbol; c != null; c = c.BaseClass)
             {
                 if (query.IncludeInstance)
@@ -153,7 +154,7 @@ public static class TypeMemberModel
         if (type is InterfaceSymbol interfaceSymbol)
         {
             interfaceSymbol.EnsureMembersResolved();
-            ImmutableArray<FunctionSymbol>.Builder builder = null;
+            ImmutableArray<FunctionSymbol>.Builder? builder = null;
 
             // Issue #1006: walk this interface and its transitive base
             // interfaces so an `interface B : A` surfaces A's methods. When
@@ -210,7 +211,7 @@ public static class TypeMemberModel
     /// <param name="name">The field name.</param>
     /// <param name="field">The found field on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetField(TypeSymbol type, string name, out FieldSymbol field)
+    public static bool TryGetField(TypeSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -243,7 +244,7 @@ public static class TypeMemberModel
     /// <param name="field">The found field on success.</param>
     /// <param name="declaringType">The struct that actually declares the field on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetFieldIncludingInherited(TypeSymbol type, string name, MemberQuery query, out FieldSymbol field, out StructSymbol declaringType)
+    public static bool TryGetFieldIncludingInherited(TypeSymbol type, string name, MemberQuery query, [NotNullWhen(true)] out FieldSymbol? field, [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         if ((query.Kinds & MemberKinds.Field) != 0 && type is StructSymbol structSymbol)
         {
@@ -283,7 +284,7 @@ public static class TypeMemberModel
     /// <param name="name">The field name.</param>
     /// <param name="field">The found field on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetStaticField(TypeSymbol type, string name, out FieldSymbol field)
+    public static bool TryGetStaticField(TypeSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (type is StructSymbol structSymbol && structSymbol.TryGetStaticField(name, out field))
         {
@@ -303,8 +304,8 @@ public static class TypeMemberModel
     public static bool TryGetStaticFieldIncludingInherited(
         StructSymbol type,
         string name,
-        out FieldSymbol field,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out FieldSymbol? field,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var c = type; c != null; c = c.BaseClass)
         {
@@ -335,7 +336,7 @@ public static class TypeMemberModel
     /// <param name="name">The property name.</param>
     /// <param name="property">The found property on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetProperty(TypeSymbol type, string name, out PropertySymbol property)
+    public static bool TryGetProperty(TypeSymbol type, string name, [NotNullWhen(true)] out PropertySymbol? property)
         => TryGetProperty(type, name, out property, out _);
 
     /// <summary>
@@ -349,7 +350,7 @@ public static class TypeMemberModel
     /// <param name="property">The found property on success.</param>
     /// <param name="declaringType">The struct/class that declares the property, or <see langword="null"/>.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetProperty(TypeSymbol type, string name, out PropertySymbol property, out StructSymbol declaringType)
+    public static bool TryGetProperty(TypeSymbol type, string name, [NotNullWhen(true)] out PropertySymbol? property, out StructSymbol? declaringType)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -410,7 +411,7 @@ public static class TypeMemberModel
     /// <param name="name">The parameter name.</param>
     /// <param name="parameter">The found positional parameter on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetPrimaryConstructorParameter(TypeSymbol type, string name, out ParameterSymbol parameter)
+    public static bool TryGetPrimaryConstructorParameter(TypeSymbol type, string name, [NotNullWhen(true)] out ParameterSymbol? parameter)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -441,7 +442,7 @@ public static class TypeMemberModel
     /// <param name="name">The property name.</param>
     /// <param name="property">The found property on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetStaticProperty(TypeSymbol type, string name, out PropertySymbol property)
+    public static bool TryGetStaticProperty(TypeSymbol type, string name, [NotNullWhen(true)] out PropertySymbol? property)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -468,8 +469,8 @@ public static class TypeMemberModel
     public static bool TryGetStaticPropertyIncludingInherited(
         StructSymbol type,
         string name,
-        out PropertySymbol property,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out PropertySymbol? property,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var c = type; c != null; c = c.BaseClass)
         {
@@ -501,7 +502,7 @@ public static class TypeMemberModel
     /// <param name="name">The event name.</param>
     /// <param name="event">The found event on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetEvent(TypeSymbol type, string name, out EventSymbol @event)
+    public static bool TryGetEvent(TypeSymbol type, string name, [NotNullWhen(true)] out EventSymbol? @event)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -555,7 +556,7 @@ public static class TypeMemberModel
     /// <param name="name">The event name.</param>
     /// <param name="event">The found event on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetStaticEvent(TypeSymbol type, string name, out EventSymbol @event)
+    public static bool TryGetStaticEvent(TypeSymbol type, string name, [NotNullWhen(true)] out EventSymbol? @event)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -582,8 +583,8 @@ public static class TypeMemberModel
     public static bool TryGetStaticEventIncludingInherited(
         StructSymbol type,
         string name,
-        out EventSymbol @event,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out EventSymbol? @event,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var c = type; c != null; c = c.BaseClass)
         {
@@ -619,11 +620,6 @@ public static class TypeMemberModel
     /// <returns>The owner construction in the lookup type's base chain.</returns>
     public static StructSymbol ResolveStaticMemberOwner(StructSymbol lookupType, StructSymbol declaredOwner)
     {
-        if (lookupType == null || declaredOwner == null)
-        {
-            return declaredOwner;
-        }
-
         var declaredDefinition = declaredOwner.Definition ?? declaredOwner;
         if (!declaredDefinition.TypeParameters.IsDefaultOrEmpty)
         {
@@ -645,7 +641,7 @@ public static class TypeMemberModel
     /// <summary>Finds the nearest imported CLR base under a source class chain.</summary>
     /// <param name="type">The source class whose chain is searched.</param>
     /// <returns>The imported base, or null.</returns>
-    public static TypeSymbol GetNearestImportedBase(StructSymbol type)
+    public static TypeSymbol? GetNearestImportedBase(StructSymbol type)
     {
         for (var c = type; c != null; c = c.BaseClass)
         {
@@ -669,7 +665,7 @@ public static class TypeMemberModel
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetMethodIncludingInherited(TypeSymbol type, string name, out FunctionSymbol method)
+    public static bool TryGetMethodIncludingInherited(TypeSymbol type, string name, [NotNullWhen(true)] out FunctionSymbol? method)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -701,7 +697,7 @@ public static class TypeMemberModel
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
     /// <returns>True if found.</returns>
-    public static bool TryGetStaticMethodIncludingInherited(TypeSymbol type, string name, out FunctionSymbol method)
+    public static bool TryGetStaticMethodIncludingInherited(TypeSymbol type, string name, [NotNullWhen(true)] out FunctionSymbol? method)
         => TryGetStaticMethodIncludingInherited(type, name, out method, out _);
 
     /// <summary>
@@ -716,8 +712,8 @@ public static class TypeMemberModel
     public static bool TryGetStaticMethodIncludingInherited(
         TypeSymbol type,
         string name,
-        out FunctionSymbol method,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out FunctionSymbol? method,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         if (type is StructSymbol structSymbol)
         {
@@ -927,30 +923,30 @@ public static class TypeMemberModel
         }
     }
 
-    private static Symbol LookupStructMember(StructSymbol structSymbol, string name, MemberQuery query)
+    private static Symbol? LookupStructMember(StructSymbol structSymbol, string name, MemberQuery query)
     {
         for (var c = structSymbol; c != null; c = c.BaseClass)
         {
             if ((query.Kinds & MemberKinds.Property) != 0
-                && TryFirst(query.IncludeInstance ? c.Properties : ImmutableArray<PropertySymbol>.Empty, query.IncludeStatic ? c.StaticProperties : ImmutableArray<PropertySymbol>.Empty, name, out PropertySymbol property))
+                && TryFirst(query.IncludeInstance ? c.Properties : ImmutableArray<PropertySymbol>.Empty, query.IncludeStatic ? c.StaticProperties : ImmutableArray<PropertySymbol>.Empty, name, out PropertySymbol? property))
             {
                 return property;
             }
 
             if ((query.Kinds & MemberKinds.Field) != 0
-                && TryFirst(query.IncludeInstance ? c.Fields : ImmutableArray<FieldSymbol>.Empty, query.IncludeStatic ? c.StaticFields : ImmutableArray<FieldSymbol>.Empty, name, out FieldSymbol field))
+                && TryFirst(query.IncludeInstance ? c.Fields : ImmutableArray<FieldSymbol>.Empty, query.IncludeStatic ? c.StaticFields : ImmutableArray<FieldSymbol>.Empty, name, out FieldSymbol? field))
             {
                 return field;
             }
 
             if ((query.Kinds & MemberKinds.Event) != 0
-                && TryFirst(query.IncludeInstance ? c.Events : ImmutableArray<EventSymbol>.Empty, query.IncludeStatic ? c.StaticEvents : ImmutableArray<EventSymbol>.Empty, name, out EventSymbol @event))
+                && TryFirst(query.IncludeInstance ? c.Events : ImmutableArray<EventSymbol>.Empty, query.IncludeStatic ? c.StaticEvents : ImmutableArray<EventSymbol>.Empty, name, out EventSymbol? @event))
             {
                 return @event;
             }
 
             if ((query.Kinds & MemberKinds.Method) != 0
-                && TryFirst(query.IncludeInstance ? c.Methods : ImmutableArray<FunctionSymbol>.Empty, query.IncludeStatic ? c.StaticMethods : ImmutableArray<FunctionSymbol>.Empty, name, out FunctionSymbol method))
+                && TryFirst(query.IncludeInstance ? c.Methods : ImmutableArray<FunctionSymbol>.Empty, query.IncludeStatic ? c.StaticMethods : ImmutableArray<FunctionSymbol>.Empty, name, out FunctionSymbol? method))
             {
                 return method;
             }
@@ -964,7 +960,7 @@ public static class TypeMemberModel
         return null;
     }
 
-    private static Symbol LookupInterfaceMember(InterfaceSymbol interfaceSymbol, string name, MemberQuery query)
+    private static Symbol? LookupInterfaceMember(InterfaceSymbol interfaceSymbol, string name, MemberQuery query)
     {
         // Issue #1006: walk this interface together with its transitive base
         // interfaces so members inherited from an extended interface resolve.
@@ -1012,7 +1008,7 @@ public static class TypeMemberModel
         return null;
     }
 
-    private static bool TryFirst<T>(ImmutableArray<T> instance, ImmutableArray<T> @static, string name, out T result)
+    private static bool TryFirst<T>(ImmutableArray<T> instance, ImmutableArray<T> @static, string name, [NotNullWhen(true)] out T? result)
         where T : Symbol
     {
         if (!instance.IsDefaultOrEmpty)
@@ -1044,7 +1040,7 @@ public static class TypeMemberModel
     }
 
     private static void AddMethodsDeduped(
-        ref ImmutableArray<FunctionSymbol>.Builder builder,
+        ref ImmutableArray<FunctionSymbol>.Builder? builder,
         ImmutableArray<FunctionSymbol> source,
         string name,
         bool skipPrivate = false)

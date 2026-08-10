@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -43,9 +44,18 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
 {
     private static readonly System.Type HandlerType = typeof(DefaultInterpolatedStringHandler);
     private static readonly TypeSymbol HandlerTypeSymbol = TypeSymbol.FromClrType(HandlerType);
-    private static readonly ConstructorInfo HandlerCtor = HandlerType.GetConstructor(new[] { typeof(int), typeof(int) });
-    private static readonly MethodInfo AppendLiteralMethod = HandlerType.GetMethod("AppendLiteral", new[] { typeof(string) });
-    private static readonly MethodInfo ToStringAndClearMethod = HandlerType.GetMethod("ToStringAndClear", System.Type.EmptyTypes);
+    private static readonly ConstructorInfo HandlerCtor = Invariant.Required(
+        HandlerType.GetConstructor(new[] { typeof(int), typeof(int) }),
+        "DefaultInterpolatedStringHandler declares the (literalLength, formattedCount) constructor");
+
+    private static readonly MethodInfo AppendLiteralMethod = Invariant.Required(
+        HandlerType.GetMethod("AppendLiteral", new[] { typeof(string) }),
+        "DefaultInterpolatedStringHandler declares AppendLiteral(string)");
+
+    private static readonly MethodInfo ToStringAndClearMethod = Invariant.Required(
+        HandlerType.GetMethod("ToStringAndClear", System.Type.EmptyTypes),
+        "DefaultInterpolatedStringHandler declares ToStringAndClear()");
+
     private static readonly MethodInfo AppendFormattedValue = FindAppendFormatted(genericArity: 1, valueOnly: true);
     private static readonly MethodInfo AppendFormattedAlign = FindAppendFormatted(secondParam: typeof(int));
     private static readonly MethodInfo AppendFormattedFormat = FindAppendFormatted(secondParam: typeof(string));
@@ -74,13 +84,8 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             changed |= newBody != pair.Value;
         }
 
-        var statement = program.Statement;
-        if (statement != null)
-        {
-            var newStatement = (BoundBlockStatement)lowerer.RewriteStatement(statement);
-            changed |= newStatement != statement;
-            statement = newStatement;
-        }
+        var statement = (BoundBlockStatement)lowerer.RewriteStatement(program.Statement);
+        changed |= statement != program.Statement;
 
         // Issue #975: base-constructor-initializer arguments (`: base(args)`) are
         // stored on the constructor / struct symbols rather than inside a method
@@ -131,7 +136,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         {
             if (part.IsLiteral)
             {
-                literalLength += part.Literal.Length;
+                literalLength += Invariant.Required(part.Literal, "a literal part is created by BoundInterpolatedStringPart.FromLiteral, which stores string.Empty rather than null").Length;
             }
             else
             {
@@ -141,7 +146,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
 
         if (node.Handler != null)
         {
-            return this.RewriteUserHandler(node, literalLength, formattedCount);
+            return this.RewriteUserHandler(node, node.Handler, literalLength, formattedCount);
         }
 
         foreach (var part in node.Parts)
@@ -150,7 +155,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 TypeSymbol.IsByRefLike(part.Value.Type) &&
                 FindByRefLikeToString(part.Value.Type) == null)
             {
-                var location = part.HoleSyntax?.Location ?? part.Value.Syntax?.Location ?? node.Syntax.Location;
+                var location = part.HoleSyntax?.Location ?? part.Value.Syntax?.Location ?? node.Syntax?.Location ?? default;
                 this.diagnostics.ReportByRefLikeInterpolationUnsupported(location, part.Value.Type);
             }
         }
@@ -179,7 +184,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         {
             if (part.IsLiteral)
             {
-                if (part.Literal.Length == 0)
+                if (Invariant.Required(part.Literal, "a literal part is created by BoundInterpolatedStringPart.FromLiteral, which stores string.Empty rather than null").Length == 0)
                 {
                     continue;
                 }
@@ -227,7 +232,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                 TypeSymbol.Void,
                 arguments.ToImmutable(),
                 argumentRefKinds: default,
-                typeArgumentSymbols: typeArguments);
+                typeArgumentSymbols: ToNullableTypeArguments(typeArguments));
             statements.Add(new BoundExpressionStatement(node.Syntax, appendFormatted));
         }
 
@@ -282,7 +287,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     /// <param name="initializer">The base-constructor initializer to lower.</param>
     /// <param name="rewritten">The rewritten initializer when arguments changed; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> when the arguments were rewritten.</returns>
-    private bool TryRewriteInitializerArguments(BaseConstructorInitializer initializer, out BaseConstructorInitializer rewritten)
+    private bool TryRewriteInitializerArguments(BaseConstructorInitializer initializer, [NotNullWhen(true)] out BaseConstructorInitializer? rewritten)
     {
         rewritten = null;
         if (initializer.Arguments.IsDefaultOrEmpty)
@@ -391,9 +396,12 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     /// appends each part, and yields the constructed handler value itself (not
     /// <c>ToStringAndClear()</c>) so the receiving API consumes the handler.
     /// </summary>
-    private BoundExpression RewriteUserHandler(BoundInterpolatedStringExpression node, int literalLength, int formattedCount)
+    private BoundExpression RewriteUserHandler(
+        BoundInterpolatedStringExpression node,
+        InterpolatedStringHandlerInfo info,
+        int literalLength,
+        int formattedCount)
     {
-        var info = node.Handler;
         var handlerClrType = info.HandlerClrType;
         var handlerSymbol = info.HandlerType;
 
@@ -439,7 +447,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             ctorArgs.Add(this.RewriteExpression(forwarded));
         }
 
-        LocalVariableSymbol shouldAppendLocal = null;
+        LocalVariableSymbol? shouldAppendLocal = null;
         ImmutableArray<RefKind> ctorRefKinds = default;
         if (info.HasTrailingOutBool)
         {
@@ -466,11 +474,11 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             ctorRefKinds);
         statements.Add(new BoundVariableDeclaration(node.Syntax, handlerLocal, construct));
 
-        LocalVariableSymbol continueLocal = null;
+        LocalVariableSymbol? continueLocal = null;
         if (needsGate)
         {
             continueLocal = new LocalVariableSymbol($"<>cont{this.counter++}", isReadOnly: false, TypeSymbol.Bool);
-            BoundExpression seed = info.HasTrailingOutBool
+            BoundExpression seed = shouldAppendLocal != null
                 ? new BoundVariableExpression(null, shouldAppendLocal)
                 : new BoundLiteralExpression(null, true);
             statements.Add(new BoundVariableDeclaration(null, continueLocal, seed));
@@ -481,7 +489,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             BoundExpression appendCall;
             if (part.IsLiteral)
             {
-                if (part.Literal.Length == 0)
+                if (Invariant.Required(part.Literal, "a literal part is created by BoundInterpolatedStringPart.FromLiteral, which stores string.Empty rather than null").Length == 0)
                 {
                     continue;
                 }
@@ -539,7 +547,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                     TypeSymbol.FromClrType(method.ReturnType),
                     arguments.ToImmutable(),
                     argumentRefKinds: default,
-                    typeArgumentSymbols: typeArguments);
+                    typeArgumentSymbols: ToNullableTypeArguments(typeArguments));
 
                 statements.Add(this.MakeAppendStatement(node.Syntax, appendCall, continueLocal, holeLeading));
                 continue;
@@ -578,9 +586,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
     /// </para>
     /// </summary>
     private BoundStatement MakeAppendStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression appendCall,
-        LocalVariableSymbol continueLocal,
+        LocalVariableSymbol? continueLocal,
         ImmutableArray<BoundStatement> holeLeading = default)
     {
         var returnsBool = appendCall.Type?.ClrType.IsSameAs(typeof(bool)) == true;
@@ -694,11 +702,11 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         return (open.MakeGenericMethod(typeof(object)), ImmutableArray.Create(holeType));
     }
 
-    private static MethodInfo FindByRefLikeToString(TypeSymbol type)
+    private static MethodInfo? FindByRefLikeToString(TypeSymbol type)
         => type?.ClrType?.GetMethodSafe("ToString", System.Type.EmptyTypes);
 
     private static MethodInfo FindAppendFormatted(
-        System.Type secondParam = null, System.Type thirdParam = null, int genericArity = 1, bool valueOnly = false)
+        System.Type? secondParam = null, System.Type? thirdParam = null, int genericArity = 1, bool valueOnly = false)
     {
         foreach (var method in HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -747,4 +755,9 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         return HandlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .First(m => m.Name == "AppendFormatted" && m.IsGenericMethodDefinition);
     }
+
+    private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        => typeArguments.IsDefault
+            ? default
+            : typeArguments.Select(static typeArgument => (TypeSymbol?)typeArgument).ToImmutableArray();
 }

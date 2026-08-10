@@ -5,6 +5,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -23,14 +24,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 {
     public BoundClrIndexAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol target,
         PropertyInfo indexer,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression value,
         TypeSymbol resultType,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null)
         : base(syntax)
     {
         Target = target;
@@ -43,14 +44,14 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
     }
 
     private BoundClrIndexAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression targetExpression,
         PropertyInfo indexer,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression value,
         TypeSymbol resultType,
-        TypeParameterSymbol constrainedReceiverTypeParameter,
-        TypeSymbol constrainedInterfaceType)
+        TypeParameterSymbol? constrainedReceiverTypeParameter,
+        TypeSymbol? constrainedInterfaceType)
         : base(syntax)
     {
         TargetExpression = targetExpression;
@@ -62,7 +63,7 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
         ConstrainedInterfaceType = constrainedInterfaceType;
     }
 
-    public VariableSymbol Target { get; }
+    public VariableSymbol? Target { get; }
 
     /// <summary>
     /// Gets the expression-based target, or <c>null</c> when the simple
@@ -70,7 +71,7 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
     /// evaluates this expression to produce the instance reference instead of
     /// loading <see cref="Target"/>.
     /// </summary>
-    public BoundExpression TargetExpression { get; }
+    public BoundExpression? TargetExpression { get; }
 
     public PropertyInfo Indexer { get; }
 
@@ -78,10 +79,11 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
 
     public BoundExpression Value { get; }
 
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }
@@ -103,14 +105,14 @@ public sealed class BoundClrIndexAssignmentExpression : BoundExpression
     /// <param name="constrainedInterfaceType">The imported interface declaring the constrained indexer, if any.</param>
     /// <returns>A new <see cref="BoundClrIndexAssignmentExpression"/> with an expression target.</returns>
     public static BoundClrIndexAssignmentExpression WithExpressionTarget(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression targetExpression,
         PropertyInfo indexer,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression value,
         TypeSymbol resultType,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null)
     {
         return new BoundClrIndexAssignmentExpression(
             syntax,

@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -20,9 +21,9 @@ public sealed record BoundSelectCase
     /// <param name="body">Bound case body.</param>
     public BoundSelectCase(
         SelectCaseKind caseKind,
-        BoundExpression channel,
-        BoundExpression value,
-        VariableSymbol variable,
+        BoundExpression? channel,
+        BoundExpression? value,
+        VariableSymbol? variable,
         BoundStatement body)
     {
         CaseKind = caseKind;
@@ -36,17 +37,22 @@ public sealed record BoundSelectCase
     public SelectCaseKind CaseKind { get; }
 
     /// <summary>Gets the channel expression for send/receive arms; null for default.</summary>
-    public BoundExpression Channel { get; }
+    public BoundExpression? Channel { get; }
 
     /// <summary>Gets the value expression for send arms; null otherwise.</summary>
-    public BoundExpression Value { get; }
+    public BoundExpression? Value { get; }
 
     /// <summary>Gets the declared variable for receive-bind arms; null otherwise.</summary>
-    public VariableSymbol Variable { get; }
+    public VariableSymbol? Variable { get; }
 
     /// <summary>Gets the bound case body.</summary>
     public BoundStatement Body { get; }
 
     /// <summary>Gets a value indicating whether this is the <c>default</c> arm.</summary>
+    // Every non-default arm references a channel -- the binder binds one before
+    // it can classify the arm at all, including on the error-recovery path.
+    // Value has no such guarantee: a send arm whose channel failed to bind is
+    // recovered with a null value.
+    [MemberNotNullWhen(false, nameof(Channel))]
     public bool IsDefault => CaseKind == SelectCaseKind.Default;
 }

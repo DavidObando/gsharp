@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -21,13 +22,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrPropertyAccessExpression : BoundExpression
 {
     public BoundClrPropertyAccessExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         MemberInfo member,
         TypeSymbol resultType,
-        TypeSymbol staticContainerType = null,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
+        TypeSymbol? staticContainerType = null,
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null,
         bool isAddressableStaticField = false,
         bool isReadOnlySubmissionGlobal = false)
         : base(syntax)
@@ -42,7 +43,7 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
         IsReadOnlySubmissionGlobal = isReadOnlySubmissionGlobal;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     public MemberInfo Member { get; }
 
@@ -79,15 +80,16 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
     /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary static or
     /// instance member access.
     /// </summary>
-    public TypeSymbol StaticContainerType { get; }
+    public TypeSymbol? StaticContainerType { get; }
 
     /// <summary>Gets the type parameter used for constrained interface dispatch, if any.</summary>
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
     /// <summary>Gets the imported interface that owns the constrained member reference, if any.</summary>
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
     /// <summary>Gets a value indicating whether this access dispatches through a type-parameter constraint.</summary>
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }

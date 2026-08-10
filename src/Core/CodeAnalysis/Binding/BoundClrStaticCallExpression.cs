@@ -17,7 +17,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrStaticCallExpression : BoundExpression
 {
     public BoundClrStaticCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         MethodInfo method,
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,

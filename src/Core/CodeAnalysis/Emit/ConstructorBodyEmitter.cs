@@ -102,7 +102,9 @@ internal sealed class ConstructorBodyEmitter
         this.emitCtx.CurrentStaticConstructorOwner = typeSym;
         try
         {
-            return this.EmitStaticConstructorBodyFromBlock(body, typeSym.Declaration);
+            return this.EmitStaticConstructorBodyFromBlock(
+                body,
+                Invariant.Required(typeSym.Declaration, "a user static initializer has a declaration"));
         }
         finally
         {
@@ -431,7 +433,7 @@ internal sealed class ConstructorBodyEmitter
     /// field initializers in declaration order. Used by the default, primary,
     /// forwarding, and explicit constructor body emitters.
     /// </summary>
-    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol thisParam = null)
+    private static ImmutableArray<BoundStatement> BuildInstanceFieldInitializerStatements(StructSymbol classSym, ParameterSymbol? thisParam = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in classSym.Fields)
@@ -479,7 +481,7 @@ internal sealed class ConstructorBodyEmitter
         }
 
         // Issue #640: pre-scan instance field initializer expressions for locals.
-        BoundBlockStatement fieldInitBody = null;
+        BoundBlockStatement? fieldInitBody = null;
         if (NeedsInstanceFieldInitializerStatements(classSym))
         {
             fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, thisParam));
@@ -557,7 +559,7 @@ internal sealed class ConstructorBodyEmitter
     internal int EmitClassConstructorWithBodyBodyBytes(
         StructSymbol classSym,
         ConstructorSymbol ctor,
-        BaseConstructorInitializer init,
+        BaseConstructorInitializer? init,
         EntityHandle baseCtorToken)
     {
         var function = ctor.Function;
@@ -586,10 +588,14 @@ internal sealed class ConstructorBodyEmitter
         // ADR-0065 §2: convenience inits skip field-init emission (the
         // chained-to designated init handles them), so don't reserve scratch
         // slots for those expressions either.
-        BoundBlockStatement fieldInitBody = null;
+        BoundBlockStatement? fieldInitBody = null;
         if (!ctor.IsConvenience && NeedsInstanceFieldInitializerStatements(classSym))
         {
-            fieldInitBody = new BoundBlockStatement(null, BuildInstanceFieldInitializerStatements(classSym, function.ThisParameter));
+            fieldInitBody = new BoundBlockStatement(
+                null,
+                BuildInstanceFieldInitializerStatements(
+                    classSym,
+                    Invariant.Required(function.ThisParameter, "an instance constructor has an instance receiver")));
             session.Plan(fieldInitBody);
         }
 
@@ -599,7 +605,7 @@ internal sealed class ConstructorBodyEmitter
         // Slot 0 is the implicit `this`; user parameters shift up by one.
         var paramSlots = new Dictionary<ParameterSymbol, int>
         {
-            [function.ThisParameter] = 0,
+            [Invariant.Required(function.ThisParameter, "an instance constructor has an instance receiver")] = 0,
         };
         for (var i = 0; i < function.Parameters.Length; i++)
         {
@@ -607,9 +613,12 @@ internal sealed class ConstructorBodyEmitter
         }
 
         var localsSignature = session.BuildLocalsSignature();
+        var structThisParameter = classSym.IsClass
+            ? null
+            : Invariant.Required(function.ThisParameter, "a struct constructor has an instance receiver");
         var emitter = session.CreateEmitter(
             paramSlots,
-            structThisParameter: classSym.IsClass ? null : function.ThisParameter);
+            structThisParameter: structThisParameter);
 
         // ADR-0065 §2: a `convenience init(...)` does NOT chain to the base
         // constructor itself — the user-authored body begins with an
@@ -695,7 +704,7 @@ internal sealed class ConstructorBodyEmitter
         // Slot 0 is the implicit `this`; deinit has no user parameters.
         var paramSlots = new Dictionary<ParameterSymbol, int>
         {
-            [function.ThisParameter] = 0,
+            [Invariant.Required(function.ThisParameter, "an instance constructor has an instance receiver")] = 0,
         };
 
         var localsSignature = session.BuildLocalsSignature();
@@ -742,7 +751,10 @@ internal sealed class ConstructorBodyEmitter
         il.OpCode(ILOpCode.Endfinally);
         il.MarkLabel(finallyEnd);
 
-        il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        Invariant.Required(
+            il.ControlFlowBuilder,
+            "the encoder for a constructor body with a protected region is created with a control-flow builder")
+            .AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
 
         return this.AddCompletedMethodBody(il, emitter, localsSignature);
     }

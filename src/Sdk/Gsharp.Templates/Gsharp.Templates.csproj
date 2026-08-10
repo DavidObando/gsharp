@@ -3,6 +3,7 @@
   <PropertyGroup>
     <!-- Template packages are content-only; no compile output. -->
     <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
     <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <!-- No compiled output means no PDB to symbol-package (issue #1671's central

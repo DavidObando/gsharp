@@ -82,7 +82,7 @@ internal static class CaptureBoxingRewriter
     /// fallback for same-compilation-only callers.
     /// </param>
     /// <returns>The lowered program (or the original when nothing changed).</returns>
-    public static BoundProgram Lower(BoundProgram program, Func<Type, Type> mapClrType = null)
+    public static BoundProgram Lower(BoundProgram program, Func<Type, Type>? mapClrType = null)
     {
         var counter = 0;
         var newStructs = new List<StructSymbol>();
@@ -183,7 +183,7 @@ internal static class CaptureBoxingRewriter
         BoundProgram program,
         List<StructSymbol> newStructs,
         ref int counter,
-        Func<Type, Type> mapClrType)
+        Func<Type, Type>? mapClrType)
     {
         var emptyUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
@@ -531,7 +531,7 @@ internal static class CaptureBoxingRewriter
             // site), scoped to the block that contains that statement. Doing it
             // at block level means a loop body gets a fresh box per iteration,
             // mirroring how `var x = e` inside a loop body is handled.
-            ImmutableArray<BoundStatement>.Builder builder = null;
+            ImmutableArray<BoundStatement>.Builder? builder = null;
 
             for (var i = 0; i < node.Statements.Length; i++)
             {
@@ -628,6 +628,10 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild sits inside `node.Receiver != null`, so this is the
+        // variable-receiver form; every other form falls through to base.
+        // InterfaceType and ReceiverExpression are null on this path.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
         {
             // Issue #567: when the receiver of a field assignment is a boxed
@@ -646,15 +650,21 @@ internal static class CaptureBoxingRewriter
                 return BoundFieldAssignmentExpression.WithExpressionReceiver(
                     null,
                     receiverExpr,
-                    node.StructType,
+                    BoundNodeForm.DeclaringType(node),
                     node.Field,
-                    value);
+                    value,
+                    node.ResultType);
             }
 
             return base.RewriteFieldAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
+        // GSA0005: The rebuild sits inside `node.Target != null`, so this is the
+        // variable-target form; TargetExpression is null on this path and the
+        // expression-target form falls through to base.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
         {
             // Issue #618: when the target of an index assignment is a boxed
@@ -681,8 +691,12 @@ internal static class CaptureBoxingRewriter
 
             return base.RewriteIndexAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
+        // GSA0005: Same as RewriteIndexAssignmentExpression: guarded by `node.Target !=
+        // null`, so TargetExpression is null on the path that rebuilds.
+        #pragma warning disable GSA0005
         protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
         {
             // Issue #618: same pattern for CLR indexer writes (e.g.
@@ -695,7 +709,7 @@ internal static class CaptureBoxingRewriter
                     new BoundVariableExpression(null, bi.BoxLocal),
                     bi.BoxClass,
                     bi.BoxField);
-                ImmutableArray<BoundExpression>.Builder argBuilder = null;
+                ImmutableArray<BoundExpression>.Builder? argBuilder = null;
                 for (var i = 0; i < node.Arguments.Length; i++)
                 {
                     var oldArg = node.Arguments[i];
@@ -723,11 +737,14 @@ internal static class CaptureBoxingRewriter
                     node.Indexer,
                     args,
                     value,
-                    node.Type);
+                    node.Type,
+                    node.ConstrainedReceiverTypeParameter,
+                    node.ConstrainedInterfaceType);
             }
 
             return base.RewriteClrIndexAssignmentExpression(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
         protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
@@ -739,7 +756,12 @@ internal static class CaptureBoxingRewriter
             foreach (var clause in node.CatchClauses)
             {
                 var body = this.RewriteStatement(clause.Body);
-                if (clause.Variable != null && this.boxInfo.TryGetValue(clause.Variable, out var bi))
+
+                // BoundCatchClause.Variable is declared non-null; the guard is
+                // kept for an oblivious producer, but it tests a copy so the
+                // property's declared state survives for the rebuild below.
+                var caught = clause.Variable;
+                if (caught != null && this.boxInfo.TryGetValue(caught, out var bi))
                 {
                     body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
                     clausesChanged = true;
@@ -766,7 +788,7 @@ internal static class CaptureBoxingRewriter
         protected override BoundStatement RewritePatternSwitchStatement(BoundPatternSwitchStatement node)
         {
             var discriminant = this.RewriteExpression(node.Discriminant);
-            ImmutableArray<BoundPatternSwitchArm>.Builder builder = null;
+            ImmutableArray<BoundPatternSwitchArm>.Builder? builder = null;
             for (var i = 0; i < node.Arms.Length; i++)
             {
                 var arm = node.Arms[i];
@@ -805,7 +827,7 @@ internal static class CaptureBoxingRewriter
         protected override BoundExpression RewriteSwitchExpression(BoundSwitchExpression node)
         {
             var discriminant = this.RewriteExpression(node.Discriminant);
-            ImmutableArray<BoundSwitchExpressionArm>.Builder builder = null;
+            ImmutableArray<BoundSwitchExpressionArm>.Builder? builder = null;
 
             for (var i = 0; i < node.Arms.Length; i++)
             {
@@ -852,7 +874,7 @@ internal static class CaptureBoxingRewriter
         /// <inheritdoc/>
         protected override BoundStatement RewriteSelectStatement(BoundSelectStatement node)
         {
-            ImmutableArray<BoundSelectCase>.Builder builder = null;
+            ImmutableArray<BoundSelectCase>.Builder? builder = null;
             for (var i = 0; i < node.Cases.Length; i++)
             {
                 var arm = node.Cases[i];
@@ -897,7 +919,7 @@ internal static class CaptureBoxingRewriter
                 seed = seed.AddRange(this.BuildBoxSeedStatements(keyBox));
             }
 
-            if (node.ValueVariable != null && this.boxInfo.TryGetValue(node.ValueVariable, out var valueBox))
+            if (this.boxInfo.TryGetValue(node.ValueVariable, out var valueBox))
             {
                 seed = seed.AddRange(this.BuildBoxSeedStatements(valueBox));
             }
@@ -949,6 +971,10 @@ internal static class CaptureBoxingRewriter
         }
 
         /// <inheritdoc/>
+        // GSA0005: Not a clone: this declares the synthesized box local, a different
+        // variable from node.Variable, so node's ConstantValue does not belong to
+        // it. The unboxed case falls through to base.
+        #pragma warning disable GSA0005
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             if (this.boxInfo.TryGetValue(node.Variable, out var bi) && bi.Original == node.Variable)
@@ -960,7 +986,8 @@ internal static class CaptureBoxingRewriter
                 // of type Box_n. Note `Lowerer.Flatten` will inline this nested
                 // block into the enclosing block during the post-binding lower pass.
                 this.allocated.Add(bi.Original);
-                var initializer = this.RewriteExpression(node.Initializer);
+                var initializer = this.RewriteExpression(
+                    Invariant.Required(node.Initializer, "a captured variable declaration has an initializer"));
                 var stmts = ImmutableArray.Create<BoundStatement>(
                     new BoundVariableDeclaration(
                         null,
@@ -982,6 +1009,7 @@ internal static class CaptureBoxingRewriter
 
             return base.RewriteVariableDeclaration(node);
         }
+        #pragma warning restore GSA0005
 
         /// <inheritdoc/>
         protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)

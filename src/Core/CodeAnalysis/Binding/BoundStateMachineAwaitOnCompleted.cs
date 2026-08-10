@@ -23,7 +23,7 @@ public sealed class BoundStateMachineAwaitOnCompleted : BoundExpression
     /// <param name="awaiterClrType">The CLR type of the awaiter.</param>
     /// <param name="awaiterTypeSymbol">The symbolic type of the awaiter.</param>
     /// <param name="useCritical">Whether to use <c>AwaitUnsafeOnCompleted</c> (true) or <c>AwaitOnCompleted</c> (false).</param>
-    public BoundStateMachineAwaitOnCompleted(SyntaxNode syntax, VariableSymbol awaiterLocal, Type awaiterClrType, TypeSymbol awaiterTypeSymbol, bool useCritical)
+    public BoundStateMachineAwaitOnCompleted(SyntaxNode? syntax, VariableSymbol awaiterLocal, Type awaiterClrType, TypeSymbol awaiterTypeSymbol, bool useCritical)
         : base(syntax)
     {
         AwaiterLocal = awaiterLocal ?? throw new ArgumentNullException(nameof(awaiterLocal));

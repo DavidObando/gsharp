@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -35,7 +36,7 @@ internal sealed partial class ExpressionBinder
     /// erase the lambda's return type and break the extension's type-argument
     /// inference.
     /// </summary>
-    private bool UserExtensionHasFunctionTypedParameterAt(BoundExpression receiver, string methodName, int argSlot)
+    private bool UserExtensionHasFunctionTypedParameterAt(BoundExpression? receiver, string methodName, int argSlot)
     {
         if (receiver?.Type == null)
         {
@@ -90,14 +91,14 @@ internal sealed partial class ExpressionBinder
     /// </para>
     /// </summary>
     private bool TryPreferBetterExtensionOverClrInstanceMethod(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         string methodName,
-        MethodInfo clrBest,
-        Type[] argTypes,
+        MethodInfo? clrBest,
+        Type?[]? argTypes,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         if (receiver?.Type == null || clrBest == null || argTypes == null)
@@ -166,7 +167,7 @@ internal sealed partial class ExpressionBinder
     /// / named / defaulted form this cheap check cannot reason about, so the
     /// tie-break is skipped and the instance method keeps winning).
     /// </summary>
-    private static ClrOverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type[] argTypes)
+    private static ClrOverloadResolution.ImplicitConversionKind ComputeClrCandidateWorstConversionRank(MethodInfo candidate, Type?[] argTypes)
     {
         var parameters = candidate.GetParameters();
         if (parameters.Length != argTypes.Length)
@@ -204,7 +205,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private ClrOverloadResolution.ImplicitConversionKind ComputeBestApplicableExtensionWorstConversionRank(
         ImmutableArray<FunctionSymbol> extCandidates,
-        Type[] argTypes)
+        Type?[] argTypes)
     {
         var best = ClrOverloadResolution.ImplicitConversionKind.None;
         foreach (var candidate in extCandidates)
@@ -273,12 +274,12 @@ internal sealed partial class ExpressionBinder
     /// <param name="result">The bound call, when an extension overload matched.</param>
     /// <returns><see langword="true"/> when at least one extension overload matched the (receiver, name) pair.</returns>
     private bool TryBindExtensionFunctionOverload(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         if (receiver == null)
@@ -302,10 +303,13 @@ internal sealed partial class ExpressionBinder
             var allNames = argumentNames;
             if (!argumentNames.IsDefault)
             {
-                var namesBuilder = ImmutableArray.CreateBuilder<string>(argumentNames.Length + 1);
-                namesBuilder.Add(null);
-                namesBuilder.AddRange(argumentNames);
-                allNames = namesBuilder.ToImmutable();
+                var names = new string[argumentNames.Length + 1];
+                for (var i = 0; i < argumentNames.Length; i++)
+                {
+                    names[i + 1] = argumentNames[i];
+                }
+
+                allNames = ImmutableArray.Create(names);
             }
 
             selected = overloads.SelectInstanceOverloadOrReport(candidates, allArguments.ToImmutable(), ce, methodName, allNames);
@@ -359,7 +363,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        InterfaceSymbol ownerIface = null;
+        InterfaceSymbol? ownerIface = null;
         if (current.ReceiverType is InterfaceSymbol ri)
         {
             ownerIface = ri;
@@ -378,7 +382,7 @@ internal sealed partial class ExpressionBinder
         return ReferenceEquals(ownerDef, ifaceDef);
     }
 
-    private FunctionSymbol TryFindDefaultInterfaceMethod(
+    private FunctionSymbol? TryFindDefaultInterfaceMethod(
         StructSymbol receiverClass,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
@@ -421,19 +425,19 @@ internal sealed partial class ExpressionBinder
     }
 
     private bool TryBindUserDelegateMemberInvocation(
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TypeSymbol receiverType,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         bool isStatic,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
         var receiverStruct = receiverType as StructSymbol;
-        FieldSymbol matchedField = null;
-        StructSymbol declaringType = null;
+        FieldSymbol? matchedField = null;
+        StructSymbol? declaringType = null;
         if (isStatic && receiverStruct != null)
         {
             TypeMemberModel.TryGetStaticFieldIncludingInherited(
@@ -457,30 +461,49 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        PropertySymbol matchedProperty = null;
+        PropertySymbol? matchedProperty = null;
         if (matchedField == null)
         {
-            var foundProperty = isStatic
-                ? TypeMemberModel.TryGetStaticPropertyIncludingInherited(
-                    receiverStruct,
-                    methodName,
-                    out var property,
-                    out var propertyDeclaringType)
-                : TypeMemberModel.TryGetProperty(
+            PropertySymbol? property = null;
+            StructSymbol? propertyDeclaringType = null;
+            var foundProperty = false;
+            if (isStatic)
+            {
+                if (receiverStruct != null)
+                {
+                    foundProperty = TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                        receiverStruct,
+                        methodName,
+                        out property,
+                        out propertyDeclaringType);
+                }
+            }
+            else
+            {
+                foundProperty = TypeMemberModel.TryGetProperty(
                     receiverType,
                     methodName,
                     out property,
                     out propertyDeclaringType);
-            if (foundProperty && property.HasGetter)
+            }
+
+            if (foundProperty && property is { HasGetter: true })
             {
                 matchedProperty = property;
                 declaringType = propertyDeclaringType;
             }
         }
 
-        var memberType = matchedField != null && isStatic
+        var memberType = matchedField != null && isStatic && declaringType != null
             ? declaringType.SubstituteMemberType(matchedField.Type)
             : matchedField?.Type ?? matchedProperty?.Type;
+
+        // declaringType is null for a property declared on an INTERFACE: the
+        // out-parameter is a StructSymbol and an interface is not one. Bailing
+        // out here (as a nullable-warning guard once did) silently unbinds
+        // `ifaceReceiver.DelegateProp(args)` and reports GS0159 -- issues #2925
+        // and #3016. BoundPropertyAccessExpression.StructType is nullable for
+        // exactly this form, so the null flows through correctly.
         if (memberType == null)
         {
             return false;
@@ -488,11 +511,22 @@ internal sealed partial class ExpressionBinder
 
         // Issue #2849: derive both argument conversions and Invoke shape from
         // the narrowed stable member read, not the nullable declaration.
-        BoundExpression memberLoad = matchedField != null
-            ? isStatic
+        BoundExpression memberLoad;
+        if (matchedField != null)
+        {
+            memberLoad = isStatic
                 ? new BoundFieldAccessExpression(null, receiver, declaringType, matchedField, memberType)
-                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField)
-            : new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
+                : new BoundFieldAccessExpression(null, receiver, declaringType, matchedField);
+        }
+        else if (matchedProperty != null)
+        {
+            memberLoad = new BoundPropertyAccessExpression(null, receiver, declaringType, matchedProperty);
+        }
+        else
+        {
+            return false;
+        }
+
         memberLoad = ApplyMemberNarrowing(memberLoad);
         var effectiveMemberType = memberLoad switch
         {
@@ -507,10 +541,14 @@ internal sealed partial class ExpressionBinder
 
         if (isStatic)
         {
-            var accessibility = matchedField?.Accessibility ?? matchedProperty.Accessibility;
-            if (!AccessibilityChecker.IsAccessible(accessibility, declaringType, function))
+            var accessibility = matchedField != null
+                ? matchedField.Accessibility
+                : matchedProperty?.Accessibility;
+            if (declaringType != null
+                && accessibility is { } memberAccessibility
+                && !AccessibilityChecker.IsAccessible(memberAccessibility, declaringType, function))
             {
-                Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, accessibility);
+                Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringType.Name, memberAccessibility);
             }
         }
 
@@ -671,7 +709,7 @@ internal sealed partial class ExpressionBinder
         var resultType = invoke.Type is NullableTypeSymbol
             ? invoke.Type
             : (TypeSymbol)NullableTypeSymbol.Get(invoke.Type);
-        LocalVariableSymbol resultSlot = null;
+        LocalVariableSymbol? resultSlot = null;
         if (resultType is NullableTypeSymbol nullableResult
             && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(nullableResult.UnderlyingType))
         {
@@ -706,7 +744,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         if (clrType == null)
@@ -718,7 +756,7 @@ internal sealed partial class ExpressionBinder
         // precedence used by the read path in BindAccessorStep (properties
         // first, fields fallback). Indexer properties (those with parameters)
         // are not member-style invocable, so skip them.
-        System.Reflection.MemberInfo member = ClrTypeUtilities.SafeGetProperty(clrType, methodName, BindingFlags.Public | BindingFlags.Instance);
+        System.Reflection.MemberInfo? member = ClrTypeUtilities.SafeGetProperty(clrType, methodName, BindingFlags.Public | BindingFlags.Instance);
         if (member is System.Reflection.PropertyInfo prop && (prop.GetIndexParameters().Length != 0 || !prop.CanRead))
         {
             member = null;
@@ -730,7 +768,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        System.Type memberClrType = member switch
+        System.Type? memberClrType = member switch
         {
             System.Reflection.PropertyInfo p => p.PropertyType,
             System.Reflection.FieldInfo f => f.FieldType,
@@ -771,7 +809,7 @@ internal sealed partial class ExpressionBinder
         // Strip nullable annotation when dispatching through Invoke.
         var underlyingDelegateClr = memberClrType;
 
-        LocalVariableSymbol capture = null;
+        LocalVariableSymbol? capture = null;
         BoundExpression invokeReceiver = delegateLoad;
         if (ce.NullableQuestionToken != null)
         {
@@ -823,18 +861,22 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     internal bool TryBindInheritedClrInstanceCall(
         BoundExpression receiver,
-        System.Type importedBaseClr,
+        System.Type? importedBaseClr,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
-        out BoundExpression result,
-        System.Type[] explicitTypeArgs = null,
+        [NotNullWhen(true)] out BoundExpression? result,
+        System.Type[]? explicitTypeArgs = null,
         ImmutableArray<TypeSymbol> typeArgSymbols = default,
         ImmutableArray<string> argumentNames = default,
         bool mapEnumArgumentsToBaseClr = false,
         bool allowProtectedInherited = false)
     {
         result = null;
+        if (importedBaseClr == null)
+        {
+            return false;
+        }
 
         // Issue #2210: start from the public (+ self-interface DIM) candidates
         // this helper has always resolved, then union in any `protected` /
@@ -899,8 +941,8 @@ internal sealed partial class ExpressionBinder
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
-        out BoundExpression result,
-        System.Type[] explicitTypeArgs = null,
+        [NotNullWhen(true)] out BoundExpression? result,
+        System.Type[]? explicitTypeArgs = null,
         ImmutableArray<TypeSymbol> typeArgSymbols = default,
         ImmutableArray<string> argumentNames = default)
     {
@@ -930,7 +972,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr: clrBases[0], methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames);
+        if (clrBases[0] is not { } importedBaseClr)
+        {
+            return false;
+        }
+
+        return TryResolveAndBindClrInstanceCall(receiver, candidates, importedBaseClr, methodName, arguments, ce, out result, explicitTypeArgs, typeArgSymbols, argumentNames);
     }
 
     /// <summary>
@@ -958,12 +1005,12 @@ internal sealed partial class ExpressionBinder
     private bool TryResolveAndBindClrInstanceCall(
         BoundExpression receiver,
         IReadOnlyList<MethodInfo> candidates,
-        System.Type importedBaseClr,
+        System.Type? importedBaseClr,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
-        out BoundExpression result,
-        System.Type[] explicitTypeArgs,
+        [NotNullWhen(true)] out BoundExpression? result,
+        System.Type[]? explicitTypeArgs,
         ImmutableArray<TypeSymbol> typeArgSymbols,
         ImmutableArray<string> argumentNames,
         bool mapEnumArgumentsToBaseClr = false,
@@ -973,7 +1020,7 @@ internal sealed partial class ExpressionBinder
     {
         result = null;
 
-        var argTypes = new System.Type[arguments.Length];
+        var argTypes = new System.Type?[arguments.Length];
         var hasUserClassArg = false;
         for (var i = 0; i < arguments.Length; i++)
         {
@@ -1015,13 +1062,13 @@ internal sealed partial class ExpressionBinder
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
             ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
             : null;
 
         var inheritedSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
             null,
-            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+            ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -1044,10 +1091,15 @@ internal sealed partial class ExpressionBinder
         switch (resolution.Outcome)
         {
             case ClrOverloadResolution.ResolutionOutcome.Resolved:
+                if (resolution.Best is not { } best)
+                {
+                    return false;
+                }
+
                 // Issue #1260: a `base.M(...)` into an abstract BCL member has no
                 // base implementation to delegate to (e.g. Stream.Read). Match C#
                 // (CS0205) with a clean diagnostic instead of emitting invalid IL.
-                if (nonVirtualBaseCall && resolution.Best.IsAbstract)
+                if (nonVirtualBaseCall && best.IsAbstract)
                 {
                     Diagnostics.ReportBaseClassCallAbstractMember(baseMemberLocation ?? ce.Location, importedBaseClr?.Name ?? "object", methodName);
                     result = new BoundErrorExpression(null);
@@ -1066,9 +1118,9 @@ internal sealed partial class ExpressionBinder
                 // from outside its declaring/derived type, instead of
                 // silently binding it.
                 if (!allowProtectedInherited && !nonVirtualBaseCall
-                    && !resolution.Best.IsPublic && (resolution.Best.IsFamily || resolution.Best.IsFamilyOrAssembly))
+                    && !best.IsPublic && (best.IsFamily || best.IsFamilyOrAssembly))
                 {
-                    Diagnostics.ReportProtectedMemberInaccessible(ce.Identifier.Location, methodName, ClrTypeDisplayName(resolution.Best.DeclaringType ?? importedBaseClr));
+                    Diagnostics.ReportProtectedMemberInaccessible(ce.Identifier.Location, methodName, ClrTypeDisplayName(best.DeclaringType ?? importedBaseClr));
                     result = new BoundErrorExpression(null);
                     return true;
                 }
@@ -1079,16 +1131,20 @@ internal sealed partial class ExpressionBinder
                 // not carry the receiver as slot 0 — otherwise lambda-only-inferable
                 // method type parameters never unify and erase to `<object>`.
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
-                    resolution.Best,
+                    best,
                     typeArgSymbols,
                     inheritedSymbolicArgs,
                     resolution.IsExpanded);
-                var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault ? inheritedSymbolicTypeArgs : typeArgSymbols;
-                var returnType = ResolveImportedGenericReturnType(resolution.Best, typeArgSymbols)
-                    ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(resolution.Best, inheritedSymbolicTypeArgs, receiver?.Type)
-                    ?? ResolveInstanceReturnTypeFromReceiver(receiver?.Type, resolution.Best)
-                    ?? MapClrMethodReturnType(resolution.Best);
-                var inheritedParameters = resolution.Best.GetParameters();
+                var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault
+                    ? inheritedSymbolicTypeArgs
+                    : typeArgSymbols.IsDefault
+                        ? default
+                        : ImmutableArray.CreateRange<TypeSymbol?>(typeArgSymbols);
+                var returnType = ResolveImportedGenericReturnType(best, typeArgSymbols)
+                    ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, inheritedSymbolicTypeArgs, receiver.Type)
+                    ?? ResolveInstanceReturnTypeFromReceiver(receiver.Type, best)
+                    ?? MapClrMethodReturnType(best);
+                var inheritedParameters = best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
                 var inheritedExpandedArgs = resolution.IsExpanded
                     ? overloads.ExpandParamsArguments(
@@ -1118,20 +1174,20 @@ internal sealed partial class ExpressionBinder
                     ClrCallDelegateRebindMode.Full,
                     out var inheritedHandlerPrelude,
                     out var inheritedUpdatedReceiver,
-                    method: resolution.Best,
+                    method: best,
                     symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall,
-                    receiverType: receiver?.Type);
+                    receiverType: receiver.Type);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
                 var inheritedCallReceiver = inheritedUpdatedReceiver ?? receiver;
-                if (TryReportByRefLikeInheritedCall(inheritedCallReceiver, resolution.Best, ce.Location))
+                if (TryReportByRefLikeInheritedCall(inheritedCallReceiver, best, ce.Location))
                 {
                     result = new BoundErrorExpression(null);
                     return true;
                 }
 
-                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, resolution.Best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
+                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
@@ -1141,7 +1197,8 @@ internal sealed partial class ExpressionBinder
             default:
                 // Issue #343: if the failure is plausibly due to an unknown
                 // named-argument target, surface that as the diagnostic.
-                if (!argumentNames.IsDefault
+                if (importedBaseClr != null
+                    && !argumentNames.IsDefault
                     && overloads.TryReportUnknownNamedArgumentForClr(importedBaseClr, methodName, BindingFlags.Instance | BindingFlags.Public, ce, argumentNames))
                 {
                     result = new BoundErrorExpression(null);
@@ -1200,11 +1257,11 @@ internal sealed partial class ExpressionBinder
     /// <param name="typeArgSymbols">Issue #320: explicit type-argument symbols in source order (carrying user-defined types), or default.</param>
     /// <param name="argumentNames">Issue #343: per-source-argument names parallel to <paramref name="arguments"/> (entries are <see langword="null"/> for positional); default when the call is purely positional.</param>
     /// <returns>True when an imported extension method was matched (success or ambiguity); false to let the caller report GS0159.</returns>
-    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, out BoundExpression result, System.Type[] explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, ImmutableArray<string> argumentNames = default)
+    private bool TryBindImportedExtensionCall(BoundExpression receiver, string methodName, ImmutableArray<BoundExpression> arguments, CallExpressionSyntax ce, [NotNullWhen(true)] out BoundExpression? result, System.Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, ImmutableArray<string> argumentNames = default)
     {
         result = null;
 
-        var receiverClrType = receiver?.Type?.ClrType;
+        var receiverClrType = receiver.Type.ClrType;
         if (receiverClrType == null)
         {
             // Issue #833: a slice/sequence of an open method type parameter
@@ -1212,7 +1269,7 @@ internal sealed partial class ExpressionBinder
             // backing on the receiver. Project it to an erased shape so
             // overload resolution can run; symbolic recovery happens via
             // BuildSymbolicMethodTypeArgs + ResolveCallReturnTypeFromSymbolicTypeArgs.
-            if (receiver?.Type == null || !MemberLookup.TryProjectErasedClrType(receiver.Type, out receiverClrType))
+            if (!MemberLookup.TryProjectErasedClrType(receiver.Type, out receiverClrType))
             {
                 return false;
             }
@@ -1259,7 +1316,7 @@ internal sealed partial class ExpressionBinder
         // receiver becomes the first ("this") parameter, followed by the user
         // arguments. Every argument must carry a concrete CLR type so overload
         // resolution (including generic inference) can run.
-        var argTypes = new Type[arguments.Length + 1];
+        var argTypes = new Type?[arguments.Length + 1];
         var deferredInferenceArgs = new bool[arguments.Length + 1];
         argTypes[0] = receiverClrType;
         var hasUserClassArg = false;
@@ -1314,7 +1371,7 @@ internal sealed partial class ExpressionBinder
         // Issue #343: extension methods are dispatched as `Class.Method(receiver, userArgs...)`,
         // so prepend a null slot to user-supplied argument names so positions
         // align with the method's parameter list (where index 0 is `this`).
-        IReadOnlyList<string> extensionArgumentNames = null;
+        IReadOnlyList<string>? extensionArgumentNames = null;
         if (!argumentNames.IsDefault)
         {
             var withReceiver = new string[arguments.Length + 1];
@@ -1327,8 +1384,8 @@ internal sealed partial class ExpressionBinder
         }
 
         var extensionSymbolicArgs = MemberLookup.BuildSymbolicArgTypeVector(
-            receiver?.Type,
-            ImmutableArray.CreateRange(arguments.Select(a => a?.Type)));
+            receiver.Type,
+            ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             this.memberLookup.CollectImportedExtensionMethods(methodName),
             extensionSymbolicArgs,
@@ -1339,7 +1396,7 @@ internal sealed partial class ExpressionBinder
         }
 
         if (deferredInferenceArgs.Any(static deferred => deferred)
-            && receiverClrType.IsGenericType)
+            && receiverClrType is { IsGenericType: true })
         {
             var receiverDefinition = receiverClrType.GetGenericTypeDefinition();
             if (candidates.Any(candidate =>
@@ -1406,7 +1463,7 @@ internal sealed partial class ExpressionBinder
         // Issue #658 / #1634: supplementary interface check for user-class args,
         // threaded as a call-local parameter into Resolve instead of a shared
         // static so nested/concurrent binds can't clobber it.
-        Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+        Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
             ? (source, target) => IsUserClassAssignableToInterfaceFromArgs(arguments, argTypes, source, target)
             : null;
         var argumentStructuralProjectionCheck = MakeStructuralProjectionArgumentCheck(arguments, argumentOffset: 1);
@@ -1457,7 +1514,11 @@ internal sealed partial class ExpressionBinder
                 return false;
         }
 
-        var best = resolution.Best;
+        if (resolution.Best is not { } best)
+        {
+            return false;
+        }
+
         var declaringType = best.DeclaringType;
         if (declaringType == null)
         {
@@ -1477,9 +1538,13 @@ internal sealed partial class ExpressionBinder
             typeArgSymbols,
             extensionSymbolicArgs,
             resolution.IsExpanded);
-        var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault ? extensionSymbolicTypeArgs : typeArgSymbols;
+        var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault
+            ? extensionSymbolicTypeArgs
+            : typeArgSymbols.IsDefault
+                ? default
+                : ImmutableArray.CreateRange<TypeSymbol?>(typeArgSymbols);
         var returnOverride = ResolveImportedGenericReturnType(best, typeArgSymbols)
-            ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, extensionSymbolicTypeArgs, receiver?.Type);
+            ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, extensionSymbolicTypeArgs, receiver.Type);
         var function = new ImportedFunctionSymbol(methodName, importedClass, best, ce, returnOverride);
 
         var allArguments = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length + 1);
@@ -1585,7 +1650,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="userClass">The user-declared class receiver.</param>
     /// <param name="clrInterface">The projected CLR interface type, on success.</param>
     /// <returns><see langword="true"/> when an implemented CLR interface was found.</returns>
-    private static bool TryProjectUserClassReceiverInterface(StructSymbol userClass, out Type clrInterface)
+    private static bool TryProjectUserClassReceiverInterface(StructSymbol userClass, [NotNullWhen(true)] out Type? clrInterface)
     {
         clrInterface = null;
         if (userClass.ImplementedClrInterfaces.IsDefaultOrEmpty)
@@ -1593,8 +1658,8 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        Type firstInterface = null;
-        Type bestEnumerable = null;
+        Type? firstInterface = null;
+        Type? bestEnumerable = null;
         foreach (var implemented in userClass.ImplementedClrInterfaces)
         {
             var clr = implemented?.ClrType;
@@ -1715,17 +1780,17 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
         ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         TextLocation location,
         CallExpressionSyntax call,
         ClrCallDelegateRebindMode delegateRebindMode,
         out ImmutableArray<BoundStatement> preludeStatements,
-        out BoundExpression updatedReceiver,
-        MethodInfo method = null,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default,
-        TypeSymbol receiverType = null,
+        out BoundExpression? updatedReceiver,
+        MethodInfo? method = null,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
+        TypeSymbol? receiverType = null,
         bool hasConversionReceiverTypeOverride = false,
-        TypeSymbol conversionReceiverType = null,
+        TypeSymbol? conversionReceiverType = null,
         int receiverArgCount = 0)
     {
         var rebound = RebindFormattableInterpolationArguments(arguments, argumentSyntax, parameters, parameterMapping, receiverArgCount);
@@ -1734,18 +1799,22 @@ internal sealed partial class ExpressionBinder
             ? RebindFunctionLiteralDelegateArguments(handlerArgs, parameters, parameterMapping, method, symbolicMethodTypeArgs, receiverType)
             : RebindNumericReturnWideningDelegateArguments(handlerArgs, parameters, parameterMapping);
         var effectiveConversionReceiverType = hasConversionReceiverTypeOverride ? conversionReceiverType : receiverType;
-        return conversions.BindClrParameterConversions(delegateArgs, parameters, call, parameterMapping, receiverArgCount, method, effectiveConversionReceiverType, symbolicMethodTypeArgs);
+        var conversionSymbolicMethodTypeArgs = symbolicMethodTypeArgs.IsDefault
+            ? default
+            : ImmutableArray.CreateRange<TypeSymbol?>(
+                symbolicMethodTypeArgs.Select(symbol => symbol ?? TypeSymbol.Error));
+        return conversions.BindClrParameterConversions(delegateArgs, parameters, call, parameterMapping, receiverArgCount, method, effectiveConversionReceiverType, conversionSymbolicMethodTypeArgs);
     }
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping = default,
-        MethodInfo method = null,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs = default,
-        TypeSymbol receiverType = null)
+        MethodInfo? method = null,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
+        TypeSymbol? receiverType = null)
     {
-        ImmutableArray<BoundExpression>.Builder builder = null;
+        ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
@@ -1844,7 +1913,7 @@ internal sealed partial class ExpressionBinder
         ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping = default)
     {
-        ImmutableArray<BoundExpression>.Builder builder = null;
+        ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
@@ -1900,7 +1969,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private static bool IsUserClassAssignableToInterface(
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        System.Type[] argTypes,
+        System.Type?[] argTypes,
         System.Type source,
         System.Type target)
     {
@@ -1970,7 +2039,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private static bool IsUserClassAssignableToInterfaceFromArgs(
         ImmutableArray<BoundExpression> boundArguments,
-        System.Type[] argTypes,
+        System.Type?[] argTypes,
         System.Type source,
         System.Type target)
     {
@@ -2033,14 +2102,20 @@ internal sealed partial class ExpressionBinder
         {
             if (syntax.IsPropertyWrite)
             {
-                var boundValue = BindExpression(syntax.Value);
+                if (syntax.Value is not { } valueSyntax
+                    || syntax.EqualsToken is not { } equalsToken)
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                var boundValue = BindExpression(valueSyntax);
                 return BindBaseClassPropertyWrite(
                     syntax.MethodIdentifier.Text,
                     syntax.MethodIdentifier.Location,
                     syntax.BaseKeyword.Location,
                     boundValue,
-                    syntax.Value.Location,
-                    syntax.EqualsToken.Location,
+                    valueSyntax.Location,
+                    equalsToken.Location,
                     explicitBaseType: propSelector,
                     selectorLocation: syntax.InterfaceTypeClause.Location);
             }
@@ -2055,13 +2130,19 @@ internal sealed partial class ExpressionBinder
 
         if (ifaceType is StructSymbol classSelector && classSelector.IsClass)
         {
+            if (syntax.OpenParenthesisToken is not { } openParenthesisToken
+                || syntax.CloseParenthesisToken is not { } closeParenthesisToken)
+            {
+                return new BoundErrorExpression(null);
+            }
+
             var synthesizedCall = new CallExpressionSyntax(
                 syntax.SyntaxTree,
                 syntax.MethodIdentifier,
                 syntax.MethodTypeArgumentList,
-                syntax.OpenParenthesisToken,
+                openParenthesisToken,
                 syntax.Arguments,
-                syntax.CloseParenthesisToken);
+                closeParenthesisToken);
             return BindBaseClassCall(
                 synthesizedCall,
                 syntax.BaseKeyword.Location,
@@ -2147,8 +2228,8 @@ internal sealed partial class ExpressionBinder
         // (preserved on InterfaceSymbol.Definition.Methods at the same
         // index) so the emitter and interpreter can resolve through the
         // single MethodHandles / program.Functions slot.
-        FunctionSymbol arityMatch = null;
-        FunctionSymbol anyMatch = null;
+        FunctionSymbol? arityMatch = null;
+        FunctionSymbol? anyMatch = null;
         int matchIndex = -1;
         var overloads = ifaceSym.Methods;
         for (var i = 0; i < overloads.Length; i++)
@@ -2210,7 +2291,12 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
         return new BoundBaseInterfaceCallExpression(
             syntax,
             receiver,
@@ -2301,7 +2387,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindBaseClassCall(
         CallExpressionSyntax ce,
         TextLocation baseLocation,
-        StructSymbol explicitBaseType,
+        StructSymbol? explicitBaseType,
         TextLocation selectorLocation)
     {
         if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
@@ -2353,7 +2439,13 @@ internal sealed partial class ExpressionBinder
         // Reuse the full instance-call binding pipeline (named-argument
         // reordering, generic substitution, variadic packing, per-argument
         // conversions). The receiver is the enclosing method's `this`.
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
+
         var bound = overloads.BindUserInstanceCall(receiver, method, arguments, ce, argumentNames);
         if (bound is not BoundUserInstanceCallExpression uic)
         {
@@ -2361,6 +2453,11 @@ internal sealed partial class ExpressionBinder
         }
 
         var declaringType = uic.Method.ReceiverType as StructSymbol ?? searchBase;
+        if (declaringType == null)
+        {
+            return new BoundErrorExpression(null);
+        }
+
         return new BoundBaseClassCallExpression(
             ce,
             uic.Receiver,
@@ -2388,8 +2485,8 @@ internal sealed partial class ExpressionBinder
     private bool TryBindBaseClrInstanceCall(
         CallExpressionSyntax ce,
         string methodName,
-        System.Type clrBase,
-        out BoundExpression result)
+        System.Type? clrBase,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -2412,7 +2509,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var arguments = boundArguments.ToImmutable();
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return false;
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
         return TryResolveAndBindClrInstanceCall(
             receiver,
             candidates,
@@ -2429,7 +2531,7 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>Issue #1260: a readable display name for a CLR base type used in base-call member-not-found diagnostics.</summary>
-    private static string ClrTypeDisplayName(System.Type clrType) => clrType?.Name ?? "object";
+    private static string ClrTypeDisplayName(System.Type? clrType) => clrType?.Name ?? "object";
 
     /// <summary>
     /// Issue #1260: collects the candidate inherited CLR instance methods named
@@ -2443,7 +2545,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="clrBase">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="methodName">The invoked method name.</param>
     /// <returns>The deduplicated candidate methods (most-derived signature wins).</returns>
-    private static IReadOnlyList<MethodInfo> CollectBaseClrMethodCandidates(System.Type clrBase, string methodName)
+    private static IReadOnlyList<MethodInfo> CollectBaseClrMethodCandidates(System.Type? clrBase, string methodName)
     {
         var result = new List<MethodInfo>();
         if (clrBase == null)
@@ -2503,10 +2605,10 @@ internal sealed partial class ExpressionBinder
     /// <returns><see langword="true"/> when the access site is a valid class instance member.</returns>
     private bool TryResolveBaseSearchType(
         TextLocation baseLocation,
-        StructSymbol explicitBaseType,
+        StructSymbol? explicitBaseType,
         TextLocation selectorLocation,
-        out StructSymbol searchBase,
-        out System.Type clrBaseFallback)
+        out StructSymbol? searchBase,
+        out System.Type? clrBaseFallback)
     {
         searchBase = null;
         clrBaseFallback = null;
@@ -2588,7 +2690,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindBaseClassPropertyRead(
         NameExpressionSyntax member,
         TextLocation baseLocation,
-        StructSymbol explicitBaseType,
+        StructSymbol? explicitBaseType,
         TextLocation selectorLocation)
     {
         if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
@@ -2611,6 +2713,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        declaringType = Invariant.Required(declaringType, "a base-class property has a declaring type");
         if (!prop.HasGetter)
         {
             Diagnostics.ReportCannotAssign(member.IdentifierToken.Location, memberName);
@@ -2624,7 +2727,12 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name, prop.GetterAccessibility);
         }
 
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
 
         // Issue #1347: an auto-property has no getter FunctionSymbol — its
         // getter is a compiler-synthesized backing-field read. Route the base
@@ -2677,7 +2785,7 @@ internal sealed partial class ExpressionBinder
         BoundExpression value,
         TextLocation valueLocation,
         TextLocation equalsLocation,
-        StructSymbol explicitBaseType,
+        StructSymbol? explicitBaseType,
         TextLocation selectorLocation)
     {
         if (!TryResolveBaseSearchType(baseLocation, explicitBaseType, selectorLocation, out var searchBase, out var clrBaseFallback))
@@ -2699,6 +2807,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        declaringType = Invariant.Required(declaringType, "a base-class property has a declaring type");
         if (!prop.HasSetter)
         {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName);
@@ -2713,7 +2822,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var converted = conversions.BindConversion(valueLocation, value, prop.Type);
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
 
         // Issue #1347: an auto-property has no setter FunctionSymbol — its
         // setter is a compiler-synthesized backing-field write. Route the base
@@ -2755,10 +2869,14 @@ internal sealed partial class ExpressionBinder
     /// <returns><see langword="true"/> when a readable inherited property was found (or a precise diagnostic was reported).</returns>
     private bool TryBindBaseClrPropertyRead(
         NameExpressionSyntax member,
-        System.Type clrBase,
-        out BoundExpression result)
+        System.Type? clrBase,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
+        if (clrBase == null)
+        {
+            return false;
+        }
 
         var memberName = member.IdentifierToken.Text;
         var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
@@ -2780,7 +2898,12 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return false;
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
         result = new BoundImportedInstanceCallExpression(
             member,
             receiver,
@@ -2812,10 +2935,14 @@ internal sealed partial class ExpressionBinder
         BoundExpression value,
         TextLocation valueLocation,
         TextLocation equalsLocation,
-        System.Type clrBase,
-        out BoundExpression result)
+        System.Type? clrBase,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
+        if (clrBase == null)
+        {
+            return false;
+        }
 
         var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
         if (clrProp == null || clrProp.GetIndexParameters().Length != 0)
@@ -2846,7 +2973,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var converted = conversions.BindConversion(valueLocation, value, TypeSymbol.FromClrType(clrProp.PropertyType));
-        var receiver = new BoundVariableExpression(null, function.ThisParameter);
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return false;
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
         result = new BoundImportedInstanceCallExpression(
             value.Syntax,
             receiver,
@@ -2903,12 +3035,12 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var constraintInterface = tp.ClrInterfaceConstraint;
         var clrType = constraintInterface?.ClrType;
-        if (clrType is not { IsInterface: true })
+        if (constraintInterface == null || clrType is not { IsInterface: true })
         {
             return false;
         }
@@ -2919,7 +3051,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var argTypes = new Type[arguments.Length];
+        var argTypes = new Type?[arguments.Length];
         for (var i = 0; i < arguments.Length; i++)
         {
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
@@ -2958,7 +3090,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var method = resolution.Best;
+        if (resolution.Best is not { } method)
+        {
+            return false;
+        }
+
         var parameters = method.GetParameters();
 
         // Return type: a return that names the interface type-variable is
@@ -3038,7 +3174,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -3048,7 +3184,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var argTypes = new Type[arguments.Length];
+        var argTypes = new Type?[arguments.Length];
         for (var i = 0; i < arguments.Length; i++)
         {
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
@@ -3089,7 +3225,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var method = resolution.Best;
+        if (resolution.Best is not { } method)
+        {
+            return false;
+        }
+
         var parameters = method.GetParameters();
 
         // A concrete object member has a concrete return type (string / int32 /
@@ -3157,7 +3297,7 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames,
-        out BoundExpression result)
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
 
@@ -3167,7 +3307,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var argTypes = new Type[arguments.Length];
+        var argTypes = new Type?[arguments.Length];
         for (var i = 0; i < arguments.Length; i++)
         {
             var t = GetEffectiveArgumentClrTypeForOverloadResolution(arguments[i].Type);
@@ -3199,7 +3339,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var method = resolution.Best;
+        if (resolution.Best is not { } method)
+        {
+            return false;
+        }
+
         var parameters = method.GetParameters();
         var returnType = TypeSymbol.FromClrType(method.ReturnType);
 

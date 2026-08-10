@@ -309,7 +309,7 @@ public sealed partial class DiagnosticBag
     /// <param name="name">The display name of the obsolete symbol.</param>
     /// <param name="message">The optional user message; may be <c>null</c>.</param>
     /// <param name="isError">When <c>true</c>, the diagnostic is reported as an error.</param>
-    public void ReportObsoleteUse(TextLocation location, string name, string message, bool isError)
+    public void ReportObsoleteUse(TextLocation location, string name, string? message, bool isError)
     {
         var detail = string.IsNullOrEmpty(message)
             ? string.Empty

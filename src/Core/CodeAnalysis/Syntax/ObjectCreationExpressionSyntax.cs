@@ -28,7 +28,7 @@ public sealed class ObjectCreationExpressionSyntax : ExpressionSyntax
     /// <param name="closeBraceToken">The matching '}'.</param>
     public ObjectCreationExpressionSyntax(
         SyntaxTree syntaxTree,
-        ExpressionSyntax target,
+        ExpressionSyntax? target,
         SyntaxToken openBraceToken,
         SeparatedSyntaxList<PropertyInitializerSyntax> initializers,
         SyntaxToken closeBraceToken)
@@ -44,7 +44,7 @@ public sealed class ObjectCreationExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.ObjectCreationExpression;
 
     /// <summary>Gets the underlying constructor call expression (a <see cref="CallExpressionSyntax"/>).</summary>
-    public ExpressionSyntax Target { get; }
+    public ExpressionSyntax? Target { get; }
 
     /// <summary>Gets the '{' opening the initializer list.</summary>
     public SyntaxToken OpenBraceToken { get; }

@@ -136,7 +136,7 @@ internal static class ExternalClrOverrideResolver
         return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: false);
     }
 
-    private static TypeSymbol FindExternalBaseType(StructSymbol type)
+    private static TypeSymbol? FindExternalBaseType(StructSymbol type)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -156,18 +156,18 @@ internal static class ExternalClrOverrideResolver
         return type != null ? TypeSymbol.Object : null;
     }
 
-    private static Type GetReflectionBaseType(TypeSymbol importedBase)
+    private static Type? GetReflectionBaseType(TypeSymbol? importedBase)
         => importedBase is ImportedTypeSymbol { OpenDefinition: not null } imported
             && imported.HasSubstitutableTypeArgument
                 ? imported.OpenDefinition
                 : importedBase?.ClrType;
 
-    private static ImmutableArray<TypeSymbol> GetSymbolicTypeArguments(TypeSymbol importedBase)
+    private static ImmutableArray<TypeSymbol> GetSymbolicTypeArguments(TypeSymbol? importedBase)
         => importedBase is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true } imported
             ? imported.TypeArguments
             : ImmutableArray<TypeSymbol>.Empty;
 
-    private static IEnumerable<MethodInfo> EnumerateMethods(Type baseType, string name)
+    private static IEnumerable<MethodInfo> EnumerateMethods(Type? baseType, string name)
     {
         for (var current = baseType; current != null; current = current.BaseType)
         {
@@ -191,7 +191,7 @@ internal static class ExternalClrOverrideResolver
         }
     }
 
-    private static IEnumerable<PropertyInfo> EnumerateProperties(Type baseType, string name)
+    private static IEnumerable<PropertyInfo> EnumerateProperties(Type? baseType, string name)
     {
         for (var current = baseType; current != null; current = current.BaseType)
         {
@@ -215,7 +215,7 @@ internal static class ExternalClrOverrideResolver
         }
     }
 
-    private static IEnumerable<EventInfo> EnumerateEvents(Type baseType, string name)
+    private static IEnumerable<EventInfo> EnumerateEvents(Type? baseType, string name)
     {
         for (var current = baseType; current != null; current = current.BaseType)
         {
@@ -276,12 +276,17 @@ internal static class ExternalClrOverrideResolver
     }
 
     private static bool ReturnMatches(
-        Type clrReturnType,
+        Type? clrReturnType,
         TypeSymbol returnType,
         RefKind returnRefKind,
         ImmutableArray<TypeParameterSymbol> typeParameters,
         ImmutableArray<TypeSymbol> containingTypeArguments)
     {
+        if (clrReturnType == null)
+        {
+            return false;
+        }
+
         var clrReturnsByRef = clrReturnType.IsByRef;
         if ((returnRefKind == RefKind.Ref) != clrReturnsByRef)
         {
@@ -291,6 +296,10 @@ internal static class ExternalClrOverrideResolver
         if (clrReturnsByRef)
         {
             clrReturnType = clrReturnType.GetElementType();
+            if (clrReturnType == null)
+            {
+                return false;
+            }
         }
 
         if (TypeMatches(clrReturnType, returnType, typeParameters, containingTypeArguments))
@@ -302,7 +311,7 @@ internal static class ExternalClrOverrideResolver
     }
 
     private static bool PropertyTypeMatches(
-        Type clrPropertyType,
+        Type? clrPropertyType,
         TypeSymbol propertyType,
         bool hasSetter,
         ImmutableArray<TypeSymbol> containingTypeArguments)
@@ -314,7 +323,7 @@ internal static class ExternalClrOverrideResolver
             || (!hasSetter && IsCovariantReturn(clrPropertyType, propertyType));
 
     private static bool TypeMatches(
-        Type clrType,
+        Type? clrType,
         TypeSymbol type,
         ImmutableArray<TypeParameterSymbol> methodTypeParameters,
         ImmutableArray<TypeSymbol> containingTypeArguments)
@@ -364,8 +373,13 @@ internal static class ExternalClrOverrideResolver
         return leftClr != null && rightClr != null && ClrTypeUtilities.AreSame(leftClr, rightClr);
     }
 
-    private static bool IsCovariantReturn(Type baseReturnType, TypeSymbol derivedReturnType)
+    private static bool IsCovariantReturn(Type? baseReturnType, TypeSymbol derivedReturnType)
     {
+        if (baseReturnType == null)
+        {
+            return false;
+        }
+
         var derivedClrType = NullableLifting.GetEffectiveClrType(derivedReturnType);
         if (derivedClrType != null)
         {
@@ -405,8 +419,8 @@ internal static class ExternalClrOverrideResolver
     }
 
     internal readonly record struct MatchResult<T>(
-        T Member,
-        TypeSymbol ContainingType,
+        T? Member,
+        TypeSymbol? ContainingType,
         bool SawName,
         bool IsSealed)
         where T : MemberInfo;

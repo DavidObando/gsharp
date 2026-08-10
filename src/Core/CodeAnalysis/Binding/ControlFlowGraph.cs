@@ -209,8 +209,8 @@ public sealed class ControlFlowGraph
         var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<BoundStatement>();
         var labelOrdinal = 0;
         var choiceOrdinal = 0;
-        BoundLabel methodExitLabel = null;
-        BoundReturnStatement methodExitReturn = null;
+        BoundLabel? methodExitLabel = null;
+        BoundReturnStatement? methodExitReturn = null;
 
         if (statement is BoundBlockStatement functionBody && functionBody.Statements.Length >= 3)
         {
@@ -230,7 +230,7 @@ public sealed class ControlFlowGraph
         Add(statement);
         return new BoundBlockStatement(null, builder.ToImmutable());
 
-        void Add(BoundStatement current, Action<BoundStatement> routeTransfer = null)
+        void Add(BoundStatement current, Action<BoundStatement>? routeTransfer = null)
         {
             switch (current)
             {
@@ -264,8 +264,12 @@ public sealed class ControlFlowGraph
                 case BoundLabelStatement labelStatement when ReferenceEquals(labelStatement.Label, methodExitLabel):
                 case BoundReturnStatement returnStatement when ReferenceEquals(returnStatement, methodExitReturn):
                     break;
-                case BoundGotoStatement gotoStatement when ReferenceEquals(gotoStatement.Label, methodExitLabel):
-                    Add(new BoundReturnStatement(null, methodExitReturn.Expression), routeTransfer);
+                case BoundGotoStatement gotoStatement when methodExitLabel is not null && ReferenceEquals(gotoStatement.Label, methodExitLabel):
+                    if (methodExitReturn is not null)
+                    {
+                        Add(new BoundReturnStatement(null, methodExitReturn.Expression), routeTransfer);
+                    }
+
                     break;
                 case BoundGotoStatement:
                 case BoundReturnStatement:
@@ -286,12 +290,12 @@ public sealed class ControlFlowGraph
             }
         }
 
-        void AddPatternSwitch(BoundPatternSwitchStatement switchStatement, Action<BoundStatement> routeTransfer)
+        void AddPatternSwitch(BoundPatternSwitchStatement switchStatement, Action<BoundStatement>? routeTransfer)
         {
             var endLabel = NewLabel("switchEnd");
             var arms = new List<(BoundPatternSwitchArm Arm, BoundLabel Label)>();
-            BoundPatternSwitchArm defaultArm = null;
-            BoundLabel defaultLabel = null;
+            BoundPatternSwitchArm? defaultArm = null;
+            BoundLabel? defaultLabel = null;
             var dispatchComplete = false;
 
             foreach (var arm in switchStatement.Arms)
@@ -317,7 +321,7 @@ public sealed class ControlFlowGraph
 
             if (!dispatchComplete && !switchStatement.IsExhaustive)
             {
-                builder.Add(new BoundGotoStatement(null, defaultArm == null ? endLabel : defaultLabel));
+                builder.Add(new BoundGotoStatement(null, defaultArm is null || defaultLabel is null ? endLabel : defaultLabel));
             }
 
             foreach (var (arm, armLabel) in arms)
@@ -327,7 +331,7 @@ public sealed class ControlFlowGraph
                 builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
-            if (defaultArm != null)
+            if (defaultArm is not null && defaultLabel is not null)
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
                 Add(defaultArm.Body, routeTransfer);
@@ -336,13 +340,13 @@ public sealed class ControlFlowGraph
             builder.Add(new BoundLabelStatement(null, endLabel));
         }
 
-        void AddSelect(BoundSelectStatement selectStatement, Action<BoundStatement> routeTransfer)
+        void AddSelect(BoundSelectStatement selectStatement, Action<BoundStatement>? routeTransfer)
         {
             var dispatchLabel = NewLabel("selectDispatch");
             var endLabel = NewLabel("selectEnd");
             var cases = new List<(BoundSelectCase Case, BoundLabel Label)>();
-            BoundSelectCase defaultCase = null;
-            BoundLabel defaultLabel = null;
+            BoundSelectCase? defaultCase = null;
+            BoundLabel? defaultLabel = null;
 
             builder.Add(new BoundLabelStatement(null, dispatchLabel));
             foreach (var @case in selectStatement.Cases)
@@ -359,7 +363,7 @@ public sealed class ControlFlowGraph
                 builder.Add(new BoundConditionalGotoStatement(null, caseLabel, NewChoice()));
             }
 
-            builder.Add(new BoundGotoStatement(null, defaultCase == null ? dispatchLabel : defaultLabel));
+            builder.Add(new BoundGotoStatement(null, defaultCase is null || defaultLabel is null ? dispatchLabel : defaultLabel));
 
             foreach (var (@case, caseLabel) in cases)
             {
@@ -368,7 +372,7 @@ public sealed class ControlFlowGraph
                 builder.Add(new BoundGotoStatement(null, endLabel));
             }
 
-            if (defaultCase != null)
+            if (defaultCase is not null && defaultLabel is not null)
             {
                 builder.Add(new BoundLabelStatement(null, defaultLabel));
                 Add(defaultCase.Body, routeTransfer);
@@ -377,10 +381,11 @@ public sealed class ControlFlowGraph
             builder.Add(new BoundLabelStatement(null, endLabel));
         }
 
-        void AddTry(BoundTryStatement tryStatement, Action<BoundStatement> outerRoute)
+        void AddTry(BoundTryStatement tryStatement, Action<BoundStatement>? outerRoute)
         {
             var endLabel = NewLabel("tryEnd");
-            var exceptionLabel = tryStatement.FinallyBlock == null ? null : NewLabel("exceptionFinally");
+            var finallyBlock = tryStatement.FinallyBlock;
+            var exceptionLabel = finallyBlock == null ? null : NewLabel("exceptionFinally");
             var alternatives = new List<(BoundStatement Body, BoundLabel Label)>
             {
                 (tryStatement.TryBlock, NewLabel("tryBody")),
@@ -407,7 +412,7 @@ public sealed class ControlFlowGraph
             {
                 builder.Add(new BoundLabelStatement(null, label));
 
-                if (tryStatement.FinallyBlock == null)
+                if (finallyBlock == null)
                 {
                     Add(body, outerRoute);
                     builder.Add(new BoundGotoStatement(null, endLabel));
@@ -428,19 +433,19 @@ public sealed class ControlFlowGraph
                         return;
                     }
 
-                    Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                    Add(CloneWithFreshLabels(finallyBlock), outerRoute);
                     Add(transfer, outerRoute);
                 }
 
                 Add(body, RouteThroughFinally);
-                Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                Add(CloneWithFreshLabels(finallyBlock), outerRoute);
                 Add(new BoundGotoStatement(null, endLabel), outerRoute);
             }
 
-            if (exceptionLabel != null)
+            if (exceptionLabel != null && finallyBlock is not null)
             {
                 builder.Add(new BoundLabelStatement(null, exceptionLabel));
-                Add(CloneWithFreshLabels(tryStatement.FinallyBlock), outerRoute);
+                Add(CloneWithFreshLabels(finallyBlock), outerRoute);
                 Add(new BoundThrowStatement(null, NewChoice()), outerRoute);
             }
 
@@ -605,7 +610,7 @@ public sealed class ControlFlowGraph
         /// <param name="from">Originating block.</param>
         /// <param name="to">Destination block.</param>
         /// <param name="condition">Branch condition.</param>
-        public BasicBlockBranch(BasicBlock from, BasicBlock to, BoundExpression condition)
+        public BasicBlockBranch(BasicBlock from, BasicBlock to, BoundExpression? condition)
         {
             From = from;
             To = to;
@@ -625,7 +630,7 @@ public sealed class ControlFlowGraph
         /// <summary>
         /// Gets the branch condition.
         /// </summary>
-        public BoundExpression Condition { get; }
+        public BoundExpression? Condition { get; }
 
         /// <inheritdoc/>
         public override string ToString()
@@ -944,11 +949,15 @@ public sealed class ControlFlowGraph
             return blockFromLabel.TryGetValue(label, out var block) ? block : end;
         }
 
-        private void Connect(BasicBlock from, BasicBlock to, BoundExpression condition = null)
+        private void Connect(BasicBlock from, BasicBlock to, BoundExpression? condition = null)
         {
             if (condition is BoundLiteralExpression l)
             {
-                var value = (bool)l.Value;
+                if (l.Value is not bool value)
+                {
+                    throw new InvalidOperationException("A literal branch condition must be Boolean.");
+                }
+
                 if (value)
                 {
                     condition = null;
@@ -969,11 +978,20 @@ public sealed class ControlFlowGraph
         {
             if (condition is BoundLiteralExpression literal)
             {
-                var value = (bool)literal.Value;
+                if (literal.Value is not bool value)
+                {
+                    throw new InvalidOperationException("A literal branch condition must be Boolean.");
+                }
+
                 return new BoundLiteralExpression(null, !value);
             }
 
             var op = BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool);
+            if (op is null)
+            {
+                throw new InvalidOperationException("The Boolean negation operator must be available.");
+            }
+
             return new BoundUnaryExpression(null, op, condition);
         }
     }

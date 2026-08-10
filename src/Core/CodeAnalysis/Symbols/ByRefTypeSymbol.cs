@@ -16,7 +16,10 @@ public sealed class ByRefTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, ByRefTypeSymbol> Cache = new();
 
     private ByRefTypeSymbol(TypeSymbol pointeeType)
-        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakeByRefType())
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation pointee types.
+        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakeByRefType()!)
     {
         PointeeType = pointeeType;
     }

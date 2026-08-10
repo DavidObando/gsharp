@@ -27,8 +27,8 @@ public sealed class IfExpressionSyntax : ExpressionSyntax
         SyntaxToken ifKeyword,
         ExpressionSyntax condition,
         BlockExpressionSyntax thenBlock,
-        SyntaxToken elseKeyword,
-        ExpressionSyntax elseExpression)
+        SyntaxToken? elseKeyword,
+        ExpressionSyntax? elseExpression)
         : base(syntaxTree)
     {
         IfKeyword = ifKeyword;
@@ -51,12 +51,12 @@ public sealed class IfExpressionSyntax : ExpressionSyntax
     public BlockExpressionSyntax ThenBlock { get; }
 
     /// <summary>Gets the optional <c>else</c> keyword token.</summary>
-    public SyntaxToken ElseKeyword { get; }
+    public SyntaxToken? ElseKeyword { get; }
 
     /// <summary>
     /// Gets the else branch: a <see cref="BlockExpressionSyntax"/> for a plain else,
     /// or another <see cref="IfExpressionSyntax"/> for an <c>else if</c> chain.
     /// Null when no else branch is present.
     /// </summary>
-    public ExpressionSyntax ElseExpression { get; }
+    public ExpressionSyntax? ElseExpression { get; }
 }

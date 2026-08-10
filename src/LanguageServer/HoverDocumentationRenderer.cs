@@ -22,7 +22,7 @@ internal static class HoverDocumentationRenderer
     /// </summary>
     /// <param name="documentation">The documentation to render.</param>
     /// <returns>The ordered sections (heading + Markdown body).</returns>
-    public static IReadOnlyList<HoverDocSection> Render(DocumentationComment documentation)
+    public static IReadOnlyList<HoverDocSection> Render(DocumentationComment? documentation)
     {
         if (documentation is null)
         {
@@ -42,7 +42,7 @@ internal static class HoverDocumentationRenderer
         return sections;
     }
 
-    private static void AddProse(List<HoverDocSection> sections, string heading, ImmutableArray<DocInline> content)
+    private static void AddProse(List<HoverDocSection> sections, string? heading, ImmutableArray<DocInline> content)
     {
         var body = RenderInline(content).Trim();
         if (body.Length > 0)
@@ -178,7 +178,7 @@ internal static class HoverDocumentationRenderer
 
     // The cref carries a "T:"/"M:"/... prefix and a fully-qualified name; hover shows the
     // trailing simple name (and method/parameter tail) for readability.
-    private static string SimpleCrefName(string cref)
+    private static string SimpleCrefName(string? cref)
     {
         if (string.IsNullOrEmpty(cref))
         {

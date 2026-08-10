@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -75,7 +76,7 @@ internal sealed partial class ExpressionBinder
         scope.TryDeclareVariable(tempVar);
 
         var seen = new HashSet<string>();
-        var explicitValues = new Dictionary<string, (FieldSymbol Field, PropertySymbol Property, BoundExpression Value)>();
+        var explicitValues = new Dictionary<string, (FieldSymbol? Field, PropertySymbol? Property, BoundExpression Value)>();
         foreach (var initSyntax in overrides)
         {
             var memberName = initSyntax.FieldIdentifier.Text;
@@ -110,6 +111,7 @@ internal sealed partial class ExpressionBinder
             // accessor instead of failing to find a field at all.
             if (TypeMemberModel.TryGetProperty(structType, memberName, out var property, out var propertyDeclaringType) && property.HasSetter)
             {
+                propertyDeclaringType = Invariant.Required(propertyDeclaringType, "a user-defined struct property has a declaring type");
                 if (!AccessibilityChecker.IsAccessible(property.SetterAccessibility, propertyDeclaringType, this.function))
                 {
                     Diagnostics.ReportMemberInaccessible(initSyntax.FieldIdentifier.Location, property.Name, propertyDeclaringType.Name, property.SetterAccessibility);
@@ -167,7 +169,8 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindObjectCreationExpression(ObjectCreationExpressionSyntax syntax)
     {
-        var target = BindExpression(syntax.Target);
+        var target = BindExpression(
+            Invariant.Required(syntax.Target, "an object creation has a target expression"));
         return BindObjectInitializerSuffix(syntax, target);
     }
 
@@ -377,6 +380,10 @@ internal sealed partial class ExpressionBinder
         if (function?.IsStaticInitializer == true &&
             function.StaticOwnerType is InterfaceSymbol)
         {
+            // BindInterfaceStaticSpreadStatements branches on
+            // `targetElementType != null` itself, so null is a shape it handles.
+            // Asserting here would make that branch dead code and turn a handled
+            // case into GS9998.
             return BindInterfaceStaticSpreadStatements(
                 collectionLocal,
                 spread,
@@ -474,7 +481,7 @@ internal sealed partial class ExpressionBinder
         LocalVariableSymbol sourceLocal,
         SyntaxToken sourceToken,
         BoundExpression source,
-        TypeSymbol targetElementType)
+        TypeSymbol? targetElementType)
     {
         var tree = spread.SyntaxTree;
         var position = spread.Span.Start;
@@ -594,7 +601,7 @@ internal sealed partial class ExpressionBinder
 
     private static bool TryGetCollectionSpreadElementType(
         TypeSymbol collectionType,
-        out TypeSymbol elementType)
+        [NotNullWhen(true)] out TypeSymbol? elementType)
     {
         switch (collectionType)
         {
@@ -635,7 +642,7 @@ internal sealed partial class ExpressionBinder
                 when MemberLookup.TryGetUserPatternEnumerableElementType(
                     user,
                     out var userElement):
-                elementType = userElement;
+                elementType = Invariant.Required(userElement, "a successful user enumerable-element lookup produces an element type");
                 return true;
         }
 
@@ -660,7 +667,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        Type clrElement = null;
+        Type? clrElement = null;
         foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
             collectionType.ClrType,
             "Add"))
@@ -810,11 +817,14 @@ internal sealed partial class ExpressionBinder
         {
             foreach (var assignment in nestedObjectAssignments)
             {
+                var nonNullAssignment = Invariant.Required(
+                    assignment,
+                    "a nested collection initializer contains only assignment elements");
                 var initializer = new PropertyInitializerSyntax(
-                    assignment.SyntaxTree,
-                    assignment.IdentifierToken,
-                    assignment.EqualsToken,
-                    assignment.Expression);
+                    nonNullAssignment.SyntaxTree,
+                    nonNullAssignment.IdentifierToken,
+                    nonNullAssignment.EqualsToken,
+                    nonNullAssignment.Expression);
                 var boundAssignment = BindObjectInitializerAssignment(memberLocal, propRead.Type, initializer);
                 if (boundAssignment != null)
                 {
@@ -919,7 +929,9 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private static bool TryGetCopyOverrides(CallExpressionSyntax call, out SeparatedSyntaxList<FieldInitializerSyntax> overrides)
+    private static bool TryGetCopyOverrides(
+        CallExpressionSyntax call,
+        [MaybeNullWhen(false)] out SeparatedSyntaxList<FieldInitializerSyntax> overrides)
     {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         foreach (var node in call.Arguments.GetWithSeparators())
@@ -986,7 +998,9 @@ internal sealed partial class ExpressionBinder
         return builder.MoveToImmutable();
     }
 
-    internal bool TryBindIntrinsicCall(CallExpressionSyntax syntax, out BoundExpression result)
+    internal bool TryBindIntrinsicCall(
+        CallExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var name = syntax.Identifier.Text;
@@ -1142,13 +1156,15 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    internal bool TryBindClrConstructorCall(CallExpressionSyntax syntax, out BoundExpression result)
+    internal bool TryBindClrConstructorCall(
+        CallExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var name = syntax.Identifier.Text;
 
-        System.Type clrType = null;
-        System.Type openGenericDefinition = null;
+        System.Type? clrType = null;
+        System.Type? openGenericDefinition = null;
         ImmutableArray<TypeSymbol> symbolicTypeArgs = default;
         if (syntax.TypeArgumentList != null)
         {
@@ -1210,12 +1226,17 @@ internal sealed partial class ExpressionBinder
             {
                 return false;
             }
+        }
 
-            if (clrType.IsGenericTypeDefinition)
-            {
-                // User wrote `List(...)` without `[T]`; can't construct an open generic.
-                return false;
-            }
+        if (clrType is not System.Type resolvedClrType)
+        {
+            return false;
+        }
+
+        if (syntax.TypeArgumentList == null && resolvedClrType.IsGenericTypeDefinition)
+        {
+            // User wrote `List(...)` without `[T]`; can't construct an open generic.
+            return false;
         }
 
         // Issue #2263: for an imported `data class` the CLR type carries a real
@@ -1237,7 +1258,7 @@ internal sealed partial class ExpressionBinder
         // `IsClass`-only restriction) so a data class AND a data struct both
         // resolve construction through the one semantic aggregate.
         if (openGenericDefinition == null
-            && ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, scope.References, out var dataClassAggregate)
+            && ImportedTypeSymbol.TryCreateSemanticAggregate(resolvedClrType, scope.References, out var dataClassAggregate)
             && dataClassAggregate.IsData
             && dataClassAggregate.HasPrimaryConstructor)
         {
@@ -1247,7 +1268,7 @@ internal sealed partial class ExpressionBinder
             // so `Settings()` supplies declared defaults instead of selecting
             // that zero-initializing constructor. C# records have no gsc marker
             // and keep using CLR overload resolution (#2291/#2458).
-            if (ImportedAssemblySemantics.TryGetTypeSemantics(clrType, out _))
+            if (ImportedAssemblySemantics.TryGetTypeSemantics(resolvedClrType, out _))
             {
                 var primaryParameterCount = dataClassAggregate.PrimaryConstructorParameters.Length;
                 var primaryAcceptsArity =
@@ -1256,17 +1277,20 @@ internal sealed partial class ExpressionBinder
                         .Skip(syntax.Arguments.Count)
                         .All(parameter => parameter.HasExplicitDefaultValue);
                 if (!primaryAcceptsArity
-                    && ClrTypeUtilities.SafeGetConstructors(clrType, BindingFlags.Public | BindingFlags.Instance)
+                    && ClrTypeUtilities.SafeGetConstructors(resolvedClrType, BindingFlags.Public | BindingFlags.Instance)
                         .Any(ctor => ctor.GetParameters().Length == syntax.Arguments.Count))
                 {
                     var boundSecondary = TryBindClrConstructorFromType(
-                        clrType,
+                        resolvedClrType,
                         syntax,
                         out result,
                         out var noApplicableSecondary,
                         resultTypeOverride: dataClassAggregate);
                     if (boundSecondary)
                     {
+                        result = Invariant.Required(
+                            result,
+                            "a successful secondary constructor binding produces a result");
                         return true;
                     }
 
@@ -1279,17 +1303,25 @@ internal sealed partial class ExpressionBinder
             }
 
             var bound = TryBindClrConstructorFromType(
-                clrType,
+                resolvedClrType,
                 syntax,
                 out result,
                 out var noApplicableOverload,
                 resultTypeOverride: dataClassAggregate);
-            return bound || FinishClrConstructorBindingFailure(
+            if (bound)
+            {
+                result = Invariant.Required(
+                    result,
+                    "a successful aggregate constructor binding produces a result");
+                return true;
+            }
+
+            return FinishClrConstructorBindingFailure(
                 syntax, name, noApplicableOverload, ref result);
         }
 
         if (TryBindClrConstructorFromType(
-                clrType,
+                resolvedClrType,
                 syntax,
                 out result,
                 out var clrNoApplicableOverload,
@@ -1300,7 +1332,7 @@ internal sealed partial class ExpressionBinder
         }
 
         if (openGenericDefinition == null
-            && ImportedTypeSymbol.TryCreateSemanticAggregate(clrType, scope.References, out var aggregate)
+            && ImportedTypeSymbol.TryCreateSemanticAggregate(resolvedClrType, scope.References, out var aggregate)
             && aggregate.HasPrimaryConstructor)
         {
             result = overloads.BindConstructorCallExpression(syntax, aggregate);
@@ -1315,7 +1347,7 @@ internal sealed partial class ExpressionBinder
         CallExpressionSyntax syntax,
         string typeName,
         bool noApplicableOverload,
-        ref BoundExpression result)
+        [NotNullWhen(true)] ref BoundExpression? result)
     {
         if (syntax.TypeArgumentList == null)
         {
@@ -1459,11 +1491,11 @@ internal sealed partial class ExpressionBinder
     private bool TryBindClrConstructorFromType(
         System.Type clrType,
         CallExpressionSyntax syntax,
-        out BoundExpression result,
+        [NotNullWhen(true)] out BoundExpression? result,
         out bool noApplicableOverload,
-        System.Type openGenericDefinition = null,
+        System.Type? openGenericDefinition = null,
         ImmutableArray<TypeSymbol> symbolicTypeArgs = default,
-        TypeSymbol resultTypeOverride = null)
+        TypeSymbol? resultTypeOverride = null)
     {
         result = null;
         noApplicableOverload = false;
@@ -1508,17 +1540,23 @@ internal sealed partial class ExpressionBinder
             // materialises as `Func<Foo>`.
             var inner = OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i]);
             if (inner is LambdaExpressionSyntax ctorLambdaSyntax
+                && openGenericDefinition is not null
                 && TryResolveSymbolicDelegateTargetForCtor(
-                    openGenericDefinition, symbolicTypeArgs, sourceArgIndex: i, argName: argName, out var symbolicTarget))
+                    openGenericDefinition,
+                    symbolicTypeArgs,
+                    sourceArgIndex: i,
+                    argName: argName,
+                    out var symbolicTarget)
+                && symbolicTarget is { } resolvedSymbolicTarget)
             {
                 var literal = lambdas.BindLambdaExpression(
                     ctorLambdaSyntax,
-                    symbolicTarget.FunctionType);
-                boundArguments.Add(ShouldConvertToNominalDelegate(symbolicTarget.DelegateType)
+                    resolvedSymbolicTarget.FunctionType);
+                boundArguments.Add(ShouldConvertToNominalDelegate(resolvedSymbolicTarget.DelegateType)
                     ? conversions.BindConversion(
                         syntax.Arguments[i].Location,
                         literal,
-                        symbolicTarget.DelegateType)
+                        resolvedSymbolicTarget.DelegateType)
                     : literal);
                 symbolicCtorDelegateArgs.Add(i);
                 continue;
@@ -1532,7 +1570,7 @@ internal sealed partial class ExpressionBinder
         // "better function member" resolver. Ambiguity surfaces a hard
         // binder diagnostic and the call falls back to the surrounding
         // pipeline (which will diagnose a missing match).
-        var argTypes = new System.Type[boundArguments.Count];
+        var argTypes = new System.Type?[boundArguments.Count];
         var argsAllTyped = true;
         var hasUserClassArg = false;
         for (var i = 0; i < boundArguments.Count; i++)
@@ -1550,7 +1588,7 @@ internal sealed partial class ExpressionBinder
             // lambda's `Func<…>` matches the erased `Lazy<object>` ctor's
             // `Func<object>` parameter. Other delegate args (and generic-method
             // inference elsewhere) keep the default enum→int ride-through.
-            System.Type t;
+            System.Type? t;
             var priorErase = eraseDelegateInnerEnumToObject;
             eraseDelegateInnerEnumToObject = symbolicCtorDelegateArgs.Contains(i);
             try
@@ -1588,7 +1626,7 @@ internal sealed partial class ExpressionBinder
             argTypes[i] = t;
         }
 
-        ConstructorInfo bestCtor = null;
+        ConstructorInfo? bestCtor = null;
         ImmutableArray<int> ctorMapping = default;
         bool ctorIsExpanded = false;
         if (argsAllTyped)
@@ -1599,7 +1637,7 @@ internal sealed partial class ExpressionBinder
             // implicit reference conversion. Threaded as a call-local
             // parameter (not a shared static) so concurrent/nested binds never
             // observe another call's closure.
-            Func<Type, Type, bool> supplementaryInterfaceCheck = hasUserClassArg
+            Func<Type, Type, bool>? supplementaryInterfaceCheck = hasUserClassArg
                 ? (source, target) => IsUserClassAssignableToInterface(boundArguments, argTypes, source, target)
                 : null;
 
@@ -1607,7 +1645,7 @@ internal sealed partial class ExpressionBinder
                 ctors,
                 argTypes,
                 interpolatedStringArgs: ComputeInterpolatedStringArgFlags(syntax.Arguments, boundArguments.Count),
-                argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames,
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments),
@@ -1615,7 +1653,9 @@ internal sealed partial class ExpressionBinder
             switch (resolution.Outcome)
             {
                 case ClrOverloadResolution.ResolutionOutcome.Resolved:
-                    bestCtor = resolution.Best;
+                    bestCtor = Invariant.Required(
+                        resolution.Best,
+                        "a resolved constructor overload has a best constructor");
                     ctorMapping = resolution.ParameterMapping;
                     ctorIsExpanded = resolution.IsExpanded;
                     break;
@@ -1749,7 +1789,7 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax argumentSyntax,
         IReadOnlyList<ParameterInfo[]> candidateParameterLists,
         int sourceArgIndex,
-        string argName,
+        string? argName,
         int paramOffset)
     {
         var inner = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax);
@@ -1778,7 +1818,7 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax argumentSyntax,
         LambdaExpressionSyntax lambdaSyntax,
         FunctionTypeSymbol target,
-        TypeSymbol nominalTarget)
+        TypeSymbol? nominalTarget)
     {
         var literal = lambdas.BindLambdaExpression(lambdaSyntax, target);
         return nominalTarget != null && ShouldConvertToNominalDelegate(nominalTarget)
@@ -1796,9 +1836,9 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<ParameterInfo[]> candidateParameterLists,
         int paramOffset,
         int sourceArgIndex,
-        string argName,
-        out FunctionTypeSymbol target,
-        out TypeSymbol nominalTarget,
+        string? argName,
+        [NotNullWhen(true)] out FunctionTypeSymbol? target,
+        out TypeSymbol? nominalTarget,
         out bool blockedByOpenGenericParameter,
         out bool sawOpenGenericParameter)
     {
@@ -1938,10 +1978,10 @@ internal sealed partial class ExpressionBinder
         Type openGenericDefinition,
         ImmutableArray<TypeSymbol> symbolicTypeArgs,
         int sourceArgIndex,
-        string argName,
-        out (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType) target)
+        string? argName,
+        [NotNullWhen(true)] out (TypeSymbol DelegateType, FunctionTypeSymbol FunctionType)? target)
     {
-        target = (null, null);
+        target = null;
         if (openGenericDefinition == null || symbolicTypeArgs.IsDefaultOrEmpty)
         {
             return false;
@@ -1993,25 +2033,26 @@ internal sealed partial class ExpressionBinder
                     symbolicTypeArgs,
                     out var mappedDelegate,
                     out var candidate)
-                || candidate == null)
+                || mappedDelegate is null
+                || candidate is null)
             {
                 continue;
             }
 
-            if (target.FunctionType == null)
+            if (target is null)
             {
                 target = (mappedDelegate, candidate);
             }
-            else if (!SameDelegateIdentity(target.DelegateType, mappedDelegate)
-                || (!ReferenceEquals(target.FunctionType, candidate)
-                    && !target.FunctionType.Equals(candidate)))
+            else if (!SameDelegateIdentity(target.Value.DelegateType, mappedDelegate)
+                || (!ReferenceEquals(target.Value.FunctionType, candidate)
+                    && !target.Value.FunctionType.Equals(candidate)))
             {
-                target = (null, null);
+                target = null;
                 return false;
             }
         }
 
-        return target.FunctionType != null;
+        return target is { FunctionType: not null };
     }
 
     /// <summary>
@@ -2029,13 +2070,16 @@ internal sealed partial class ExpressionBinder
     /// <param name="syntax">The call expression (identifier = nested type name, args = ctor args).</param>
     /// <param name="result">The bound constructor call on success.</param>
     /// <returns>Whether a nested type was found and a constructor was bound.</returns>
-    private bool TryBindNestedTypeConstructorCall(System.Type containingType, CallExpressionSyntax syntax, out BoundExpression result)
+    private bool TryBindNestedTypeConstructorCall(
+        System.Type containingType,
+        CallExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
     {
         result = null;
         var nestedName = syntax.Identifier.Text;
         var arity = syntax.TypeArgumentList?.Arguments.Count ?? 0;
 
-        System.Type nestedType = null;
+        System.Type? nestedType = null;
 
         // Try arity-mangled name first for generic nested types (e.g. Inner`1).
         if (arity > 0)
@@ -2056,10 +2100,15 @@ internal sealed partial class ExpressionBinder
         // Close generic nested type if type arguments were provided.
         if (arity > 0 && nestedType.IsGenericTypeDefinition)
         {
+            if (syntax.TypeArgumentList is not TypeArgumentListSyntax typeArguments)
+            {
+                return false;
+            }
+
             var clrArgs = new System.Type[arity];
             for (var i = 0; i < arity; i++)
             {
-                var ta = bindTypeClause(syntax.TypeArgumentList.Arguments[i]);
+                var ta = bindTypeClause(typeArguments.Arguments[i]);
                 if (ta?.ClrType == null)
                 {
                     return false;

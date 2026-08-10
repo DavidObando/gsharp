@@ -134,10 +134,12 @@ internal static class SynthesizedClosureReifier
                     ?? src.InterfaceConstraint;
             }
 
-            clone.ClrInterfaceConstraint =
-                StructSymbol.SubstituteTypeParameters(src.ClrInterfaceConstraint, subst);
-            clone.ClassConstraint =
-                StructSymbol.SubstituteTypeParameters(src.ClassConstraint, subst);
+            clone.ClrInterfaceConstraint = src.ClrInterfaceConstraint is { } clrInterfaceConstraint
+                ? StructSymbol.SubstituteTypeParameters(clrInterfaceConstraint, subst)
+                : null;
+            clone.ClassConstraint = src.ClassConstraint is { } classConstraint
+                ? StructSymbol.SubstituteTypeParameters(classConstraint, subst)
+                : null;
         }
 
         return ImmutableArray.Create(clones);
@@ -166,7 +168,10 @@ internal static class SynthesizedClosureReifier
     /// erase-on-mismatch fallback for same-compilation-only callers.
     /// </param>
     /// <returns>The constructed instance over the original parameters.</returns>
-    public static StructSymbol Reify(StructSymbol definition, ImmutableArray<TypeParameterSymbol> origTPs, System.Func<System.Type, System.Type> mapClrType = null)
+    public static StructSymbol Reify(
+        StructSymbol definition,
+        ImmutableArray<TypeParameterSymbol> origTPs,
+        System.Func<System.Type, System.Type>? mapClrType = null)
     {
         var clones = CloneWithRemappedConstraints(origTPs);
 
@@ -179,6 +184,9 @@ internal static class SynthesizedClosureReifier
             args.Add(tp);
         }
 
-        return StructSymbol.Construct(definition, args.MoveToImmutable(), mapClrType);
+        var typeArguments = args.MoveToImmutable();
+        return mapClrType is null
+            ? StructSymbol.Construct(definition, typeArguments)
+            : StructSymbol.Construct(definition, typeArguments, mapClrType);
     }
 }

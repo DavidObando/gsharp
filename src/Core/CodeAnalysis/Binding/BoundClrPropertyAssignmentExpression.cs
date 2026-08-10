@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -21,14 +22,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
 {
     public BoundClrPropertyAssignmentExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         MemberInfo member,
         BoundExpression value,
         TypeSymbol resultType,
-        TypeSymbol staticContainerType,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null)
+        TypeSymbol? staticContainerType,
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -40,18 +41,24 @@ public sealed class BoundClrPropertyAssignmentExpression : BoundExpression
         StaticContainerType = staticContainerType;
     }
 
-    public BoundExpression Receiver { get; }
+    /// <summary>Gets the receiver, or <c>null</c> when the member is
+    /// static -- see the remarks on this type.</summary>
+    public BoundExpression? Receiver { get; }
 
     public MemberInfo Member { get; }
 
     public BoundExpression Value { get; }
 
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
-    public TypeSymbol StaticContainerType { get; }
+    /// <summary>Gets the declaring type used to parent a static member
+    /// reference, or <c>null</c> when the binder had none to record (which
+    /// includes every instance write).</summary>
+    public TypeSymbol? StaticContainerType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }

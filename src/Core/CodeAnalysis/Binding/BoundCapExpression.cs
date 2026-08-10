@@ -19,7 +19,7 @@ public sealed class BoundCapExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The operand expression.</param>
-    public BoundCapExpression(SyntaxNode syntax, BoundExpression operand)
+    public BoundCapExpression(SyntaxNode? syntax, BoundExpression operand)
         : base(syntax)
     {
         Operand = operand;

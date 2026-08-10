@@ -82,7 +82,7 @@ internal static class MagicCollectionZeroValue
     /// <param name="syntax">The originating declaration syntax (may be null in synthesized contexts).</param>
     /// <param name="type">The declared slot type.</param>
     /// <returns>The synthesized empty-instance expression, or null.</returns>
-    public static BoundExpression TrySynthesizeEmptyInstance(SyntaxNode syntax, TypeSymbol type)
+    public static BoundExpression? TrySynthesizeEmptyInstance(SyntaxNode? syntax, TypeSymbol type)
         => TrySynthesizeEmptyInstanceCore(syntax, type, visiting: null);
 
     /// <summary>
@@ -144,7 +144,7 @@ internal static class MagicCollectionZeroValue
     /// </summary>
     /// <param name="type">The field's declared type.</param>
     /// <returns>The marker tag, or <see langword="null"/> when the type is not a magic-collection or recursively-magic struct shape.</returns>
-    internal static string ClassifyForMarker(TypeSymbol type) => type switch
+    internal static string? ClassifyForMarker(TypeSymbol type) => type switch
     {
         MapTypeSymbol => "map",
         SliceTypeSymbol => "slice",
@@ -167,7 +167,7 @@ internal static class MagicCollectionZeroValue
     /// <param name="fieldInfo">The reflected field the marker describes.</param>
     /// <param name="markerKind">The marker tag produced by <see cref="ClassifyForMarker"/>.</param>
     /// <returns>The synthesized empty-instance expression, or <see langword="null"/> when the field/tag cannot be reconstructed.</returns>
-    internal static BoundExpression TrySynthesizeEmptyInstanceFromMarker(FieldInfo fieldInfo, string markerKind)
+    internal static BoundExpression? TrySynthesizeEmptyInstanceFromMarker(FieldInfo? fieldInfo, string? markerKind)
     {
         if (fieldInfo == null || string.IsNullOrEmpty(markerKind))
         {
@@ -254,7 +254,7 @@ internal static class MagicCollectionZeroValue
     /// </summary>
     /// <param name="clrType">The nested struct field's own reflected CLR type.</param>
     /// <returns>The synthesized nested struct literal, or <see langword="null"/> when it carries no marker or no field of it can be reconstructed.</returns>
-    private static BoundExpression TrySynthesizeEmptyInstanceForImportedStruct(Type clrType)
+    private static BoundExpression? TrySynthesizeEmptyInstanceForImportedStruct(Type? clrType)
     {
         if (clrType == null || !ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
         {
@@ -284,7 +284,7 @@ internal static class MagicCollectionZeroValue
             fields: fieldBuilder.ToImmutable(),
             accessibility: Accessibility.Public,
             declaration: null,
-            packageName: clrType.Namespace,
+            packageName: clrType.Namespace ?? string.Empty,
             isData: false,
             isInline: false,
             isClass: false,
@@ -294,7 +294,7 @@ internal static class MagicCollectionZeroValue
             clrType: clrType);
 
         var fieldsByName = nestedStruct.Fields.ToDictionary(f => f.Name, StringComparer.Ordinal);
-        ImmutableArray<BoundFieldInitializer>.Builder inits = null;
+        ImmutableArray<BoundFieldInitializer>.Builder? inits = null;
         foreach (var (fieldName, kind) in magicFieldKinds)
         {
             if (!fieldsByName.TryGetValue(fieldName, out var fieldSymbol)
@@ -322,7 +322,7 @@ internal static class MagicCollectionZeroValue
         return new BoundStructLiteralExpression(null, nestedStruct, inits.ToImmutable());
     }
 
-    private static BoundExpression TrySynthesizeEmptyInstanceCore(SyntaxNode syntax, TypeSymbol type, HashSet<StructSymbol> visiting)
+    private static BoundExpression? TrySynthesizeEmptyInstanceCore(SyntaxNode? syntax, TypeSymbol type, HashSet<StructSymbol>? visiting)
     {
         switch (type)
         {
@@ -380,7 +380,7 @@ internal static class MagicCollectionZeroValue
     /// recursion for a self-referential struct shape (nothing else in the
     /// compiler currently rejects that as a layout cycle).
     /// </summary>
-    private static BoundExpression TrySynthesizeStructFieldDefaults(SyntaxNode syntax, StructSymbol structType, HashSet<StructSymbol> visiting)
+    private static BoundExpression? TrySynthesizeStructFieldDefaults(SyntaxNode? syntax, StructSymbol structType, HashSet<StructSymbol>? visiting)
     {
         // Key the cycle guard by the generic DEFINITION so a self-referential
         // shape is caught regardless of which closed instantiation is being
@@ -394,7 +394,7 @@ internal static class MagicCollectionZeroValue
 
         try
         {
-            ImmutableArray<BoundFieldInitializer>.Builder inits = null;
+            ImmutableArray<BoundFieldInitializer>.Builder? inits = null;
             var needsZeroValue = false;
             var hasNonPublicZeroValueField = false;
             foreach (var field in structType.Fields)

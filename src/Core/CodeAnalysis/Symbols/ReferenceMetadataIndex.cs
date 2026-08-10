@@ -194,7 +194,7 @@ public sealed class ReferenceMetadataIndex
     /// <param name="lines">All descriptor lines, in order.</param>
     /// <param name="index">The parsed index on success; otherwise <see langword="null"/>.</param>
     /// <returns><see langword="true"/> when a well-formed section was read.</returns>
-    public static bool TryReadTextSection(IReadOnlyList<string> lines, out ReferenceMetadataIndex index)
+    public static bool TryReadTextSection(IReadOnlyList<string> lines, out ReferenceMetadataIndex? index)
     {
         index = null;
         if (lines is null)
@@ -236,6 +236,11 @@ public sealed class ReferenceMetadataIndex
             for (var a = 0; a < assemblyCount; a++)
             {
                 if (!TryReadStringField(lines, ref cursor, "assembly", out var identity))
+                {
+                    return false;
+                }
+
+                if (identity is null)
                 {
                     return false;
                 }
@@ -291,7 +296,7 @@ public sealed class ReferenceMetadataIndex
     // Skips blank and `#` comment lines, then requires the next line to be
     // `<key>=<value>`; returns the value. A non-matching key or end-of-input
     // returns false (a conservative parse failure).
-    private static bool TryReadStringField(IReadOnlyList<string> lines, ref int cursor, string key, out string value)
+    private static bool TryReadStringField(IReadOnlyList<string> lines, ref int cursor, string key, out string? value)
     {
         value = null;
         while (cursor < lines.Count)
@@ -299,6 +304,12 @@ public sealed class ReferenceMetadataIndex
             var line = lines[cursor];
             var trimmed = line?.Trim();
             if (string.IsNullOrEmpty(trimmed) || trimmed[0] == '#')
+            {
+                cursor++;
+                continue;
+            }
+
+            if (line is null)
             {
                 cursor++;
                 continue;

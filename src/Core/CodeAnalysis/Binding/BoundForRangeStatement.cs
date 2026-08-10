@@ -45,8 +45,8 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
     public BoundForRangeStatement(
-        SyntaxNode syntax,
-        VariableSymbol keyVariable,
+        SyntaxNode? syntax,
+        VariableSymbol? keyVariable,
         VariableSymbol valueVariable,
         BoundExpression collection,
         ForRangeKind kind,
@@ -65,8 +65,9 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.ForRangeStatement;
 
-    /// <summary>Gets the key variable (or null when only a value was declared).</summary>
-    public VariableSymbol KeyVariable { get; }
+    /// <summary>Gets the key variable, or <c>null</c> when only a value was
+    /// declared (<c>for v in xs</c>).</summary>
+    public VariableSymbol? KeyVariable { get; }
 
     /// <summary>Gets the value variable.</summary>
     public VariableSymbol ValueVariable { get; }

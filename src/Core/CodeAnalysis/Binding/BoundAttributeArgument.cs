@@ -21,7 +21,7 @@ public sealed record BoundAttributeArgument
     /// <param name="name">Property/field name for named arguments; <c>null</c> for positional.</param>
     /// <param name="value">The constant value of the argument.</param>
     /// <param name="type">The static type of the argument.</param>
-    public BoundAttributeArgument(string name, object value, TypeSymbol type)
+    public BoundAttributeArgument(string? name, object? value, TypeSymbol type)
     {
         Name = name;
         Value = value;
@@ -31,12 +31,12 @@ public sealed record BoundAttributeArgument
     /// <summary>
     /// Gets the field or property name for a named argument, or <c>null</c> for a positional argument.
     /// </summary>
-    public string Name { get; }
+    public string? Name { get; }
 
     /// <summary>
     /// Gets the compile-time constant value of the argument.
     /// </summary>
-    public object Value { get; }
+    public object? Value { get; }
 
     /// <summary>
     /// Gets the static type of the argument.

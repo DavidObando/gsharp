@@ -39,12 +39,12 @@ public sealed class StackAllocExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         SyntaxToken stackAllocKeyword,
         SyntaxToken openBracketToken,
-        ExpressionSyntax countExpression,
+        ExpressionSyntax? countExpression,
         SyntaxToken closeBracketToken,
         SyntaxToken elementTypeIdentifier,
-        SyntaxToken openBraceToken,
-        SeparatedSyntaxList<ExpressionSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? openBraceToken,
+        SeparatedSyntaxList<ExpressionSyntax>? elements,
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         StackAllocKeyword = stackAllocKeyword;
@@ -67,7 +67,7 @@ public sealed class StackAllocExpressionSyntax : ExpressionSyntax
     public SyntaxToken OpenBracketToken { get; }
 
     /// <summary>Gets the element-count expression, or <see langword="null"/> for the count-inferred <c>[]T</c> shape.</summary>
-    public ExpressionSyntax CountExpression { get; }
+    public ExpressionSyntax? CountExpression { get; }
 
     /// <summary>Gets the closing bracket token.</summary>
     public SyntaxToken CloseBracketToken { get; }
@@ -76,13 +76,13 @@ public sealed class StackAllocExpressionSyntax : ExpressionSyntax
     public SyntaxToken ElementTypeIdentifier { get; }
 
     /// <summary>Gets the opening brace token of the initializer, or <see langword="null"/>.</summary>
-    public SyntaxToken OpenBraceToken { get; }
+    public SyntaxToken? OpenBraceToken { get; }
 
     /// <summary>Gets the initializer element expressions, or <see langword="null"/> when there is no initializer.</summary>
-    public SeparatedSyntaxList<ExpressionSyntax> Elements { get; }
+    public SeparatedSyntaxList<ExpressionSyntax>? Elements { get; }
 
     /// <summary>Gets the closing brace token of the initializer, or <see langword="null"/>.</summary>
-    public SyntaxToken CloseBraceToken { get; }
+    public SyntaxToken? CloseBraceToken { get; }
 
     /// <summary>Gets a value indicating whether an explicit brace-delimited initializer is present.</summary>
     public bool HasInitializer => OpenBraceToken != null;

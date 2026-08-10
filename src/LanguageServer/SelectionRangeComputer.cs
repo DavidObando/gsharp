@@ -25,7 +25,7 @@ public static class SelectionRangeComputer
         CollectAncestors(tree.Root, offset, chain);
 
         // Build nested SelectionRange from inside out
-        SelectionRange current = null;
+        SelectionRange? current = null;
         for (var i = chain.Count - 1; i >= 0; i--)
         {
             var node = chain[i];

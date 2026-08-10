@@ -239,8 +239,7 @@ internal sealed class ClosureEmitter
                 // never need the accessibility-domain trick this nesting
                 // exists for), always keep them on the top-level `<Program>`
                 // static placement.
-                if (literal.Function == null
-                    || literal.Function.IsGeneric
+                if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing
                     || !zeroCaptureEnclosing.TypeParameters.IsDefaultOrEmpty)
                 {
@@ -297,7 +296,7 @@ internal sealed class ClosureEmitter
             // single `T`). Without nesting, the reified closure was emitted as a
             // top-level type and its Invoke could not read the generic encloser's
             // private captured field ("Field is not visible").
-            if (literal.Function?.LexicalEnclosingType is StructSymbol enclosing
+            if (literal.Function.LexicalEnclosingType is StructSymbol enclosing
                 && info.ClassSym.ContainingType == null)
             {
                 info.ClassSym.SetContainingType(enclosing);
@@ -427,7 +426,10 @@ internal sealed class ClosureEmitter
         // Issue #2669: field accesses inside a reified generic closure's Invoke
         // must be parented at the constructed display-class TypeSpec, including
         // fields whose own type is non-generic.
-        var rewriter = new CaptureRewriter(constructedClass, captureFields, invokeMethod.ThisParameter);
+        var rewriter = new CaptureRewriter(
+            constructedClass,
+            captureFields,
+            Invariant.Required(invokeMethod.ThisParameter, "a closure Invoke method has an instance receiver"));
         var rewrittenBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
         if (rewriter.UnsupportedCapture != null)
         {
@@ -461,7 +463,7 @@ internal sealed class ClosureEmitter
     /// </remarks>
     /// <param name="clrType">The CLR type to test (may be <see langword="null"/>).</param>
     /// <returns><see langword="true"/> if <paramref name="clrType"/> is <see cref="System.Threading.Tasks.Task"/> or any subclass thereof (notably <c>Task&lt;T&gt;</c>); otherwise <see langword="false"/>.</returns>
-    internal static bool IsTaskClrType(Type clrType)
+    internal static bool IsTaskClrType(Type? clrType)
     {
         for (var t = clrType; t != null; t = t.BaseType)
         {
@@ -537,9 +539,9 @@ internal sealed class ClosureEmitter
         // it cannot lower (e.g., as the target of a BoundIndexAssignmentExpression
         // or other shape that the BoundFieldAssignment node does not model).
         // Reported by SynthesizeClosures as a NotSupportedException.
-        public VariableSymbol UnsupportedCapture { get; private set; }
+        public VariableSymbol? UnsupportedCapture { get; private set; }
 
-        public string UnsupportedCaptureKind { get; private set; }
+        public string? UnsupportedCaptureKind { get; private set; }
 
         protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
         {
@@ -654,7 +656,7 @@ internal sealed class ClosureEmitter
             return base.RewriteExpression(node);
         }
 
-        private void TryAdd(TypeSymbol type)
+        private void TryAdd(TypeSymbol? type)
         {
             if (type is StructSymbol s && !s.TypeArguments.IsDefaultOrEmpty)
             {

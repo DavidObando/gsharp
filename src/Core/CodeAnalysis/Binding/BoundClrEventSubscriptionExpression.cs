@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 #pragma warning disable CS1591
@@ -20,14 +21,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 {
     public BoundClrEventSubscriptionExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         EventInfo eventInfo,
         BoundExpression handler,
         bool isAdd,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
-        TypeSymbol eventContainingType = null)
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null,
+        TypeSymbol? eventContainingType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -39,7 +40,7 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
         EventContainingType = eventContainingType;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     public EventInfo Event { get; }
 
@@ -47,12 +48,13 @@ public sealed class BoundClrEventSubscriptionExpression : BoundExpression
 
     public bool IsAdd { get; }
 
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
-    public TypeSymbol EventContainingType { get; }
+    public TypeSymbol? EventContainingType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => TypeSymbol.Void;

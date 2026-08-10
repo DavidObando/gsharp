@@ -43,7 +43,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// <param name="type">The CLR type to navigate to.</param>
     /// <param name="location">The resolved source location on success.</param>
     /// <returns>True when a location was resolved.</returns>
-    public static bool TryResolveType(WorkspaceState workspace, Type type, out Location location)
+    public static bool TryResolveType(WorkspaceState? workspace, Type type, out Location? location)
     {
         location = null;
         if (type == null)
@@ -90,7 +90,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// <param name="method">The CLR method to navigate to.</param>
     /// <param name="location">The resolved source location on success.</param>
     /// <returns>True when a location was resolved.</returns>
-    public static bool TryResolveMethod(WorkspaceState workspace, MethodInfo method, out Location location)
+    public static bool TryResolveMethod(WorkspaceState? workspace, MethodInfo method, out Location? location)
     {
         location = null;
         if (method == null)
@@ -140,7 +140,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// <param name="property">The CLR property to navigate to.</param>
     /// <param name="location">The resolved source location on success.</param>
     /// <returns>True when a location was resolved.</returns>
-    public static bool TryResolveProperty(WorkspaceState workspace, PropertyInfo property, out Location location)
+    public static bool TryResolveProperty(WorkspaceState? workspace, PropertyInfo property, out Location? location)
     {
         location = null;
         if (property == null)
@@ -187,7 +187,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// <param name="field">The CLR field to navigate to.</param>
     /// <param name="location">The resolved source location on success.</param>
     /// <returns>True when a location was resolved.</returns>
-    public static bool TryResolveField(WorkspaceState workspace, FieldInfo field, out Location location)
+    public static bool TryResolveField(WorkspaceState? workspace, FieldInfo field, out Location? location)
     {
         location = null;
         if (field == null)
@@ -225,7 +225,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// <param name="evt">The CLR event to navigate to.</param>
     /// <param name="location">The resolved source location on success.</param>
     /// <returns>True when a location was resolved.</returns>
-    public static bool TryResolveEvent(WorkspaceState workspace, EventInfo evt, out Location location)
+    public static bool TryResolveEvent(WorkspaceState? workspace, EventInfo evt, out Location? location)
     {
         location = null;
         if (evt == null)
@@ -263,7 +263,7 @@ internal static class CrossAssemblyDefinitionResolver
         return declaringType != null && TryResolveType(workspace, declaringType, out location);
     }
 
-    internal static bool TryResolveTypeBySourceSearch(string assemblyPath, Type type, out Location location)
+    internal static bool TryResolveTypeBySourceSearch(string assemblyPath, Type type, out Location? location)
     {
         location = null;
 
@@ -333,7 +333,7 @@ internal static class CrossAssemblyDefinitionResolver
     // requiring the member name to be preceded, on the same line, by a return/field type (and
     // optional modifiers) and followed by `(`, `{`, `=`, or `;`. Best-effort: returns the first
     // plausible declaration found.
-    internal static bool TryResolveMemberBySourceSearch(string assemblyPath, Type declaringType, string memberName, out Location location)
+    internal static bool TryResolveMemberBySourceSearch(string assemblyPath, Type? declaringType, string memberName, out Location? location)
     {
         location = null;
         if (declaringType == null || string.IsNullOrEmpty(memberName))
@@ -414,7 +414,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// at and below the MSBuild <c>obj</c> (or <c>bin</c>) output folder, e.g.
     /// <c>/repo/src/Lib/obj/Debug/net10.0/ref/Lib.dll</c> → <c>/repo/src/Lib</c>.
     /// </summary>
-    private static string DeriveProjectDirectory(string assemblyPath)
+    private static string? DeriveProjectDirectory(string assemblyPath)
     {
         var directory = System.IO.Path.GetDirectoryName(assemblyPath);
         while (!string.IsNullOrEmpty(directory))
@@ -480,7 +480,7 @@ internal static class CrossAssemblyDefinitionResolver
         return (line, offset - lineStart);
     }
 
-    private static bool TryResolveTypeInSiblingProject(ProjectState siblingProject, Type type, out Location location)
+    private static bool TryResolveTypeInSiblingProject(ProjectState siblingProject, Type type, out Location? location)
     {
         location = null;
         var compilation = siblingProject?.GetCompilation();
@@ -490,6 +490,7 @@ internal static class CrossAssemblyDefinitionResolver
         }
 
         if (TryFindStructSymbol(compilation, type, out var structSymbol)
+            && structSymbol is not null
             && structSymbol.Declaration != null)
         {
             location = ToLocation(structSymbol.Declaration.Identifier);
@@ -497,6 +498,7 @@ internal static class CrossAssemblyDefinitionResolver
         }
 
         if (TryFindEnumSymbol(compilation, type, out var enumSymbol)
+            && enumSymbol is not null
             && enumSymbol.Declaration != null)
         {
             location = ToLocation(enumSymbol.Declaration.Identifier);
@@ -504,13 +506,15 @@ internal static class CrossAssemblyDefinitionResolver
         }
 
         if (TryFindInterfaceSymbol(compilation, type, out var interfaceSymbol)
+            && interfaceSymbol is not null
             && interfaceSymbol.Declaration != null)
         {
             location = ToLocation(interfaceSymbol.Declaration.Identifier);
             return location != null;
         }
 
-        if (TryFindDelegateSymbol(compilation, type, out var delegateDeclaration))
+        if (TryFindDelegateSymbol(compilation, type, out var delegateDeclaration)
+            && delegateDeclaration is not null)
         {
             location = ToLocation(delegateDeclaration.Identifier);
             return location != null;
@@ -519,7 +523,7 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryResolveMethodInSiblingProject(ProjectState siblingProject, Type declaringType, MethodInfo method, out Location location)
+    private static bool TryResolveMethodInSiblingProject(ProjectState siblingProject, Type declaringType, MethodInfo method, out Location? location)
     {
         location = null;
         var compilation = siblingProject?.GetCompilation();
@@ -528,7 +532,8 @@ internal static class CrossAssemblyDefinitionResolver
             return false;
         }
 
-        if (TryFindStructSymbol(compilation, declaringType, out var structSymbol))
+        if (TryFindStructSymbol(compilation, declaringType, out var structSymbol)
+            && structSymbol is not null)
         {
             var candidates = structSymbol.Methods.Concat(structSymbol.StaticMethods)
                 .Where(fs => fs.Declaration != null && string.Equals(fs.Name, method.Name, StringComparison.Ordinal))
@@ -542,7 +547,8 @@ internal static class CrossAssemblyDefinitionResolver
             }
         }
 
-        if (TryFindInterfaceSymbol(compilation, declaringType, out var interfaceSymbol))
+        if (TryFindInterfaceSymbol(compilation, declaringType, out var interfaceSymbol)
+            && interfaceSymbol is not null)
         {
             var match = interfaceSymbol.Methods
                 .FirstOrDefault(fs => fs.Declaration != null && string.Equals(fs.Name, method.Name, StringComparison.Ordinal));
@@ -556,11 +562,12 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryResolvePropertyInSiblingProject(ProjectState siblingProject, Type declaringType, string propertyName, out Location location)
+    private static bool TryResolvePropertyInSiblingProject(ProjectState siblingProject, Type declaringType, string propertyName, out Location? location)
     {
         location = null;
         var compilation = siblingProject?.GetCompilation();
-        if (compilation == null || !TryFindStructSymbol(compilation, declaringType, out var structSymbol))
+        if (compilation == null || !TryFindStructSymbol(compilation, declaringType, out var structSymbol)
+            || structSymbol is null)
         {
             return false;
         }
@@ -576,11 +583,12 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryResolveFieldInSiblingProject(ProjectState siblingProject, Type declaringType, string fieldName, out Location location)
+    private static bool TryResolveFieldInSiblingProject(ProjectState siblingProject, Type declaringType, string fieldName, out Location? location)
     {
         location = null;
         var compilation = siblingProject?.GetCompilation();
         if (compilation == null || !TryFindStructSymbol(compilation, declaringType, out var structSymbol)
+            || structSymbol is null
             || structSymbol.Declaration == null)
         {
             return false;
@@ -598,11 +606,12 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryResolveEventInSiblingProject(ProjectState siblingProject, Type declaringType, string eventName, out Location location)
+    private static bool TryResolveEventInSiblingProject(ProjectState siblingProject, Type declaringType, string eventName, out Location? location)
     {
         location = null;
         var compilation = siblingProject?.GetCompilation();
-        if (compilation == null || !TryFindStructSymbol(compilation, declaringType, out var structSymbol))
+        if (compilation == null || !TryFindStructSymbol(compilation, declaringType, out var structSymbol)
+            || structSymbol is null)
         {
             return false;
         }
@@ -623,7 +632,7 @@ internal static class CrossAssemblyDefinitionResolver
     /// one whose parameter arity equals the CLR method's. Best-effort; the
     /// caller will fall back to the first match when nothing better is found.
     /// </summary>
-    private static FunctionSymbol SelectMatchingMethod(FunctionSymbol[] candidates, MethodInfo method)
+    private static FunctionSymbol? SelectMatchingMethod(FunctionSymbol[] candidates, MethodInfo method)
     {
         if (candidates.Length <= 1)
         {
@@ -635,7 +644,7 @@ internal static class CrossAssemblyDefinitionResolver
         return arityMatch ?? candidates.FirstOrDefault();
     }
 
-    private static bool TryFindStructSymbol(Compilation compilation, Type type, out StructSymbol structSymbol)
+    private static bool TryFindStructSymbol(Compilation compilation, Type type, out StructSymbol? structSymbol)
     {
         structSymbol = null;
         if (compilation == null || type == null)
@@ -655,7 +664,7 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryFindEnumSymbol(Compilation compilation, Type type, out EnumSymbol enumSymbol)
+    private static bool TryFindEnumSymbol(Compilation compilation, Type type, out EnumSymbol? enumSymbol)
     {
         enumSymbol = null;
         if (compilation == null || type == null)
@@ -675,7 +684,7 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryFindInterfaceSymbol(Compilation compilation, Type type, out InterfaceSymbol interfaceSymbol)
+    private static bool TryFindInterfaceSymbol(Compilation compilation, Type type, out InterfaceSymbol? interfaceSymbol)
     {
         interfaceSymbol = null;
         if (compilation == null || type == null)
@@ -695,7 +704,7 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static bool TryFindDelegateSymbol(Compilation compilation, Type type, out DelegateDeclarationSyntax declaration)
+    private static bool TryFindDelegateSymbol(Compilation compilation, Type type, out DelegateDeclarationSyntax? declaration)
     {
         declaration = null;
         if (compilation == null || type == null)
@@ -724,7 +733,7 @@ internal static class CrossAssemblyDefinitionResolver
         return false;
     }
 
-    private static DelegateDeclarationSyntax FindDelegateDeclaration(SyntaxNode root, string name)
+    private static DelegateDeclarationSyntax? FindDelegateDeclaration(SyntaxNode root, string name)
     {
         if (root is DelegateDeclarationSyntax decl && string.Equals(decl.Identifier.Text, name, StringComparison.Ordinal))
         {
@@ -766,7 +775,7 @@ internal static class CrossAssemblyDefinitionResolver
         return string.Equals(symbolName, clrSimpleName, StringComparison.Ordinal);
     }
 
-    private static Location ToLocation(SyntaxToken token)
+    private static Location? ToLocation(SyntaxToken token)
     {
         if (token == null || token.IsMissing)
         {
@@ -786,7 +795,7 @@ internal static class CrossAssemblyDefinitionResolver
         };
     }
 
-    private static Location ToLocation(PdbSourceLocator.SourceLocation source)
+    private static Location? ToLocation(PdbSourceLocator.SourceLocation source)
     {
         if (string.IsNullOrEmpty(source.FilePath))
         {
@@ -806,8 +815,13 @@ internal static class CrossAssemblyDefinitionResolver
         };
     }
 
-    private static string TryGetAssemblyPath(Assembly assembly)
+    private static string? TryGetAssemblyPath(Assembly? assembly)
     {
+        if (assembly is null)
+        {
+            return null;
+        }
+
         // Delegates to ReferenceResolver.TryGetAssemblyPath which falls back
         // to the per-process registry of original paths for assemblies loaded
         // via MetadataLoadContext.LoadFromByteArray (whose Assembly.Location

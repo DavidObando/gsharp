@@ -24,7 +24,7 @@ public sealed class IfLetBindingClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken letKeyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
+        TypeClauseSyntax? typeClause,
         SyntaxToken equalsToken,
         ExpressionSyntax initializer)
         : base(syntaxTree)
@@ -46,7 +46,7 @@ public sealed class IfLetBindingClauseSyntax : SyntaxNode
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional declared (underlying, non-null) type clause.</summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the <c>=</c> token between the identifier (or type clause) and the initializer.</summary>
     public SyntaxToken EqualsToken { get; }

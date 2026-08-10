@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -79,7 +80,7 @@ public static class MoveNextBodyRewriter
         private readonly StructSymbol structType;
         private readonly Dictionary<BoundAwaitExpression, AwaitResumePoint> awaitResumeMap;
         private readonly LocalVariableSymbol cachedStateLocal;
-        private readonly LocalVariableSymbol retValLocal;
+        private readonly LocalVariableSymbol? retValLocal;
         private readonly List<LocalVariableSymbol> allLocals = new List<LocalVariableSymbol>();
 
         public RewriteContext(AsyncStateMachinePlan plan)
@@ -202,7 +203,9 @@ public static class MoveNextBodyRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, cachedStateLocal),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for await-state dispatch"),
                     Literal(rp.State));
                 statements.Add(new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true));
             }
@@ -226,7 +229,9 @@ public static class MoveNextBodyRewriter
             var setExceptionCall = new BoundImportedInstanceCallExpression(
                 null,
                 builderAddr,
-                builderInfo.SetExceptionMethod,
+                Invariant.Required(
+                    builderInfo.SetExceptionMethod,
+                    "MoveNextBodyRewriter runs only for a non-iterator async method, whose builder passed AsyncMethodBuilderInfo.IsValid -- that requires SetException for every kind except AsyncIterator"),
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, exLocal)));
             stmts.Add(Stmt(setExceptionCall));
@@ -257,12 +262,14 @@ public static class MoveNextBodyRewriter
             return new BoundImportedInstanceCallExpression(
                 null,
                 builderAddr,
-                builderInfo.SetResultMethod,
+                Invariant.Required(
+                    builderInfo.SetResultMethod,
+                    "MoveNextBodyRewriter runs only for a non-iterator async method, whose builder passed AsyncMethodBuilderInfo.IsValid -- that requires SetResult for every kind except AsyncIterator"),
                 TypeSymbol.Void,
                 args);
         }
 
-        private BoundExpression ReadField(FieldSymbol field, TypeSymbol narrowedType = null)
+        private BoundExpression ReadField(FieldSymbol field, TypeSymbol? narrowedType = null)
         {
             return new BoundFieldAccessExpression(
                 null,
@@ -355,7 +362,7 @@ public static class MoveNextBodyRewriter
 
                 if (rewrittenInit != node.Initializer)
                 {
-                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit);
+                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit, node.ConstantValue);
                 }
 
                 return node;
@@ -398,7 +405,7 @@ public static class MoveNextBodyRewriter
                 if (node.Receiver != null
                     && TryGetHoistedField(node.Receiver, out var recvField))
                 {
-                    if (node.StructType.IsClass)
+                    if (BoundNodeForm.DeclaringType(node).IsClass)
                     {
                         // Class receiver — reference type. Alias the hoisted field
                         // to a fresh local and store through it.
@@ -410,7 +417,7 @@ public static class MoveNextBodyRewriter
                         var newAssign = new BoundFieldAssignmentExpression(
                             null,
                             aliasLocal,
-                            node.StructType,
+                            BoundNodeForm.DeclaringType(node),
                             node.Field,
                             rewrittenValue);
                         return new BoundBlockExpression(
@@ -431,7 +438,7 @@ public static class MoveNextBodyRewriter
                         var innerAssign = new BoundFieldAssignmentExpression(
                             null,
                             copyLocal,
-                            node.StructType,
+                            BoundNodeForm.DeclaringType(node),
                             node.Field,
                             rewrittenValue);
                         var writeBack = new BoundExpressionStatement(
@@ -440,7 +447,7 @@ public static class MoveNextBodyRewriter
                         var resultRead = new BoundFieldAccessExpression(
                             null,
                             new BoundVariableExpression(null, copyLocal),
-                            node.StructType,
+                            BoundNodeForm.DeclaringType(node),
                             node.Field);
                         return new BoundBlockExpression(
                             null,
@@ -454,7 +461,36 @@ public static class MoveNextBodyRewriter
 
                 if (rewrittenValue != node.Value)
                 {
-                    return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, rewrittenValue);
+                    // Issue #3333 / #1644: an interface static field write has a
+                    // null Receiver and StructType, and carries the owning
+                    // interface in InterfaceType. Rebuilding it through the
+                    // variable-receiver constructor drops that, and the emitter
+                    // parents the field at the open-generic TypeDef instead of a
+                    // TypeSpec. This override must carry the same guard the base
+                    // BoundTreeRewriter does.
+                    if (node.InterfaceType != null)
+                    {
+                        return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, rewrittenValue);
+                    }
+
+                    if (node.ReceiverExpression != null)
+                    {
+                        return BoundFieldAssignmentExpression.WithExpressionReceiver(
+                            null,
+                            node.ReceiverExpression,
+                            BoundNodeForm.DeclaringType(node),
+                            node.Field,
+                            rewrittenValue,
+                            node.ResultType);
+                    }
+
+                    return new BoundFieldAssignmentExpression(
+                        null,
+                        node.Receiver,
+                        BoundNodeForm.DeclaringType(node),
+                        node.Field,
+                        rewrittenValue,
+                        node.ResultType);
                 }
 
                 return node;
@@ -471,7 +507,7 @@ public static class MoveNextBodyRewriter
                 // are reference types, so aliasing the hoisted field into a fresh
                 // local lets us perform the index store through that local; the
                 // mutation lands on the same underlying array.
-                if (TryGetHoistedField(node.Target, out var targetField))
+                if (node.Target != null && TryGetHoistedField(node.Target, out var targetField))
                 {
                     var aliasLocal = new LocalVariableSymbol(
                         "<>arr_alias_" + (aliasOrdinal++),
@@ -492,7 +528,13 @@ public static class MoveNextBodyRewriter
 
                 if (rewrittenIndex != node.Index || rewrittenValue != node.Value)
                 {
-                    return new BoundIndexAssignmentExpression(null, node.Target, rewrittenIndex, rewrittenValue, node.Type);
+                    // Preserve the node's form (see #3333): the expression-target
+                    // form carries no Target.
+                    return node.TargetExpression != null
+                        ? BoundIndexAssignmentExpression.WithExpressionTarget(
+                            null, node.TargetExpression, rewrittenIndex, rewrittenValue, node.Type)
+                        : new BoundIndexAssignmentExpression(
+                            null, BoundNodeForm.VariableTarget(node), rewrittenIndex, rewrittenValue, node.Type);
                 }
 
                 return node;
@@ -500,7 +542,7 @@ public static class MoveNextBodyRewriter
 
             protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
             {
-                ImmutableArray<BoundExpression>.Builder argBuilder = null;
+                ImmutableArray<BoundExpression>.Builder? argBuilder = null;
                 for (var i = 0; i < node.Arguments.Length; i++)
                 {
                     var oldArg = node.Arguments[i];
@@ -561,7 +603,28 @@ public static class MoveNextBodyRewriter
 
                 if (argBuilder != null || rewrittenValue != node.Value)
                 {
-                    return new BoundClrIndexAssignmentExpression(null, node.Target, node.Indexer, rewrittenArgs, rewrittenValue, node.Type);
+                    // Preserve the node's form: rebuilding the expression-target
+                    // form through the variable-target constructor would drop
+                    // TargetExpression -- the #3333 failure shape.
+                    return node.TargetExpression != null
+                        ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                            null,
+                            node.TargetExpression,
+                            node.Indexer,
+                            rewrittenArgs,
+                            rewrittenValue,
+                            node.Type,
+                            node.ConstrainedReceiverTypeParameter,
+                            node.ConstrainedInterfaceType)
+                        : new BoundClrIndexAssignmentExpression(
+                            null,
+                            BoundNodeForm.VariableTarget(node),
+                            node.Indexer,
+                            rewrittenArgs,
+                            rewrittenValue,
+                            node.Type,
+                            node.ConstrainedReceiverTypeParameter,
+                            node.ConstrainedInterfaceType);
                 }
 
                 return node;
@@ -650,7 +713,9 @@ public static class MoveNextBodyRewriter
                         var cond = new BoundBinaryExpression(
                             null,
                             new BoundVariableExpression(null, ctx.cachedStateLocal),
-                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            Invariant.Required(
+                                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                                "int32 equality operator exists for await-state dispatch"),
                             Literal(entry.State));
                         newTryBodyStmts.Add(new BoundConditionalGotoStatement(null, entry.Target, cond, jumpIfTrue: true));
                     }
@@ -692,7 +757,7 @@ public static class MoveNextBodyRewriter
                 return node;
             }
 
-            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol resultTarget)
+            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol? resultTarget)
             {
                 if (!ctx.awaitResumeMap.TryGetValue(awaitExpr, out var resumePoint))
                 {
@@ -723,7 +788,8 @@ public static class MoveNextBodyRewriter
                 var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
                 // TAwaiter awaiter = <expr>.GetAwaiter();
-                var rewrittenOperand = RewriteExpression(awaitExpr.Expression);
+                var rewrittenOperand = RewriteExpression(
+                    Invariant.Required(awaitExpr.Expression, "an await expression has an operand"));
                 BoundExpression getAwaiterReceiver;
                 var awaitableClrType = awaitExpr.Expression?.Type?.ClrType;
                 if (awaitableClrType != null && awaitableClrType.IsValueType)
@@ -775,7 +841,9 @@ public static class MoveNextBodyRewriter
                 var isCompletedCall = new BoundImportedInstanceCallExpression(
                     null,
                     isCompletedReceiver,
-                    isCompletedGetter,
+                    Invariant.Required(
+                        isCompletedGetter,
+                        "AwaitableShape.Resolve only returns a shape when the awaiter declares a readable IsCompleted"),
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
                 stmts.Add(new BoundConditionalGotoStatement(
@@ -887,7 +955,7 @@ public static class MoveNextBodyRewriter
                 return new BoundBlockStatement(null, stmts.ToImmutable());
             }
 
-            private bool TryGetHoistedField(VariableSymbol variable, out FieldSymbol field)
+            private bool TryGetHoistedField(VariableSymbol variable, [NotNullWhen(true)] out FieldSymbol? field)
             {
                 // Delegate to the field map's single source of truth (issue
                 // #2331) so `this`, ordinary parameters, and locals resolve

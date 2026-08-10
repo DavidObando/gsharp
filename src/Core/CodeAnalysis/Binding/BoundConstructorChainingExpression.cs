@@ -20,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundConstructorChainingExpression : BoundExpression
 {
-    public BoundConstructorChainingExpression(SyntaxNode syntax, ConstructorSymbol selectedConstructor, ImmutableArray<BoundExpression> arguments)
+    public BoundConstructorChainingExpression(SyntaxNode? syntax, ConstructorSymbol selectedConstructor, ImmutableArray<BoundExpression> arguments)
         : base(syntax)
     {
         SelectedConstructor = selectedConstructor;

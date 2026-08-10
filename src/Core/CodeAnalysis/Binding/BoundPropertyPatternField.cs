@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -15,7 +16,7 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="field">The matched field.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(SyntaxNode syntax, FieldSymbol field, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode? syntax, FieldSymbol field, BoundPattern pattern)
         : this(syntax, field, declaringType: null, pattern)
     {
     }
@@ -25,7 +26,7 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <param name="field">The matched field.</param>
     /// <param name="declaringType">The type that declares the field.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(SyntaxNode syntax, FieldSymbol field, TypeSymbol declaringType, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode? syntax, FieldSymbol field, TypeSymbol? declaringType, BoundPattern pattern)
         : base(syntax)
     {
         Field = field;
@@ -38,7 +39,7 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="property">The matched property.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(SyntaxNode syntax, PropertySymbol property, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode? syntax, PropertySymbol property, BoundPattern pattern)
         : this(syntax, property, declaringType: null, pattern)
     {
     }
@@ -48,7 +49,7 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <param name="property">The matched property.</param>
     /// <param name="declaringType">The type that declares the property.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(SyntaxNode syntax, PropertySymbol property, TypeSymbol declaringType, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode? syntax, PropertySymbol property, TypeSymbol? declaringType, BoundPattern pattern)
         : base(syntax)
     {
         Property = property;
@@ -63,7 +64,7 @@ public sealed class BoundPropertyPatternField : BoundNode
     /// <param name="clrMember">The matched CLR field or property.</param>
     /// <param name="type">The matched member type.</param>
     /// <param name="pattern">The nested pattern.</param>
-    public BoundPropertyPatternField(SyntaxNode syntax, MemberInfo clrMember, TypeSymbol type, BoundPattern pattern)
+    public BoundPropertyPatternField(SyntaxNode? syntax, MemberInfo clrMember, TypeSymbol type, BoundPattern pattern)
         : base(syntax)
     {
         ClrMember = clrMember;
@@ -79,29 +80,34 @@ public sealed class BoundPropertyPatternField : BoundNode
     public override BoundNodeKind Kind => BoundNodeKind.PropertyPatternField;
 
     /// <summary>Gets the field symbol.</summary>
-    public FieldSymbol Field { get; }
+    public FieldSymbol? Field { get; }
 
     /// <summary>Gets the matched property symbol, when this member is property-backed.</summary>
-    public PropertySymbol Property { get; }
+    public PropertySymbol? Property { get; }
 
     /// <summary>Gets the matched CLR field or property, when metadata-backed.</summary>
-    public MemberInfo ClrMember { get; }
+    public MemberInfo? ClrMember { get; }
 
     /// <summary>Gets the user type that declares the matched field or property.</summary>
-    public TypeSymbol DeclaringType { get; }
+    public TypeSymbol? DeclaringType { get; }
 
     /// <summary>Gets the matched member name.</summary>
-    public string Name => ClrMember?.Name ?? Property?.Name ?? Field.Name;
+    // Each of the five constructors sets exactly one of ClrMember, Property or
+    // Field from a non-nullable parameter, so the last fallback always binds.
+    public string Name => ClrMember?.Name ?? Property?.Name ?? Field!.Name;
 
     /// <summary>Gets the matched member type.</summary>
     public TypeSymbol Type { get; }
 
     /// <summary>Gets a value indicating whether matching reads through a property getter.</summary>
+    // Both property-backed constructors -- and only those -- allocate
+    // ValueVariable, so this discriminates it.
+    [MemberNotNullWhen(true, nameof(ValueVariable))]
     public bool IsProperty => Property != null || ClrMember is PropertyInfo;
 
     /// <summary>Gets the nested field pattern.</summary>
     public BoundPattern Pattern { get; }
 
     /// <summary>Gets the temporary holding one getter evaluation, when property-backed.</summary>
-    public LocalVariableSymbol ValueVariable { get; }
+    public LocalVariableSymbol? ValueVariable { get; }
 }

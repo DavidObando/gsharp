@@ -421,16 +421,16 @@ internal sealed class MetadataTokenCache
     internal readonly struct MethodSpecSymbolKey : IEquatable<MethodSpecSymbolKey>
     {
         private readonly MethodInfo method;
-        private readonly ImmutableArray<TypeSymbol> typeArgs;
+        private readonly ImmutableArray<TypeSymbol?> typeArgs;
         private readonly RemapScope scope;
 
         public MethodSpecSymbolKey(
             MethodInfo method,
-            ImmutableArray<TypeSymbol> typeArgs,
+            ImmutableArray<TypeSymbol?> typeArgs,
             RemapScope scope)
         {
             this.method = method;
-            this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArgs;
+            this.typeArgs = typeArgs.IsDefault ? ImmutableArray<TypeSymbol?>.Empty : typeArgs;
             this.scope = scope;
         }
 
@@ -458,7 +458,7 @@ internal sealed class MetadataTokenCache
             return true;
         }
 
-        public override bool Equals(object obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
+        public override bool Equals(object? obj) => obj is MethodSpecSymbolKey other && this.Equals(other);
 
         public override int GetHashCode()
         {
@@ -466,7 +466,7 @@ internal sealed class MetadataTokenCache
             hash = unchecked((hash * 31) + this.scope.GetHashCode());
             for (var i = 0; i < this.typeArgs.Length; i++)
             {
-                hash = unchecked((hash * 31) + RuntimeHelpers.GetHashCode(this.typeArgs[i]));
+                hash = unchecked((hash * 31) + (this.typeArgs[i] is { } typeArg ? RuntimeHelpers.GetHashCode(typeArg) : 0));
             }
 
             return hash;
@@ -522,7 +522,7 @@ internal sealed class MetadataTokenCache
             return true;
         }
 
-        public override bool Equals(object obj) => obj is CtorRefSymbolKey other && this.Equals(other);
+        public override bool Equals(object? obj) => obj is CtorRefSymbolKey other && this.Equals(other);
 
         public override int GetHashCode()
         {

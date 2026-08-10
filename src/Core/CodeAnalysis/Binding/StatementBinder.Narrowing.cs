@@ -29,9 +29,9 @@ internal sealed partial class StatementBinder
     /// named field (via its <see cref="ImplicitFieldVariableSymbol"/>) to its
     /// underlying non-nullable type in <paramref name="frame"/>.
     /// </summary>
-    private void ApplyMemberNotNullNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> frame)
+    private void ApplyMemberNotNullNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> frame)
     {
-        BoundExpression callExpr = null;
+        BoundExpression? callExpr = null;
         if (statement is BoundExpressionStatement exprStmt)
         {
             callExpr = exprStmt.Expression;
@@ -104,7 +104,7 @@ internal sealed partial class StatementBinder
 
     private void InvalidateNarrowingsForAssignedVariables(
         SyntaxNode statementSyntax,
-        BoundStatement boundStatement = null)
+        BoundStatement? boundStatement = null)
     {
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
         // `BindBlockStatements` pushes a (usually empty) memberNotNullFrame for
@@ -184,7 +184,7 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            List<AccessPath> toRemove = null;
+            List<AccessPath>? toRemove = null;
             foreach (var key in frame.Keys)
             {
                 var drop = assignedRoots.Contains(key.Root)
@@ -268,8 +268,8 @@ internal sealed partial class StatementBinder
             BoundStatement body,
             BoundLabel breakLabel,
             BoundLabel continueLabel,
-            BoundStatement backEdgeTail,
-            BoundExpression backEdgeCondition)
+            BoundStatement? backEdgeTail,
+            BoundExpression? backEdgeCondition)
     {
         var markerLabel = new BoundLabel("loopBackEdge");
         var marker = new BoundExpressionStatement(null, new BoundLiteralExpression(null, true));
@@ -390,7 +390,7 @@ internal sealed partial class StatementBinder
     /// <paramref name="persistentFrame"/> so subsequent statements in the
     /// enclosing block see the narrowing.
     /// </summary>
-    private void ApplyEarlyExitNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundIfStatement ifStmt)
         {
@@ -446,12 +446,13 @@ internal sealed partial class StatementBinder
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
     /// </summary>
-    private void ApplyAssignmentNarrowing(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
-            persistentFrame[variable] = underlying;
+            persistentFrame[Invariant.Required(variable, "a successful assignment narrowing has a variable")]
+                = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
         }
     }
 
@@ -468,7 +469,10 @@ internal sealed partial class StatementBinder
     /// <param name="variable">On success, the narrowed variable.</param>
     /// <param name="underlying">On success, the variable's underlying non-nullable type.</param>
     /// <returns><see langword="true"/> when the assignment narrows the variable.</returns>
-    private bool TryClassifyNonNullAssignment(BoundAssignmentExpression assign, out VariableSymbol variable, out TypeSymbol underlying)
+    private bool TryClassifyNonNullAssignment(
+        BoundAssignmentExpression assign,
+        out VariableSymbol? variable,
+        out TypeSymbol? underlying)
     {
         variable = null;
         underlying = null;
@@ -587,7 +591,7 @@ internal sealed partial class StatementBinder
             && returns.All(statement => IsDefinitelyNonNullSyntax(statement.Expression, function.Type));
     }
 
-    private bool IsDefinitelyNonNullSyntax(ExpressionSyntax expression, TypeSymbol expectedType)
+    private bool IsDefinitelyNonNullSyntax(ExpressionSyntax? expression, TypeSymbol expectedType)
     {
         if (expression is LiteralExpressionSyntax literal)
         {
@@ -641,7 +645,7 @@ internal sealed partial class StatementBinder
     /// reassigns the local to a nullable value re-nullable-izes it through its
     /// own invalidation pass.
     /// </summary>
-    private void ApplyIfJoinNarrowings(BoundStatement statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    private void ApplyIfJoinNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         if (statement is not BoundIfStatement ifStmt)
         {
@@ -696,7 +700,9 @@ internal sealed partial class StatementBinder
     /// <see cref="BoundIfStatement"/>). Returns <see langword="null"/> when the
     /// whole <c>if</c> exits unconditionally (no path falls through).
     /// </summary>
-    private Dictionary<AccessPath, TypeSymbol> ComputeIfJoinNonNull(BoundIfStatement ifStmt, Dictionary<AccessPath, TypeSymbol> entry)
+    private Dictionary<AccessPath, TypeSymbol>? ComputeIfJoinNonNull(
+        BoundIfStatement ifStmt,
+        Dictionary<AccessPath, TypeSymbol>? entry)
     {
         var (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition);
 
@@ -735,7 +741,9 @@ internal sealed partial class StatementBinder
     /// on entry. Returns <see langword="null"/> when the branch unconditionally
     /// exits (does not fall through to the join).
     /// </summary>
-    private Dictionary<AccessPath, TypeSymbol> ComputeBranchFallthroughNonNull(BoundStatement branch, Dictionary<AccessPath, TypeSymbol> entry)
+    private Dictionary<AccessPath, TypeSymbol>? ComputeBranchFallthroughNonNull(
+        BoundStatement branch,
+        Dictionary<AccessPath, TypeSymbol>? entry)
     {
         switch (branch)
         {
@@ -792,7 +800,9 @@ internal sealed partial class StatementBinder
             case BoundExpressionStatement { Expression: BoundAssignmentExpression assign }:
                 if (TryClassifyNonNullAssignment(assign, out var local, out var underlying))
                 {
-                    state[AccessPath.ForVariable(local)] = underlying;
+                    state[AccessPath.ForVariable(
+                        Invariant.Required(local, "a successful assignment narrowing has a variable"))]
+                        = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
                 }
                 else if (assign.Variable != null)
                 {
@@ -850,7 +860,7 @@ internal sealed partial class StatementBinder
     /// bool call, and type-test), so the join analysis sees the same seeds the
     /// branches were bound under.
     /// </summary>
-    private (Dictionary<AccessPath, TypeSymbol> Then, Dictionary<AccessPath, TypeSymbol> Else) ComputeConditionNarrowing(BoundExpression condition)
+    private (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ComputeConditionNarrowing(BoundExpression condition)
     {
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition);
         if (thenNarrow == null && elseNarrow == null)
@@ -870,7 +880,9 @@ internal sealed partial class StatementBinder
     /// condition-narrowing frame). Member paths and by-reference roots are
     /// outside the join pass's lift scope.
     /// </summary>
-    private static Dictionary<AccessPath, TypeSymbol> MergeLocalNonNull(Dictionary<AccessPath, TypeSymbol> baseState, Dictionary<AccessPath, TypeSymbol> add)
+    private static Dictionary<AccessPath, TypeSymbol> MergeLocalNonNull(
+        Dictionary<AccessPath, TypeSymbol>? baseState,
+        Dictionary<AccessPath, TypeSymbol>? add)
     {
         var result = baseState == null
             ? new Dictionary<AccessPath, TypeSymbol>()
@@ -915,7 +927,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     private static void RemoveByRoot(Dictionary<AccessPath, TypeSymbol> state, VariableSymbol root)
     {
-        List<AccessPath> toRemove = null;
+        List<AccessPath>? toRemove = null;
         foreach (var key in state.Keys)
         {
             if (ReferenceEquals(key.Root, root))
@@ -959,12 +971,12 @@ internal sealed partial class StatementBinder
     /// </summary>
     private class AssignedRootsCollector : BoundTreeWalker
     {
-        private readonly Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing;
-        private readonly HashSet<(VariableSymbol Receiver, FieldSymbol Field)> assignedFields = new();
-        private readonly HashSet<(VariableSymbol Receiver, PropertySymbol Property)> assignedProperties = new();
+        private readonly Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing;
+        private readonly HashSet<(VariableSymbol? Receiver, FieldSymbol Field)> assignedFields = new();
+        private readonly HashSet<(VariableSymbol? Receiver, PropertySymbol Property)> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
 
-        public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing)
+        public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
         {
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing;
         }
@@ -1057,7 +1069,7 @@ internal sealed partial class StatementBinder
 
         public override void VisitExpression(BoundExpression node)
         {
-            if (node != null && IsPotentiallyMutatingMemberPathExpression(node.Kind))
+            if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
             {
                 MayMutateMemberPaths = true;
             }
@@ -1139,10 +1151,13 @@ internal sealed partial class StatementBinder
     /// counts when its last statement does any of those; an
     /// <see cref="BoundIfStatement"/> counts only if both arms do.
     /// </summary>
-    private static bool EndsInUnconditionalExit(BoundStatement statement)
+    private static bool EndsInUnconditionalExit(BoundStatement? statement)
     {
         switch (statement)
         {
+            case null:
+                return false;
+
             case BoundReturnStatement:
             case BoundThrowStatement:
                 return true;
@@ -1208,7 +1223,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     /// <param name="syntax">The candidate expression syntax.</param>
     /// <returns><see langword="true"/> for a <c>??</c> binary expression.</returns>
-    private static bool IsNullCoalescingExpression(ExpressionSyntax syntax)
+    private static bool IsNullCoalescingExpression(ExpressionSyntax? syntax)
         => syntax is BinaryExpressionSyntax binary
             && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken;
 
@@ -1238,7 +1253,9 @@ internal sealed partial class StatementBinder
 
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
             || syntax.Keyword?.Kind == SyntaxKind.LetKeyword;
-        var type = bindTypeClause(syntax.TypeClause);
+        var type = syntax.TypeClause is { } typeClause
+            ? bindTypeClause(typeClause)
+            : null;
 
         BoundExpression convertedInitializer;
         TypeSymbol variableType;
@@ -1481,14 +1498,18 @@ internal sealed partial class StatementBinder
         // Issue #216: a `const` declaration whose converted initializer is a
         // literal expression carries a compile-time ConstantValue. The emitter
         // uses this to skip IL slot allocation and emit a LocalConstant PDB row.
-        object constValue = null;
+        object? constValue = null;
         if (syntax.Keyword?.Kind == SyntaxKind.ConstKeyword
             && convertedInitializer is BoundLiteralExpression litExpr)
         {
             constValue = litExpr.Value;
         }
 
-        return new BoundVariableDeclaration(syntax, variable, convertedInitializer, constValue);
+        return new BoundVariableDeclaration(
+            syntax,
+            Invariant.Required(variable, "a variable declaration produces a variable symbol"),
+            convertedInitializer,
+            constValue);
     }
 
     private static ImmutableArray<string> GetCallableParameterNames(BoundExpression initializer)
@@ -1528,8 +1549,12 @@ internal sealed partial class StatementBinder
     /// </summary>
     private BoundStatement BindRefAliasLocalDeclaration(VariableDeclarationSyntax syntax)
     {
-        var refModifierLoc = syntax.RefKindModifier.Location;
-        var declaredType = bindTypeClause(syntax.TypeClause);
+        var refModifierLoc = Invariant.Required(
+            syntax.RefKindModifier,
+            "a ref-alias declaration has a ref modifier").Location;
+        var declaredType = syntax.TypeClause is { } declaredTypeClause
+            ? bindTypeClause(declaredTypeClause)
+            : null;
 
         // `const ref` is rejected: a `const` binding is a compile-time constant,
         // not a runtime storage slot, so there is no storage to alias.
@@ -1649,7 +1674,10 @@ internal sealed partial class StatementBinder
             boundInitializer = new BoundAddressOfExpression(syntax.Initializer, initializer);
         }
 
-        return new BoundVariableDeclaration(syntax, variable, boundInitializer);
+        return new BoundVariableDeclaration(
+            syntax,
+            Invariant.Required(variable, "a ref-alias declaration produces a variable symbol"),
+            boundInitializer);
     }
 
     private BoundStatement BindTupleDeconstructionStatement(TupleDeconstructionStatementSyntax syntax)
@@ -1867,10 +1895,14 @@ internal sealed partial class StatementBinder
         statements = default;
         var receiverClrType = receiver.Type?.ClrType;
         if (receiverClrType == null
-            && !MemberLookup.TryProjectErasedClrType(receiver.Type, out receiverClrType))
+            && !MemberLookup.TryProjectErasedClrType(
+                Invariant.Required(receiver.Type, "a deconstruction receiver has a type"),
+                out receiverClrType))
         {
             return false;
         }
+
+        receiverClrType = Invariant.Required(receiverClrType, "a deconstruction receiver has a CLR type");
 
         if (receiver.Type is ImportedTypeSymbol symbolicReceiver
             && symbolicReceiver.OpenDefinition != null
@@ -1938,6 +1970,7 @@ internal sealed partial class StatementBinder
                     }
                 })
                 .Where(method => method != null)
+                .Cast<MethodInfo>()
                 .ToList();
             if (candidates.Count == 0)
             {
@@ -1977,7 +2010,7 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            var method = resolution.Best;
+            var method = Invariant.Required(resolution.Best, "a resolved overload has a best method");
             var parameters = method.GetParameters();
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
             var refKinds = ImmutableArray.CreateBuilder<RefKind>(parameters.Length);
@@ -1994,7 +2027,10 @@ internal sealed partial class StatementBinder
             for (var i = 0; i < identifiers.Count; i++)
             {
                 var parameterType = receiverOffset == 0
-                    ? MemberLookup.GetClrMethodParameterTypeSymbol(receiver.Type, method, i)
+                    ? MemberLookup.GetClrMethodParameterTypeSymbol(
+                        Invariant.Required(receiver.Type, "a deconstruction receiver has a type"),
+                        method,
+                        i)
                     : TypeSymbol.FromClrType(parameters[i + receiverOffset].ParameterType);
                 var elementType = parameterType is ByRefTypeSymbol byRef
                     ? byRef.PointeeType

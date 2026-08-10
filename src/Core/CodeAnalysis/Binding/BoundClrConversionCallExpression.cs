@@ -20,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrConversionCallExpression : BoundExpression
 {
-    public BoundClrConversionCallExpression(SyntaxNode syntax, BoundExpression source, MethodInfo method, TypeSymbol resultType)
+    public BoundClrConversionCallExpression(SyntaxNode? syntax, BoundExpression source, MethodInfo method, TypeSymbol resultType)
         : base(syntax)
     {
         Source = source;

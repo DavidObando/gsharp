@@ -229,8 +229,8 @@ public static class IncrementalGlobalScopeReuse
 
         var constructorsToRepoint = new List<(ConstructorSymbol Symbol, ConstructorDeclarationSyntax Updated)>();
         var deinitsToRepoint = new List<(DeinitSymbol Symbol, DeinitDeclarationSyntax Updated)>();
-        var propertiesToRepoint = new List<(PropertySymbol Symbol, PropertyDeclarationSyntax Updated, BlockStatementSyntax Getter, BlockStatementSyntax Setter)>();
-        var eventsToRepoint = new List<(EventSymbol Symbol, EventDeclarationSyntax Updated, BlockStatementSyntax Add, BlockStatementSyntax Remove, BlockStatementSyntax Raise)>();
+        var propertiesToRepoint = new List<(PropertySymbol Symbol, PropertyDeclarationSyntax Updated, BlockStatementSyntax? Getter, BlockStatementSyntax? Setter)>();
+        var eventsToRepoint = new List<(EventSymbol Symbol, EventDeclarationSyntax Updated, BlockStatementSyntax? Add, BlockStatementSyntax? Remove, BlockStatementSyntax? Raise)>();
 
         foreach (var structSymbol in scope.Structs)
         {
@@ -519,7 +519,7 @@ public static class IncrementalGlobalScopeReuse
         var updated = CollectDeclarations<TNode>(updatedTree);
         if (previous.Count != updated.Count)
         {
-            map = null;
+            map = new Dictionary<TNode, TNode>();
             return false;
         }
 
@@ -601,7 +601,7 @@ public static class IncrementalGlobalScopeReuse
         return builder.ToString();
     }
 
-    private static BlockStatementSyntax GetAccessorBody(PropertyDeclarationSyntax property, bool isGetter)
+    private static BlockStatementSyntax? GetAccessorBody(PropertyDeclarationSyntax property, bool isGetter)
     {
         foreach (var accessor in property.Accessors)
         {
@@ -614,7 +614,7 @@ public static class IncrementalGlobalScopeReuse
         return null;
     }
 
-    private static BlockStatementSyntax GetEventAccessorBody(EventDeclarationSyntax eventDeclaration, EventAccessorKind kind)
+    private static BlockStatementSyntax? GetEventAccessorBody(EventDeclarationSyntax eventDeclaration, EventAccessorKind kind)
     {
         foreach (var accessor in eventDeclaration.Accessors)
         {

@@ -56,7 +56,7 @@ internal sealed class TypeIdentityComparer : IEqualityComparer<Type>
     {
     }
 
-    public bool Equals(Type x, Type y)
+    public bool Equals(Type? x, Type? y)
     {
         if (ReferenceEquals(x, y))
         {

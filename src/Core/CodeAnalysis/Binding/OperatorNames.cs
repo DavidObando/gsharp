@@ -19,7 +19,7 @@ internal static class OperatorNames
     /// </summary>
     /// <param name="kind">The operator token kind.</param>
     /// <returns>The CLR operator name, or <see langword="null"/>.</returns>
-    public static string TryGetBinaryName(SyntaxKind kind)
+    public static string? TryGetBinaryName(SyntaxKind kind)
     {
         return kind switch
         {
@@ -50,7 +50,7 @@ internal static class OperatorNames
     /// </summary>
     /// <param name="kind">The operator token kind.</param>
     /// <returns>The CLR operator name, or <see langword="null"/>.</returns>
-    public static string TryGetUnaryName(SyntaxKind kind)
+    public static string? TryGetUnaryName(SyntaxKind kind)
     {
         return kind switch
         {
@@ -77,7 +77,7 @@ internal static class OperatorNames
     /// </remarks>
     /// <param name="kind">The operator token kind.</param>
     /// <returns>The CLR operator name, or <see langword="null"/>.</returns>
-    public static string TryGetCompoundAssignmentName(SyntaxKind kind)
+    public static string? TryGetCompoundAssignmentName(SyntaxKind kind)
     {
         return kind switch
         {

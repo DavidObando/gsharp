@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -104,10 +105,10 @@ internal static class EnumOperatorTable
     /// <returns><c>true</c> if the table contains a matching rule.</returns>
     public static bool TryBindBinary(
         SyntaxKind syntaxKind,
-        TypeSymbol leftType,
-        TypeSymbol rightType,
+        TypeSymbol? leftType,
+        TypeSymbol? rightType,
         out BoundBinaryOperatorKind kind,
-        out TypeSymbol resultType)
+        [NotNullWhen(true)] out TypeSymbol? resultType)
     {
         kind = default;
         resultType = null;
@@ -134,7 +135,7 @@ internal static class EnumOperatorTable
                     ResultRule.ResultUnderlying => underlyingType,
                     _ => throw new InvalidOperationException($"Unknown result rule: {rule.Result}"),
                 };
-                return true;
+                return resultType is not null;
             }
         }
 
@@ -153,9 +154,9 @@ internal static class EnumOperatorTable
     /// <returns><c>true</c> if the table contains a matching rule.</returns>
     public static bool TryBindUnary(
         SyntaxKind syntaxKind,
-        TypeSymbol operandType,
+        TypeSymbol? operandType,
         out BoundUnaryOperatorKind kind,
-        out TypeSymbol resultType)
+        [NotNullWhen(true)] out TypeSymbol? resultType)
     {
         kind = default;
         resultType = null;
@@ -164,7 +165,7 @@ internal static class EnumOperatorTable
         {
             kind = BoundUnaryOperatorKind.OnesComplement;
             resultType = operandType;
-            return true;
+            return resultType is not null;
         }
 
         return false;
@@ -177,7 +178,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="type">The type to check.</param>
     /// <returns><c>true</c> if <paramref name="type"/> is an enum with an unsigned underlying type.</returns>
-    public static bool IsUnsignedEnumUnderlying(TypeSymbol type)
+    public static bool IsUnsignedEnumUnderlying(TypeSymbol? type)
     {
         if (type == null)
         {
@@ -197,7 +198,9 @@ internal static class EnumOperatorTable
         // (generalizing the #1100/#2135 pattern) instead of probing
         // `ClrType.IsEnum` directly; a throw means "definitely not an enum",
         // so IsUnsignedOrChar correctly falls through to its signed default.
-        var underlying = type.ClrType.GetEnumUnderlyingTypeSafe();
+        var underlying = type.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (underlying != null)
         {
             var underlyingName = underlying.FullName;
@@ -219,7 +222,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="type">The type to check.</param>
     /// <returns><c>true</c> if the type is an enum.</returns>
-    public static bool IsEnumType(TypeSymbol type)
+    public static bool IsEnumType(TypeSymbol? type)
     {
         if (type is NullableTypeSymbol)
         {
@@ -234,7 +237,7 @@ internal static class EnumOperatorTable
         // Issue #2327: guard against NotSupportedException from a
         // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
         // above for the full rationale).
-        return type?.ClrType.IsEnumSafe() == true;
+        return type?.ClrType is { } clrType && clrType.IsEnumSafe();
     }
 
     /// <summary>
@@ -244,7 +247,7 @@ internal static class EnumOperatorTable
     /// </summary>
     /// <param name="enumType">The enum type symbol.</param>
     /// <returns>The underlying primitive type symbol, or <c>null</c>.</returns>
-    internal static TypeSymbol GetUnderlyingType(TypeSymbol enumType)
+    internal static TypeSymbol? GetUnderlyingType(TypeSymbol? enumType)
     {
         if (enumType is EnumSymbol es)
         {
@@ -254,7 +257,9 @@ internal static class EnumOperatorTable
         // Issue #2327: guard against NotSupportedException from a
         // TypeBuilderInstantiation-backed ClrType (see IsUnsignedEnumUnderlying
         // above for the full rationale).
-        var clrUnderlying = enumType?.ClrType.GetEnumUnderlyingTypeSafe();
+        var clrUnderlying = enumType?.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (clrUnderlying != null)
         {
             return TypeSymbol.FromClrType(clrUnderlying);
@@ -267,8 +272,8 @@ internal static class EnumOperatorTable
         OperandShape shape,
         TypeSymbol leftType,
         TypeSymbol rightType,
-        out TypeSymbol enumType,
-        out TypeSymbol underlyingType)
+        out TypeSymbol? enumType,
+        out TypeSymbol? underlyingType)
     {
         enumType = null;
         underlyingType = null;

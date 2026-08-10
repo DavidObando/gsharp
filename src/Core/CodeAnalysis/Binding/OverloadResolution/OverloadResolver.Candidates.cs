@@ -21,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 internal sealed partial class OverloadResolver
 {
-    public FunctionSymbol SelectInstanceOverloadOrReport(
+    public FunctionSymbol? SelectInstanceOverloadOrReport(
         ImmutableArray<FunctionSymbol> overloads,
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
@@ -42,7 +42,7 @@ internal sealed partial class OverloadResolver
         if (explicitTypeArgCount > 0)
         {
             var explicitTypeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(explicitTypeArgCount);
-            foreach (var explicitArgument in ce.TypeArgumentList.Arguments)
+            foreach (var explicitArgument in Invariant.Required(ce.TypeArgumentList, "an explicit type-argument count has a type-argument list").Arguments)
             {
                 var typeArgument = bindTypeClause(explicitArgument);
                 if (typeArgument == null)
@@ -99,7 +99,7 @@ internal sealed partial class OverloadResolver
                 Diagnostics.ReportUnconstrainedNullableIteratorCall(
                     ce.Identifier.Location,
                     methodName,
-                    unconstrainedTypeParameter.Name);
+                    Invariant.Required(unconstrainedTypeParameter, "an unconstrained nullable iterator diagnostic has a type parameter").Name);
             }
             else
             {
@@ -136,7 +136,7 @@ internal sealed partial class OverloadResolver
     /// reports GS0130.</param>
     /// <returns>The selected overload, or <see langword="null"/> (after a
     /// diagnostic) when the non-empty union had no applicable overload.</returns>
-    public FunctionSymbol SelectUnifiedInstanceStaticOverload(
+    public FunctionSymbol? SelectUnifiedInstanceStaticOverload(
         StructSymbol structSym,
         string methodName,
         ImmutableArray<BoundExpression> arguments,
@@ -161,13 +161,13 @@ internal sealed partial class OverloadResolver
         return SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames);
     }
 
-    private FunctionSymbol SelectBestUserOverload(
+    private FunctionSymbol? SelectBestUserOverload(
         ImmutableArray<FunctionSymbol> candidates,
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         out bool ambiguous,
-        out NullSafetyArgumentMismatch nullSafetyFailure,
+        out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0)
     {
         return SelectBestUserOverloadCore(candidates, argumentCount, argumentNames, boundArguments, out ambiguous, out nullSafetyFailure, explicitTypeArgCount);
@@ -179,13 +179,13 @@ internal sealed partial class OverloadResolver
     /// callable arity, named-argument compatibility, and optional-parameter
     /// applicability, then ranks by exact-type matches and defaulted slots.
     /// </summary>
-    public FunctionSymbol SelectBestInstanceOverload(
+    public FunctionSymbol? SelectBestInstanceOverload(
         ImmutableArray<FunctionSymbol> candidates,
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression> boundArguments,
         out bool ambiguous,
-        out NullSafetyArgumentMismatch nullSafetyFailure,
+        out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
         ImmutableArray<TypeSymbol> explicitTypeArguments = default)
     {
@@ -214,13 +214,13 @@ internal sealed partial class OverloadResolver
             explicitTypeArguments);
     }
 
-    private FunctionSymbol SelectBestUserOverloadCore(
+    private FunctionSymbol? SelectBestUserOverloadCore(
         ImmutableArray<FunctionSymbol> candidates,
         int argumentCount,
         ImmutableArray<string> argumentNames,
         ImmutableArray<BoundExpression>.Builder boundArguments,
         out bool ambiguous,
-        out NullSafetyArgumentMismatch nullSafetyFailure,
+        out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
         ImmutableArray<TypeSymbol> explicitTypeArguments = default)
     {
@@ -233,7 +233,7 @@ internal sealed partial class OverloadResolver
         // inputs. Memoize per candidate for this call so unification runs once
         // instead of twice per generic candidate.
         var substitutionCache = new Dictionary<FunctionSymbol, (bool Ok, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
-        Dictionary<TypeParameterSymbol, TypeSymbol> GetCandidateSubstitution(FunctionSymbol candidate)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? GetCandidateSubstitution(FunctionSymbol candidate)
         {
             if (!explicitTypeArguments.IsDefaultOrEmpty
                 && candidate.TypeParameters.Length == explicitTypeArguments.Length)
@@ -412,7 +412,7 @@ internal sealed partial class OverloadResolver
             // For generic candidates, compute the inferred method-type
             // substitution so delegate parameter return types can be closed
             // when classifying the value-return discard case below.
-            Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution = null;
+            Dictionary<TypeParameterSymbol, TypeSymbol>? candSubstitution = null;
             if (cand.IsGeneric)
             {
                 candSubstitution = GetCandidateSubstitution(cand);
@@ -496,7 +496,7 @@ internal sealed partial class OverloadResolver
         // per-argument conversions are pairwise incomparable both survive —
         // exactly the non-generic-vs-generic tie the previous strict-
         // dominance-over-all-others requirement rejected.
-        var argTypes = new TypeSymbol[boundArguments.Count];
+        var argTypes = new TypeSymbol?[boundArguments.Count];
         for (var i = 0; i < boundArguments.Count; i++)
         {
             argTypes[i] = boundArguments[i]?.Type;
@@ -733,7 +733,7 @@ internal sealed partial class OverloadResolver
     /// not worse than <paramref name="b"/> on any argument and strictly better
     /// on at least one.
     /// </summary>
-    private static bool IsUserCandidateAtLeastAsGoodAs(UserCandidateRankData a, UserCandidateRankData b, TypeSymbol[] argTypes)
+    private static bool IsUserCandidateAtLeastAsGoodAs(UserCandidateRankData a, UserCandidateRankData b,     TypeSymbol?[] argTypes)
     {
         var hasStrictlyBetter = false;
         for (var i = 0; i < a.Kinds.Length; i++)
@@ -763,7 +763,7 @@ internal sealed partial class OverloadResolver
     /// helper rather than reimplementing the numeric/signed-vs-unsigned
     /// lattice a second time.
     /// </summary>
-    private static int CompareUserConversions(ClrOverloadResolution.ImplicitConversionKind ka, TypeSymbol paramA, bool tailA, ClrOverloadResolution.ImplicitConversionKind kb, TypeSymbol paramB, bool tailB, TypeSymbol source)
+    private static int CompareUserConversions(ClrOverloadResolution.ImplicitConversionKind ka, TypeSymbol? paramA, bool tailA, ClrOverloadResolution.ImplicitConversionKind kb, TypeSymbol? paramB, bool tailB, TypeSymbol? source)
     {
         // Issue #1631 (B1'): per C# §7.5.3.2, "non-expanded form preferred
         // over expanded form" is a LATE tie-break applied only when per-arg
@@ -780,7 +780,10 @@ internal sealed partial class OverloadResolver
 
         if (ka == ClrOverloadResolution.ImplicitConversionKind.NumericWidening)
         {
-            return ClrOverloadResolution.CompareNumericTargets(paramA?.ClrType, paramB?.ClrType, source?.ClrType);
+            return ClrOverloadResolution.CompareNumericTargets(
+                Invariant.Required(paramA?.ClrType, "a numeric conversion target has a CLR type"),
+                Invariant.Required(paramB?.ClrType, "a numeric conversion target has a CLR type"),
+                Invariant.Required(source?.ClrType, "a numeric conversion source has a CLR type"));
         }
 
         // Issue #2146: reference "better conversion target" tie-break
@@ -853,7 +856,7 @@ internal sealed partial class OverloadResolver
     /// separately, but they still rank strictly better than the numeric/
     /// delegate special cases ranked worse below.
     /// </summary>
-    private ClrOverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol argType, TypeSymbol paramType)
+    private ClrOverloadResolution.ImplicitConversionKind ClassifyUserArgumentConversionKind(TypeSymbol? argType, TypeSymbol? paramType)
     {
         if (argType == null || paramType == null)
         {
@@ -899,9 +902,10 @@ internal sealed partial class OverloadResolver
         // path against nullableParam.UnderlyingType) if a real ambiguity shows up.
         var argClr = argType.ClrType;
         var paramClr = paramType.ClrType;
-        if (argClr != null && paramClr != null
-            && NumericWideningLattice.IsNumericPrimitive(argClr.FullName)
-            && NumericWideningLattice.IsNumericPrimitive(paramClr.FullName)
+        if (argClr?.FullName is string argFullName
+            && paramClr?.FullName is string paramFullName
+            && NumericWideningLattice.IsNumericPrimitive(argFullName)
+            && NumericWideningLattice.IsNumericPrimitive(paramFullName)
             && NumericWideningLattice.IsWidening(argClr, paramClr))
         {
             return ClrOverloadResolution.ImplicitConversionKind.NumericWidening;
@@ -956,7 +960,7 @@ internal sealed partial class OverloadResolver
         FunctionSymbol candidate,
         int argumentCount,
         ImmutableArray<BoundExpression>.Builder boundArguments,
-        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
     {
         // Generic candidates may carry unsubstituted method type parameters in
         // their signature; rely on the existing #1124 inference filter instead.
@@ -1181,7 +1185,7 @@ internal sealed partial class OverloadResolver
     /// (pointing at the argument), or <see langword="null"/> when the empty set
     /// is not attributable to the null-safety gate.
     /// </summary>
-    private static NullSafetyArgumentMismatch TryFindNullSafetyArgumentMismatch(
+    private static NullSafetyArgumentMismatch? TryFindNullSafetyArgumentMismatch(
         List<FunctionSymbol> candidates,
         int argumentCount,
         ImmutableArray<BoundExpression>.Builder boundArguments)
@@ -1385,7 +1389,7 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression>.Builder boundArguments,
         int argumentCount,
         ImmutableArray<TypeSymbol> explicitTypeArguments,
-        out TypeParameterSymbol typeParameter)
+        out TypeParameterSymbol? typeParameter)
     {
         typeParameter = null;
         if (candidates.Length < 2)
@@ -1414,7 +1418,7 @@ internal sealed partial class OverloadResolver
                 return false;
             }
 
-            TypeSymbol callerType;
+            TypeSymbol? callerType;
             if (!explicitTypeArguments.IsDefaultOrEmpty)
             {
                 if (specializedTarget.Ordinal >= explicitTypeArguments.Length)
@@ -1518,9 +1522,9 @@ internal sealed partial class OverloadResolver
     /// <c>(...)-&gt;void</c> one when a value-returning argument is supplied.
     /// </summary>
     private bool IsValueReturnDiscardedToVoidDelegate(
-        TypeSymbol argType,
-        TypeSymbol paramType,
-        Dictionary<TypeParameterSymbol, TypeSymbol> candSubstitution)
+        TypeSymbol? argType,
+        TypeSymbol? paramType,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? candSubstitution)
     {
         if (argType is not FunctionTypeSymbol argFn
             || paramType is not FunctionTypeSymbol paramFn

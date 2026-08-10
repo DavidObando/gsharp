@@ -19,7 +19,7 @@ public sealed class BoundScopeStatement : BoundStatement
     /// <summary>Initializes a new instance of the <see cref="BoundScopeStatement"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="body">The bound body block.</param>
-    public BoundScopeStatement(SyntaxNode syntax, BoundStatement body)
+    public BoundScopeStatement(SyntaxNode? syntax, BoundStatement body)
         : base(syntax)
     {
         Body = body;

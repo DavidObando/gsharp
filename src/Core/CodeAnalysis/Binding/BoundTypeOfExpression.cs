@@ -19,7 +19,7 @@ public sealed class BoundTypeOfExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="operandType">The type that this <c>typeof</c> references.</param>
     /// <param name="systemType">The <c>System.Type</c> symbol used as the result type.</param>
-    public BoundTypeOfExpression(SyntaxNode syntax, TypeSymbol operandType, TypeSymbol systemType)
+    public BoundTypeOfExpression(SyntaxNode? syntax, TypeSymbol operandType, TypeSymbol systemType)
         : base(syntax)
     {
         OperandType = operandType;

@@ -18,7 +18,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <param name="constraint">The constraint kind (Phase 4.1: only <see cref="TypeParameterConstraint.Any"/>; Phase 4.2 widens this).</param>
     /// <param name="variance">The variance modifier (Phase 4.3 / ADR-0021).</param>
     /// <param name="interfaceConstraint">Optional sealed-interface constraint (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface and the enum <paramref name="constraint"/> is set to <see cref="TypeParameterConstraint.Any"/> (the interface bound subsumes <c>any</c>).</param>
-    public TypeParameterSymbol(string name, int ordinal, TypeParameterConstraint constraint, TypeParameterVariance variance, InterfaceSymbol interfaceConstraint = null)
+    public TypeParameterSymbol(string name, int ordinal, TypeParameterConstraint constraint, TypeParameterVariance variance, InterfaceSymbol? interfaceConstraint = null)
         : base(name)
     {
         Ordinal = ordinal;
@@ -37,7 +37,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     public TypeParameterVariance Variance { get; }
 
     /// <summary>Gets or sets the sealed-interface constraint, if any (Phase 4.2b / ADR-0020). When non-<c>null</c>, type arguments must implement this interface. ADR-0089 allows late patching by the binder when the constraint is a self-referential constructed generic such as <c>[T IAdd[T]]</c>.</summary>
-    public InterfaceSymbol InterfaceConstraint { get; set; }
+    public InterfaceSymbol? InterfaceConstraint { get; set; }
 
     /// <summary>
     /// Gets or sets the imported CLR interface constraint, if any (issue #943).
@@ -51,7 +51,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// and routes instance calls on the type parameter through it with a
     /// <c>constrained.</c> prefix so the IL is verifiable.
     /// </summary>
-    public TypeSymbol ClrInterfaceConstraint { get; set; }
+    public TypeSymbol? ClrInterfaceConstraint { get; set; }
 
     /// <summary>
     /// Gets or sets the base-class (non-interface) constraint, if any (issue
@@ -67,7 +67,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <c>constrained.</c> prefix is required because the bound proves <c>T</c>
     /// is a reference type.
     /// </summary>
-    public TypeSymbol ClassConstraint { get; set; }
+    public TypeSymbol? ClassConstraint { get; set; }
 
     /// <summary>
     /// Gets the single interface bound carried by this type parameter, if any —
@@ -76,7 +76,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// emit the <c>GenericParamConstraint</c> row and by the binder to enforce
     /// constraint satisfaction at call sites.
     /// </summary>
-    public TypeSymbol ConstraintInterfaceType => (TypeSymbol)InterfaceConstraint ?? ClrInterfaceConstraint;
+    public TypeSymbol? ConstraintInterfaceType => InterfaceConstraint ?? ClrInterfaceConstraint;
 
     /// <summary>
     /// Gets the single TypeDefOrRefOrSpec bound this type parameter projects onto
@@ -85,7 +85,7 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// (<see cref="ClassConstraint"/>, issue #1056). At most one of these is set
     /// for a given type parameter.
     /// </summary>
-    public TypeSymbol ConstraintReferenceType => ConstraintInterfaceType ?? ClassConstraint;
+    public TypeSymbol? ConstraintReferenceType => ConstraintInterfaceType ?? ClassConstraint;
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter carries a

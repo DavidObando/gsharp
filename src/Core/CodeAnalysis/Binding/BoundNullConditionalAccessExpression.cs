@@ -39,12 +39,12 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
     /// uses to materialize <c>default(Nullable&lt;T&gt;)</c> when the access
     /// result is a value type. Null for reference-typed results.</param>
     public BoundNullConditionalAccessExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         VariableSymbol capture,
         BoundExpression whenNotNull,
         TypeSymbol type,
-        VariableSymbol resultSlot = null)
+        VariableSymbol? resultSlot = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -74,5 +74,5 @@ public sealed class BoundNullConditionalAccessExpression : BoundExpression
     /// in the nil branch when the access result is a value type. Null when the
     /// result is a reference type (the nil branch then just pushes <c>ldnull</c>).
     /// </summary>
-    public VariableSymbol ResultSlot { get; }
+    public VariableSymbol? ResultSlot { get; }
 }

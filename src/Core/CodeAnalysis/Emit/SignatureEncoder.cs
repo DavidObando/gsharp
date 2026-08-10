@@ -104,7 +104,7 @@ internal sealed class SignatureEncoder
         }
     }
 
-    internal void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol type)
+    internal void EncodeTypeSymbol(SignatureTypeEncoder encoder, TypeSymbol? type)
     {
         // ADR-0122 / issue #1014: an *unmanaged* pointer type (PointerTypeSymbol
         // → CLR ELEMENT_TYPE_PTR) is encoded by emitting the `*` element-type
@@ -685,7 +685,7 @@ internal sealed class SignatureEncoder
         }
     }
 
-    internal void EncodeClrType(SignatureTypeEncoder encoder, Type type)
+    internal void EncodeClrType(SignatureTypeEncoder encoder, Type? type)
     {
         // ADR-0060 §13 / migration: same as EncodeTypeSymbol — a CLR `T&` (Type.IsByRef)
         // cannot be encoded into a SignatureTypeEncoder slot. Callers must arrange the
@@ -909,8 +909,15 @@ internal sealed class SignatureEncoder
     /// time (GS9998). `MapToReferenceClrType` now performs the same recursive
     /// remapping itself, so both callers share one implementation.
     /// </summary>
+    /// <remarks>
+    /// Falls back to <paramref name="hostDelegate"/> when the reference set has
+    /// no matching type, exactly as every other <see cref="MapToReferenceClrType"/>
+    /// caller does: an unmappable delegate is still a delegate the emitter must
+    /// reference, and both callers here feed the result straight into a
+    /// MemberRef/TypeRef that a null would only turn into a null dereference.
+    /// </remarks>
     internal Type ResolveTargetDelegateClrType(Type hostDelegate)
-        => this.MapToReferenceClrType(hostDelegate);
+        => this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
 
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses
@@ -1012,7 +1019,7 @@ internal sealed class SignatureEncoder
     internal Type ResolveAsyncDelegateClrType(FunctionTypeSymbol fnType, FunctionSymbol function)
     {
         // Find the async plan for this function.
-        AsyncStateMachinePlan plan = null;
+        AsyncStateMachinePlan? plan = null;
         foreach (var p in this.outer.stateMachines.AsyncStateMachinePlans)
         {
             if (p.KickoffMethod == function)
@@ -1049,10 +1056,11 @@ internal sealed class SignatureEncoder
         var args = new Type[arity + 1];
         for (int i = 0; i < arity; i++)
         {
-            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType);
+            args[i] = this.MapToReferenceClrType(fnType.ParameterTypes[i].ClrType)
+                ?? Invariant.Required(fnType.ParameterTypes[i].ClrType, "a function parameter has a CLR representation");
         }
 
-        args[arity] = this.MapToReferenceClrType(taskClrType);
+        args[arity] = this.MapToReferenceClrType(taskClrType) ?? taskClrType;
         return openDef.MakeGenericType(args);
     }
 
@@ -1106,7 +1114,7 @@ internal sealed class SignatureEncoder
     // exactly as an unwrapped generic parameter already did: this rebuild
     // only changes how the *wrapper* is reconstructed, not generic-parameter
     // handling.
-    internal Type MapToReferenceClrType(Type hostType)
+    internal Type? MapToReferenceClrType(Type? hostType)
     {
         if (hostType == null)
         {
@@ -1115,19 +1123,22 @@ internal sealed class SignatureEncoder
 
         if (hostType.IsByRef)
         {
-            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            var element = Invariant.Required(hostType.GetElementType(), "a by-ref, pointer or array type always has an element type");
+            var mappedElement = this.MapToReferenceClrType(element) ?? element;
             return mappedElement.MakeByRefType();
         }
 
         if (hostType.IsPointer)
         {
-            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            var element = Invariant.Required(hostType.GetElementType(), "a by-ref, pointer or array type always has an element type");
+            var mappedElement = this.MapToReferenceClrType(element) ?? element;
             return mappedElement.MakePointerType();
         }
 
         if (hostType.IsArray)
         {
-            var mappedElement = this.MapToReferenceClrType(hostType.GetElementType()) ?? hostType.GetElementType();
+            var element = Invariant.Required(hostType.GetElementType(), "a by-ref, pointer or array type always has an element type");
+            var mappedElement = this.MapToReferenceClrType(element) ?? element;
 
             // A rank-1 array is either a vector (`T[]`, constructed via the
             // parameterless `MakeArrayType()`) or a general rank-1 array

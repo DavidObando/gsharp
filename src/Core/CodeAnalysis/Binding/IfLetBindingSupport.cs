@@ -37,7 +37,7 @@ internal static class IfLetBindingSupport
     /// <param name="Initializer">The bound right-hand-side expression.</param>
     internal readonly record struct BoundIfLetBinding(
         VariableSymbol Variable,
-        TypeSymbol Underlying,
+        TypeSymbol? Underlying,
         BoundExpression Initializer)
     {
         /// <summary>Gets a value indicating whether the clause produced a usable binding.</summary>
@@ -62,11 +62,11 @@ internal static class IfLetBindingSupport
         IfLetBindingClauseSyntax binding,
         DiagnosticBag diagnostics,
         ConversionClassifier conversions,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> declareLocal)
     {
-        TypeSymbol declaredUnderlying = null;
+        TypeSymbol? declaredUnderlying = null;
         if (binding.TypeClause != null)
         {
             declaredUnderlying = bindTypeClause(binding.TypeClause);
@@ -147,14 +147,16 @@ internal static class IfLetBindingSupport
     /// <param name="syntax">The syntax the synthesized nodes are attributed to.</param>
     /// <param name="variables">The binding variables, in source order.</param>
     /// <returns>The nil-check chain, or <see langword="null"/> when there are no bindings.</returns>
-    internal static BoundExpression BuildNilCheckChain(SyntaxNode syntax, IEnumerable<VariableSymbol> variables)
+    internal static BoundExpression? BuildNilCheckChain(SyntaxNode syntax, IEnumerable<VariableSymbol> variables)
     {
-        BoundExpression result = null;
+        BoundExpression? result = null;
         foreach (var variable in variables)
         {
             var read = new BoundVariableExpression(syntax, variable);
             var nilLiteral = new BoundLiteralExpression(syntax, null, TypeSymbol.Null);
-            var neqOp = BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null);
+            var neqOp = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.BangEqualsToken, variable.Type, TypeSymbol.Null),
+                "a nullable binding variable supports nil inequality");
             BoundExpression test = new BoundBinaryExpression(syntax, read, neqOp, nilLiteral);
             if (result == null)
             {
@@ -162,7 +164,9 @@ internal static class IfLetBindingSupport
             }
             else
             {
-                var andOp = BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool);
+                var andOp = Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.AmpersandAmpersandToken, TypeSymbol.Bool, TypeSymbol.Bool),
+                    "boolean nil checks support logical conjunction");
                 result = new BoundBinaryExpression(syntax, result, andOp, test);
             }
         }

@@ -210,10 +210,12 @@ internal static class FinallyExitRewriter
                 new BoundBinaryExpression(
                     null,
                     new BoundVariableExpression(null, pendingException),
-                    BoundBinaryOperator.Bind(
-                        SyntaxKind.EqualsEqualsToken,
-                        pendingException.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            SyntaxKind.EqualsEqualsToken,
+                            pendingException.Type,
+                            TypeSymbol.Null),
+                        "pending exception locals support nil equality"),
                     new BoundLiteralExpression(null, null, TypeSymbol.Null)),
                 jumpIfTrue: true));
             statements.Add(BuildExceptionDispatchThrow(
@@ -229,10 +231,12 @@ internal static class FinallyExitRewriter
                     new BoundBinaryExpression(
                         null,
                         new BoundVariableExpression(null, plan.PendingBranch),
-                        BoundBinaryOperator.Bind(
-                            SyntaxKind.EqualsEqualsToken,
-                            TypeSymbol.Int32,
-                            TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                SyntaxKind.EqualsEqualsToken,
+                                TypeSymbol.Int32,
+                                TypeSymbol.Int32),
+                            "int32 equality operator exists for finally dispatch"),
                         new BoundLiteralExpression(null, arm.Discriminator)),
                     jumpIfTrue: false));
                 statements.Add(new BoundGotoStatement(null, arm.Target));
@@ -259,12 +263,16 @@ internal static class FinallyExitRewriter
         private static BoundStatement BuildExceptionDispatchThrow(BoundExpression exception)
         {
             var ediType = typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo);
-            var captureMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
-                new[] { typeof(Exception) });
-            var throwMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
-                Type.EmptyTypes);
+            var captureMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
+                    new[] { typeof(Exception) }),
+                "ExceptionDispatchInfo.Capture(Exception) is looked up on the host runtime's own type, not on the target framework's references");
+            var throwMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
+                    Type.EmptyTypes),
+                "ExceptionDispatchInfo.Throw() is looked up on the host runtime's own type, not on the target framework's references");
             var ediClass = new ImportedClassSymbol(ediType, declaration: null);
             var captureFunction = new ImportedFunctionSymbol(
                 captureMethod.Name,

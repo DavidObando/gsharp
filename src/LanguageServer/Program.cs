@@ -56,15 +56,16 @@ public class Program
 
         var pipeName = GetPipeName(args);
 
-        Stream stream = null;
+        Stream? stream = null;
         Stream sending;
         Stream receiving;
 
         if (pipeName != null)
         {
-            stream = await ConnectPipeAsync(pipeName);
-            sending = stream;
-            receiving = stream;
+            var connectedStream = await ConnectPipeAsync(pipeName);
+            stream = connectedStream;
+            sending = connectedStream;
+            receiving = connectedStream;
         }
         else
         {
@@ -107,7 +108,7 @@ public class Program
     /// <param name="args">The language-server command-line arguments.</param>
     /// <param name="tracePath">The optional trace path supplied by the host environment.</param>
     /// <returns>The requested log path, or <see langword="null"/> when logging is disabled.</returns>
-    internal static string GetLogPath(string[] args, string tracePath = null)
+    internal static string? GetLogPath(string[] args, string? tracePath = null)
     {
         var logArg = args.FirstOrDefault(a =>
             string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
@@ -167,7 +168,7 @@ public class Program
         return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
     }
 
-    private static string GetPipeName(string[] args)
+    private static string? GetPipeName(string[] args)
     {
         var pipeArg = args.FirstOrDefault(a => a.StartsWith("--pipe=", StringComparison.OrdinalIgnoreCase));
         return pipeArg != null ? pipeArg.Substring("--pipe=".Length) : null;

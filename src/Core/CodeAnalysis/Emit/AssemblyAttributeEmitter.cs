@@ -382,7 +382,9 @@ internal sealed class AssemblyAttributeEmitter
             ? resolved
             : typeof(System.Diagnostics.DebuggableAttribute);
         var attrTypeRef = this.getTypeReference(attrType);
-        var modesType = attrType.GetNestedType("DebuggingModes");
+        var modesType = Invariant.Required(
+            attrType.GetNestedType("DebuggingModes"),
+            "System.Diagnostics.DebuggableAttribute declares the nested DebuggingModes enum");
         var modesTypeRef = this.getTypeReference(modesType);
 
         var ctorSig = new BlobBuilder();

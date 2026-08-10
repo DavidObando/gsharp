@@ -53,7 +53,7 @@ public static class AsyncBoundTreeQueries
     /// <param name="statement">The bound statement to inspect.</param>
     /// <param name="memo">An optional reference-keyed cache shared across calls in one lowering pass.</param>
     /// <returns>Whether the subtree contains an <c>await</c>.</returns>
-    public static bool HasAwait(BoundStatement statement, Dictionary<BoundNode, bool> memo)
+    public static bool HasAwait(BoundStatement statement, Dictionary<BoundNode, bool>? memo)
     {
         if (statement == null)
         {
@@ -82,7 +82,7 @@ public static class AsyncBoundTreeQueries
     /// <param name="expression">The bound expression to inspect.</param>
     /// <param name="memo">An optional reference-keyed cache shared across calls in one lowering pass.</param>
     /// <returns>Whether the subtree contains an <c>await</c>.</returns>
-    public static bool HasAwait(BoundExpression expression, Dictionary<BoundNode, bool> memo)
+    public static bool HasAwait(BoundExpression expression, Dictionary<BoundNode, bool>? memo)
     {
         if (expression == null)
         {
@@ -105,7 +105,7 @@ public static class AsyncBoundTreeQueries
     /// </summary>
     /// <param name="expression">The bound expression to inspect.</param>
     /// <returns>The first await's syntax node, or <see langword="null"/>.</returns>
-    public static SyntaxNode FindFirstAwaitSyntax(BoundExpression expression)
+    public static SyntaxNode? FindFirstAwaitSyntax(BoundExpression expression)
     {
         if (expression == null)
         {
@@ -128,9 +128,9 @@ public static class AsyncBoundTreeQueries
     /// </summary>
     private sealed class AwaitDetector : BoundTreeWalker
     {
-        private readonly Dictionary<BoundNode, bool> memo;
+        private readonly Dictionary<BoundNode, bool>? memo;
 
-        public AwaitDetector(Dictionary<BoundNode, bool> memo)
+        public AwaitDetector(Dictionary<BoundNode, bool>? memo)
         {
             this.memo = memo;
         }
@@ -185,7 +185,7 @@ public static class AsyncBoundTreeQueries
 
     private sealed class AwaitSyntaxFinder : BoundTreeWalker
     {
-        public SyntaxNode Syntax { get; private set; }
+        public SyntaxNode? Syntax { get; private set; }
 
         protected override void VisitAwaitExpression(BoundAwaitExpression node)
         {

@@ -16,13 +16,13 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundEventSubscriptionExpression : BoundExpression
 {
     public BoundEventSubscriptionExpression(
-        SyntaxNode syntax,
-        BoundExpression receiver,
+        SyntaxNode? syntax,
+        BoundExpression? receiver,
         TypeSymbol structType,
         EventSymbol eventSymbol,
         BoundExpression handler,
         bool isAdd,
-        TypeSymbol eventType = null)
+        TypeSymbol? eventType = null)
         : base(syntax)
     {
         Receiver = receiver;
@@ -33,7 +33,7 @@ public sealed class BoundEventSubscriptionExpression : BoundExpression
         EventType = eventType ?? eventSymbol.Type;
     }
 
-    public BoundExpression Receiver { get; }
+    public BoundExpression? Receiver { get; }
 
     /// <summary>
     /// Gets the event's static owner type: a <see cref="StructSymbol"/> for

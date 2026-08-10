@@ -13,9 +13,9 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken scopedModifier;
-    private SyntaxToken refKindModifier;
-    private TypeParameterListSyntax typeParameterList;
+    private SyntaxToken? scopedModifier;
+    private SyntaxToken? refKindModifier;
+    private TypeParameterListSyntax? typeParameterList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="VariableDeclarationSyntax"/> class.
@@ -28,11 +28,11 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <param name="initializer">The initializer expression.</param>
     public VariableDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken keyword,
+        SyntaxToken? keyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
-        SyntaxToken equalsToken,
-        ExpressionSyntax initializer)
+        TypeClauseSyntax? typeClause,
+        SyntaxToken? equalsToken,
+        ExpressionSyntax? initializer)
         : this(syntaxTree, accessibilityModifier: null, keyword, identifier, typeClause, equalsToken, initializer)
     {
     }
@@ -49,12 +49,12 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <param name="initializer">The initializer expression.</param>
     public VariableDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken keyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? keyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
-        SyntaxToken equalsToken,
-        ExpressionSyntax initializer)
+        TypeClauseSyntax? typeClause,
+        SyntaxToken? equalsToken,
+        ExpressionSyntax? initializer)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -82,18 +82,18 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <summary>
     /// Gets the optional accessibility modifier token. Only meaningful for top-level declarations.
     /// </summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the var keyword.
     /// </summary>
-    public SyntaxToken Keyword { get; }
+    public SyntaxToken? Keyword { get; }
 
     /// <summary>
     /// Gets or sets the optional <c>scoped</c> contextual modifier token (ADR-0058 / issue #376).
     /// When non-null, the local's safe-to-escape scope is restricted to the current function body.
     /// </summary>
-    public SyntaxToken ScopedModifier
+    public SyntaxToken? ScopedModifier
     {
         get => scopedModifier;
         set
@@ -111,7 +111,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// When non-null, this declaration is a ref-aliasing local: the slot stores a managed pointer to the
     /// initializer's lvalue and reads/writes through the local indirect through the alias.
     /// </summary>
-    public SyntaxToken RefKindModifier
+    public SyntaxToken? RefKindModifier
     {
         get => refKindModifier;
         set
@@ -135,7 +135,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <c>let First[T] = func (a T, b T) T { ... }</c>. <c>null</c> for non-generic declarations.
     /// Assigned by the parser.
     /// </summary>
-    public TypeParameterListSyntax TypeParameterList
+    public TypeParameterListSyntax? TypeParameterList
     {
         get => typeParameterList;
         set
@@ -151,17 +151,17 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// <summary>
     /// GEts the optional type clause.
     /// </summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>
     /// Gets the equals token.
     /// </summary>
-    public SyntaxToken EqualsToken { get; }
+    public SyntaxToken? EqualsToken { get; }
 
     /// <summary>
     /// Gets the initializer expression.
     /// </summary>
-    public ExpressionSyntax Initializer { get; }
+    public ExpressionSyntax? Initializer { get; }
 
     /// <summary>Attaches the given annotation list to this variable declaration and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>

@@ -38,7 +38,7 @@ internal static class AccessibilityChecker
     /// <param name="declaringType">The type that declares the member.</param>
     /// <param name="currentFunction">The function whose body contains the access (may be <see langword="null"/> for top-level code).</param>
     /// <returns><see langword="true"/> when the access is permitted.</returns>
-    public static bool IsAccessible(Accessibility accessibility, StructSymbol declaringType, FunctionSymbol currentFunction)
+    public static bool IsAccessible(Accessibility accessibility, StructSymbol? declaringType, FunctionSymbol? currentFunction)
     {
         if (declaringType == null || (accessibility != Accessibility.Protected && accessibility != Accessibility.Private))
         {
@@ -76,7 +76,7 @@ internal static class AccessibilityChecker
     /// outermost enclosing type, so nested types declared inside the same
     /// top-level type share `private` access to each other's members.
     /// </summary>
-    private static StructSymbol GetTopLevelContainer(StructSymbol type)
+    private static StructSymbol? GetTopLevelContainer(StructSymbol? type)
     {
         var current = type;
         while (current?.ContainingType is StructSymbol parent)
@@ -87,7 +87,7 @@ internal static class AccessibilityChecker
         return current;
     }
 
-    private static bool SameDeclaringType(StructSymbol a, StructSymbol b)
+    private static bool SameDeclaringType(StructSymbol? a, StructSymbol? b)
     {
         if (ReferenceEquals(a, b))
         {

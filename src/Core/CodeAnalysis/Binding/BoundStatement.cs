@@ -15,7 +15,7 @@ public abstract class BoundStatement : BoundNode
     /// Initializes a new instance of the <see cref="BoundStatement"/> class.
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
-    protected BoundStatement(SyntaxNode syntax)
+    protected BoundStatement(SyntaxNode? syntax)
         : base(syntax)
     {
     }

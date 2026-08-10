@@ -18,7 +18,7 @@ public sealed class BoundLenExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="operand">The operand expression.</param>
-    public BoundLenExpression(SyntaxNode syntax, BoundExpression operand)
+    public BoundLenExpression(SyntaxNode? syntax, BoundExpression operand)
         : base(syntax)
     {
         Operand = operand;

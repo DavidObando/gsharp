@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Documentation;
 
 internal static class SymbolDocumentationIdProvider
 {
-    public static string GetDocumentationId(Symbol symbol)
+    public static string? GetDocumentationId(Symbol symbol)
     {
         return symbol switch
         {
@@ -24,7 +24,7 @@ internal static class SymbolDocumentationIdProvider
         };
     }
 
-    public static string GetDocumentationId(Symbol member, StructSymbol ownerType)
+    public static string? GetDocumentationId(Symbol member, StructSymbol? ownerType)
     {
         return member switch
         {
@@ -36,12 +36,12 @@ internal static class SymbolDocumentationIdProvider
         };
     }
 
-    internal static string GetDocumentationId(PackageSymbol package)
+    internal static string? GetDocumentationId(PackageSymbol package)
     {
         return package is null ? null : $"N:{package.Name}";
     }
 
-    internal static string GetDocumentationId(StructSymbol type)
+    internal static string? GetDocumentationId(StructSymbol type)
     {
         if (type is null)
         {
@@ -53,7 +53,7 @@ internal static class SymbolDocumentationIdProvider
         return builder.ToString();
     }
 
-    internal static string GetDocumentationId(FunctionSymbol function)
+    internal static string? GetDocumentationId(FunctionSymbol function)
     {
         if (function is null)
         {
@@ -87,7 +87,7 @@ internal static class SymbolDocumentationIdProvider
         return builder.ToString();
     }
 
-    private static string GetDocumentationId(FieldSymbol field, StructSymbol ownerType)
+    private static string? GetDocumentationId(FieldSymbol field, StructSymbol? ownerType)
     {
         if (field is null || ownerType is null)
         {
@@ -100,7 +100,7 @@ internal static class SymbolDocumentationIdProvider
         return builder.ToString();
     }
 
-    private static string GetDocumentationId(PropertySymbol property, StructSymbol ownerType)
+    private static string? GetDocumentationId(PropertySymbol property, StructSymbol? ownerType)
     {
         if (property is null || ownerType is null)
         {
@@ -113,7 +113,7 @@ internal static class SymbolDocumentationIdProvider
         return builder.ToString();
     }
 
-    private static string GetDocumentationId(EventSymbol @event, StructSymbol ownerType)
+    private static string? GetDocumentationId(EventSymbol @event, StructSymbol? ownerType)
     {
         if (@event is null || ownerType is null)
         {
@@ -137,7 +137,7 @@ internal static class SymbolDocumentationIdProvider
         builder.Append(EncodeName(function.Name));
     }
 
-    private static void AppendParameterList(StringBuilder builder, FunctionSymbol function, StructSymbol ownerType)
+    private static void AppendParameterList(StringBuilder builder, FunctionSymbol function, StructSymbol? ownerType)
     {
         var start = function.ReceiverType != null && function.ExplicitReceiverParameter != null ? 1 : 0;
         if (function.Parameters.Length <= start)
@@ -174,7 +174,7 @@ internal static class SymbolDocumentationIdProvider
         AppendSourceTypeDeclarationName(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length);
     }
 
-    private static void AppendTypeReference(StringBuilder builder, TypeSymbol type, StructSymbol ownerType, FunctionSymbol function)
+    private static void AppendTypeReference(StringBuilder builder, TypeSymbol type, StructSymbol? ownerType, FunctionSymbol function)
     {
         switch (type)
         {
@@ -229,13 +229,13 @@ internal static class SymbolDocumentationIdProvider
         }
     }
 
-    private static void AppendSourceTypeReference(StringBuilder builder, StructSymbol type, StructSymbol ownerType, FunctionSymbol function)
+    private static void AppendSourceTypeReference(StringBuilder builder, StructSymbol type, StructSymbol? ownerType, FunctionSymbol function)
     {
         var definition = type.Definition ?? type;
         AppendSourceNamedTypeReference(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length, type.TypeArguments, ownerType, function);
     }
 
-    private static void AppendSourceTypeReference(StringBuilder builder, InterfaceSymbol type, StructSymbol ownerType, FunctionSymbol function)
+    private static void AppendSourceTypeReference(StringBuilder builder, InterfaceSymbol type, StructSymbol? ownerType, FunctionSymbol function)
     {
         var definition = type.Definition ?? type;
         AppendSourceNamedTypeReference(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length, type.TypeArguments, ownerType, function);
@@ -247,7 +247,7 @@ internal static class SymbolDocumentationIdProvider
         string name,
         int arity,
         ImmutableArray<TypeSymbol> typeArguments,
-        StructSymbol ownerType,
+        StructSymbol? ownerType,
         FunctionSymbol function)
     {
         if (!string.IsNullOrEmpty(packageName))
@@ -293,8 +293,13 @@ internal static class SymbolDocumentationIdProvider
         }
     }
 
-    private static void AppendClrTypeReference(StringBuilder builder, Type type)
+    private static void AppendClrTypeReference(StringBuilder builder, Type? type)
     {
+        if (type == null)
+        {
+            return;
+        }
+
         if (type.IsByRef)
         {
             AppendClrTypeReference(builder, type.GetElementType());
@@ -325,7 +330,7 @@ internal static class SymbolDocumentationIdProvider
         AppendClrConstructedTypeReference(builder, type);
     }
 
-    private static void AppendClrConstructedTypeReference(StringBuilder builder, Type type)
+    private static void AppendClrConstructedTypeReference(StringBuilder builder, Type? type)
     {
         var chain = NestingChain(type);
         var outermost = chain[0];
@@ -334,7 +339,9 @@ internal static class SymbolDocumentationIdProvider
             builder.Append(outermost.Namespace).Append('.');
         }
 
-        var allArgs = type.IsGenericType ? type.GetGenericArguments() : Type.EmptyTypes;
+        // NestingChain returns an empty list for a null type, so the chain[0]
+        // above would already have thrown; reaching here means type is present.
+        var allArgs = type!.IsGenericType ? type.GetGenericArguments() : Type.EmptyTypes;
         var consumed = 0;
         for (var i = 0; i < chain.Count; i++)
         {
@@ -377,7 +384,7 @@ internal static class SymbolDocumentationIdProvider
         StringBuilder builder,
         Type openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
-        StructSymbol ownerType,
+        StructSymbol? ownerType,
         FunctionSymbol function)
     {
         var chain = NestingChain(openDefinition);
@@ -442,7 +449,7 @@ internal static class SymbolDocumentationIdProvider
         builder.Append(']');
     }
 
-    private static List<Type> NestingChain(Type type)
+    private static List<Type> NestingChain(Type? type)
     {
         var chain = new List<Type>();
         for (var current = type; current != null; current = current.DeclaringType)

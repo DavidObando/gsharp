@@ -15,7 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundTupleElementAccessExpression : BoundExpression
 {
-    public BoundTupleElementAccessExpression(SyntaxNode syntax, BoundExpression receiver, TupleTypeSymbol tupleType, int index)
+    public BoundTupleElementAccessExpression(SyntaxNode? syntax, BoundExpression receiver, TupleTypeSymbol tupleType, int index)
         : base(syntax)
     {
         Receiver = receiver;

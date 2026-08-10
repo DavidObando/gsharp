@@ -25,7 +25,7 @@ public sealed class IfLetStatementSyntax : StatementSyntax
         SyntaxToken ifKeyword,
         SeparatedSyntaxList<IfLetBindingClauseSyntax> bindings,
         StatementSyntax thenStatement,
-        ElseClauseSyntax elseClause)
+        ElseClauseSyntax? elseClause)
         : base(syntaxTree)
     {
         IfKeyword = ifKeyword;
@@ -47,5 +47,5 @@ public sealed class IfLetStatementSyntax : StatementSyntax
     public StatementSyntax ThenStatement { get; }
 
     /// <summary>Gets the optional else clause; <c>null</c> when absent.</summary>
-    public ElseClauseSyntax ElseClause { get; }
+    public ElseClauseSyntax? ElseClause { get; }
 }

@@ -21,7 +21,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class DeclarationBinder
 {
-    internal InterfaceSymbol DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
+    internal InterfaceSymbol? DeclareInterfaceSymbol(InterfaceDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
         var name = syntax.Identifier.Text;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
@@ -256,7 +256,9 @@ internal sealed partial class DeclarationBinder
             foreach (var parameterSyntax in methodSyntax.Parameters)
             {
                 var parameterName = parameterSyntax.Identifier.Text;
-                var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+                var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                    ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                    : TypeSymbol.Error;
 
                 // ADR-0101 follow-up / issue #812: variadic parameters are now
                 // accepted on interface methods. For abstract members the
@@ -335,7 +337,8 @@ internal sealed partial class DeclarationBinder
             // classification so an eager delegation body is not discarded.
             methodSymbol.IsAsync = methodSyntax.IsAsync
                 || (isAsyncIteratorReturnType(returnType)
-                    && (methodSyntax.HasSemicolonBody || IteratorDetection.ContainsYield(methodSyntax.Body)));
+                    && (methodSyntax.HasSemicolonBody
+                        || (methodSyntax.Body is { } body && IteratorDetection.ContainsYield(body))));
             methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
             methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;
             methodSymbol.TypeParameters = methodTypeParameters;
@@ -457,7 +460,7 @@ internal sealed partial class DeclarationBinder
                 {
                     if (propSyntax.Parameters.Count == 0)
                     {
-                        Diagnostics.ReportIndexerRequiresParameter(propSyntax.ThisKeyword.Location);
+                        Diagnostics.ReportIndexerRequiresParameter(propSyntax.ThisKeyword?.Location ?? propSyntax.Identifier.Location);
                         continue;
                     }
 
@@ -466,7 +469,9 @@ internal sealed partial class DeclarationBinder
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
                         var indexParamName = indexParamSyntax.Identifier.Text;
-                        var indexParamType = bindTypeClause(indexParamSyntax.Type) ?? TypeSymbol.Error;
+                        var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
+                            ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
+                            : TypeSymbol.Error;
                         if (!seenIndexParamNames.Add(indexParamName))
                         {
                             Diagnostics.ReportParameterAlreadyDeclared(indexParamSyntax.Location, indexParamName);
@@ -490,7 +495,9 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var propType = bindTypeClause(propSyntax.Type);
+                var propType = propSyntax.Type is { } propTypeSyntax
+                    ? bindTypeClause(propTypeSyntax)
+                    : null;
                 if (propType == null)
                 {
                     continue;
@@ -574,7 +581,7 @@ internal sealed partial class DeclarationBinder
                 {
                     var getAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsGetter);
                     var setAccessor = propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit);
-                    TypeSymbol accessorReceiverType = isStaticInterfaceProperty ? null : interfaceSymbol;
+                    TypeSymbol? accessorReceiverType = isStaticInterfaceProperty ? null : interfaceSymbol;
 
                     if (hasGetter)
                     {
@@ -692,7 +699,9 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var handlerType = bindTypeClause(eventSyntax.Type);
+                var handlerType = eventSyntax.Type is { } eventTypeSyntax
+                    ? bindTypeClause(eventTypeSyntax)
+                    : null;
                 if (handlerType == null)
                 {
                     continue;

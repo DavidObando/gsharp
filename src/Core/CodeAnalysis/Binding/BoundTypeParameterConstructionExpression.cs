@@ -23,7 +23,7 @@ public sealed class BoundTypeParameterConstructionExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="typeParameter">The constrained type parameter being constructed.</param>
-    public BoundTypeParameterConstructionExpression(SyntaxNode syntax, TypeParameterSymbol typeParameter)
+    public BoundTypeParameterConstructionExpression(SyntaxNode? syntax, TypeParameterSymbol typeParameter)
         : base(syntax)
     {
         TypeParameter = typeParameter;

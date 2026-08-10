@@ -13,12 +13,12 @@ public sealed class BlockStatementSyntax : StatementSyntax
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private SyntaxToken unsafeKeyword;
+    private SyntaxToken? unsafeKeyword;
 
     // Issue #1881: backing fields for the checked/unchecked contextual block
     // keyword, mirroring the unsafeKeyword pattern above.
-    private SyntaxToken checkedKeyword;
-    private SyntaxToken uncheckedKeyword;
+    private SyntaxToken? checkedKeyword;
+    private SyntaxToken? uncheckedKeyword;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BlockStatementSyntax"/> class.
@@ -49,7 +49,7 @@ public sealed class BlockStatementSyntax : StatementSyntax
     /// <c>unsafe</c> context (unmanaged raw pointers and raw-pointer operations
     /// permitted). Assigned by the parser; <c>null</c> for ordinary blocks.
     /// </summary>
-    public SyntaxToken UnsafeKeyword
+    public SyntaxToken? UnsafeKeyword
     {
         get => unsafeKeyword;
         set
@@ -69,7 +69,7 @@ public sealed class BlockStatementSyntax : StatementSyntax
     /// conversions inside the block trap on overflow. Assigned by the parser;
     /// <c>null</c> for ordinary blocks.
     /// </summary>
-    public SyntaxToken CheckedKeyword
+    public SyntaxToken? CheckedKeyword
     {
         get => checkedKeyword;
         set
@@ -88,7 +88,7 @@ public sealed class BlockStatementSyntax : StatementSyntax
     /// truncating arithmetic/conversions inside the block. Assigned by the
     /// parser; <c>null</c> for ordinary blocks.
     /// </summary>
-    public SyntaxToken UncheckedKeyword
+    public SyntaxToken? UncheckedKeyword
     {
         get => uncheckedKeyword;
         set

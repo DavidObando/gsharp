@@ -42,7 +42,7 @@ public sealed class DeinitSymbol
     public DeinitDeclarationSyntax Declaration { get; private set; }
 
     /// <summary>Gets the owning class.</summary>
-    public StructSymbol DeclaringType => Function.ReceiverType as StructSymbol;
+    public StructSymbol? DeclaringType => Function.ReceiverType as StructSymbol;
 
     /// <summary>
     /// ADR-0105 Phase 2 — re-points this (reused) destructor at the declaration

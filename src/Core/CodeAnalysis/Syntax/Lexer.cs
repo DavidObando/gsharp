@@ -50,12 +50,12 @@ public sealed class Lexer
 
     private int start;
     private SyntaxKind kind;
-    private object value;
+    private object? value;
 
     // Issue #1677: set by ReadIdentifierOrKeyword when it determines the token is a plain
     // identifier (not a keyword). Lex() reuses this interned string instead of substringing
     // the same range a second time.
-    private string internedIdentifierText;
+    private string? internedIdentifierText;
 
     // Issue #1602: current interpolation-hole nesting depth. See
     // MaxInterpolationNestingDepth above.
@@ -775,7 +775,7 @@ public sealed class Lexer
         position++;
 
         var sb = new StringBuilder();
-        List<InterpolationFragment> fragments = null;
+        List<InterpolationFragment>? fragments = null;
         var done = false;
 
         while (!done)
@@ -1571,7 +1571,7 @@ public sealed class Lexer
         kind = suffixKind;
     }
 
-    private (TypeSymbol Type, int Length) TryReadNumericSuffix(bool allowFloatSuffixes, bool isFloatBody)
+    private (TypeSymbol? Type, int Length) TryReadNumericSuffix(bool allowFloatSuffixes, bool isFloatBody)
     {
         // ADR-0044 numeric suffix grammar. Case-insensitive. UL and LU
         // combinations both denote ulong. F/D/M are not legal on hex,
@@ -1628,7 +1628,7 @@ public sealed class Lexer
             || type == TypeSymbol.Decimal;
     }
 
-    private object ParseIntegerLiteral(string digitBody, int radix, TypeSymbol suffixType, string fullText, int spanStart, int spanLength)
+    private object ParseIntegerLiteral(string digitBody, int radix, TypeSymbol? suffixType, string fullText, int spanStart, int spanLength)
     {
         // Big enough to hold any 64-bit literal; we narrow into a smaller
         // CLR type based on the suffix or default to int when none is given.
@@ -1714,7 +1714,7 @@ public sealed class Lexer
         return parsed;
     }
 
-    private object ParseFloatLiteral(string digitBody, TypeSymbol suffixType, string fullText, int spanStart, int spanLength)
+    private object ParseFloatLiteral(string digitBody, TypeSymbol? suffixType, string fullText, int spanStart, int spanLength)
     {
         var targetType = suffixType ?? TypeSymbol.Float64;
 

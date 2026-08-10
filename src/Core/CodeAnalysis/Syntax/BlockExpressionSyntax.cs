@@ -19,14 +19,14 @@ public sealed class BlockExpressionSyntax : ExpressionSyntax
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="openBraceToken">The opening <c>{</c> token.</param>
-    /// <param name="statements">The prefix statements (all but the trailing expression).</param>
+    /// <param name="statements">The prefix statements (all but the trailing? expression).</param>
     /// <param name="expression">The trailing expression that yields the block's value (may be null for statement-only blocks).</param>
     /// <param name="closeBraceToken">The closing <c>}</c> token.</param>
     public BlockExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken openBraceToken,
         ImmutableArray<StatementSyntax> statements,
-        ExpressionSyntax expression,
+        ExpressionSyntax? expression,
         SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
@@ -50,7 +50,7 @@ public sealed class BlockExpressionSyntax : ExpressionSyntax
     /// (in which case the surrounding if-expression is only legal in statement
     /// position, which the binder enforces).
     /// </summary>
-    public ExpressionSyntax Expression { get; }
+    public ExpressionSyntax? Expression { get; }
 
     /// <summary>Gets the closing <c>}</c> token.</summary>
     public SyntaxToken CloseBraceToken { get; }

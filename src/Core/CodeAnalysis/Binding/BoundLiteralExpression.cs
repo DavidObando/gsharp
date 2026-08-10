@@ -17,8 +17,8 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class.
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
-    /// <param name="value">The value.</param>
-    public BoundLiteralExpression(SyntaxNode syntax, object value)
+    /// <param name="value">The value, or <c>null</c> for the <c>nil</c> literal.</param>
+    public BoundLiteralExpression(SyntaxNode? syntax, object? value)
         : this(syntax, value, InferType(value))
     {
     }
@@ -27,9 +27,9 @@ public sealed class BoundLiteralExpression : BoundExpression
     /// Initializes a new instance of the <see cref="BoundLiteralExpression"/> class with an explicit type.
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
-    /// <param name="value">The runtime value.</param>
+    /// <param name="value">The runtime value, or <c>null</c> for the <c>nil</c> literal.</param>
     /// <param name="type">The static type.</param>
-    public BoundLiteralExpression(SyntaxNode syntax, object value, TypeSymbol type)
+    public BoundLiteralExpression(SyntaxNode? syntax, object? value, TypeSymbol type)
         : base(syntax)
     {
         Value = value;
@@ -43,11 +43,13 @@ public sealed class BoundLiteralExpression : BoundExpression
     public override TypeSymbol Type { get; }
 
     /// <summary>
-    /// Gets the value.
+    /// Gets the value, or <c>null</c> for the <c>nil</c> literal (whose
+    /// <see cref="BoundExpression.Type"/> is <c>TypeSymbol.Null</c>). The emitter
+    /// and the narrowing analysis both test this.
     /// </summary>
-    public object Value { get; }
+    public object? Value { get; }
 
-    private static TypeSymbol InferType(object value)
+    private static TypeSymbol InferType(object? value)
     {
         if (value == null)
         {

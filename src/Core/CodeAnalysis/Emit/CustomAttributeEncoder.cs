@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -69,17 +70,17 @@ internal sealed class CustomAttributeEncoder
     private readonly EmitContext emitCtx;
     private readonly WellKnownReferences wellKnown;
     private readonly Func<Type, TypeReferenceHandle> getTypeReference;
-    private readonly Func<StructSymbol, EntityHandle> resolvePrimaryCtorToken;
-    private readonly Func<StructSymbol, EntityHandle> resolveDefaultCtorToken;
-    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveExplicitCtorToken;
+    private readonly Func<StructSymbol, EntityHandle>? resolvePrimaryCtorToken;
+    private readonly Func<StructSymbol, EntityHandle>? resolveDefaultCtorToken;
+    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle>? resolveExplicitCtorToken;
 
     public CustomAttributeEncoder(
         EmitContext emitCtx,
         WellKnownReferences wellKnown,
         Func<Type, TypeReferenceHandle> getTypeReference,
-        Func<StructSymbol, EntityHandle> resolvePrimaryCtorToken = null,
-        Func<StructSymbol, EntityHandle> resolveDefaultCtorToken = null,
-        Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveExplicitCtorToken = null)
+        Func<StructSymbol, EntityHandle>? resolvePrimaryCtorToken = null,
+        Func<StructSymbol, EntityHandle>? resolveDefaultCtorToken = null,
+        Func<StructSymbol, ConstructorSymbol, EntityHandle>? resolveExplicitCtorToken = null)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
         this.wellKnown = wellKnown ?? throw new ArgumentNullException(nameof(wellKnown));
@@ -495,7 +496,16 @@ internal sealed class CustomAttributeEncoder
             return;
         }
 
-        if (!this.emitCtx.References.TryResolveType(clrType.FullName, requireExternalVisibility: false, out var resolved))
+        // Type.FullName is null for a constructed generic whose type argument
+        // has no full name of its own -- reachable via the C#11-style generic
+        // attribute application in DeclarationBinder.Attributes.cs. That is a
+        // resolve FAILURE, not a reason to skip the attribute: TryResolveType
+        // already returned false for a null name (its first statement is an
+        // IsNullOrEmpty check) and the emit continued against the raw CLR type.
+        // Returning here instead silently dropped the CustomAttribute row.
+        var fullName = clrType.FullName;
+        if (fullName == null
+            || !this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved))
         {
             resolved = clrType;
         }
@@ -629,7 +639,7 @@ internal sealed class CustomAttributeEncoder
         StructSymbol attributeType,
         BoundAttribute attr,
         out EntityHandle ctorToken,
-        out Type[] paramTypes)
+        [NotNullWhen(true)] out Type[]? paramTypes)
     {
         var argCount = attr.PositionalArguments.Length;
         ctorToken = default;
@@ -646,9 +656,9 @@ internal sealed class CustomAttributeEncoder
 
         if (this.resolveExplicitCtorToken != null)
         {
-            ConstructorSymbol matchedCtor = null;
-            Type[] matchedParamTypes = null;
-            ConstructorSymbol ambiguousCtor = null;
+            ConstructorSymbol? matchedCtor = null;
+            Type[]? matchedParamTypes = null;
+            ConstructorSymbol? ambiguousCtor = null;
 
             foreach (var ctor in attributeType.EffectiveExplicitConstructors)
             {
@@ -684,7 +694,7 @@ internal sealed class CustomAttributeEncoder
                     $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload with {argCount} parameter(s) accepts the given argument types. Add an explicit conversion or change the argument types to disambiguate.");
             }
 
-            if (matchedCtor != null)
+            if (matchedCtor != null && matchedParamTypes != null)
             {
                 ctorToken = this.resolveExplicitCtorToken(attributeType, matchedCtor);
                 paramTypes = matchedParamTypes;
@@ -714,7 +724,7 @@ internal sealed class CustomAttributeEncoder
         return false;
     }
 
-    private static bool TryGetClrParameterTypes(ImmutableArray<ParameterSymbol> parameters, out Type[] clrTypes)
+    private static bool TryGetClrParameterTypes(ImmutableArray<ParameterSymbol> parameters, [NotNullWhen(true)] out Type[]? clrTypes)
     {
         clrTypes = new Type[parameters.Length];
         for (int i = 0; i < parameters.Length; i++)
@@ -732,7 +742,7 @@ internal sealed class CustomAttributeEncoder
         return true;
     }
 
-    private static ConstructorInfo ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
+    private static ConstructorInfo? ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
     {
         var ctors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
 
@@ -810,7 +820,7 @@ internal sealed class CustomAttributeEncoder
         return true;
     }
 
-    private static bool ArgAssignable(object supplied, Type paramType)
+    private static bool ArgAssignable(object? supplied, Type paramType)
     {
         // Third-party attributes are commonly resolved through a
         // MetadataLoadContext. Normalize framework types before using CLR
@@ -871,7 +881,7 @@ internal sealed class CustomAttributeEncoder
     /// <see cref="object"/>[] when the call site supplied the elements inline
     /// (params expansion). Returns one value per constructor parameter.
     /// </summary>
-    private static object[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
+    private static object?[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
     {
         var lastIsArray = ctorParams.Length > 0
             && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
@@ -890,7 +900,7 @@ internal sealed class CustomAttributeEncoder
 
         if (direct)
         {
-            var values = new object[ctorParams.Length];
+            var values = new object?[ctorParams.Length];
             for (int i = 0; i < ctorParams.Length; i++)
             {
                 values[i] = positional[i].Value;
@@ -899,14 +909,14 @@ internal sealed class CustomAttributeEncoder
             return values;
         }
 
-        var result = new object[ctorParams.Length];
+        var result = new object?[ctorParams.Length];
         for (int i = 0; i < ctorParams.Length - 1; i++)
         {
             result[i] = positional[i].Value;
         }
 
         var tail = positional.Length - (ctorParams.Length - 1);
-        var array = new object[tail];
+        var array = new object?[tail];
         for (int i = 0; i < tail; i++)
         {
             array[i] = positional[ctorParams.Length - 1 + i].Value;
@@ -924,7 +934,8 @@ internal sealed class CustomAttributeEncoder
     /// was resolved through a <see cref="MetadataLoadContext"/>. Unknown types
     /// are returned unchanged.
     /// </summary>
-    private static Type NormalizeWellKnownType(Type t)
+    [return: NotNullIfNotNull(nameof(t))]
+    private static Type? NormalizeWellKnownType(Type? t)
     {
         if (t == null)
         {
@@ -1040,7 +1051,7 @@ internal sealed class CustomAttributeEncoder
         }
     }
 
-    private void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object value)
+    private void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object? value)
     {
         if (paramType.IsEnum)
         {
@@ -1050,11 +1061,11 @@ internal sealed class CustomAttributeEncoder
 
         if (paramType.IsSameAs(typeof(bool)))
         {
-            bb.WriteBoolean((bool)value);
+            bb.WriteBoolean((bool)Invariant.Required(value, "a bool-typed attribute parameter binds a bool constant"));
         }
         else if (paramType.IsSameAs(typeof(char)))
         {
-            bb.WriteUInt16((char)value);
+            bb.WriteUInt16((char)Invariant.Required(value, "a char-typed attribute parameter binds a char constant"));
         }
         else if (paramType.IsSameAs(typeof(sbyte)))
         {
@@ -1098,7 +1109,7 @@ internal sealed class CustomAttributeEncoder
         }
         else if (paramType.IsSameAs(typeof(string)))
         {
-            bb.WriteSerializedString((string)value);
+            bb.WriteSerializedString((string?)value);
         }
         else if (paramType.IsSameAs(typeof(Type)))
         {
@@ -1142,7 +1153,7 @@ internal sealed class CustomAttributeEncoder
         }
     }
 
-    private void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object value)
+    private void WriteCustomAttributeArrayArg(BlobBuilder bb, Type elementType, object? value)
     {
         // ECMA-335 II.23.3: an SZARRAY argument is encoded as an Int32 length
         // (or 0xFFFFFFFF for a null array) followed by length elements of
@@ -1182,7 +1193,7 @@ internal sealed class CustomAttributeEncoder
     private static string GetMetadataTypeName(TypeSymbol type)
     {
         string packageName;
-        TypeSymbol containingType;
+        TypeSymbol? containingType;
         int arity;
         switch (type)
         {
@@ -1253,9 +1264,10 @@ internal sealed class CustomAttributeEncoder
 
     private void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
     {
-        var prop = attributeType.GetProperty(arg.Name, BindingFlags.Public | BindingFlags.Instance);
+        var name = Invariant.Required(arg.Name, "a named attribute argument always has a member name");
+        var prop = attributeType.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
         var field = prop == null
-            ? attributeType.GetField(arg.Name, BindingFlags.Public | BindingFlags.Instance)
+            ? attributeType.GetField(name, BindingFlags.Public | BindingFlags.Instance)
             : null;
         Type memberType;
         byte kindTag;

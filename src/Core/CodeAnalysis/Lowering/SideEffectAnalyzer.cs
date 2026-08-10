@@ -46,9 +46,11 @@ internal static class SideEffectAnalyzer
     /// duplicate at an emit-time re-emission point without first spilling
     /// it to a temp).
     /// </summary>
-    /// <param name="expression">The expression to classify.</param>
+    /// <param name="expression">The expression to classify, or <c>null</c>
+    /// for an absent optional operand such as a static access's receiver;
+    /// a null expression evaluates nothing and so has no side effects.</param>
     /// <returns><see langword="true"/> if the expression has observable side effects.</returns>
-    public static bool HasObservableSideEffect(BoundExpression expression)
+    public static bool HasObservableSideEffect(BoundExpression? expression)
     {
         if (expression == null)
         {

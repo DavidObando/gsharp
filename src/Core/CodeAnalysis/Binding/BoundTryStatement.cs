@@ -16,8 +16,9 @@ public sealed class BoundTryStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="tryBlock">The protected block.</param>
     /// <param name="catchClauses">The bound catch clauses (possibly empty).</param>
-    /// <param name="finallyBlock">The optional finally block.</param>
-    public BoundTryStatement(SyntaxNode syntax, BoundStatement tryBlock, ImmutableArray<BoundCatchClause> catchClauses, BoundStatement finallyBlock)
+    /// <param name="finallyBlock">The finally block, or <c>null</c> for a
+    /// <c>try</c>/<c>catch</c> with no <c>finally</c>.</param>
+    public BoundTryStatement(SyntaxNode? syntax, BoundStatement tryBlock, ImmutableArray<BoundCatchClause> catchClauses, BoundStatement? finallyBlock)
         : base(syntax)
     {
         TryBlock = tryBlock;
@@ -34,6 +35,7 @@ public sealed class BoundTryStatement : BoundStatement
     /// <summary>Gets the bound catch clauses.</summary>
     public ImmutableArray<BoundCatchClause> CatchClauses { get; }
 
-    /// <summary>Gets the optional finally block.</summary>
-    public BoundStatement FinallyBlock { get; }
+    /// <summary>Gets the finally block, or <c>null</c> for a <c>try</c>/<c>catch</c>
+    /// with no <c>finally</c>.</summary>
+    public BoundStatement? FinallyBlock { get; }
 }

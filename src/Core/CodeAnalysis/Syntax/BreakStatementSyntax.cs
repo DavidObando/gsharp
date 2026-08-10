@@ -21,7 +21,7 @@ public class BreakStatementSyntax : StatementSyntax
     /// as the <paramref name="keyword"/>); <see langword="null"/> for an
     /// innermost-loop break.
     /// </param>
-    public BreakStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword, SyntaxToken labelIdentifier = null)
+    public BreakStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword, SyntaxToken? labelIdentifier = null)
         : base(syntaxTree)
     {
         Keyword = keyword;
@@ -40,5 +40,5 @@ public class BreakStatementSyntax : StatementSyntax
     /// Gets the optional target label identifier (<see langword="null"/> when
     /// the break targets the innermost enclosing loop).
     /// </summary>
-    public SyntaxToken LabelIdentifier { get; }
+    public SyntaxToken? LabelIdentifier { get; }
 }

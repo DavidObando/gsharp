@@ -24,7 +24,7 @@ public sealed class BoundAssignmentExpression : BoundExpression
     /// assignment of a non-nullable value narrows a nullable <c>var</c> local
     /// for subsequent reads. <see langword="null"/> falls back to
     /// <see cref="Expression"/>'s (post-conversion) type.</param>
-    public BoundAssignmentExpression(SyntaxNode syntax, VariableSymbol variable, BoundExpression expression, TypeSymbol assignedValueType = null)
+    public BoundAssignmentExpression(SyntaxNode? syntax, VariableSymbol variable, BoundExpression expression, TypeSymbol? assignedValueType = null)
         : base(syntax)
     {
         Variable = variable;

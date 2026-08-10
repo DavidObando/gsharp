@@ -13,7 +13,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private TypeArgumentListSyntax typeArgumentList;
+    private TypeArgumentListSyntax? typeArgumentList;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructLiteralExpressionSyntax"/> class.
@@ -30,9 +30,9 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         SyntaxToken typeIdentifier,
         SyntaxToken openBraceToken,
-        SyntaxToken spreadToken,
-        ExpressionSyntax spreadExpression,
-        SyntaxToken spreadSeparatorToken,
+        SyntaxToken? spreadToken,
+        ExpressionSyntax? spreadExpression,
+        SyntaxToken? spreadSeparatorToken,
         SeparatedSyntaxList<FieldInitializerSyntax> initializers,
         SyntaxToken closeBraceToken)
         : base(syntaxTree)
@@ -56,13 +56,13 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     public SyntaxToken OpenBraceToken { get; }
 
     /// <summary>Gets the optional leading <c>...</c> token.</summary>
-    public SyntaxToken SpreadToken { get; }
+    public SyntaxToken? SpreadToken { get; }
 
     /// <summary>Gets the optional source expression whose public shape is projected.</summary>
-    public ExpressionSyntax SpreadExpression { get; }
+    public ExpressionSyntax? SpreadExpression { get; }
 
     /// <summary>Gets the comma separating the spread from explicit overrides, when present.</summary>
-    public SyntaxToken SpreadSeparatorToken { get; }
+    public SyntaxToken? SpreadSeparatorToken { get; }
 
     /// <summary>Gets the field initializers.</summary>
     public SeparatedSyntaxList<FieldInitializerSyntax> Initializers { get; }
@@ -71,7 +71,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional type-argument list (Phase 4.3 / ADR-0020), e.g. <c>Result[int, string]{...}</c>. <c>null</c> for non-generic literals or for literals whose type arguments are to be inferred.</summary>
-    public TypeArgumentListSyntax TypeArgumentList
+    public TypeArgumentListSyntax? TypeArgumentList
     {
         get => typeArgumentList;
         set

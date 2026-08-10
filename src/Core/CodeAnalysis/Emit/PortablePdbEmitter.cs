@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -58,7 +59,7 @@ internal sealed class PortablePdbEmitter
     private readonly Dictionary<SyntaxTree, DocumentHandle> documentsByTree = new Dictionary<SyntaxTree, DocumentHandle>();
     private readonly Dictionary<int, RecordedMethod> recordedMethods = new Dictionary<int, RecordedMethod>();
     private readonly DebugInformationOptions options;
-    private IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>> importsPerTree;
+    private IReadOnlyDictionary<SyntaxTree, ImmutableArray<ImportSymbol>>? importsPerTree;
     private ImmutableArray<ReferenceInfo> referenceInfos;
 
     public PortablePdbEmitter(DebugInformationOptions options)
@@ -177,12 +178,12 @@ internal sealed class PortablePdbEmitter
     /// </param>
     public void RecordMethod(
         MethodDefinitionHandle methodHandle,
-        IReadOnlyList<SequencePoint> sequencePoints,
-        IReadOnlyList<LocalInfo> locals,
-        IReadOnlyList<LocalConstantInfo> constants,
+        IReadOnlyList<SequencePoint>? sequencePoints,
+        IReadOnlyList<LocalInfo>? locals,
+        IReadOnlyList<LocalConstantInfo>? constants,
         int ilCodeSize,
         StandaloneSignatureHandle localSignatureToken,
-        SyntaxTree syntaxTree = null)
+        SyntaxTree? syntaxTree = null)
     {
         if (methodHandle.IsNil)
         {
@@ -242,7 +243,7 @@ internal sealed class PortablePdbEmitter
         // contract: one row per MethodDef, lockstep).
         for (var rid = 1; rid <= methodDefRowCount; rid++)
         {
-            if (this.recordedMethods.TryGetValue(rid, out var rec) && rec.Points.Count > 0)
+            if (this.recordedMethods.TryGetValue(rid, out var rec) && rec.Points is { Count: > 0 })
             {
                 var primaryDoc = FindPrimaryDocument(rec.Points);
 
@@ -322,8 +323,8 @@ internal sealed class PortablePdbEmitter
                 continue;
             }
 
-            var hasLocals = rec.Locals.Count > 0;
-            var hasConstants = rec.Constants.Count > 0;
+            var hasLocals = rec.Locals is { Count: > 0 };
+            var hasConstants = rec.Constants is { Count: > 0 };
             if (!hasLocals && !hasConstants)
             {
                 continue;
@@ -333,9 +334,10 @@ internal sealed class PortablePdbEmitter
             // the *first* AddLocalVariable call becomes the scope's variable
             // list anchor.
             LocalVariableHandle firstLocal = default;
-            for (var i = 0; i < rec.Locals.Count; i++)
+            var localList = rec.Locals ?? Array.Empty<LocalInfo>();
+            for (var i = 0; i < localList.Count; i++)
             {
-                var l = rec.Locals[i];
+                var l = localList[i];
                 var handle = this.pdbMetadata.AddLocalVariable(
                     attributes: l.IsCompilerGenerated
                         ? LocalVariableAttributes.DebuggerHidden
@@ -351,9 +353,10 @@ internal sealed class PortablePdbEmitter
             // Add LocalConstant rows for this method. Track the first RID so
             // AddLocalScope gets a correct constantList anchor.
             var firstConstantRid = nextConstantRid;
-            for (var i = 0; i < rec.Constants.Count; i++)
+            var constantList = rec.Constants ?? Array.Empty<LocalConstantInfo>();
+            for (var i = 0; i < constantList.Count; i++)
             {
-                var c = rec.Constants[i];
+                var c = constantList[i];
                 var sigBlob = EncodeLocalConstantSignature(c.Value);
                 if (!sigBlob.IsNil)
                 {
@@ -716,12 +719,12 @@ internal sealed class PortablePdbEmitter
     private sealed class RecordedMethod
     {
         public RecordedMethod(
-            IReadOnlyList<SequencePoint> points,
-            IReadOnlyList<LocalInfo> locals,
-            IReadOnlyList<LocalConstantInfo> constants,
+            IReadOnlyList<SequencePoint>? points,
+            IReadOnlyList<LocalInfo>? locals,
+            IReadOnlyList<LocalConstantInfo>? constants,
             int ilCodeSize,
             StandaloneSignatureHandle localSignatureToken,
-            SyntaxTree syntaxTree)
+            SyntaxTree? syntaxTree)
         {
             this.Points = points;
             this.Locals = locals;
@@ -731,11 +734,11 @@ internal sealed class PortablePdbEmitter
             this.SyntaxTree = syntaxTree;
         }
 
-        public IReadOnlyList<SequencePoint> Points { get; }
+        public IReadOnlyList<SequencePoint>? Points { get; }
 
-        public IReadOnlyList<LocalInfo> Locals { get; }
+        public IReadOnlyList<LocalInfo>? Locals { get; }
 
-        public IReadOnlyList<LocalConstantInfo> Constants { get; }
+        public IReadOnlyList<LocalConstantInfo>? Constants { get; }
 
         public int IlCodeSize { get; }
 
@@ -747,7 +750,7 @@ internal sealed class PortablePdbEmitter
         /// Used by <see cref="Serialize"/> to pick the per-file
         /// <c>ImportScope</c> for each <c>LocalScope</c> row.
         /// </summary>
-        public SyntaxTree SyntaxTree { get; }
+        public SyntaxTree? SyntaxTree { get; }
     }
 }
 

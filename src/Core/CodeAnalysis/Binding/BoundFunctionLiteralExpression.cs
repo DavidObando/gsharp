@@ -20,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundFunctionLiteralExpression : BoundExpression
 {
     public BoundFunctionLiteralExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         FunctionSymbol function,
         FunctionTypeSymbol type,
         BoundBlockStatement body,
@@ -51,5 +51,5 @@ public sealed class BoundFunctionLiteralExpression : BoundExpression
     /// <c>Lowerer</c> per call and holds no static state, so either cached value
     /// is safe.
     /// </summary>
-    internal BoundBlockStatement LoweredBody { get; set; }
+    internal BoundBlockStatement? LoweredBody { get; set; }
 }

@@ -31,17 +31,17 @@ public sealed class DelegateDeclarationSyntax : MemberSyntax
     /// <param name="returnType">Optional return type clause; <c>null</c> for void.</param>
     public DelegateDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
+        TypeParameterListSyntax? typeParameterList,
         SyntaxToken equalsToken,
         SyntaxToken delegateKeyword,
         SyntaxToken funcKeyword,
         SyntaxToken openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenToken,
-        TypeClauseSyntax returnType)
+        TypeClauseSyntax? returnType)
         : base(syntaxTree)
     {
         AccessibilityModifier = accessibilityModifier;
@@ -61,16 +61,16 @@ public sealed class DelegateDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.DelegateDeclaration;
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the <c>type</c> keyword.</summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>Gets the delegate type identifier.</summary>
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional generic type-parameter list.</summary>
-    public TypeParameterListSyntax TypeParameterList { get; }
+    public TypeParameterListSyntax? TypeParameterList { get; }
 
     /// <summary>Gets the <c>=</c> token.</summary>
     public SyntaxToken EqualsToken { get; }
@@ -91,5 +91,5 @@ public sealed class DelegateDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseParenToken { get; }
 
     /// <summary>Gets the optional return type clause; <c>null</c> for a <c>void</c>-returning delegate.</summary>
-    public TypeClauseSyntax ReturnType { get; }
+    public TypeClauseSyntax? ReturnType { get; }
 }

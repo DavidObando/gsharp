@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -105,7 +106,7 @@ public static class AsyncExceptionHandlerRewriter
         BoundBlockStatement body,
         bool preserveFinallyAcrossSuspension = false)
     {
-        if (body == null || !AsyncBoundTreeQueries.HasAwait(body))
+        if (!AsyncBoundTreeQueries.HasAwait(body))
         {
             return body;
         }
@@ -187,10 +188,15 @@ public static class AsyncExceptionHandlerRewriter
             //      finally should run only when the try completes normally,
             //      exceptionally, or via early exit — not on async suspension).
             bool tryBodyHasAwait = HasAwait(rewrittenTry);
-            bool needsFinallyLift = rewrittenFinally != null
-                && (finallyHasAwait || (tryBodyHasAwait && !preserveFinallyAcrossSuspension));
 
-            if (!anyCatchHasAwait && !needsFinallyLift)
+            // The finally to lift, or null when this try keeps its finally in
+            // place. Holding the block rather than a bool keeps the
+            // non-nullness that RewriteFinallyWithAwait requires visible.
+            var finallyToLift = finallyHasAwait || (tryBodyHasAwait && !preserveFinallyAcrossSuspension)
+                ? rewrittenFinally
+                : null;
+
+            if (!anyCatchHasAwait && finallyToLift == null)
             {
                 // No handler-await and no need to lift the finally — pass
                 // through (possibly with rewritten children).
@@ -215,7 +221,7 @@ public static class AsyncExceptionHandlerRewriter
                 new BoundLiteralExpression(null, null, nullableExceptionType));
             statements.Add(pendingExNullInit);
 
-            if (needsFinallyLift)
+            if (finallyToLift != null)
             {
                 // Pattern B: try/finally with await in finally
                 // Also handles try/catch/finally where finally has await:
@@ -225,7 +231,7 @@ public static class AsyncExceptionHandlerRewriter
                     statements,
                     rewrittenTry,
                     rewrittenClauses,
-                    rewrittenFinally,
+                    finallyToLift,
                     pendingExLocal,
                     exceptionType,
                     anyCatchHasAwait);
@@ -251,7 +257,7 @@ public static class AsyncExceptionHandlerRewriter
             ImmutableArray<BoundStatement>.Builder statements,
             BoundStatement tryBody,
             ImmutableArray<BoundCatchClause>.Builder catchClauses,
-            BoundStatement finallyBlock,
+            BoundStatement? finallyBlock,
             LocalVariableSymbol pendingExLocal,
             TypeSymbol exceptionType)
         {
@@ -326,10 +332,12 @@ public static class AsyncExceptionHandlerRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     captureRef,
-                    BoundBinaryOperator.Bind(
-                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        captureLocal.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                            captureLocal.Type,
+                            TypeSymbol.Null),
+                        "captured exception locals support nil equality"),
                     nullLit);
 
                 statements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
@@ -383,7 +391,7 @@ public static class AsyncExceptionHandlerRewriter
             {
                 statements.Add(new BoundVariableDeclaration(
                     null,
-                    funneler.PendingBranchLocal,
+                    Invariant.Required(funneler.PendingBranchLocal, "funneler.HasCapturedExits is true, and EnsureFinallyTail creates this alongside the first captured exit"),
                     new BoundLiteralExpression(null, 0)));
                 if (funneler.PendingReturnValueLocal != null)
                 {
@@ -478,10 +486,12 @@ public static class AsyncExceptionHandlerRewriter
                 var condition = new BoundBinaryExpression(
                     null,
                     captureRef,
-                    BoundBinaryOperator.Bind(
-                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                        captureLocal.Type,
-                        TypeSymbol.Null),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                            captureLocal.Type,
+                            TypeSymbol.Null),
+                        "captured exception locals support nil equality"),
                     nullLit);
 
                 liftedHandlerStatements.Add(new BoundConditionalGotoStatement(null, endLabel, condition, jumpIfTrue: true));
@@ -542,7 +552,9 @@ public static class AsyncExceptionHandlerRewriter
             // the finally exactly like the normal-completion and exception paths.
             if (funneler.HasCapturedExits)
             {
-                statements.Add(new BoundLabelStatement(null, funneler.FinallyTailLabel));
+                statements.Add(new BoundLabelStatement(
+                null,
+                Invariant.Required(funneler.FinallyTailLabel, "funneler.HasCapturedExits is true, and EnsureFinallyTail creates this alongside the first captured exit")));
             }
 
             // Emit the finally body (now outside any handler region)
@@ -565,10 +577,12 @@ public static class AsyncExceptionHandlerRewriter
             var rethrowCondition = new BoundBinaryExpression(
                 null,
                 pendingRef,
-                BoundBinaryOperator.Bind(
-                    CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                    pendingExLocal.Type,
-                    TypeSymbol.Null),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(
+                        CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                        pendingExLocal.Type,
+                        TypeSymbol.Null),
+                    "pending exception locals support nil equality"),
                 nullLitFinal);
 
             statements.Add(new BoundConditionalGotoStatement(null, rethrowEndLabel, rethrowCondition, jumpIfTrue: true));
@@ -593,11 +607,15 @@ public static class AsyncExceptionHandlerRewriter
                     var skipLabel = MakeLabel("branch_skip");
                     var armCondition = new BoundBinaryExpression(
                         null,
-                        new BoundVariableExpression(null, funneler.PendingBranchLocal),
-                        BoundBinaryOperator.Bind(
-                            CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
-                            TypeSymbol.Int32,
-                            TypeSymbol.Int32),
+                        new BoundVariableExpression(
+                    null,
+                    Invariant.Required(funneler.PendingBranchLocal, "funneler.HasCapturedExits is true, and EnsureFinallyTail creates this alongside the first captured exit")),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                CodeAnalysis.Syntax.SyntaxKind.EqualsEqualsToken,
+                                TypeSymbol.Int32,
+                                TypeSymbol.Int32),
+                            "int32 equality operator exists for captured-exit dispatch"),
                         new BoundLiteralExpression(null, arm.Discriminator));
 
                     // if (pendingBranch != value) goto skip; <exit>; skip:
@@ -622,12 +640,16 @@ public static class AsyncExceptionHandlerRewriter
         private static BoundStatement BuildEdiCaptureThrow(BoundExpression exceptionExpr, TypeSymbol exceptionType)
         {
             var ediType = typeof(System.Runtime.ExceptionServices.ExceptionDispatchInfo);
-            var captureMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
-                new[] { typeof(Exception) });
-            var throwMethod = ediType.GetMethod(
-                nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
-                Type.EmptyTypes);
+            var captureMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture),
+                    new[] { typeof(Exception) }),
+                "ExceptionDispatchInfo.Capture(Exception) is looked up on the host runtime's own type, not on the target framework's references");
+            var throwMethod = Invariant.Required(
+                ediType.GetMethod(
+                    nameof(System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw),
+                    Type.EmptyTypes),
+                "ExceptionDispatchInfo.Throw() is looked up on the host runtime's own type, not on the target framework's references");
 
             var ediClass = new ImportedClassSymbol(ediType, declaration: null);
             var captureFn = new ImportedFunctionSymbol(captureMethod.Name, ediClass, captureMethod, declaration: null);
@@ -736,9 +758,9 @@ public static class AsyncExceptionHandlerRewriter
             private readonly Dictionary<BoundLabel, int> gotoDiscriminators = new Dictionary<BoundLabel, int>();
             private readonly List<DispatchArm> dispatchArms = new List<DispatchArm>();
 
-            private BoundLabel finallyTailLabel;
-            private LocalVariableSymbol pendingBranchLocal;
-            private LocalVariableSymbol pendingReturnValueLocal;
+            private BoundLabel? finallyTailLabel;
+            private LocalVariableSymbol? pendingBranchLocal;
+            private LocalVariableSymbol? pendingReturnValueLocal;
             private bool returnCaptured;
             private int nextGotoDiscriminator = ReturnDiscriminator + 1;
 
@@ -751,14 +773,17 @@ public static class AsyncExceptionHandlerRewriter
             /// <summary>Gets a value indicating whether any exit was captured.</summary>
             public bool HasCapturedExits => dispatchArms.Count > 0;
 
-            /// <summary>Gets the lifted-finally tail label (only valid once an exit is captured).</summary>
-            public BoundLabel FinallyTailLabel => finallyTailLabel;
+            /// <summary>Gets the lifted-finally tail label, or <c>null</c> until an
+            /// exit is captured -- see <see cref="HasCapturedExits"/>.</summary>
+            public BoundLabel? FinallyTailLabel => finallyTailLabel;
 
-            /// <summary>Gets the pending-branch discriminator local (only valid once an exit is captured).</summary>
-            public LocalVariableSymbol PendingBranchLocal => pendingBranchLocal;
+            /// <summary>Gets the pending-branch discriminator local, or <c>null</c>
+            /// until an exit is captured -- see <see cref="HasCapturedExits"/>.</summary>
+            public LocalVariableSymbol? PendingBranchLocal => pendingBranchLocal;
 
-            /// <summary>Gets the pending-return-value local, or null when no value-return was captured.</summary>
-            public LocalVariableSymbol PendingReturnValueLocal => pendingReturnValueLocal;
+            /// <summary>Gets the pending-return-value local, or <c>null</c> when no
+            /// value-return was captured.</summary>
+            public LocalVariableSymbol? PendingReturnValueLocal => pendingReturnValueLocal;
 
             /// <summary>Gets the captured exits, in first-encounter order.</summary>
             public IReadOnlyList<DispatchArm> DispatchArms => dispatchArms;
@@ -774,23 +799,26 @@ public static class AsyncExceptionHandlerRewriter
                 EnsureFinallyTail();
                 var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
+                // Held in a local as well as the field: the dispatch arm below
+                // needs it, and `returnValueLocal != null` is exactly
+                // `node.Expression != null` without the analyzer having to
+                // correlate two separate `if`s.
+                LocalVariableSymbol? returnValueLocal = null;
                 if (node.Expression != null)
                 {
-                    if (pendingReturnValueLocal == null)
-                    {
-                        pendingReturnValueLocal = owner.NewLocal("pending_ret", node.Expression.Type);
-                    }
+                    returnValueLocal = pendingReturnValueLocal ??=
+                        owner.NewLocal("pending_ret", node.Expression.Type);
 
                     stmts.Add(new BoundExpressionStatement(
                         null,
-                        new BoundAssignmentExpression(null, pendingReturnValueLocal, node.Expression)));
+                        new BoundAssignmentExpression(null, returnValueLocal, node.Expression)));
                 }
 
                 if (!returnCaptured)
                 {
                     returnCaptured = true;
-                    var resume = node.Expression != null
-                        ? new BoundReturnStatement(null, new BoundVariableExpression(null, pendingReturnValueLocal), node.IsRef)
+                    var resume = returnValueLocal != null
+                        ? new BoundReturnStatement(null, new BoundVariableExpression(null, returnValueLocal), node.IsRef)
                         : new BoundReturnStatement(null, null);
                     dispatchArms.Add(new DispatchArm(ReturnDiscriminator, resume));
                 }
@@ -851,6 +879,7 @@ public static class AsyncExceptionHandlerRewriter
 
             private BoundStatement AssignBranch(int discriminator)
             {
+                EnsureFinallyTail();
                 return new BoundExpressionStatement(
                     null,
                     new BoundAssignmentExpression(
@@ -859,13 +888,18 @@ public static class AsyncExceptionHandlerRewriter
                         new BoundLiteralExpression(null, discriminator)));
             }
 
+            /// <summary>
+            /// Creates the lifted-finally tail label and its branch
+            /// discriminator local on first use. Every site that reads either
+            /// field calls this first, which is what
+            /// <see cref="MemberNotNullAttribute"/> records here: the two are
+            /// always created together and never cleared.
+            /// </summary>
+            [MemberNotNull(nameof(finallyTailLabel), nameof(pendingBranchLocal))]
             private void EnsureFinallyTail()
             {
-                if (finallyTailLabel == null)
-                {
-                    finallyTailLabel = MakeLabel("finally_tail");
-                    pendingBranchLocal = owner.NewLocal("pending_branch", TypeSymbol.Int32);
-                }
+                finallyTailLabel ??= MakeLabel("finally_tail");
+                pendingBranchLocal ??= owner.NewLocal("pending_branch", TypeSymbol.Int32);
             }
         }
     }

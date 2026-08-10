@@ -13,11 +13,11 @@ public sealed class EnumMemberSyntax : SyntaxNode
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken payloadOpenParenthesis;
-    private SeparatedSyntaxList<ParameterSyntax> payloadParameters;
-    private SyntaxToken payloadCloseParenthesis;
-    private SyntaxToken equalsToken;
-    private ExpressionSyntax value;
+    private SyntaxToken? payloadOpenParenthesis;
+    private SeparatedSyntaxList<ParameterSyntax>? payloadParameters;
+    private SyntaxToken? payloadCloseParenthesis;
+    private SyntaxToken? equalsToken;
+    private ExpressionSyntax? value;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EnumMemberSyntax"/> class.
@@ -52,7 +52,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// Gets the opening parenthesis for the optional payload parameter list
     /// (ADR-0078 / issue #725). Null when the case has no payload.
     /// </summary>
-    public SyntaxToken PayloadOpenParenthesis
+    public SyntaxToken? PayloadOpenParenthesis
     {
         get => payloadOpenParenthesis;
         internal set
@@ -67,7 +67,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// case (ADR-0078 / issue #725). Empty when the case has no payload —
     /// inspect <see cref="HasPayload"/> to distinguish.
     /// </summary>
-    public SeparatedSyntaxList<ParameterSyntax> PayloadParameters
+    public SeparatedSyntaxList<ParameterSyntax>? PayloadParameters
     {
         get => payloadParameters;
         internal set
@@ -81,7 +81,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// Gets the closing parenthesis for the optional payload parameter list
     /// (ADR-0078 / issue #725). Null when the case has no payload.
     /// </summary>
-    public SyntaxToken PayloadCloseParenthesis
+    public SyntaxToken? PayloadCloseParenthesis
     {
         get => payloadCloseParenthesis;
         internal set
@@ -98,7 +98,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// Gets the <c>=</c> token for an explicit member value (issue #1912),
     /// e.g. <c>Banana = 2</c>. Null when the member has no explicit value.
     /// </summary>
-    public SyntaxToken EqualsToken
+    public SyntaxToken? EqualsToken
     {
         get => equalsToken;
         internal set
@@ -112,7 +112,7 @@ public sealed class EnumMemberSyntax : SyntaxNode
     /// Gets the explicit constant-value expression (issue #1912) following
     /// <see cref="EqualsToken"/>. Null when the member has no explicit value.
     /// </summary>
-    public ExpressionSyntax Value
+    public ExpressionSyntax? Value
     {
         get => value;
         internal set

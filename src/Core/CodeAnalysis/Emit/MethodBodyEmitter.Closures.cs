@@ -452,11 +452,15 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     private void EmitMethodGroupTarget(BoundMethodGroupExpression methodGroup)
     {
-        if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var staticHandle)
-            && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out staticHandle))
+        var function = Invariant.Required(
+            methodGroup.Function,
+            "a method group whose candidate set is empty is an unresolved-overload error node, which the binder reports rather than handing to emit");
+
+        if (!this.outer.cache.FunctionHandles.TryGetValue(function, out var staticHandle)
+            && !this.outer.cache.MethodHandles.TryGetValue(function, out staticHandle))
         {
             throw new InvalidOperationException(
-                $"Method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
+                $"Method group '{function.Name}' has no emitted MethodDef.");
         }
 
         // Issue #1467: when the method group targets an instance method of a
@@ -470,22 +474,22 @@ internal sealed partial class MethodBodyEmitter
             && methodGroup.StaticOwnerType != null
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(methodGroup.StaticOwnerType))
         {
-            ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, methodGroup.Function);
+            ftnToken = this.outer.userTokens.ResolveUserStaticMethodToken(methodGroup.StaticOwnerType, function);
         }
 
         if (methodGroup.Receiver?.Type is StructSymbol receiverStruct
             && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverStruct)
-            && this.outer.cache.MethodHandles.ContainsKey(methodGroup.Function))
+            && this.outer.cache.MethodHandles.ContainsKey(function))
         {
-            ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverStruct, methodGroup.Function);
+            ftnToken = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverStruct, function);
         }
 
-        if (methodGroup.Function.IsGeneric)
+        if (function.IsGeneric)
         {
-            if (methodGroup.MethodTypeArguments.Length != methodGroup.Function.TypeParameters.Length)
+            if (methodGroup.MethodTypeArguments.Length != function.TypeParameters.Length)
             {
                 throw new InvalidOperationException(
-                    $"Generic method group '{methodGroup.Function.Name}' has no inferred type arguments.");
+                    $"Generic method group '{function.Name}' has no inferred type arguments.");
             }
 
             ftnToken = this.outer.userTokens.BuildMethodSpecForGenericMethodGroup(ftnToken, methodGroup);
@@ -513,7 +517,7 @@ internal sealed partial class MethodBodyEmitter
             // per issue #1397, an interface-typed receiver — dispatch via
             // `ldvirtftn` so the delegate invokes the concrete implementation.
             // Non-virtual / sealed methods use `ldftn` directly.
-            if (methodGroup.Function.IsOpen || methodGroup.Function.IsOverride
+            if (function.IsOpen || function.IsOverride
                 || methodGroup.Receiver.Type is InterfaceSymbol)
             {
                 this.il.OpCode(ILOpCode.Dup);
@@ -532,16 +536,19 @@ internal sealed partial class MethodBodyEmitter
     {
         // Stream B′ emit parity: `+=` / `-=` calls the event's add_X /
         // remove_X accessor. Both accessors are void-returning.
-        var isStatic = subscription.Receiver == null;
-        var receiverIsValueType = !isStatic && ReflectionMetadataEmitter.IsValueTypeSymbol(subscription.Receiver.Type);
+        var receiver = subscription.Receiver;
+        var isStatic = receiver == null;
+        var receiverIsValueType = receiver != null && ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type);
 
         if (subscription.IsConstrainedTypeParameterAccess)
         {
-            this.EmitConstrainedTypeParameterReceiver(subscription.Receiver);
+            this.EmitConstrainedTypeParameterReceiver(Invariant.Required(
+                receiver,
+                "a constrained type-parameter event subscription dispatches on a receiver"));
         }
-        else if (!isStatic)
+        else if (receiver != null)
         {
-            this.EmitInstanceReceiver(subscription.Receiver);
+            this.EmitInstanceReceiver(receiver);
         }
 
         // Function-literal handlers default to Action/Func; redirect them
@@ -703,7 +710,7 @@ internal sealed partial class MethodBodyEmitter
     private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal)
     {
         // For async lambdas, resolve the delegate type with the Task-wrapped return.
-        Type asyncDelegateOverride = null;
+        Type? asyncDelegateOverride = null;
         if (literal.Function.IsAsync)
         {
             // For no-capture lambdas, the plan's kickoff is literal.Function.
@@ -734,12 +741,12 @@ internal sealed partial class MethodBodyEmitter
         EmitFunctionLiteral(literal, overrideDelegateType: asyncDelegateOverride);
     }
 
-    private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType)
+    private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type? overrideDelegateType)
     {
         this.EmitFunctionLiteral(literal, overrideDelegateType, symbolicDelegateCtorRef: null);
     }
 
-    private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type overrideDelegateType, EntityHandle? symbolicDelegateCtorRef)
+    private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type? overrideDelegateType, EntityHandle? symbolicDelegateCtorRef)
     {
         if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))
         {
@@ -887,27 +894,37 @@ internal sealed partial class MethodBodyEmitter
     // resulting delegate's `Target` is the captured instance. This is the
     // user-event method-group subscription path; CLR-event method groups
     // already go through EmitClrMethodGroup.
-    private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type overrideDelegateType)
+    private void EmitMethodGroup(BoundMethodGroupExpression methodGroup, Type? overrideDelegateType)
     {
-        Type delegateType = null;
+        // A method group reaches emit only after overload resolution has
+        // picked one candidate; the multi-candidate constructor's form, where
+        // Function and FunctionType are unset, is a bind-time shape only.
+        var function = Invariant.Required(
+            methodGroup.Function,
+            "overload resolution resolves a method group to a single function before emit");
+        var functionType = Invariant.Required(
+            methodGroup.FunctionType,
+            "a resolved method group carries the function type overload resolution selected");
+
+        Type? delegateType = null;
         if (overrideDelegateType != null
-            || (methodGroup.FunctionType.ClrType != null
-                && !this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(methodGroup.FunctionType)))
+            || (functionType.ClrType != null
+                && !this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(functionType)))
         {
-            delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(methodGroup.FunctionType);
+            delegateType = overrideDelegateType ?? this.outer.signatures.ResolveDelegateClrType(functionType);
         }
 
-        if (methodGroup.Function.IsExtension && methodGroup.Receiver != null)
+        if (function.IsExtension && methodGroup.Receiver != null)
         {
-            if (!this.outer.cache.FunctionHandles.TryGetValue(methodGroup.Function, out var methodHandle)
-                && !this.outer.cache.MethodHandles.TryGetValue(methodGroup.Function, out methodHandle))
+            if (!this.outer.cache.FunctionHandles.TryGetValue(function, out var methodHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(function, out methodHandle))
             {
                 throw new InvalidOperationException(
-                    $"Extension method group '{methodGroup.Function.Name}' has no emitted MethodDef.");
+                    $"Extension method group '{function.Name}' has no emitted MethodDef.");
             }
 
             EntityHandle delegateTypeHandle = delegateType == null
-                ? this.outer.memberRefs.GetFunctionDelegateTypeSpec(methodGroup.FunctionType)
+                ? this.outer.memberRefs.GetFunctionDelegateTypeSpec(functionType)
                 : this.outer.memberRefs.GetTypeHandleForMember(delegateType);
             this.EmitClosedStaticMethodGroup(methodGroup.Receiver, methodHandle, delegateTypeHandle);
             return;
@@ -923,7 +940,7 @@ internal sealed partial class MethodBodyEmitter
         // delegate shape carries type-parameter slots.
         if (delegateType == null)
         {
-            this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(methodGroup.FunctionType));
+            this.il.Token(this.outer.memberRefs.GetFunctionDelegateCtorRef(functionType));
         }
         else
         {
@@ -969,7 +986,10 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            this.EmitExpression(methodGroup.Receiver);
+            var instanceReceiver = Invariant.Required(
+                methodGroup.Receiver,
+                "an instance method group binds a receiver: the receiverless form is only constructed for a group qualified by a static type");
+            this.EmitExpression(instanceReceiver);
 
             // Issue #420 (P3-1): the delegate ctor signature is
             // `(object target, IntPtr ptr)` and `ldvirtftn` requires an
@@ -980,10 +1000,10 @@ internal sealed partial class MethodBodyEmitter
             // emitting the raw value would produce unverifiable IL that
             // silently corrupts the stack. Defensively box value-type
             // receivers so the emitted sequence stays verifiable.
-            if (ReflectionMetadataEmitter.IsValueTypeSymbol(methodGroup.Receiver.Type))
+            if (ReflectionMetadataEmitter.IsValueTypeSymbol(instanceReceiver.Type))
             {
                 this.il.OpCode(ILOpCode.Box);
-                this.il.Token(this.outer.memberRefs.GetElementTypeToken(methodGroup.Receiver.Type));
+                this.il.Token(this.outer.memberRefs.GetElementTypeToken(instanceReceiver.Type));
             }
 
             if (method.IsVirtual && !method.IsFinal)
@@ -1007,7 +1027,7 @@ internal sealed partial class MethodBodyEmitter
         BoundExpression receiver,
         EntityHandle methodHandle,
         EntityHandle delegateTypeHandle,
-        MethodInfo importedMethod = null)
+        MethodInfo? importedMethod = null)
     {
         this.il.OpCode(ILOpCode.Ldtoken);
         this.il.Token(delegateTypeHandle);
@@ -1043,7 +1063,7 @@ internal sealed partial class MethodBodyEmitter
     // field; emit the field load instead of a local/parameter load.
     private void EmitCapturedVariableLoad(VariableSymbol captured)
     {
-        FieldSymbol hoistedField = null;
+        FieldSymbol? hoistedField = null;
         if ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out hoistedField))
             || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))
         {

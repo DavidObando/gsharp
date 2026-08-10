@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -13,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public readonly struct BoundInterpolatedStringPart
 {
-    private BoundInterpolatedStringPart(string literal, BoundExpression value, int? alignment, string format, SyntaxNode holeSyntax)
+    private BoundInterpolatedStringPart(string? literal, BoundExpression? value, int? alignment, string? format, SyntaxNode? holeSyntax)
     {
         Literal = literal;
         Value = value;
@@ -23,25 +24,27 @@ public readonly struct BoundInterpolatedStringPart
     }
 
     /// <summary>Gets a value indicating whether this part is a hole (an embedded expression).</summary>
+    [MemberNotNullWhen(true, nameof(Value))]
     public bool IsHole => Value != null;
 
     /// <summary>Gets a value indicating whether this part is literal text.</summary>
+    [MemberNotNullWhen(false, nameof(Value))]
     public bool IsLiteral => Value == null;
 
     /// <summary>Gets the literal text, or <c>null</c> when this part is a hole.</summary>
-    public string Literal { get; }
+    public string? Literal { get; }
 
     /// <summary>Gets the hole expression, or <c>null</c> when this part is literal text.</summary>
-    public BoundExpression Value { get; }
+    public BoundExpression? Value { get; }
 
     /// <summary>Gets the hole's alignment (signed field width; negative = left-justify), or <c>null</c>.</summary>
     public int? Alignment { get; }
 
     /// <summary>Gets the hole's format specifier (e.g. <c>N2</c>, <c>X4</c>), or <c>null</c>.</summary>
-    public string Format { get; }
+    public string? Format { get; }
 
     /// <summary>Gets the hole's own syntax, or <c>null</c> when this part is literal text.</summary>
-    public SyntaxNode HoleSyntax { get; }
+    public SyntaxNode? HoleSyntax { get; }
 
     /// <summary>Creates a literal-text part.</summary>
     /// <param name="text">The literal text.</param>
@@ -55,7 +58,7 @@ public readonly struct BoundInterpolatedStringPart
     /// <param name="format">The optional format specifier.</param>
     /// <param name="holeSyntax">The hole's own syntax, used to anchor hole-level diagnostics.</param>
     /// <returns>The part.</returns>
-    public static BoundInterpolatedStringPart FromHole(BoundExpression value, int? alignment, string format, SyntaxNode holeSyntax = null)
+    public static BoundInterpolatedStringPart FromHole(BoundExpression value, int? alignment, string? format, SyntaxNode? holeSyntax = null)
         => new(literal: null, value, alignment, format, holeSyntax);
 
     /// <summary>Returns a copy of this hole with a different bound value (used by tree rewriters).</summary>

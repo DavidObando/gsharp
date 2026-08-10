@@ -47,7 +47,7 @@ public sealed class CollectionInitializerExpressionSyntax : ExpressionSyntax
     /// <param name="closeBraceToken">The matching '}'.</param>
     public CollectionInitializerExpressionSyntax(
         SyntaxTree syntaxTree,
-        ExpressionSyntax target,
+        ExpressionSyntax? target,
         SyntaxToken openBraceToken,
         SeparatedSyntaxList<CollectionElementSyntax> elements,
         SyntaxToken closeBraceToken)
@@ -63,7 +63,7 @@ public sealed class CollectionInitializerExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.CollectionInitializerExpression;
 
     /// <summary>Gets the underlying constructor call expression (a <see cref="CallExpressionSyntax"/>).</summary>
-    public ExpressionSyntax Target { get; }
+    public ExpressionSyntax? Target { get; }
 
     /// <summary>Gets the '{' opening the initializer list.</summary>
     public SyntaxToken OpenBraceToken { get; }

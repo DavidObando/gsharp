@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -290,7 +291,9 @@ internal sealed class InterfaceImplEmitter
 
             foreach (var iface in structSymbol.Interfaces)
             {
-                if (!DeclarationBinder.TypeSignaturesEquivalent(prop.ExplicitInterfaceClauseTarget, iface))
+                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                    Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
+                    iface))
                 {
                     continue;
                 }
@@ -552,7 +555,9 @@ internal sealed class InterfaceImplEmitter
                     : TypeSymbol.FromClrType(clrInterface);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                        Invariant.Required(containingType, "a CLR interface slot has a containing type"),
+                        slotEvent);
                     if (IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
                         || !TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
                         || (ReferenceEquals(declaringType, structSymbol) && ev.IsFieldLike)
@@ -624,7 +629,9 @@ internal sealed class InterfaceImplEmitter
                     : TypeSymbol.FromClrType(clrInterface);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(containingType, slotEvent);
+                    var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
+                        Invariant.Required(containingType, "a CLR interface slot has a containing type"),
+                        slotEvent);
                     if (!IsImportedSlotExplicitlyImplemented(structSymbol, slotEvent)
                         && TryFindImplicitEvent(structSymbol, slotEvent.Name, slotType, out var ev, out var declaringType)
                         && !ReferenceEquals(declaringType, structSymbol))
@@ -687,8 +694,8 @@ internal sealed class InterfaceImplEmitter
         StructSymbol type,
         InterfaceSymbol iface,
         EventSymbol slot,
-        out EventSymbol implementation,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out EventSymbol? implementation,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -715,8 +722,8 @@ internal sealed class InterfaceImplEmitter
         StructSymbol type,
         string name,
         TypeSymbol slotType,
-        out EventSymbol implementation,
-        out StructSymbol declaringType)
+        [NotNullWhen(true)] out EventSymbol? implementation,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -922,7 +929,7 @@ internal sealed class InterfaceImplEmitter
                 // `StaticVirtualSignatureEquals` scan below, mirroring
                 // `EmitExplicitInterfaceMethodImpls`'s instance-method
                 // precedent.
-                FunctionSymbol implMatch = null;
+                FunctionSymbol? implMatch = null;
                 if (!structSymbol.StaticMethods.IsDefaultOrEmpty)
                 {
                     foreach (var explicitCandidate in structSymbol.StaticMethods)
@@ -1098,12 +1105,12 @@ internal sealed class InterfaceImplEmitter
                 // `Properties` table — see `VerifyStaticVirtualInterfaceProperty
                 // Implementations`'s `staticPropDefIface` fix) — prefer that
                 // link over the name-based scan below.
-                PropertySymbol implProp = null;
+                PropertySymbol? implProp = null;
                 foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
                     if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)
                         && DeclarationBinder.TypeSignaturesEquivalent(
-                            explicitCandidate.ExplicitInterfaceClauseTarget,
+                            Invariant.Required(explicitCandidate.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                             iface))
                     {
                         implProp = explicitCandidate;

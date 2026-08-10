@@ -92,7 +92,7 @@ public sealed class ReflectionTypeComparisonAnalyzer : DiagnosticAnalyzer
         return operation.ConstantValue.HasValue && operation.ConstantValue.Value == null;
     }
 
-    private static bool IsCompilerMetadataArea(INamespaceSymbol namespaceSymbol)
+    private static bool IsCompilerMetadataArea(INamespaceSymbol? namespaceSymbol)
     {
         var namespaceName = namespaceSymbol?.ToDisplayString();
         return namespaceName == "GSharp.Core.CodeAnalysis.Emit"
@@ -123,7 +123,7 @@ public sealed class ReflectionTypeComparisonAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsReflectionType(ITypeSymbol type)
+    private static bool IsReflectionType(ITypeSymbol? type)
     {
         if (type == null)
         {

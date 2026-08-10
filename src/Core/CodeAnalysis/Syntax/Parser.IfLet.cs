@@ -114,7 +114,7 @@ public partial class Parser
         return left;
     }
 
-    private TypeClauseSyntax ParseOptionalTypeClauseBeforeEquals()
+    private TypeClauseSyntax? ParseOptionalTypeClauseBeforeEquals()
     {
         // A binding clause is always followed by `=`; if we see `=` directly
         // there is no type annotation. Otherwise reuse the regular optional
@@ -164,8 +164,8 @@ public partial class Parser
         var ifKeyword = MatchToken(SyntaxKind.IfKeyword);
         var bindings = ParseIfLetBindingList(stopAtTopLevelLogicalAnd: true);
 
-        SyntaxToken ampersandAmpersandToken = null;
-        ExpressionSyntax guard = null;
+        SyntaxToken? ampersandAmpersandToken = null;
+        ExpressionSyntax? guard = null;
         if (Current.Kind == SyntaxKind.AmpersandAmpersandToken)
         {
             ampersandAmpersandToken = NextToken();
@@ -193,8 +193,8 @@ public partial class Parser
         // NOT manufactured here (that would cascade into a bogus block parse);
         // the binder reports GS0276 for a null else, exactly as it does for the
         // ADR-0064 if-expression.
-        SyntaxToken elseKeyword = null;
-        ExpressionSyntax elseExpression = null;
+        SyntaxToken? elseKeyword = null;
+        ExpressionSyntax? elseExpression = null;
         if (Current.Kind == SyntaxKind.ElseKeyword)
         {
             elseKeyword = NextToken();

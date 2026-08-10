@@ -11,7 +11,7 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private SyntaxToken sealedKeyword;
+    private SyntaxToken? sealedKeyword;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EnumDeclarationSyntax"/> class.
@@ -26,8 +26,8 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public EnumDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken enumKeyword,
         SyntaxToken openBraceToken,
@@ -48,10 +48,10 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.EnumDeclaration;
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the <c>type</c> keyword.</summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>Gets the enum type identifier.</summary>
     public SyntaxToken Identifier { get; }
@@ -69,7 +69,7 @@ public sealed class EnumDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). The parser sets this to non-null for an enum declared <c>sealed enum Foo { ... }</c>, but the new grammar rejects that combination — kept as a field only for diagnostic recovery. Discriminated-union enums are already closed-hierarchy by construction.</summary>
-    public SyntaxToken SealedKeyword
+    public SyntaxToken? SealedKeyword
     {
         get => sealedKeyword;
         set

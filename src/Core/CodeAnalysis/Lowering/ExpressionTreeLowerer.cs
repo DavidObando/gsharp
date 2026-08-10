@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -231,13 +232,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             changed |= newBody != pair.Value;
         }
 
-        var statement = program.Statement;
-        if (statement != null)
-        {
-            var newStatement = (BoundBlockStatement)lowerer.RewriteStatement(statement);
-            changed |= newStatement != statement;
-            statement = newStatement;
-        }
+        var statement = (BoundBlockStatement)lowerer.RewriteStatement(program.Statement);
+        changed |= statement != program.Statement;
 
         if (!changed)
         {
@@ -276,7 +272,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     }
 
     private BoundExpression BuildExpressionTreeValue(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundFunctionLiteralExpression literal,
         TypeSymbol targetType)
     {
@@ -458,7 +454,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
-                    CreateTypeOf(owner),
+                    CreateTypeOf(Invariant.Required(
+                        owner,
+                        "a static field read carries its owner in exactly one of InterfaceType (the ADR-0089 form) or StructType")),
                     new BoundLiteralExpression(null, field.Field.Name, TypeSymbol.String)));
         }
 
@@ -483,7 +481,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
-                    CreateTypeOf(property.StructType),
+                    CreateTypeOf(Invariant.Required(
+                        property.StructType,
+                        "this is the receiverless (static) property form; only the interface-receiver form leaves StructType null, and that form carries a receiver")),
                     new BoundLiteralExpression(null, property.Property.Name, TypeSymbol.String)));
         }
 
@@ -501,7 +501,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var memberName = property.Member.Name;
-        var ownerType = property.StaticContainerType ?? TypeSymbol.FromClrType(property.Member.DeclaringType);
+        var ownerType = property.StaticContainerType
+            ?? TypeSymbol.FromClrType(
+                Invariant.Required(property.Member.DeclaringType, "a CLR property has a declaring type"));
         var isField = property.Member is FieldInfo;
         var staticMethod = isField ? ExpressionFieldStaticMethod : ExpressionPropertyStaticMethod;
         var instanceMethod = isField ? ExpressionFieldInstanceMethod : ExpressionPropertyInstanceMethod;
@@ -822,7 +824,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(call.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
-                BuildTypeArray(GetTypeSymbols(call.TypeArgumentSymbols)),
+                BuildTypeArray(GetNullableTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Method.GetParameters(), parameterMap))));
     }
 
@@ -835,9 +837,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionCallStaticMethod,
             TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(call.Function.Method.DeclaringType)),
+                CreateTypeOf(TypeSymbol.FromClrType(
+                    Invariant.Required(call.Function.Method.DeclaringType, "a CLR method has a declaring type"))),
                 new BoundLiteralExpression(null, call.Function.Method.Name, TypeSymbol.String),
-                BuildTypeArray(GetTypeSymbols(call.TypeArgumentSymbols)),
+                BuildTypeArray(GetNullableTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Function.Method.GetParameters(), parameterMap))));
     }
 
@@ -850,7 +853,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             ExpressionCallStaticMethod,
             TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(call.Method.DeclaringType)),
+                CreateTypeOf(TypeSymbol.FromClrType(
+                    Invariant.Required(call.Method.DeclaringType, "a CLR method has a declaring type"))),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
                 BuildTypeArray(ImmutableArray<TypeSymbol>.Empty),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Method.GetParameters(), parameterMap))));
@@ -1008,7 +1012,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     private bool TryBuildObjectInitializerExpression(
         BoundBlockExpression block,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap,
-        out BoundExpression expression)
+        [NotNullWhen(true)] out BoundExpression? expression)
     {
         expression = null;
 
@@ -1052,7 +1056,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         BoundExpression expression,
         VariableSymbol receiver,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap,
-        out BoundExpression binding)
+        [NotNullWhen(true)] out BoundExpression? binding)
     {
         binding = expression switch
         {
@@ -1062,7 +1066,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     ExpressionBindMethod,
                     TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
                     ImmutableArray.Create<BoundExpression>(
-                        BuildUserFieldInfoLookup(field.StructType, field.Field.Name),
+                        BuildUserFieldInfoLookup(BoundNodeForm.DeclaringType(field), field.Field.Name),
                         UpcastToExpression(this.TranslateExpression(field.Value, parameterMap)))),
             BoundPropertyAssignmentExpression property when ReferencesReceiver(property.Receiver, receiver) =>
                 new BoundClrStaticCallExpression(
@@ -1070,7 +1074,11 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     ExpressionBindMethod,
                     TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
                     ImmutableArray.Create<BoundExpression>(
-                        BuildUserPropertyInfoLookup(property.StructType, property.Property.Name),
+                        BuildUserPropertyInfoLookup(
+                            Invariant.Required(
+                                property.StructType ?? property.Receiver?.Type,
+                                "a property assignment has an expression-tree owner type"),
+                            property.Property.Name),
                         UpcastToExpression(this.TranslateExpression(property.Value, parameterMap)))),
             BoundClrPropertyAssignmentExpression clrProperty when ReferencesReceiver(clrProperty.Receiver, receiver) =>
                 new BoundClrStaticCallExpression(
@@ -1133,7 +1141,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
     private BoundExpression TranslateArgument(
         BoundExpression argument,
-        TypeSymbol expectedType,
+        TypeSymbol? expectedType,
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         if (expectedType != null
@@ -1320,6 +1328,25 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return builder.MoveToImmutable();
     }
 
+    private static ImmutableArray<TypeSymbol> GetNullableTypeSymbols(ImmutableArray<TypeSymbol?> types)
+    {
+        if (types.IsDefault)
+        {
+            return ImmutableArray<TypeSymbol>.Empty;
+        }
+
+        var result = ImmutableArray.CreateBuilder<TypeSymbol>(types.Length);
+        foreach (var type in types)
+        {
+            result.Add(type ?? TypeSymbol.Error);
+        }
+
+        return result.MoveToImmutable();
+    }
+
+    // Normalizes an uninitialized type-argument vector to Empty. Callers
+    // enumerate the result, and enumerating a default ImmutableArray throws --
+    // returning `default` here would defeat the whole point of the helper.
     private static ImmutableArray<TypeSymbol> GetTypeSymbols(ImmutableArray<TypeSymbol> types)
         => types.IsDefault ? ImmutableArray<TypeSymbol>.Empty : types;
 
@@ -1335,7 +1362,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
     private static BoundExpression ExtractLambdaBodyExpression(BoundBlockStatement body)
     {
-        BoundExpression candidate = null;
+        BoundExpression? candidate = null;
         foreach (var statement in body.Statements)
         {
             switch (statement)
@@ -1354,8 +1381,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
     private static bool TryMatchObjectInitializer(
         BoundBlockExpression block,
-        out VariableSymbol receiver,
-        out BoundExpression initializer,
+        [NotNullWhen(true)] out VariableSymbol? receiver,
+        [NotNullWhen(true)] out BoundExpression? initializer,
         out ImmutableArray<BoundStatement> statements)
     {
         receiver = null;
@@ -1365,8 +1392,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         if (block.Expression is not BoundVariableExpression result
             || block.Statements.IsDefaultOrEmpty
             || block.Statements[0] is not BoundVariableDeclaration declaration
+            || declaration.Initializer is null
             || !ReferenceEquals(declaration.Variable, result.Variable))
         {
+            // An object-initializer block always opens with an initialized
+            // temp (`var t = new T(); t.X = ...`), so a declaration with no
+            // initializer is not this shape.
             return false;
         }
 
@@ -1376,7 +1407,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return true;
     }
 
-    private static bool ReferencesReceiver(BoundExpression expression, VariableSymbol receiver)
+    private static bool ReferencesReceiver(BoundExpression? expression, VariableSymbol receiver)
         => expression is BoundVariableExpression variable && ReferenceEquals(variable.Variable, receiver);
 
     private static bool ReferencesReceiver(BoundFieldAssignmentExpression assignment, VariableSymbol receiver)

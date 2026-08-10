@@ -45,7 +45,7 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
     /// <summary>Gets or sets the full path to gsgen.dll.</summary>
     [Required]
-    public string GsgenToolFullPath { get; set; }
+    public string? GsgenToolFullPath { get; set; }
 
     /// <summary>Gets or sets the Compile item group (the user's .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
@@ -85,21 +85,21 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
     /// <summary>Gets or sets the output directory for the generated .g.gs files (/out:).</summary>
     [Required]
-    public string OutputDir { get; set; }
+    public string? OutputDir { get; set; }
 
     /// <summary>Gets or sets the manifest path receiving the newline-separated generated-file list (/manifest:).</summary>
     [Required]
-    public string ManifestPath { get; set; }
+    public string? ManifestPath { get; set; }
 
     /// <summary>Gets or sets the optional root namespace (/rootnamespace:).</summary>
-    public string RootNamespace { get; set; }
+    public string? RootNamespace { get; set; }
 
     /// <summary>Gets or sets the path of the response file to be written.</summary>
     [Required]
-    public string ResponseFilePath { get; set; }
+    public string? ResponseFilePath { get; set; }
 
     /// <summary>Gets or sets the project base directory, used as the process working directory.</summary>
-    public string BasePath { get; set; }
+    public string? BasePath { get; set; }
 
     /// <inheritdoc/>
     public void Cancel() => this.cts.Cancel();
@@ -112,6 +112,19 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
         if (this.Compile == null || this.Compile.Length == 0)
         {
             return true;
+        }
+
+        string gsgenToolFullPath = this.GsgenToolFullPath ?? string.Empty;
+        string outputDir = this.OutputDir ?? string.Empty;
+        string manifestPath = this.ManifestPath ?? string.Empty;
+        string responseFilePath = this.ResponseFilePath ?? string.Empty;
+        if (string.IsNullOrEmpty(gsgenToolFullPath) ||
+            string.IsNullOrEmpty(outputDir) ||
+            string.IsNullOrEmpty(manifestPath) ||
+            string.IsNullOrEmpty(responseFilePath))
+        {
+            this.Log.LogError("GsgenTask requires GsgenToolFullPath, OutputDir, ManifestPath, and ResponseFilePath.");
+            return false;
         }
 
         var args = new List<string>();
@@ -156,18 +169,18 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
             args.Add(BuildTask.QuoteIfNeeded($"/globaloption:{go.ItemSpec}={go.GetMetadata("Value")}"));
         }
 
-        args.Add(BuildTask.QuoteIfNeeded($"/out:{this.OutputDir}"));
-        args.Add(BuildTask.QuoteIfNeeded($"/manifest:{this.ManifestPath}"));
+        args.Add(BuildTask.QuoteIfNeeded($"/out:{outputDir}"));
+        args.Add(BuildTask.QuoteIfNeeded($"/manifest:{manifestPath}"));
 
         if (!string.IsNullOrEmpty(this.RootNamespace))
         {
             args.Add(BuildTask.QuoteIfNeeded($"/rootnamespace:{this.RootNamespace}"));
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath));
-        File.WriteAllLines(this.ResponseFilePath, args, Encoding.UTF8);
+        Directory.CreateDirectory(Path.GetDirectoryName(responseFilePath) ?? ".");
+        File.WriteAllLines(responseFilePath, args, Encoding.UTF8);
 
-        var psi = new ProcessStartInfo("dotnet", $"\"{this.GsgenToolFullPath}\" @\"{this.ResponseFilePath}\"")
+        var psi = new ProcessStartInfo("dotnet", $"\"{gsgenToolFullPath}\" @\"{responseFilePath}\"")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -183,7 +196,7 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
         catch (Exception ex)
         {
             // Hard failure: the gsgen process could not even be launched.
-            this.Log.LogError($"Failed to launch gsgen ('{this.GsgenToolFullPath}'): {ex.Message}");
+            this.Log.LogError($"Failed to launch gsgen ('{gsgenToolFullPath}'): {ex.Message}");
             return false;
         }
 
@@ -207,8 +220,8 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
                 }
             });
 
-            string lastStdoutLine = null;
-            string lastStderrLine = null;
+            string? lastStdoutLine = null;
+            string? lastStderrLine = null;
             proc.OutputDataReceived += (_, e) =>
             {
                 if (e.Data != null)
@@ -246,7 +259,7 @@ public class GsgenTask : Microsoft.Build.Utilities.Task, ICancelableTask
             {
                 var anchorFile = this.Compile?.Length > 0
                     ? this.Compile[0].ItemSpec
-                    : (this.GsgenToolFullPath ?? "gsgen");
+                    : gsgenToolFullPath;
 
                 var lastOutput = lastStderrLine ?? lastStdoutLine;
                 var breadcrumb = string.IsNullOrWhiteSpace(lastOutput)

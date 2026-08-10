@@ -20,7 +20,7 @@ public sealed class TypeAliasDeclarationSyntax : MemberSyntax
     /// <param name="aliasedType">The aliased type clause.</param>
     public TypeAliasDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken typeKeyword,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken equalsToken,
         TypeClauseSyntax aliasedType)
@@ -39,8 +39,8 @@ public sealed class TypeAliasDeclarationSyntax : MemberSyntax
     /// <param name="aliasedType">The aliased type clause.</param>
     public TypeAliasDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken equalsToken,
         TypeClauseSyntax aliasedType)
@@ -59,12 +59,12 @@ public sealed class TypeAliasDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets the optional accessibility modifier token.
     /// </summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the <c>type</c> keyword.
     /// </summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>
     /// Gets the alias identifier.

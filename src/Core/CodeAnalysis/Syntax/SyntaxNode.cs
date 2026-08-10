@@ -45,7 +45,7 @@ public abstract class SyntaxNode
     /// <c>null</c> means "not computed yet". Cleared by <see cref="InvalidateCachedSpan"/> when a
     /// parser-time mutation replaces a child-bearing property after construction.
     /// </summary>
-    private object cachedSpan;
+    private object? cachedSpan;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SyntaxNode"/> class.

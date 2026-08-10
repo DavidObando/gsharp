@@ -25,7 +25,7 @@ public sealed class LiteralExpressionSyntax : ExpressionSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="literalToken">The literal token.</param>
     /// <param name="value">The literal expression value.</param>
-    public LiteralExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken literalToken, object value)
+    public LiteralExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken literalToken, object? value)
         : base(syntaxTree)
     {
         LiteralToken = literalToken;
@@ -43,5 +43,5 @@ public sealed class LiteralExpressionSyntax : ExpressionSyntax
     /// <summary>
     /// Gets the literal value.
     /// </summary>
-    public object Value { get; }
+    public object? Value { get; }
 }

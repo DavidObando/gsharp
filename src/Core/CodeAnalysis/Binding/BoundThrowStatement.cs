@@ -14,7 +14,7 @@ public sealed class BoundThrowStatement : BoundStatement
     /// <summary>Initializes a new instance of the <see cref="BoundThrowStatement"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The bound exception expression.</param>
-    public BoundThrowStatement(SyntaxNode syntax, BoundExpression expression)
+    public BoundThrowStatement(SyntaxNode? syntax, BoundExpression expression)
         : this(syntax, expression, null)
     {
     }
@@ -27,7 +27,7 @@ public sealed class BoundThrowStatement : BoundStatement
     /// <param name="expression">The bound exception expression.</param>
     /// <param name="diagnosticDescriptor">The interpreter diagnostic.</param>
     internal BoundThrowStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression expression,
         DiagnosticDescriptor? diagnosticDescriptor)
         : base(syntax)

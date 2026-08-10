@@ -82,8 +82,12 @@ public static class KickoffBodyBuilder
             fieldMap.BuilderField,
             fieldMap.ThisField,
             parameterCopies.ToImmutable(),
-            fieldMap.StateMachine.BuilderInfo.CreateMethod,
-            fieldMap.StateMachine.BuilderInfo.StartMethod,
+            Invariant.Required(
+                fieldMap.StateMachine.BuilderInfo.CreateMethod,
+                "a state machine is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, which requires Create"),
+            Invariant.Required(
+                fieldMap.StateMachine.BuilderInfo.StartMethod,
+                "a state machine is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, which requires Start (MoveNext for an async iterator)"),
             fieldMap.StateMachine.BuilderInfo.TaskProperty);
     }
 }
@@ -98,7 +102,8 @@ public sealed class KickoffBodyPlan
     /// <param name="initialState">The initial value assigned to <c>&lt;&gt;1__state</c>.</param>
     /// <param name="stateField">The synthesized state field.</param>
     /// <param name="builderField">The synthesized builder field.</param>
-    /// <param name="thisField">The optional synthesized <c>this</c> field.</param>
+    /// <param name="thisField">The synthesized <c>this</c> field, or <c>null</c>
+    /// when the kickoff method does not capture a receiver.</param>
     /// <param name="parameterCopies">Parameter-to-field copies for the kickoff stub.</param>
     /// <param name="builderCreateMethod">The builder <c>Create</c> method.</param>
     /// <param name="builderStartMethod">The builder <c>Start&lt;TStateMachine&gt;</c> method.</param>
@@ -108,11 +113,11 @@ public sealed class KickoffBodyPlan
         int initialState,
         FieldSymbol stateField,
         FieldSymbol builderField,
-        FieldSymbol thisField,
+        FieldSymbol? thisField,
         ImmutableArray<KickoffParameterCopy> parameterCopies,
         MethodInfo builderCreateMethod,
         MethodInfo builderStartMethod,
-        PropertyInfo builderTaskProperty)
+        PropertyInfo? builderTaskProperty)
     {
         StateMachineLocal = stateMachineLocal ?? throw new ArgumentNullException(nameof(stateMachineLocal));
         InitialState = initialState;
@@ -140,8 +145,9 @@ public sealed class KickoffBodyPlan
     /// <summary>Gets the synthesized builder field.</summary>
     public FieldSymbol BuilderField { get; }
 
-    /// <summary>Gets the optional synthesized <c>this</c> field.</summary>
-    public FieldSymbol ThisField { get; }
+    /// <summary>Gets the synthesized <c>this</c> field, or <c>null</c> when the
+    /// kickoff method does not capture a receiver.</summary>
+    public FieldSymbol? ThisField { get; }
 
     /// <summary>Gets parameter-to-field copies for the kickoff stub.</summary>
     public ImmutableArray<KickoffParameterCopy> ParameterCopies { get; }
@@ -153,7 +159,7 @@ public sealed class KickoffBodyPlan
     public MethodInfo BuilderStartMethod { get; }
 
     /// <summary>Gets the builder <c>Task</c> property, or <see langword="null"/> for <c>async void</c>.</summary>
-    public PropertyInfo BuilderTaskProperty { get; }
+    public PropertyInfo? BuilderTaskProperty { get; }
 
     /// <summary>Gets the ordered kickoff-stub operations.</summary>
     public ImmutableArray<KickoffOperation> Operations { get; }
@@ -195,12 +201,12 @@ public sealed class KickoffOperation
 {
     private KickoffOperation(
         KickoffOperationKind kind,
-        LocalVariableSymbol stateMachineLocal = null,
-        FieldSymbol field = null,
-        ParameterSymbol parameter = null,
+        LocalVariableSymbol? stateMachineLocal = null,
+        FieldSymbol? field = null,
+        ParameterSymbol? parameter = null,
         int? initialState = null,
-        MethodInfo method = null,
-        PropertyInfo property = null)
+        MethodInfo? method = null,
+        PropertyInfo? property = null)
     {
         Kind = kind;
         StateMachineLocal = stateMachineLocal;
@@ -214,23 +220,33 @@ public sealed class KickoffOperation
     /// <summary>Gets the operation kind.</summary>
     public KickoffOperationKind Kind { get; }
 
-    /// <summary>Gets the state-machine local for operations that target it.</summary>
-    public LocalVariableSymbol StateMachineLocal { get; }
+    /// <summary>Gets the state-machine local for operations that target it,
+    /// or <c>null</c> for <see cref="KickoffOperationKind.ReturnVoid"/>, the one
+    /// kind that does not.</summary>
+    public LocalVariableSymbol? StateMachineLocal { get; }
 
-    /// <summary>Gets the state-machine field read or written by the operation.</summary>
-    public FieldSymbol Field { get; }
+    /// <summary>Gets the state-machine field read or written by the operation,
+    /// or <c>null</c> for the kinds that touch no field.</summary>
+    public FieldSymbol? Field { get; }
 
-    /// <summary>Gets the kickoff parameter copied by the operation.</summary>
-    public ParameterSymbol Parameter { get; }
+    /// <summary>Gets the kickoff parameter copied by the operation, or
+    /// <c>null</c> for every kind other than
+    /// <see cref="KickoffOperationKind.CopyParameter"/>.</summary>
+    public ParameterSymbol? Parameter { get; }
 
-    /// <summary>Gets the initial state value written by the operation.</summary>
+    /// <summary>Gets the initial state value written by the operation, or
+    /// <c>null</c> for every kind other than
+    /// <see cref="KickoffOperationKind.InitializeState"/>.</summary>
     public int? InitialState { get; }
 
-    /// <summary>Gets the builder method called by the operation.</summary>
-    public MethodInfo Method { get; }
+    /// <summary>Gets the builder method called by the operation, or <c>null</c>
+    /// for the kinds that call none.</summary>
+    public MethodInfo? Method { get; }
 
-    /// <summary>Gets the builder property read by the operation.</summary>
-    public PropertyInfo Property { get; }
+    /// <summary>Gets the builder property read by the operation, or <c>null</c>
+    /// for every kind other than
+    /// <see cref="KickoffOperationKind.ReturnBuilderTask"/>.</summary>
+    public PropertyInfo? Property { get; }
 
     /// <summary>Creates a state-machine local declaration operation.</summary>
     /// <param name="stateMachineLocal">The state-machine local.</param>

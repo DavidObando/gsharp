@@ -67,12 +67,20 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
                 this.CheckTypeArguments(userInstanceCall.MethodTypeArguments);
                 break;
             case BoundImportedCallExpression importedCall:
-                this.CheckTypeArguments(importedCall.TypeArgumentSymbols);
+                this.CheckNullableTypeArguments(importedCall.TypeArgumentSymbols);
                 break;
             case BoundImportedInstanceCallExpression importedInstanceCall:
-                this.CheckTypeArguments(importedInstanceCall.TypeArgumentSymbols);
-                TypeSymbol.CollectReferencedTypeParameters(importedInstanceCall.ConstrainedReceiverTypeParameter, this.sink);
-                TypeSymbol.CollectReferencedTypeParameters(importedInstanceCall.ConstrainedInterfaceType, this.sink);
+                this.CheckNullableTypeArguments(importedInstanceCall.TypeArgumentSymbols);
+                if (importedInstanceCall.ConstrainedReceiverTypeParameter is { } receiverTypeParameter)
+                {
+                    TypeSymbol.CollectReferencedTypeParameters(receiverTypeParameter, this.sink);
+                }
+
+                if (importedInstanceCall.ConstrainedInterfaceType is { } interfaceType)
+                {
+                    TypeSymbol.CollectReferencedTypeParameters(interfaceType, this.sink);
+                }
+
                 break;
             case BoundIsExpression isExpression:
                 TypeSymbol.CollectReferencedTypeParameters(isExpression.TargetType, this.sink);
@@ -111,6 +119,19 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
     {
         TypeSymbol.CollectReferencedTypeParameters(node.Variable.Type, this.sink);
         base.VisitVariableDeclaration(node);
+    }
+
+    private void CheckNullableTypeArguments(System.Collections.Immutable.ImmutableArray<TypeSymbol?> typeArguments)
+    {
+        if (typeArguments.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var typeArgument in typeArguments)
+        {
+            TypeSymbol.CollectReferencedTypeParameters(typeArgument, this.sink);
+        }
     }
 
     private void CheckTypeArguments(System.Collections.Immutable.ImmutableArray<TypeSymbol> typeArguments)

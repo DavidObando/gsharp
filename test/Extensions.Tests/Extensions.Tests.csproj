@@ -4,7 +4,9 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Extensions.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
-    <Nullable>enable</Nullable>
+    <!-- Keep nullable annotations available to these tests without enabling
+         nullable flow warnings in test projects. -->
+    <Nullable>annotations</Nullable>
   </PropertyGroup>
 
   <ItemGroup>

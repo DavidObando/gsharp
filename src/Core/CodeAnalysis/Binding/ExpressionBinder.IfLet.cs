@@ -55,7 +55,7 @@ internal sealed partial class ExpressionBinder
     /// </remarks>
     private BoundExpression BindIfLetExpression(
         IfLetExpressionSyntax syntax,
-        TypeSymbol targetType,
+        TypeSymbol? targetType,
         bool canBeVoid = false)
     {
         // Issue #1238 parity with BindIfExpression: a bare branchy argument
@@ -85,7 +85,7 @@ internal sealed partial class ExpressionBinder
 
         var bound = ImmutableArray.CreateBuilder<(IfLetBindingClauseSyntax Syntax, VariableSymbol Variable, BoundExpression Initializer)>();
         var anyInvalid = false;
-        BoundExpression guard = null;
+        BoundExpression? guard = null;
         BoundExpression whenTrue;
         try
         {
@@ -105,7 +105,9 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                narrowing[clause.Variable] = clause.Underlying;
+                narrowing[clause.Variable] = Invariant.Required(
+                    clause.Underlying,
+                    "a valid if-let binding has an underlying type");
                 bound.Add((binding, clause.Variable, clause.Initializer));
             }
 
@@ -119,7 +121,8 @@ internal sealed partial class ExpressionBinder
         finally
         {
             binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
-            scope = scope.Parent;
+
+            scope = scope.Pop();
         }
 
         // Bound AFTER the binding scope/frame is popped: the else branch never
@@ -166,7 +169,9 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var condition = BuildIfLetCondition(bound.ToImmutable(), 0, guard);
+        var condition = Invariant.Required(
+            BuildIfLetCondition(bound.ToImmutable(), 0, guard),
+            "a valid if-let expression has at least one binding");
         return new BoundConditionalExpression(null, condition, convertedTrue, convertedFalse, resultType);
     }
 
@@ -199,11 +204,13 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BuildIfLetCondition(
         ImmutableArray<(IfLetBindingClauseSyntax Syntax, VariableSymbol Variable, BoundExpression Initializer)> bindings,
         int index,
-        BoundExpression guard)
+        BoundExpression? guard)
     {
         var (bindingSyntax, variable, initializer) = bindings[index];
         var declaration = new BoundVariableDeclaration(bindingSyntax, variable, initializer);
-        var test = IfLetBindingSupport.BuildNilCheckChain(bindingSyntax, new[] { variable });
+        var test = Invariant.Required(
+            IfLetBindingSupport.BuildNilCheckChain(bindingSyntax, new[] { variable }),
+            "an if-let binding condition has a nil check");
 
         BoundExpression value;
         if (index == bindings.Length - 1)

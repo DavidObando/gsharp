@@ -24,7 +24,7 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     /// <param name="value">The value expression.</param>
     /// <param name="elementType">The element type of the array.</param>
     public BoundIndexAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol target,
         BoundExpression index,
         BoundExpression value,
@@ -38,7 +38,7 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     }
 
     private BoundIndexAssignmentExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression targetExpression,
         BoundExpression index,
         BoundExpression value,
@@ -58,7 +58,7 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     public override TypeSymbol Type { get; }
 
     /// <summary>Gets the target variable holding the array.</summary>
-    public VariableSymbol Target { get; }
+    public VariableSymbol? Target { get; }
 
     /// <summary>
     /// Gets the expression-based target, or <c>null</c> when the simple
@@ -66,7 +66,7 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     /// evaluates this expression to produce the array/map/slice reference
     /// instead of loading <see cref="Target"/>.
     /// </summary>
-    public BoundExpression TargetExpression { get; }
+    public BoundExpression? TargetExpression { get; }
 
     /// <summary>Gets the index expression.</summary>
     public BoundExpression Index { get; }
@@ -86,7 +86,7 @@ public sealed class BoundIndexAssignmentExpression : BoundExpression
     /// <param name="elementType">The element type of the array.</param>
     /// <returns>A new <see cref="BoundIndexAssignmentExpression"/> with an expression target.</returns>
     public static BoundIndexAssignmentExpression WithExpressionTarget(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression targetExpression,
         BoundExpression index,
         BoundExpression value,

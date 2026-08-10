@@ -25,10 +25,10 @@ namespace GSharp.Core.CodeAnalysis.Compilation;
 /// </summary>
 public class Compilation
 {
-    private BoundGlobalScope globalScope;
-    private BoundProgram boundProgram;
+    private BoundGlobalScope? globalScope;
+    private BoundProgram? boundProgram;
     private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
-    private string assemblyName;
+    private string? assemblyName;
     private DebugInformationOptions debugInformation = new();
 
     /// <summary>
@@ -46,7 +46,7 @@ public class Compilation
     /// </summary>
     /// <param name="references">The reference resolver to use for imported CLR type lookups.</param>
     /// <param name="syntaxTrees">The syntax trees.</param>
-    public Compilation(ReferenceResolver references, params SyntaxTree[] syntaxTrees)
+    public Compilation(ReferenceResolver? references, params SyntaxTree[] syntaxTrees)
     {
         SyntaxTrees = syntaxTrees.ToImmutableArray();
         References = references;
@@ -63,7 +63,7 @@ public class Compilation
     /// <summary>
     /// Gets the reference resolver used to look up imported CLR types.
     /// </summary>
-    public ReferenceResolver References { get; }
+    public ReferenceResolver? References { get; }
 
     /// <summary>Gets or sets the managed resources embedded in the runtime assembly.</summary>
     public ImmutableArray<(string Name, byte[] Data, bool IsPublic)> EmbeddedResources { get; set; }
@@ -148,7 +148,7 @@ public class Compilation
     /// diagnostics relative to the full-rebuild path. Defaults to
     /// <see langword="null"/>, which is exactly the historical behavior.
     /// </summary>
-    public BoundBodyCache BodyCache { get; set; }
+    public BoundBodyCache? BodyCache { get; set; }
 
     /// <summary>
     /// Gets or sets a pre-bound <see cref="BoundGlobalScope"/> to reuse instead
@@ -163,7 +163,7 @@ public class Compilation
     /// syntax via <see cref="IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit"/>
     /// before this is set. Defaults to <see langword="null"/> (full rebuild).
     /// </summary>
-    public BoundGlobalScope ReusedGlobalScope { get; set; }
+    public BoundGlobalScope? ReusedGlobalScope { get; set; }
 
     /// <summary>
     /// Gets or sets the set of syntax trees whose member bodies must be re-bound
@@ -174,7 +174,7 @@ public class Compilation
     /// then refreshes their cached entry). Unchanged files are absent and hit
     /// the cache. Defaults to <see langword="null"/> (no forced re-bind).
     /// </summary>
-    public System.Collections.Immutable.ImmutableHashSet<SyntaxTree> DirtyBodyTrees { get; set; }
+    public System.Collections.Immutable.ImmutableHashSet<SyntaxTree>? DirtyBodyTrees { get; set; }
 
     /// <summary>
     /// Gets or sets the assembly-identity override (e.g. from MSBuild's
@@ -192,7 +192,7 @@ public class Compilation
     /// up front (the gsc CLI, the language server) should set this before
     /// touching <see cref="GlobalScope"/> or <see cref="Diagnostics"/>.
     /// </summary>
-    public string AssemblyName
+    public string? AssemblyName
     {
         get => assemblyName;
         set
@@ -213,7 +213,7 @@ public class Compilation
     /// <see cref="SubmissionImports.ResultFieldName"/> global for the cell
     /// echo. Defaults to <see langword="null"/> (ordinary compilation).
     /// </summary>
-    public SubmissionBindingOptions Submission { get; set; }
+    public SubmissionBindingOptions? Submission { get; set; }
 
     /// <summary>
     /// Gets the global scope.
@@ -406,7 +406,7 @@ public class Compilation
     /// <param name="assemblyName">Optional override for the assembly identity. When null, the entry-point package name is used.</param>
     /// <param name="assemblyVersion">Optional informational version string stamped as <c>AssemblyInformationalVersionAttribute</c>.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream, Stream pdbStream, Stream refStream, string assemblyName = null, string assemblyVersion = null)
+    public EmitResult Emit(Stream peStream, Stream? pdbStream, Stream? refStream, string? assemblyName = null, string? assemblyVersion = null)
         => Emit(peStream, pdbStream, refStream, docStream: null, assemblyName, assemblyVersion);
 
     /// <summary>
@@ -426,12 +426,12 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit(
         Stream peStream,
-        Stream pdbStream,
-        Stream refStream,
-        Stream docStream,
-        string assemblyName = null,
-        string assemblyVersion = null,
-        string targetFrameworkMoniker = null)
+        Stream? pdbStream,
+        Stream? refStream,
+        Stream? docStream,
+        string? assemblyName = null,
+        string? assemblyVersion = null,
+        string? targetFrameworkMoniker = null)
     {
         AssemblyName = assemblyName ?? AssemblyName;
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics);
@@ -542,7 +542,7 @@ public class Compilation
     /// <param name="peStream">Destination stream for the PE bytes. May be <c>null</c> when only a reference assembly is desired.</param>
     /// <param name="refStream">Optional destination stream for the metadata-only reference assembly.</param>
     /// <returns>An emit result.</returns>
-    public EmitResult Emit(Stream peStream, Stream refStream) =>
+    public EmitResult Emit(Stream peStream, Stream? refStream) =>
         Emit(peStream, pdbStream: null, refStream, docStream: null, assemblyName: null);
 
     /// <summary>
@@ -557,7 +557,7 @@ public class Compilation
     {
         ArgumentNullException.ThrowIfNull(ex);
 
-        Emit.EmitDiagnosticException anchoredException = null;
+        Emit.EmitDiagnosticException? anchoredException = null;
         var rootEx = ex;
         for (var current = ex; current is not null; current = current.InnerException)
         {
@@ -593,7 +593,7 @@ public class Compilation
     /// failed builder resolution.</para>
     /// </remarks>
     private static (LoweredProgram Lowered, BoundProgram Program, ImmutableArray<Diagnostic> Diagnostics) LowerForEmit(
-        BoundProgram program, ReferenceResolver references)
+        BoundProgram program, ReferenceResolver? references)
     {
         // Run the rewriter passes.
         // Issue #1467: route base.M() calls inside async/iterator bodies through
@@ -619,7 +619,7 @@ public class Compilation
         return (lowered, program, diagnostics);
     }
 
-    private static DebugInformationOptions CloneDebugInformation(DebugInformationOptions source)
+    private static DebugInformationOptions CloneDebugInformation(DebugInformationOptions? source)
     {
         if (source is null)
         {
@@ -635,12 +635,12 @@ public class Compilation
         };
     }
 
-    private void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver references, string assemblyName = null, string assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult asyncRewriteResult = null, IteratorRewriteResult iteratorRewriteResult = null, AsyncIteratorRewriteResult asyncIteratorRewriteResult = null, DebugInformationOptions debugInformation = null, Stream pdbStream = null, string targetFrameworkMoniker = null, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null)
+    private void EmitAssembly(BoundProgram program, Stream peStream, ReferenceResolver? references, string? assemblyName = null, string? assemblyVersion = null, bool metadataOnly = false, Lowering.Async.AsyncStateMachineRewriteResult? asyncRewriteResult = null, IteratorRewriteResult? iteratorRewriteResult = null, AsyncIteratorRewriteResult? asyncIteratorRewriteResult = null, DebugInformationOptions? debugInformation = null, Stream? pdbStream = null, string? targetFrameworkMoniker = null, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>? embeddedResources = null)
     {
         ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker, embeddedResources, Optimize);
     }
 
-    private void PrepareReferencesForBinding(string assemblyName)
+    private void PrepareReferencesForBinding(string? assemblyName)
     {
         if (References == null)
         {

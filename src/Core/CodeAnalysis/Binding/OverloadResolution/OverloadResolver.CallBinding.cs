@@ -46,8 +46,8 @@ internal sealed partial class OverloadResolver
     }
 
     private bool TryResolveImplicitInheritedTypeArguments(
-        TypeArgumentListSyntax typeArgumentList,
-        out Type[] clrTypeArguments,
+        TypeArgumentListSyntax? typeArgumentList,
+        out Type[]? clrTypeArguments,
         out ImmutableArray<TypeSymbol> typeArgumentSymbols)
     {
         clrTypeArguments = null;
@@ -93,7 +93,7 @@ internal sealed partial class OverloadResolver
     /// in scope, so this returns <see langword="null"/> and unqualified
     /// resolution stays unchanged.
     /// </summary>
-    private ParameterSymbol GetEffectiveThisParameter()
+    private ParameterSymbol? GetEffectiveThisParameter()
     {
         var current = getCurrentFunction();
         if (current?.ThisParameter != null)
@@ -144,7 +144,7 @@ internal sealed partial class OverloadResolver
             return new BoundErrorExpression(null);
         }
 
-        ExpressionSyntax[] permutedSyntax;
+        ExpressionSyntax?[] permutedSyntax;
         ImmutableArray<BoundExpression> permutedArguments;
         if (!argumentNames.IsDefault)
         {
@@ -174,7 +174,10 @@ internal sealed partial class OverloadResolver
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(parameterCount);
         for (var ai = 0; ai < parameterCount; ai++)
         {
-            convertedArgs.Add(conversions.BindConversion(permutedSyntax[ai].Location, permutedArguments[ai], method.Parameters[ai].Type));
+            convertedArgs.Add(conversions.BindConversion(
+                Invariant.Required(permutedSyntax[ai], "a reordered call argument has source syntax").Location,
+                permutedArguments[ai],
+                method.Parameters[ai].Type));
         }
 
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
@@ -472,7 +475,7 @@ internal sealed partial class OverloadResolver
         // ("cannot infer parameter type"), and aborts the call — even though
         // the parameter (e.g. `Func[int32, int32]` / `(int32) -> int32`)
         // fully determines the lambda's shape.
-        HashSet<int> deferredArrowLambdaIndices = null;
+        HashSet<int>? deferredArrowLambdaIndices = null;
 
         // ADR-0060: argument binding needs the matching parameter to resolve
         // inline `out var`/`out let`/`out _` payloads. For free-function calls
@@ -489,6 +492,7 @@ internal sealed partial class OverloadResolver
             BoundExpression boundArgument;
             if (argSyntax is RefArgumentExpressionSyntax refArg)
             {
+                // The first binding pass has no resolved parameter for inline out arguments.
                 boundArgument = bindRefArgumentExpression(refArg, null);
             }
             else if (argumentNames.IsDefault
@@ -611,7 +615,9 @@ internal sealed partial class OverloadResolver
 
                 var implicitBaseClr = ExpressionBinder.GetInheritedClrBaseType(implicitReceiverStruct) ?? typeof(object);
                 var implicitReceiverExpr = new BoundVariableExpression(null, effThis);
-                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
+
+                // The callback uses null to mean that no explicit type arguments were supplied.
+                if (tryBindInheritedClrInstanceCall(implicitReceiverExpr, implicitBaseClr, syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitInheritedCall, inheritedClrTypeArgs!, inheritedTypeArgSymbols, argumentNames, allowProtectedInherited: true))
                 {
                     return implicitInheritedCall;
                 }
@@ -653,6 +659,8 @@ internal sealed partial class OverloadResolver
                 // from issue #2304 and applies in every expression context,
                 // including interpolation holes.
                 var implicitObjectReceiver = new BoundVariableExpression(null, effThis);
+
+                // The callback uses null to mean that no explicit type arguments were supplied.
                 if (tryBindInheritedClrInstanceCall(implicitObjectReceiver, typeof(object), syntax.Identifier.Text, boundArguments.ToImmutable(), syntax, out var implicitObjectCall, null, default, argumentNames))
                 {
                     return implicitObjectCall;
@@ -742,7 +750,7 @@ internal sealed partial class OverloadResolver
                 // `GetValues[TEnum]()` resolves exactly like `EnumUtil.GetValues[TEnum]()`.
                 if (bindUserTypeStaticCall != null)
                 {
-                    StructSymbol matchedStaticImport = null;
+                    StructSymbol? matchedStaticImport = null;
                     var ambiguousStaticImport = false;
                     foreach (var importedType in binderCtx.GetStaticImportTypes())
                     {
@@ -787,7 +795,7 @@ internal sealed partial class OverloadResolver
                 // optional/variadic/generic fidelity.
                 if (bindImportedClrStaticCall != null)
                 {
-                    System.Type matchedClrStaticImport = null;
+                    System.Type? matchedClrStaticImport = null;
                     var ambiguousClrStaticImport = false;
                     foreach (var clrType in Scope.EnumerateStaticImportClrTypes())
                     {
@@ -828,7 +836,8 @@ internal sealed partial class OverloadResolver
                 if (Scope.SubmissionImports is { } submissionImports)
                 {
                     if (bindImportedClrStaticCall != null
-                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType))
+                        && submissionImports.TryFindFunctionContainer(Scope.References, syntax.Identifier.Text, out var submissionProgramType)
+                        && submissionProgramType is not null)
                     {
                         return bindImportedClrStaticCall(submissionProgramType, syntax);
                     }
@@ -839,7 +848,7 @@ internal sealed partial class OverloadResolver
                     // then dispatch its Func/Action shape.
                     if (TryBindSubmissionDelegateGlobalCall(syntax, submissionImports, out var submissionDelegateCall))
                     {
-                        return submissionDelegateCall;
+                        return Invariant.Required(submissionDelegateCall, "a matched submission delegate global produces a bound invocation");
                     }
                 }
 
@@ -860,7 +869,7 @@ internal sealed partial class OverloadResolver
                 return new BoundErrorExpression(null);
             }
 
-            ExpressionSyntax[] fpParameterSyntax;
+            ExpressionSyntax?[] fpParameterSyntax;
             var fpArguments = boundArguments.ToImmutable();
             if (!argumentNames.IsDefault)
             {
@@ -1018,7 +1027,7 @@ internal sealed partial class OverloadResolver
                 out var clrMemberLoad,
                 narrowedCallTargetType))
             {
-                receiver = clrMemberLoad;
+                receiver = Invariant.Required(clrMemberLoad, "an implicit member load succeeds with a bound expression");
             }
             else
             {
@@ -1050,6 +1059,8 @@ internal sealed partial class OverloadResolver
                     .ToString(System.Globalization.CultureInfo.InvariantCulture);
                 var eventRaiseCapture = new LocalVariableSymbol(eventRaiseCaptureName, isReadOnly: true, type: delegateTargetType);
                 var eventRaiseCaptureRef = new BoundVariableExpression(null, eventRaiseCapture);
+
+                // The callback uses null to mean that no explicit type arguments were supplied.
                 if (tryBindInheritedClrInstanceCall(eventRaiseCaptureRef, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var guardedInvoke, null, default, argumentNames)
                     && guardedInvoke is not BoundErrorExpression)
                 {
@@ -1057,6 +1068,7 @@ internal sealed partial class OverloadResolver
                 }
             }
 
+            // The callback uses null to mean that no explicit type arguments were supplied.
             if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {
                 return invokeCall;
@@ -1138,7 +1150,7 @@ internal sealed partial class OverloadResolver
                         Diagnostics.ReportUnconstrainedNullableIteratorCall(
                             syntax.Identifier.Location,
                             syntax.Identifier.Text,
-                            unconstrainedTypeParameter.Name);
+                            Invariant.Required(unconstrainedTypeParameter, "an unconstrained nullable iterator diagnostic has a type parameter").Name);
                     }
                     else
                     {
@@ -1203,14 +1215,18 @@ internal sealed partial class OverloadResolver
                 SyntaxNode firstExceedingNode;
                 if (function.Parameters.Length > 0)
                 {
-                    firstExceedingNode = syntax.Arguments.GetSeparator(function.Parameters.Length - 1);
+                    firstExceedingNode = Invariant.Required(
+                        syntax.Arguments.GetSeparator(function.Parameters.Length - 1),
+                        "an argument list with too many arguments has a separator before the excess arguments");
                 }
                 else
                 {
                     firstExceedingNode = syntax.Arguments[0];
                 }
 
-                var lastExceedingArgument = syntax.Arguments[syntax.Arguments.Count - 1];
+                var lastExceedingArgument = Invariant.Required(
+                    syntax.Arguments[syntax.Arguments.Count - 1],
+                    "an argument list with too many arguments has a last argument");
                 span = TextSpan.FromBounds(firstExceedingNode.Span.Start, lastExceedingArgument.Span.End);
             }
             else
@@ -1218,7 +1234,11 @@ internal sealed partial class OverloadResolver
                 span = syntax.CloseParenthesisToken.Span;
             }
 
-            Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), function.Name, function.Parameters.Length, syntax.Arguments.Count);
+            Diagnostics.ReportWrongArgumentCount(
+                new TextLocation(Invariant.Required(syntax.Location.Text, "a call syntax location has source text"), span),
+                function.Name,
+                function.Parameters.Length,
+                syntax.Arguments.Count);
             return new BoundErrorExpression(null);
         }
 
@@ -1230,7 +1250,7 @@ internal sealed partial class OverloadResolver
         // ADR-0063: when there are optional parameters, omitted slots are left
         // empty in the reorder output, then filled with default-value
         // BoundLiteralExpression here.
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         var hasOptional = function.Parameters.Length > 0 && requiredParamCount < function.Parameters.Length && !isVariadic;
         if ((!argumentNames.IsDefault && !isVariadic) ||
             (hasOptional && syntax.Arguments.Count < function.Parameters.Length))
@@ -1240,7 +1260,7 @@ internal sealed partial class OverloadResolver
                     boundArguments.ToImmutable(),
                     function.Parameters.Length,
                     p => function.Parameters[p].Name,
-                    hasOptional ? (p => function.Parameters[p].HasExplicitDefaultValue) : (System.Func<int, bool>)null,
+                    hasOptional ? (p => function.Parameters[p].HasExplicitDefaultValue) : null,
                     function.Name,
                     out parameterSyntax,
                     out var permutedBound))
@@ -1277,7 +1297,7 @@ internal sealed partial class OverloadResolver
         // substitution either from the explicit `[T1, T2]` list at the call
         // site or by left-to-right inference from argument types matched
         // against parameter types.
-        Dictionary<TypeParameterSymbol, TypeSymbol> substitution = null;
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution = null;
         if (function.IsGeneric)
         {
             substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
@@ -1373,7 +1393,9 @@ internal sealed partial class OverloadResolver
         {
             var argument = boundArguments[i];
             var parameter = function.Parameters[i];
-            var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
+            TypeSymbol? expectedType = substitution != null
+                ? substituteType(parameter.Type, substitution)
+                : parameter.Type;
 
             // Issue #1238: a deferred target-typed conditional/if/switch
             // argument is re-bound here against the resolved parameter type so
@@ -1397,9 +1419,10 @@ internal sealed partial class OverloadResolver
             if (deferredArrowLambdaIndices != null
                 && deferredArrowLambdaIndices.Remove(i)
                 && i < parameterSyntax.Length
-                && UnwrapNamedArgumentValue(parameterSyntax[i]) is LambdaExpressionSyntax deferredLambda)
+                && parameterSyntax[i] is { } deferredArgument
+                && UnwrapNamedArgumentValue(deferredArgument) is LambdaExpressionSyntax deferredLambda)
             {
-                var lambdaLoc = parameterSyntax[i].Location;
+                var lambdaLoc = deferredArgument.Location;
                 if (bindLambdaWithTarget != null
                     && expectedType != null
                     && expectedType != TypeSymbol.Error
@@ -1508,7 +1531,11 @@ internal sealed partial class OverloadResolver
 
                     if (operandType != expectedType && operandType != TypeSymbol.Error)
                     {
-                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, operandType);
+                        Diagnostics.ReportWrongArgumentType(
+                            Invariant.Required(parameterSyntax[i], "a ref argument has source syntax").Location,
+                            parameter.Name,
+                            Invariant.Required(expectedType, "a bound parameter has a target type"),
+                            operandType);
                         hasErrors = true;
                     }
                 }
@@ -1517,7 +1544,11 @@ internal sealed partial class OverloadResolver
                     var pointeeType = condAddrArg.PointeeType;
                     if (pointeeType != expectedType && pointeeType != TypeSymbol.Error)
                     {
-                        Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, pointeeType);
+                        Diagnostics.ReportWrongArgumentType(
+                            Invariant.Required(parameterSyntax[i], "a conditional ref argument has source syntax").Location,
+                            parameter.Name,
+                            Invariant.Required(expectedType, "a bound parameter has a target type"),
+                            pointeeType);
                         hasErrors = true;
                     }
                 }
@@ -1553,7 +1584,8 @@ internal sealed partial class OverloadResolver
                 && widenLiteralArg.FunctionType is FunctionTypeSymbol widenLiteralFnType
                 && widenLiteralFnType.ReturnType != TypeSymbol.Void
                 && widenLiteralFnType.ReturnType != TypeSymbol.Error
-                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var widenTargetFn)
+                && expectedType is TypeSymbol widenExpectedType
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(widenExpectedType, out var widenTargetFn)
                 && widenTargetFn != null
                 && widenTargetFn.Arity == widenLiteralFnType.Arity
                 && widenTargetFn.ReturnType != TypeSymbol.Void
@@ -1561,8 +1593,13 @@ internal sealed partial class OverloadResolver
                 && !ReferenceEquals(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType)
                 && Conversion.Classify(widenLiteralFnType.ReturnType, widenTargetFn.ReturnType).IsImplicit)
             {
-                var widenLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(widenLoc, argument, expectedType);
+                var widenLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a widened lambda argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(
+                    widenLoc,
+                    argument,
+                    Invariant.Required(expectedType, "a widened lambda argument has a target type"));
                 continue;
             }
 
@@ -1574,9 +1611,11 @@ internal sealed partial class OverloadResolver
             if (substitution == null
                 && i < parameterSyntax.Length
                 && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedArg
-                && isFormattableStringTargetType(expectedType))
+                && isFormattableStringTargetType(Invariant.Required(expectedType, "a non-generic interpolated-string argument has a target type")))
             {
-                boundArguments[i] = bindInterpolatedStringAsFormattable(interpolatedArg, expectedType);
+                boundArguments[i] = bindInterpolatedStringAsFormattable(
+                    interpolatedArg,
+                    Invariant.Required(expectedType, "a formattable-string argument has a target type"));
                 continue;
             }
 
@@ -1590,8 +1629,13 @@ internal sealed partial class OverloadResolver
                     || argument is BoundClrMethodGroupExpression { ResolvedMethod: null })
                 && !(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type)))
             {
-                var groupLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                var resolvedGroupArg = conversions.BindConversion(groupLoc, argument, expectedType);
+                var groupLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a method group argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                var resolvedGroupArg = conversions.BindConversion(
+                    groupLoc,
+                    argument,
+                    Invariant.Required(expectedType, "a method group argument has a target type"));
                 boundArguments[i] = resolvedGroupArg;
                 if (resolvedGroupArg is BoundErrorExpression)
                 {
@@ -1616,8 +1660,13 @@ internal sealed partial class OverloadResolver
                 && argTuple != paramTuple
                 && Conversion.Classify(argTuple, paramTuple).IsImplicit)
             {
-                var tupleLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(tupleLoc, argument, expectedType);
+                var tupleLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a tuple argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(
+                    tupleLoc,
+                    argument,
+                    Invariant.Required(expectedType, "a tuple argument has a target type"));
                 continue;
             }
 
@@ -1642,26 +1691,34 @@ internal sealed partial class OverloadResolver
             if (nominalDelegateCallTarget is DelegateTypeSymbol
                 && structuralArgumentType is FunctionTypeSymbol)
             {
-                var namedDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(namedDelegateLoc, argument, expectedType);
+                var namedDelegateLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a delegate argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(
+                    namedDelegateLoc,
+                    argument,
+                    Invariant.Required(expectedType, "a delegate argument has a target type"));
                 continue;
             }
 
             if (argument.Type != expectedType
-                && !TypeSymbol.ContainsTypeParameter(expectedType)
-                && !Conversion.Classify(argument.Type, expectedType).IsImplicit)
+                && !TypeSymbol.ContainsTypeParameter(Invariant.Required(expectedType, "an argument conversion has a target type"))
+                && !Conversion.Classify(argument.Type, Invariant.Required(expectedType, "an argument conversion has a target type")).IsImplicit)
             {
                 // Issue #889: arrow/func literal → void-returning delegate.
-                var voidDelegateLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                if (TryConvertLiteralArgumentToExpressionTree(argument, expectedType, voidDelegateLoc, out var expressionTreeArg))
+                var voidDelegateLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a delegate argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                var targetType = Invariant.Required(expectedType, "a delegate argument has a target type");
+                if (TryConvertLiteralArgumentToExpressionTree(argument, targetType, voidDelegateLoc, out var expressionTreeArg))
                 {
-                    boundArguments[i] = expressionTreeArg;
+                    boundArguments[i] = Invariant.Required(expressionTreeArg, "a successful expression-tree argument conversion produces a bound expression");
                     continue;
                 }
 
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, expectedType, voidDelegateLoc, out var voidDelegateArg))
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, targetType, voidDelegateLoc, out var voidDelegateArg))
                 {
-                    boundArguments[i] = voidDelegateArg;
+                    boundArguments[i] = Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression");
                     continue;
                 }
 
@@ -1670,13 +1727,13 @@ internal sealed partial class OverloadResolver
                 // Re-materialise it as a literal of exactly the parameter type so
                 // emit produces a correctly-typed constant — matching `var x
                 // uint16 = 5` at a declaration target (ADR-0129).
-                if (TryBindConstantNarrowingArgument(argument, expectedType, voidDelegateLoc, out var narrowedArg))
+                if (TryBindConstantNarrowingArgument(argument, targetType, voidDelegateLoc, out var narrowedArg))
                 {
-                    boundArguments[i] = narrowedArg;
+                    boundArguments[i] = Invariant.Required(narrowedArg, "a successful constant narrowing conversion produces a bound expression");
                     continue;
                 }
 
-                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, expectedType, out var convertedArg))
+                if (conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var convertedArg))
                 {
                     boundArguments[i] = convertedArg;
                     continue;
@@ -1684,7 +1741,11 @@ internal sealed partial class OverloadResolver
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, expectedType, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(
+                        Invariant.Required(parameterSyntax[i], "an argument with a conversion error has source syntax").Location,
+                        parameter.Name,
+                        targetType,
+                        argument.Type);
                 }
 
                 hasErrors = true;
@@ -1705,15 +1766,17 @@ internal sealed partial class OverloadResolver
                 // bare `UserT` where `Nullable<UserT>` is expected). Include the
                 // symbol-aware predicate so the `UserT → UserT?` argument lift is
                 // lowered to a `newobj Nullable<UserT>::.ctor` here too.
-                var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
+                var argLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a nullable-lifted argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(argLoc, argument, Invariant.Required(expectedType, "a nullable-lifted argument has a target type"));
             }
             else if (argument.Type != expectedType
                 && !(substitution != null
                     && parameter.Type is TypeParameterSymbol
-                    && TypeSymbol.ContainsTypeParameter(expectedType))
+                    && TypeSymbol.ContainsTypeParameter(Invariant.Required(expectedType, "a substituted argument has a target type")))
                 && (!(substitution != null && TypeSymbol.ContainsTypeParameter(parameter.Type))
-                    || (Conversion.Classify(argument.Type, expectedType).IsImplicit
+                    || (Conversion.Classify(argument.Type, Invariant.Required(expectedType, "a substituted argument has a target type")).IsImplicit
                         && structuralArgumentType is not FunctionTypeSymbol)))
             {
                 // Issue #2335 (audit follow-up): every OTHER implicit
@@ -1758,8 +1821,13 @@ internal sealed partial class OverloadResolver
                 // re-materializing it here rebuilt the delegate from the
                 // collapsed structural shape (`Func<int32,int32>`), tripping
                 // ilverify's DelegateCtor check.
-                var argLoc = i < parameterSyntax.Length ? parameterSyntax[i].Location : syntax.Identifier.Location;
-                boundArguments[i] = conversions.BindConversion(argLoc, argument, expectedType);
+                var argLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "an implicitly converted argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(
+                    argLoc,
+                    argument,
+                    Invariant.Required(expectedType, "an implicitly converted argument has a target type"));
             }
         }
 
@@ -1900,7 +1968,7 @@ internal sealed partial class OverloadResolver
     /// Argument binding still ran above so wrong-type diagnostics on the
     /// elided arguments are reported normally.
     /// </summary>
-    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol returnType, ImmutableArray<TypeSymbol> methodTypeArguments = default)
+    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnType, ImmutableArray<TypeSymbol> methodTypeArguments = default)
     {
         if (KnownAttributes.IsConditionallyElided(function.Attributes, Scope.PreprocessorSymbols))
         {
@@ -1921,11 +1989,16 @@ internal sealed partial class OverloadResolver
     /// <param name="submissionImports">The active submission import set.</param>
     /// <param name="result">The bound invocation, when the name matched an invocable global.</param>
     /// <returns><c>true</c> when the call was bound (or errored) against a submission global.</returns>
-    private bool TryBindSubmissionDelegateGlobalCall(CallExpressionSyntax syntax, SubmissionImports submissionImports, out BoundExpression result)
+    private bool TryBindSubmissionDelegateGlobalCall(CallExpressionSyntax syntax, SubmissionImports submissionImports, out BoundExpression? result)
     {
         result = null;
         var name = syntax.Identifier.Text;
         if (!submissionImports.TryFindGlobalVariable(Scope.References, name, out var programType, out _))
+        {
+            return false;
+        }
+
+        if (programType is null)
         {
             return false;
         }
@@ -1936,7 +2009,15 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
-        var calleeLoad = new BoundClrPropertyAccessExpression(syntax, receiver: null, field, functionType);
+        // Static field access has no instance receiver; this constructor's
+        // non-null annotation predates its use for static fields.
+        var calleeLoad = new BoundClrPropertyAccessExpression(
+            syntax,
+            receiver: null,
+            field,
+            Invariant.Required(functionType, "a mapped CLR delegate has a function type"));
+
+        // The callback uses null to mean that no null-safe invocation token was present.
         result = BindIndirectCallExpression(syntax, calleeLoad, name, syntax.Identifier.Location, nullSafeInvocation: null);
         return true;
     }
@@ -1945,7 +2026,7 @@ internal sealed partial class OverloadResolver
     // equivalent G# function type so the indirect-call binder (and the
     // emitter's Invoke dispatch) can consume it. Other delegate shapes (named
     // G# delegates, custom CLR delegates) are not mapped here.
-    private static bool TryMapClrDelegateToFunctionType(Type clrType, out FunctionTypeSymbol functionType)
+    private static bool TryMapClrDelegateToFunctionType(Type clrType, out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         if (clrType is null || !ClrTypeUtilities.IsDelegateType(clrType))

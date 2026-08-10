@@ -5,6 +5,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 
 #pragma warning disable CS1591
 #pragma warning disable SA1600
@@ -19,26 +20,26 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundUserInstanceCallExpression : BoundExpression
 {
-    private readonly TypeSymbol returnTypeOverride;
+    private readonly TypeSymbol? returnTypeOverride;
 
-    public BoundUserInstanceCallExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments)
+    public BoundUserInstanceCallExpression(SyntaxNode? syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments)
         : this(syntax, receiver, method, arguments, returnTypeOverride: null)
     {
     }
 
-    public BoundUserInstanceCallExpression(SyntaxNode syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol returnTypeOverride)
+    public BoundUserInstanceCallExpression(SyntaxNode? syntax, BoundExpression receiver, FunctionSymbol method, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnTypeOverride)
         : this(syntax, receiver, method, arguments, returnTypeOverride, constrainedReceiverTypeParameter: null, constrainedInterfaceType: null)
     {
     }
 
     public BoundUserInstanceCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         FunctionSymbol method,
         ImmutableArray<BoundExpression> arguments,
-        TypeSymbol returnTypeOverride,
-        TypeParameterSymbol constrainedReceiverTypeParameter,
-        TypeSymbol constrainedInterfaceType)
+        TypeSymbol? returnTypeOverride,
+        TypeParameterSymbol? constrainedReceiverTypeParameter,
+        TypeSymbol? constrainedInterfaceType)
         : base(syntax)
     {
         Receiver = receiver;
@@ -80,15 +81,16 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     /// sequence instead of a bare <c>callvirt</c> on the unboxed type parameter.
     /// Null for ordinary user-instance calls.
     /// </summary>
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
     /// <summary>
     /// Gets the user-declared interface (possibly a constructed generic
     /// interface) that backs <see cref="ConstrainedReceiverTypeParameter"/>
     /// (issue #1052). Null for ordinary user-instance calls.
     /// </summary>
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type => returnTypeOverride ?? Method.Type;

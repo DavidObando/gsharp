@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -41,11 +42,6 @@ public static class BaseCallForwarderRewriter
     /// <returns>The updated program, or the original when no base call required forwarding.</returns>
     public static BoundProgram Rewrite(BoundProgram program)
     {
-        if (program == null)
-        {
-            return null;
-        }
-
         // Forwarders shared across the whole program, keyed by (containing class
         // definition, base method) so repeated base calls reuse one forwarder.
         var forwarders = new Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol>();
@@ -91,7 +87,7 @@ public static class BaseCallForwarderRewriter
         var methodsByClass = new Dictionary<StructSymbol, ImmutableArray<FunctionSymbol>.Builder>();
         foreach (var forwarder in forwarderBodies.Keys)
         {
-            var owner = (StructSymbol)forwarder.ReceiverType;
+            var owner = Invariant.Required(forwarder.ReceiverType as StructSymbol, "a synthesized forwarder has a struct receiver");
             if (!methodsByClass.TryGetValue(owner, out var builder))
             {
                 builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
@@ -199,7 +195,11 @@ public static class BaseCallForwarderRewriter
 
         private FunctionSymbol GetOrCreateForwarder(BoundBaseClassCallExpression node)
         {
-            var key = (this.classDef, node.Method);
+            var method = Invariant.Required(
+                node.Method,
+                "RewriteBaseClassCallExpression returns early for the property-accessor form, so only the method form reaches here");
+
+            var key = (this.classDef, method);
             if (this.forwarders.TryGetValue(key, out var existing))
             {
                 return existing;
@@ -210,8 +210,8 @@ public static class BaseCallForwarderRewriter
 
             // Fresh parameters so the forwarder body can read them without
             // aliasing the base method's parameter symbols.
-            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Method.Parameters.Length);
-            foreach (var p in node.Method.Parameters)
+            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.Parameters.Length);
+            foreach (var p in method.Parameters)
             {
                 paramBuilder.Add(new ParameterSymbol(p.Name, p.Type));
             }
@@ -227,7 +227,7 @@ public static class BaseCallForwarderRewriter
                 receiverType: this.classDef,
                 explicitReceiverParameter: null);
 
-            var thisExpr = new BoundVariableExpression(null, forwarder.ThisParameter);
+            var thisExpr = new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver"));
             var argBuilder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
             foreach (var p in parameters)
             {
@@ -238,7 +238,7 @@ public static class BaseCallForwarderRewriter
                 null,
                 thisExpr,
                 node.BaseClass,
-                node.Method,
+                method,
                 argBuilder.ToImmutable(),
                 node.Type);
 
@@ -269,7 +269,7 @@ public static class BaseCallForwarderRewriter
             {
                 var refKind = node.ArgumentRefKinds.IsDefault ? RefKind.None : node.ArgumentRefKinds[i];
                 parameters.Add(new ParameterSymbol(
-                    i < methodParameters.Length ? methodParameters[i].Name : "arg" + i,
+                    i < methodParameters.Length ? methodParameters[i].Name ?? "arg" + i : "arg" + i,
                     node.Arguments[i].Type,
                     refKind: refKind));
             }
@@ -296,7 +296,7 @@ public static class BaseCallForwarderRewriter
 
             var innerCall = new BoundImportedInstanceCallExpression(
                 null,
-                new BoundVariableExpression(null, forwarder.ThisParameter),
+                new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver")),
                 node.Method,
                 node.Type,
                 arguments.ToImmutable(),

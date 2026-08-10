@@ -19,7 +19,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundTupleLiteralExpression : BoundExpression
 {
-    public BoundTupleLiteralExpression(SyntaxNode syntax, TupleTypeSymbol tupleType, ImmutableArray<BoundExpression> elements)
+    public BoundTupleLiteralExpression(SyntaxNode? syntax, TupleTypeSymbol tupleType, ImmutableArray<BoundExpression> elements)
         : base(syntax)
     {
         TupleType = tupleType;

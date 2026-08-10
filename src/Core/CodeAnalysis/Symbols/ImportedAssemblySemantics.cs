@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -54,7 +55,7 @@ internal static class ImportedAssemblySemantics
     // load context is disposed and unreachable.
     private static readonly ConditionalWeakTable<Assembly, AssemblySemantics> Cache = new();
 
-    public static bool TryGetTypeSemantics(Type type, out ImportedTypeSemantics semantics)
+    public static bool TryGetTypeSemantics(Type? type, [NotNullWhen(true)] out ImportedTypeSemantics? semantics)
     {
         semantics = null;
         if (type == null)
@@ -82,7 +83,7 @@ internal static class ImportedAssemblySemantics
     /// <param name="type">The reflected CLR type to inspect.</param>
     /// <param name="fieldKinds">The field name to marker-tag map on success.</param>
     /// <returns><see langword="true"/> when the type carries the marker.</returns>
-    public static bool TryGetMagicCollectionFields(Type type, out ImmutableDictionary<string, string> fieldKinds)
+    public static bool TryGetMagicCollectionFields(Type? type, [NotNullWhen(true)] out ImmutableDictionary<string, string>? fieldKinds)
     {
         fieldKinds = null;
         if (type == null)
@@ -117,7 +118,7 @@ internal static class ImportedAssemblySemantics
     /// <param name="type">The externally-referenced CLR type to inspect.</param>
     /// <param name="semantics">The synthesized semantics on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> has the full record shape.</returns>
-    public static bool TryDetectCSharpRecordSemantics(Type type, out ImportedTypeSemantics semantics)
+    public static bool TryDetectCSharpRecordSemantics(Type? type, [NotNullWhen(true)] out ImportedTypeSemantics? semantics)
     {
         semantics = null;
         if (type == null || type.IsPrimitive || type.IsEnum || type.IsInterface || type.IsGenericTypeDefinition)
@@ -184,7 +185,7 @@ internal static class ImportedAssemblySemantics
         return true;
     }
 
-    public static bool GrantsInternalAccessTo(Assembly assembly, string consumerAssemblyName)
+    public static bool GrantsInternalAccessTo(Assembly? assembly, string? consumerAssemblyName)
     {
         if (assembly == null || string.IsNullOrWhiteSpace(consumerAssemblyName))
         {
@@ -305,7 +306,7 @@ internal static class ImportedAssemblySemantics
             return (ImmutableArray<string>.Empty, ImmutableArray<int>.Empty);
         }
 
-        ConstructorInfo bestMatch = null;
+        ConstructorInfo? bestMatch = null;
         var bestParameters = Array.Empty<ParameterInfo>();
         foreach (var ctor in type.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -340,7 +341,7 @@ internal static class ImportedAssemblySemantics
         foreach (var parameter in bestParameters)
         {
             var name = parameter.Name;
-            namesBuilder.Add(name);
+            namesBuilder.Add(name ?? string.Empty);
 
             var backingField = type.GetField($"<{name}>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
             tokensBuilder.Add(backingField?.MetadataToken ?? 0);
@@ -423,7 +424,7 @@ internal static class ImportedAssemblySemantics
     // Issue #3329: payload shape is "typeToken|field1:kind1,field2:kind2,...";
     // see AssemblyAttributeEmitter.EmitGSharpMagicCollectionFieldMarkers for
     // the writer.
-    private static bool TryParseMagicCollectionFields(string value, out int typeToken, out ImmutableDictionary<string, string> fieldKinds)
+    private static bool TryParseMagicCollectionFields(string? value, out int typeToken, [NotNullWhen(true)] out ImmutableDictionary<string, string>? fieldKinds)
     {
         typeToken = 0;
         fieldKinds = null;
@@ -454,7 +455,7 @@ internal static class ImportedAssemblySemantics
         return true;
     }
 
-    private static bool TryParseTypeSemantics(string value, out ImportedTypeSemantics semantics)
+    private static bool TryParseTypeSemantics(string? value, [NotNullWhen(true)] out ImportedTypeSemantics? semantics)
     {
         semantics = null;
         if (string.IsNullOrWhiteSpace(value))
@@ -510,7 +511,7 @@ internal static class ImportedAssemblySemantics
         return true;
     }
 
-    private static string NormalizeAssemblyName(string value)
+    private static string? NormalizeAssemblyName(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {

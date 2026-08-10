@@ -23,7 +23,7 @@ public sealed class CatchClauseSyntax : SyntaxNode
         SyntaxToken catchKeyword,
         SyntaxToken openParenthesisToken,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
+        TypeClauseSyntax? typeClause,
         SyntaxToken closeParenthesisToken,
         BlockStatementSyntax body)
         : base(syntaxTree)
@@ -49,7 +49,7 @@ public sealed class CatchClauseSyntax : SyntaxNode
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional exception type clause; <c>null</c> for an untyped catch.</summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the closing parenthesis token.</summary>
     public SyntaxToken CloseParenthesisToken { get; }

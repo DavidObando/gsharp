@@ -19,7 +19,7 @@ public sealed class BoundChannelReceiveExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="channel">The bound channel expression.</param>
     /// <param name="elementType">The channel's element type (the type yielded by the receive).</param>
-    public BoundChannelReceiveExpression(SyntaxNode syntax, BoundExpression channel, TypeSymbol elementType)
+    public BoundChannelReceiveExpression(SyntaxNode? syntax, BoundExpression channel, TypeSymbol elementType)
         : base(syntax)
     {
         Channel = channel;

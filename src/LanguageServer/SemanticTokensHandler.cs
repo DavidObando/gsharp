@@ -70,8 +70,8 @@ public static class SemanticTokensComputer
         var text = tree.Text;
 
         // Build semantic model if possible for symbol classification
-        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation = null;
-        HashSet<int> declarationPositions = null;
+        GSharp.Core.CodeAnalysis.Compilation.Compilation? compilation = null;
+        HashSet<int>? declarationPositions = null;
         try
         {
             compilation = content.Project?.GetCompilation() ?? new GSharp.Core.CodeAnalysis.Compilation.Compilation(tree);
@@ -133,8 +133,8 @@ public static class SemanticTokensComputer
         SyntaxTree tree,
         GSharp.Core.CodeAnalysis.Text.SourceText text,
         GSharp.Core.CodeAnalysis.Text.TextSpan literalSpan,
-        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions,
+        GSharp.Core.CodeAnalysis.Compilation.Compilation? compilation,
+        HashSet<int>? declarationPositions,
         CancellationToken ct = default)
     {
         var node = FindInterpolatedNode(tree.Root, literalSpan.Start);
@@ -225,7 +225,7 @@ public static class SemanticTokensComputer
         }
     }
 
-    private static InterpolatedStringExpressionSyntax FindInterpolatedNode(SyntaxNode node, int literalStart)
+    private static InterpolatedStringExpressionSyntax? FindInterpolatedNode(SyntaxNode node, int literalStart)
     {
         if (node is InterpolatedStringExpressionSyntax interpolated &&
             interpolated.StringToken.Span.Start == literalStart)
@@ -355,8 +355,8 @@ public static class SemanticTokensComputer
 
     private static (SemanticTokenType Type, SemanticTokenModifier[] Modifiers)? ClassifyToken(
         SyntaxToken token,
-        GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions,
+        GSharp.Core.CodeAnalysis.Compilation.Compilation? compilation,
+        HashSet<int>? declarationPositions,
         CancellationToken ct = default)
     {
         // Comments
@@ -404,7 +404,7 @@ public static class SemanticTokensComputer
     private static (SemanticTokenType Type, SemanticTokenModifier[] Modifiers)? ClassifyIdentifier(
         SyntaxToken token,
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
-        HashSet<int> declarationPositions,
+        HashSet<int>? declarationPositions,
         CancellationToken ct = default)
     {
         var symbol = SemanticLookup.ResolveSymbol(compilation, token, ct);

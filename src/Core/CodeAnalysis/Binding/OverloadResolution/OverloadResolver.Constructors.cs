@@ -292,7 +292,9 @@ internal sealed partial class OverloadResolver
                 typeArgs.Add(substitution[tp]);
             }
 
-            classType = StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), MapClrType);
+            classType = MapClrType is { } mapClrType
+                ? StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), mapClrType)
+                : StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
         }
         else if (syntax.TypeArgumentList != null && !IsClosedGenericImportedAggregate(classType))
         {
@@ -366,7 +368,7 @@ internal sealed partial class OverloadResolver
 
                 if (TryBindConstructorMethodGroup(argument, parameter.Type, parameterSyntaxV[i].Location, out var methodGroupArg))
                 {
-                    boundArguments[i] = methodGroupArg;
+                    boundArguments[i] = Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression");
                     hasErrorsV |= methodGroupArg is BoundErrorExpression;
                     continue;
                 }
@@ -389,7 +391,7 @@ internal sealed partial class OverloadResolver
                 {
                     if (TryBindConstantNarrowingArgument(argument, parameter.Type, parameterSyntaxV[i].Location, out var narrowedArg))
                     {
-                        boundArguments[i] = narrowedArg;
+                        boundArguments[i] = Invariant.Required(narrowedArg, "a successful constant narrowing conversion produces a bound expression");
                         continue;
                     }
 
@@ -527,14 +529,20 @@ internal sealed partial class OverloadResolver
                 SyntaxNode firstExceedingNode;
                 if (parameters.Length > 0)
                 {
-                    firstExceedingNode = syntax.Arguments.GetSeparator(parameters.Length - 1);
+                    firstExceedingNode = Invariant.Required(
+                        syntax.Arguments.GetSeparator(parameters.Length - 1),
+                        "an argument list with too many arguments has a separator before the excess arguments");
                 }
                 else
                 {
-                    firstExceedingNode = syntax.Arguments[0];
+                    firstExceedingNode = Invariant.Required(
+                        syntax.Arguments[0],
+                        "an argument list with too many arguments has a first argument");
                 }
 
-                var lastExceedingArgument = syntax.Arguments[syntax.Arguments.Count - 1];
+                var lastExceedingArgument = Invariant.Required(
+                    syntax.Arguments[syntax.Arguments.Count - 1],
+                    "an argument list with too many arguments has a last argument");
                 span = TextSpan.FromBounds(firstExceedingNode.Span.Start, lastExceedingArgument.Span.End);
             }
             else
@@ -542,14 +550,20 @@ internal sealed partial class OverloadResolver
                 span = syntax.CloseParenthesisToken.Span;
             }
 
-            Diagnostics.ReportWrongArgumentCount(new TextLocation(syntax.Location.Text, span), classType.Name, parameters.Length, syntax.Arguments.Count);
+            Diagnostics.ReportWrongArgumentCount(
+                new TextLocation(
+                    Invariant.Required(syntax.Location.Text, "a constructor call syntax location has source text"),
+                    span),
+                classType.Name,
+                parameters.Length,
+                syntax.Arguments.Count);
             return new BoundErrorExpression(syntax);
         }
 
         // Issue #343: reorder bound arguments into parameter order when the
         // call mixes positional and named arguments. The per-position loop
         // below then sees the call as fully positional.
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         if (!argumentNames.IsDefault)
         {
             if (!TryReorderUserCallArguments(
@@ -620,13 +634,20 @@ internal sealed partial class OverloadResolver
                 && argument.Type is FunctionTypeSymbol
                 && !ReferenceEquals(argument.Type, namedDelegateCtorTarget))
             {
-                boundArguments[i] = conversions.BindConversion(parameterSyntax[i].Location, argument, parameter.Type);
+                boundArguments[i] = conversions.BindConversion(
+                    Invariant.Required(parameterSyntax[i], "a delegate constructor argument has source syntax").Location,
+                    argument,
+                    parameter.Type);
                 continue;
             }
 
-            if (TryBindConstructorMethodGroup(argument, parameter.Type, parameterSyntax[i].Location, out var methodGroupArg))
+            if (TryBindConstructorMethodGroup(
+                    argument,
+                    parameter.Type,
+                    Invariant.Required(parameterSyntax[i], "a constructor method-group argument has source syntax").Location,
+                    out var methodGroupArg))
             {
-                boundArguments[i] = methodGroupArg;
+                boundArguments[i] = Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression");
                 hasErrors |= methodGroupArg is BoundErrorExpression;
                 continue;
             }
@@ -634,23 +655,23 @@ internal sealed partial class OverloadResolver
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
             {
-                if (TryConvertLiteralArgumentToExpressionTree(argument, parameter.Type, parameterSyntax[i].Location, out var expressionTreeArg))
+                if (TryConvertLiteralArgumentToExpressionTree(argument, parameter.Type, Invariant.Required(parameterSyntax[i], "an expression-tree constructor argument has source syntax").Location, out var expressionTreeArg))
                 {
-                    boundArguments[i] = expressionTreeArg;
+                    boundArguments[i] = Invariant.Required(expressionTreeArg, "a successful expression-tree argument conversion produces a bound expression");
                     continue;
                 }
 
                 // Issue #889: arrow/func literal → void-returning delegate.
-                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, parameterSyntax[i].Location, out var voidDelegateArg))
+                if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, Invariant.Required(parameterSyntax[i], "a void-delegate constructor argument has source syntax").Location, out var voidDelegateArg))
                 {
-                    boundArguments[i] = voidDelegateArg;
+                    boundArguments[i] = Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression");
                     continue;
                 }
 
                 // Issue #1281: implicit constant-expression narrowing argument.
-                if (TryBindConstantNarrowingArgument(argument, parameter.Type, parameterSyntax[i].Location, out var narrowedArg))
+                if (TryBindConstantNarrowingArgument(argument, parameter.Type, Invariant.Required(parameterSyntax[i], "a narrowed constructor argument has source syntax").Location, out var narrowedArg))
                 {
-                    boundArguments[i] = narrowedArg;
+                    boundArguments[i] = Invariant.Required(narrowedArg, "a successful constant narrowing conversion produces a bound expression");
                     continue;
                 }
 
@@ -662,7 +683,11 @@ internal sealed partial class OverloadResolver
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(parameterSyntax[i].Location, parameter.Name, parameter.Type, argument.Type);
+                    Diagnostics.ReportWrongArgumentType(
+                        Invariant.Required(parameterSyntax[i], "a constructor argument with a conversion error has source syntax").Location,
+                        parameter.Name,
+                        parameter.Type,
+                        argument.Type);
                 }
 
                 hasErrors = true;
@@ -682,7 +707,10 @@ internal sealed partial class OverloadResolver
                 // the sibling paths that already do this correctly:
                 // `BindExplicitConstructorCallExpression`'s equivalent loop and
                 // the `primaryHasOptional` branch above in this same method.
-                boundArguments[i] = conversions.BindConversion(parameterSyntax[i].Location, argument, parameter.Type);
+                boundArguments[i] = conversions.BindConversion(
+                    Invariant.Required(parameterSyntax[i], "an implicitly converted constructor argument has source syntax").Location,
+                    argument,
+                    parameter.Type);
             }
         }
 
@@ -772,7 +800,7 @@ internal sealed partial class OverloadResolver
             // Issue #343: peel any named-argument wrapper before binding so the
             // value is bound in source order. We will permute below.
             var argument = UnwrapNamedArgumentValue(syntax.Arguments[ai]);
-            ParameterSymbol parameterForArg = null;
+            ParameterSymbol? parameterForArg = null;
             if (ctorOverloads.Length == 1 && ai < ctorOverloads[0].Parameters.Length)
             {
                 parameterForArg = ctorOverloads[0].Parameters[ai];
@@ -780,7 +808,10 @@ internal sealed partial class OverloadResolver
 
             if (argument is RefArgumentExpressionSyntax refArg)
             {
-                boundArgumentsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg));
+                // The callback uses null to mean that overload resolution has
+                // not identified the ref parameter yet; its legacy non-null
+                // annotation predates that two-pass binding contract.
+                boundArgumentsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!));
             }
             else
             {
@@ -788,7 +819,7 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        ConstructorSymbol selectedCtor;
+        ConstructorSymbol? selectedCtor;
         if (ctorOverloads.Length <= 1)
         {
             selectedCtor = ctorOverloads.Length == 1 ? ctorOverloads[0] : classType.ExplicitConstructor;
@@ -841,6 +872,7 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        selectedCtor = Invariant.Required(selectedCtor, "an applicable explicit constructor has a selected constructor symbol");
         var parameters = selectedCtor.Parameters;
 
         // Issue #1214: for a closed generic construction, surface the
@@ -906,7 +938,7 @@ internal sealed partial class OverloadResolver
         // Issue #343: reorder into parameter order when the call mixes
         // positional and named arguments. ADR-0063: also slot defaults for
         // unsupplied optional parameters.
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         var boundArguments = boundArgumentsBuilder;
         if (ctorIsVariadic)
         {
@@ -942,7 +974,7 @@ internal sealed partial class OverloadResolver
                     fixedCtorParamCount,
                     sliceType,
                     variadicParam.Name,
-                    i => parameterSyntax[i].Location,
+                    i => Invariant.Required(parameterSyntax[i], "a variadic constructor argument has source syntax").Location,
                     ref hasVariadicErrors);
 
                 if (hasVariadicErrors)
@@ -952,7 +984,7 @@ internal sealed partial class OverloadResolver
 
                 boundArguments = packedArgs.ToBuilder();
 
-                var newSyntax = new ExpressionSyntax[parameters.Length];
+                var newSyntax = new ExpressionSyntax?[parameters.Length];
                 for (var i = 0; i < fixedCtorParamCount; i++)
                 {
                     newSyntax[i] = parameterSyntax[i];
@@ -1016,7 +1048,6 @@ internal sealed partial class OverloadResolver
             // ADR-0055 Tier 4 (#369): re-lower an interpolated-string argument
             // targeting an IFormattable/FormattableString parameter.
             if (i < parameterSyntax.Length
-                && parameterSyntax[i] != null
                 && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && isFormattableStringTargetType(paramType))
             {
@@ -1049,12 +1080,12 @@ internal sealed partial class OverloadResolver
             }
 
             var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
-                ? parameterSyntax[i].Location
+                ? Invariant.Required(parameterSyntax[i], "an explicit constructor argument has source syntax").Location
                 : syntax.Identifier.Location;
 
             if (TryBindConstructorMethodGroup(argument, paramType, argLocation, out var methodGroupArg))
             {
-                convertedArguments.Add(methodGroupArg);
+                convertedArguments.Add(Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression"));
                 hasErrors |= methodGroupArg is BoundErrorExpression;
                 continue;
             }
@@ -1079,21 +1110,21 @@ internal sealed partial class OverloadResolver
             {
                 if (TryConvertLiteralArgumentToExpressionTree(argument, paramType, argLocation, out var expressionTreeArg))
                 {
-                    convertedArguments.Add(expressionTreeArg);
+                    convertedArguments.Add(Invariant.Required(expressionTreeArg, "a successful expression-tree argument conversion produces a bound expression"));
                     continue;
                 }
 
                 // Issue #889: arrow/func literal → void-returning delegate.
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, paramType, argLocation, out var voidDelegateArg))
                 {
-                    convertedArguments.Add(voidDelegateArg);
+                    convertedArguments.Add(Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression"));
                     continue;
                 }
 
                 // Issue #1281: implicit constant-expression narrowing argument.
                 if (TryBindConstantNarrowingArgument(argument, paramType, argLocation, out var narrowedArg))
                 {
-                    convertedArguments.Add(narrowedArg);
+                    convertedArguments.Add(Invariant.Required(narrowedArg, "a successful constant narrowing conversion produces a bound expression"));
                     continue;
                 }
 
@@ -1247,7 +1278,9 @@ internal sealed partial class OverloadResolver
             typeArgs.Add(substitution[tp]);
         }
 
-        constructed = StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), MapClrType);
+        constructed = MapClrType is { } mapClrType
+            ? StructSymbol.Construct(classType, typeArgs.MoveToImmutable(), mapClrType)
+            : StructSymbol.Construct(classType, typeArgs.MoveToImmutable());
         return true;
     }
 
@@ -1263,7 +1296,7 @@ internal sealed partial class OverloadResolver
         // Resolve the current ConstructorSymbol so we know whether the caller
         // is convenience or designated, and so we can exclude it from the
         // candidate set (recursion would loop indefinitely).
-        ConstructorSymbol currentCtor = null;
+        ConstructorSymbol? currentCtor = null;
         foreach (var c in owningClass.ExplicitConstructors)
         {
             if (ReferenceEquals(c.Function, currentCtorFunction))
@@ -1313,7 +1346,7 @@ internal sealed partial class OverloadResolver
         for (var i = 0; i < syntax.Arguments.Count; i++)
         {
             var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
-            ParameterSymbol parameterForArg = null;
+            ParameterSymbol? parameterForArg = null;
             if (siblingBuilder.Count == 1 && i < siblingBuilder[0].Parameters.Length)
             {
                 parameterForArg = siblingBuilder[0].Parameters[i];
@@ -1321,7 +1354,10 @@ internal sealed partial class OverloadResolver
 
             if (argument is RefArgumentExpressionSyntax refArg)
             {
-                boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg));
+                // The callback uses null to mean that overload resolution has
+                // not identified the ref parameter yet; its legacy non-null
+                // annotation predates that two-pass binding contract.
+                boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!));
             }
             else
             {
@@ -1329,7 +1365,7 @@ internal sealed partial class OverloadResolver
             }
         }
 
-        ConstructorSymbol selectedCtor;
+        ConstructorSymbol? selectedCtor;
         if (siblingBuilder.Count == 1)
         {
             selectedCtor = siblingBuilder[0];
@@ -1388,6 +1424,7 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        selectedCtor = Invariant.Required(selectedCtor, "an applicable constructor-chain overload has a selected constructor symbol");
         var parameters = selectedCtor.Parameters;
         var requestedArgCount = syntax.Arguments.Count;
         if (requestedArgCount < parameters.Length)
@@ -1417,7 +1454,7 @@ internal sealed partial class OverloadResolver
             return new BoundErrorExpression(syntax);
         }
 
-        ExpressionSyntax[] parameterSyntax;
+        ExpressionSyntax?[] parameterSyntax;
         var boundArgs = boundArgsBuilder;
         if (!argumentNames.IsDefault || requestedArgCount < parameters.Length)
         {
@@ -1466,7 +1503,7 @@ internal sealed partial class OverloadResolver
 
             if (TryBindConstructorMethodGroup(argument, parameter.Type, argLocation, out var methodGroupArg))
             {
-                convertedArgs.Add(methodGroupArg);
+                convertedArgs.Add(Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression"));
                 hadErrors |= methodGroupArg is BoundErrorExpression;
                 continue;
             }
@@ -1517,21 +1554,21 @@ internal sealed partial class OverloadResolver
             {
                 if (TryConvertLiteralArgumentToExpressionTree(argument, parameter.Type, argLocation, out var expressionTreeArg))
                 {
-                    convertedArgs.Add(expressionTreeArg);
+                    convertedArgs.Add(Invariant.Required(expressionTreeArg, "a successful expression-tree argument conversion produces a bound expression"));
                     continue;
                 }
 
                 // Issue #889: arrow/func literal → void-returning delegate.
                 if (TryConvertLiteralArgumentToVoidDelegate(argument, parameter.Type, argLocation, out var voidDelegateArg))
                 {
-                    convertedArgs.Add(voidDelegateArg);
+                    convertedArgs.Add(Invariant.Required(voidDelegateArg, "a successful void-delegate argument conversion produces a bound expression"));
                     continue;
                 }
 
                 // Issue #1281: implicit constant-expression narrowing argument.
                 if (TryBindConstantNarrowingArgument(argument, parameter.Type, argLocation, out var narrowedArg))
                 {
-                    convertedArgs.Add(narrowedArg);
+                    convertedArgs.Add(Invariant.Required(narrowedArg, "a successful constant narrowing conversion produces a bound expression"));
                     continue;
                 }
 
@@ -1567,7 +1604,7 @@ internal sealed partial class OverloadResolver
         BoundExpression argument,
         TypeSymbol targetType,
         TextLocation location,
-        out BoundExpression converted)
+        out BoundExpression? converted)
     {
         if (ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument))
         {
@@ -1591,7 +1628,7 @@ internal sealed partial class OverloadResolver
         ImmutableArray<ParameterSymbol> parameters,
         string callableName,
         TextLocation diagnosticLocation,
-        out ExpressionSyntax[] parameterSyntax,
+        out ExpressionSyntax?[] parameterSyntax,
         out ImmutableArray<BoundExpression> permutedBound)
     {
         parameterSyntax = new ExpressionSyntax[parameters.Length];

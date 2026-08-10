@@ -82,9 +82,9 @@ public static class SemanticLookup
     internal static (long Hits, long Misses) FunctionLocalsCacheStats =>
         (System.Threading.Interlocked.Read(ref functionLocalsCacheHits), System.Threading.Interlocked.Read(ref functionLocalsCacheMisses));
 
-    public static SyntaxToken FindTokenAt(SyntaxTree tree, int position)
+    public static SyntaxToken? FindTokenAt(SyntaxTree tree, int position)
     {
-        SyntaxToken best = null;
+        SyntaxToken? best = null;
         foreach (var token in EnumerateTokens(tree.Root))
         {
             if (token.IsMissing)
@@ -120,7 +120,7 @@ public static class SemanticLookup
         return best;
     }
 
-    public static Symbol ResolveSymbol(Compilation compilation, SyntaxToken identifierToken, CancellationToken ct = default)
+    public static Symbol? ResolveSymbol(Compilation compilation, SyntaxToken? identifierToken, CancellationToken ct = default)
     {
         if (identifierToken == null || identifierToken.IsMissing || identifierToken.Kind != SyntaxKind.IdentifierToken)
         {
@@ -165,8 +165,8 @@ public static class SemanticLookup
         string methodName,
         int argumentCount,
         CallReceiverGate gate,
-        Type receiverClrType,
-        out System.Reflection.MethodInfo method,
+        Type? receiverClrType,
+        out System.Reflection.MethodInfo? method,
         out int overloadCount)
     {
         method = null;
@@ -186,7 +186,7 @@ public static class SemanticLookup
             return false;
         }
 
-        System.Reflection.MethodInfo firstGated = null;
+        System.Reflection.MethodInfo? firstGated = null;
         foreach (var root in EnumerateBoundRoots(program))
         {
             if (root == null)
@@ -309,7 +309,7 @@ public static class SemanticLookup
     /// <param name="tree">The syntax tree the offset belongs to; scopes the function search to that file.</param>
     /// <param name="offset">The source offset of the expression.</param>
     /// <returns>The enclosing function symbol and the in-scope local symbols.</returns>
-    public static (FunctionSymbol Function, IReadOnlyList<VariableSymbol> Locals) GetExpressionBindingContext(Compilation compilation, SyntaxTree tree, int offset)
+    public static (FunctionSymbol? Function, IReadOnlyList<VariableSymbol> Locals) GetExpressionBindingContext(Compilation compilation, SyntaxTree tree, int offset)
     {
         // Spans are per-file offsets; restrict the search to the supplied tree so a function
         // in another file can't be chosen by offset overlap in a multi-file compilation.
@@ -345,7 +345,7 @@ public static class SemanticLookup
     /// <c>&lt;name&gt;Attribute</c> fallback (used for annotation hover, e.g. <c>@Obsolete</c>).
     /// </param>
     /// <returns>The resolved CLR type, or <c>null</c> when no match is found.</returns>
-    public static Type ResolveImportedClrType(
+    public static Type? ResolveImportedClrType(
         SyntaxTree tree,
         Compilation compilation,
         string name,
@@ -420,7 +420,7 @@ public static class SemanticLookup
         return true;
     }
 
-    public static bool CanRename(Symbol symbol)
+    public static bool CanRename(Symbol? symbol)
     {
         return symbol is not null and not ImportedTypeSymbol and not ImportedClassSymbol and not ImportedFunctionSymbol and not TypeParameterSymbol
             && !ReferenceEquals(symbol, TypeSymbol.Bool)
@@ -488,7 +488,7 @@ public static class SemanticLookup
         System.Threading.Interlocked.Exchange(ref functionLocalsCacheMisses, 0);
     }
 
-    private static FunctionSymbol FindFunctionSymbol(Compilation compilation, FunctionDeclarationSyntax declaration)
+    private static FunctionSymbol? FindFunctionSymbol(Compilation compilation, FunctionDeclarationSyntax declaration)
     {
         foreach (var function in compilation.GlobalScope.Functions)
         {
@@ -778,7 +778,7 @@ public static class SemanticLookup
         foreach (var typeAliasSyntax in bucketsByTree.Values.SelectMany(b => b.TypeAliasDeclarations))
         {
             var aliasId = typeAliasSyntax.Identifier;
-            if (aliasId != null && aliasId.Text != null
+            if (aliasId != null && !aliasId.IsMissing
                 && compilation.GlobalScope.TypeAliases.TryGetValue(aliasId.Text, out var aliasedType))
             {
                 declarations[aliasId] = aliasedType;
@@ -805,7 +805,7 @@ public static class SemanticLookup
 
         foreach (var identifier in identifiers)
         {
-            if (identifier != null && identifier.Text != null && byName.TryGetValue(identifier.Text, out var symbol))
+            if (identifier != null && !identifier.IsMissing && byName.TryGetValue(identifier.Text, out var symbol))
             {
                 declarations[identifier] = symbol;
             }
@@ -848,7 +848,7 @@ public static class SemanticLookup
     }
 
     private static void MapTypeClauseReference(
-        TypeClauseSyntax typeClause,
+        TypeClauseSyntax? typeClause,
         TypeSymbol type,
         Dictionary<SyntaxToken, Symbol> declarations)
     {
@@ -924,7 +924,7 @@ public static class SemanticLookup
 
         foreach (var pair in program.Functions)
         {
-            SyntaxNode scope = pair.Key.Declaration;
+            SyntaxNode? scope = pair.Key.Declaration;
             var bodySyntax = pair.Key.Declaration?.Body;
             if (scope == null && constructorByFunction.TryGetValue(pair.Key, out var constructorDeclaration))
             {
@@ -1265,7 +1265,7 @@ public static class SemanticLookup
         bool isExtensionDispatched,
         Type receiverClrType)
     {
-        Type effectiveReceiverType = isExtensionDispatched
+        Type? effectiveReceiverType = isExtensionDispatched
             ? candidate.GetParameters().FirstOrDefault()?.ParameterType
             : candidate.DeclaringType;
         if (effectiveReceiverType == null)
@@ -1348,7 +1348,7 @@ public static class SemanticLookup
         private readonly Dictionary<string, Symbol> globals;
         private readonly Dictionary<SyntaxNode, Dictionary<string, Symbol>> localDeclarations;
         private readonly object referencesLock = new object();
-        private Dictionary<Symbol, List<SyntaxToken>> referencesIndex;
+        private Dictionary<Symbol, List<SyntaxToken>>? referencesIndex;
 
         // Cached tree-walk results. Resolve's fallback path used to call
         // FindNodes<FunctionDeclarationSyntax> and FindNodes<StructDeclarationSyntax>
@@ -1503,7 +1503,7 @@ public static class SemanticLookup
         /// <summary>Gets a snapshot of the global name → symbol map. ADR-0106 test hook.</summary>
         internal IReadOnlyDictionary<string, Symbol> GlobalsSnapshot => this.globals;
 
-        public Symbol Resolve(SyntaxToken token)
+        public Symbol? Resolve(SyntaxToken token)
         {
             if (this.declarations.TryGetValue(token, out var declared))
             {
@@ -1516,7 +1516,7 @@ public static class SemanticLookup
                 return bySpan;
             }
 
-            if (token.Text == null)
+            if (token.IsMissing)
             {
                 return null;
             }
@@ -1610,7 +1610,13 @@ public static class SemanticLookup
                 }
             }
 
-            return index.TryGetValue(NormalizeForReferences(target), out var tokens)
+            var normalizedTarget = NormalizeForReferences(target);
+            if (normalizedTarget is null)
+            {
+                return Array.Empty<SyntaxToken>();
+            }
+
+            return index.TryGetValue(normalizedTarget, out var tokens)
                 ? tokens
                 : (IReadOnlyList<SyntaxToken>)Array.Empty<SyntaxToken>();
         }
@@ -1675,7 +1681,7 @@ public static class SemanticLookup
             return index;
         }
 
-        private static Symbol NormalizeForReferences(Symbol symbol) => symbol switch
+        private static Symbol? NormalizeForReferences(Symbol? symbol) => symbol switch
         {
             StructSymbol s => s.Definition ?? s,
             EnumSymbol e => e.Definition ?? e,
@@ -1718,13 +1724,13 @@ public static class SemanticLookup
             }
         }
 
-        private static Symbol LookupMember(StructSymbol structSymbol, string memberName)
+        private static Symbol? LookupMember(StructSymbol structSymbol, string memberName)
         {
             // ADR-0112: shared canonical member lookup (see TypeMemberModel).
             return TypeMemberModel.LookupMember(structSymbol, memberName, MemberQuery.All);
         }
 
-        private Symbol ResolveImplicitThisMember(SyntaxToken token)
+        private Symbol? ResolveImplicitThisMember(SyntaxToken token)
         {
             // Find the innermost struct method body that contains the token. We deliberately do
             // NOT pre-filter by StructDeclarationSyntax.Span: the parser sometimes reports a
@@ -1735,7 +1741,7 @@ public static class SemanticLookup
             //
             // Shared-block methods are intentionally excluded — they're static and have no
             // implicit `this` receiver.
-            StructDeclarationSyntax enclosing = null;
+            StructDeclarationSyntax? enclosing = null;
             var enclosingBodyLength = int.MaxValue;
             var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
             if (!this.cachedStructsByFile.TryGetValue(fileName, out var structs))
@@ -1843,7 +1849,7 @@ public static class SemanticLookup
             }
         }
 
-        private Symbol ResolveAsMemberAccess(SyntaxToken token)
+        private Symbol? ResolveAsMemberAccess(SyntaxToken token)
         {
             if (token?.SyntaxTree == null || token.Kind != SyntaxKind.IdentifierToken)
             {
@@ -1870,7 +1876,9 @@ public static class SemanticLookup
                          .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
                          .OrderBy(a => a.Span.Length))
             {
-                if (TryDriveAccessorTarget(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpr, out var memberName))
+                if (TryDriveAccessorTarget(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpr, out var memberName)
+                    && receiverExpr is not null
+                    && memberName is not null)
                 {
                     var receiverType = this.ResolveReceiverTypeSymbol(tree, receiverExpr);
                     var member = LookupTypeMember(receiverType, memberName);
@@ -1921,8 +1929,8 @@ public static class SemanticLookup
             ExpressionSyntax expression,
             ExpressionSyntax receiver,
             SyntaxToken token,
-            out ExpressionSyntax receiverExpression,
-            out string memberName)
+            out ExpressionSyntax? receiverExpression,
+            out string? memberName)
         {
             receiverExpression = null;
             memberName = null;
@@ -1950,7 +1958,7 @@ public static class SemanticLookup
             }
         }
 
-        private TypeSymbol ResolveReceiverTypeSymbol(SyntaxTree tree, ExpressionSyntax expression)
+        private TypeSymbol? ResolveReceiverTypeSymbol(SyntaxTree tree, ExpressionSyntax expression)
         {
             switch (expression)
             {
@@ -1970,6 +1978,11 @@ public static class SemanticLookup
                         return null;
                     }
 
+                    if (intermediateName is null)
+                    {
+                        return null;
+                    }
+
                     var member = LookupTypeMember(outerType, intermediateName);
                     return member switch
                     {
@@ -1983,7 +1996,7 @@ public static class SemanticLookup
             }
         }
 
-        private static bool TryGetMemberName(ExpressionSyntax expression, out string memberName)
+        private static bool TryGetMemberName(ExpressionSyntax expression, out string? memberName)
         {
             memberName = expression switch
             {
@@ -1995,7 +2008,7 @@ public static class SemanticLookup
             return memberName != null;
         }
 
-        private static TypeSymbol AsTypeSymbol(Symbol symbol)
+        private static TypeSymbol? AsTypeSymbol(Symbol? symbol)
         {
             return symbol switch
             {
@@ -2008,7 +2021,7 @@ public static class SemanticLookup
             };
         }
 
-        private static Symbol LookupTypeMember(TypeSymbol receiverType, string memberName)
+        private static Symbol? LookupTypeMember(TypeSymbol? receiverType, string memberName)
         {
             switch (receiverType)
             {
@@ -2021,9 +2034,9 @@ public static class SemanticLookup
             }
         }
 
-        private FunctionDeclarationSyntax FindContainingFunction(SyntaxToken token)
+        private FunctionDeclarationSyntax? FindContainingFunction(SyntaxToken token)
         {
-            FunctionDeclarationSyntax best = null;
+            FunctionDeclarationSyntax? best = null;
             var bestLength = int.MaxValue;
             var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
             if (!this.cachedFunctionsByFile.TryGetValue(fileName, out var functions))
@@ -2043,9 +2056,9 @@ public static class SemanticLookup
             return best;
         }
 
-        private ConstructorDeclarationSyntax FindContainingConstructor(SyntaxToken token)
+        private ConstructorDeclarationSyntax? FindContainingConstructor(SyntaxToken token)
         {
-            ConstructorDeclarationSyntax best = null;
+            ConstructorDeclarationSyntax? best = null;
             var bestLength = int.MaxValue;
             var fileName = token.SyntaxTree?.Text?.FileName ?? string.Empty;
             if (!this.cachedConstructorsByFile.TryGetValue(fileName, out var constructors))
@@ -2065,14 +2078,14 @@ public static class SemanticLookup
             return best;
         }
 
-        private Symbol ResolveForRangeLoopLocal(SyntaxToken token)
+        private Symbol? ResolveForRangeLoopLocal(SyntaxToken token)
         {
             if (token?.SyntaxTree == null)
             {
                 return null;
             }
 
-            Symbol best = null;
+            Symbol? best = null;
             var bestSpanLength = int.MaxValue;
 
             foreach (var statement in this.GetForRangesForTree(token.SyntaxTree))
@@ -2086,7 +2099,7 @@ public static class SemanticLookup
 
                 if (statement.SecondIdentifier != null && string.Equals(statement.FirstIdentifier?.Text, token.Text, StringComparison.Ordinal))
                 {
-                    var keySymbol = this.Resolve(statement.FirstIdentifier);
+                    var keySymbol = statement.FirstIdentifier is null ? null : this.Resolve(statement.FirstIdentifier);
                     if (keySymbol != null && statement.Body.Span.Length < bestSpanLength)
                     {
                         best = keySymbol;
@@ -2100,7 +2113,7 @@ public static class SemanticLookup
                     continue;
                 }
 
-                var valueSymbol = this.Resolve(valueIdentifier);
+                var valueSymbol = valueIdentifier is null ? null : this.Resolve(valueIdentifier);
                 if (valueSymbol != null && statement.Body.Span.Length < bestSpanLength)
                 {
                     best = valueSymbol;
@@ -2118,7 +2131,7 @@ public static class SemanticLookup
                     continue;
                 }
 
-                var valueSymbol = this.Resolve(statement.Identifier);
+                var valueSymbol = statement.Identifier is null ? null : this.Resolve(statement.Identifier);
                 if (valueSymbol != null && statement.Body.Span.Length < bestSpanLength)
                 {
                     best = valueSymbol;
@@ -2143,7 +2156,7 @@ public static class SemanticLookup
                 : FindNodes<AwaitForRangeStatementSyntax>(tree.Root).ToArray();
         }
 
-        private Symbol ResolvePrimitiveOrImportedType(string text)
+        private Symbol? ResolvePrimitiveOrImportedType(string text)
         {
             return text switch
             {

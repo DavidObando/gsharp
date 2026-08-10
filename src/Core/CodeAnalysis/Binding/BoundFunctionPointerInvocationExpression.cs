@@ -22,7 +22,7 @@ public sealed class BoundFunctionPointerInvocationExpression : BoundExpression
     /// <param name="arguments">The converted call arguments.</param>
     /// <param name="functionPointerType">The function-pointer type being invoked.</param>
     public BoundFunctionPointerInvocationExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression pointer,
         ImmutableArray<BoundExpression> arguments,
         FunctionPointerTypeSymbol functionPointerType)

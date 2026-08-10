@@ -21,7 +21,7 @@ public class ContinueStatementSyntax : StatementSyntax
     /// as the <paramref name="keyword"/>); <see langword="null"/> for an
     /// innermost-loop continue.
     /// </param>
-    public ContinueStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword, SyntaxToken labelIdentifier = null)
+    public ContinueStatementSyntax(SyntaxTree syntaxTree, SyntaxToken keyword, SyntaxToken? labelIdentifier = null)
         : base(syntaxTree)
     {
         Keyword = keyword;
@@ -40,5 +40,5 @@ public class ContinueStatementSyntax : StatementSyntax
     /// Gets the optional target label identifier (<see langword="null"/> when
     /// the continue targets the innermost enclosing loop).
     /// </summary>
-    public SyntaxToken LabelIdentifier { get; }
+    public SyntaxToken? LabelIdentifier { get; }
 }

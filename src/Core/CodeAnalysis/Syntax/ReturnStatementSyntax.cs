@@ -15,7 +15,7 @@ public sealed class ReturnStatementSyntax : StatementSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="returnKeyword">The return keyword.</param>
     /// <param name="expression">The expression.</param>
-    public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, ExpressionSyntax expression)
+    public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, ExpressionSyntax? expression)
         : this(syntaxTree, returnKeyword, refKeyword: null, expression)
     {
     }
@@ -28,7 +28,7 @@ public sealed class ReturnStatementSyntax : StatementSyntax
     /// <param name="returnKeyword">The return keyword.</param>
     /// <param name="refKeyword">The optional <c>ref</c> contextual modifier; <c>null</c> when absent.</param>
     /// <param name="expression">The expression.</param>
-    public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, SyntaxToken refKeyword, ExpressionSyntax expression)
+    public ReturnStatementSyntax(SyntaxTree syntaxTree, SyntaxToken returnKeyword, SyntaxToken? refKeyword, ExpressionSyntax? expression)
         : base(syntaxTree)
     {
         ReturnKeyword = returnKeyword;
@@ -49,7 +49,7 @@ public sealed class ReturnStatementSyntax : StatementSyntax
     /// <c>return</c> keyword (issue #490 / ADR-0060 follow-up). Non-null when the source
     /// is <c>return ref &lt;lvalue&gt;</c>.
     /// </summary>
-    public SyntaxToken RefKeyword { get; }
+    public SyntaxToken? RefKeyword { get; }
 
     /// <summary>Gets a value indicating whether this is a <c>return ref</c> statement (issue #490).</summary>
     public bool IsRefReturn => RefKeyword != null;
@@ -57,5 +57,5 @@ public sealed class ReturnStatementSyntax : StatementSyntax
     /// <summary>
     /// Gets the expression.
     /// </summary>
-    public ExpressionSyntax Expression { get; }
+    public ExpressionSyntax? Expression { get; }
 }

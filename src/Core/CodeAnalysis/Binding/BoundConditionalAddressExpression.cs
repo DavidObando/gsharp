@@ -28,7 +28,7 @@ public sealed class BoundConditionalAddressExpression : BoundExpression
     /// <param name="whenFalseOperand">The lvalue operand for the false branch (its address is taken at emit).</param>
     /// <param name="pointeeType">The common pointee type of the two branches.</param>
     public BoundConditionalAddressExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression condition,
         BoundExpression whenTrueOperand,
         BoundExpression whenFalseOperand,

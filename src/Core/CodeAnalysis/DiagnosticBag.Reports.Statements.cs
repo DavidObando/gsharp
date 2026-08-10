@@ -337,7 +337,7 @@ public sealed partial class DiagnosticBag
     /// <param name="op">The operator kind.</param>
     /// <param name="type">The operand type.</param>
     public void ReportRelationalPatternOperatorUndefined(TextLocation location, SyntaxKind op, TypeSymbol type)
-    => Report(location, DiagnosticDescriptors.RelationalPatternOperatorUndefined, SyntaxFacts.GetText(op), type);
+    => Report(location, DiagnosticDescriptors.RelationalPatternOperatorUndefined, SyntaxFacts.GetTextOrEmpty(op), type);
 
     /// <summary>Reports that a list pattern was used on a non-array/slice type.</summary>
     /// <param name="location">The text location.</param>

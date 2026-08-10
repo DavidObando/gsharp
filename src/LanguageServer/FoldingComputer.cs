@@ -50,7 +50,7 @@ public static class FoldingComputer
         foreach (SyntaxNode node in DescendantNodesAndSelf(content.SyntaxTree.Root))
         {
             ct.ThrowIfCancellationRequested();
-            FoldingRange range = TryComputeBraceFold(node, content);
+            FoldingRange? range = TryComputeBraceFold(node, content);
             if (range != null && seen.Add((range.StartLine, range.EndLine)))
             {
                 ranges.Add(range);
@@ -83,10 +83,10 @@ public static class FoldingComputer
         }
     }
 
-    private static FoldingRange TryComputeBraceFold(SyntaxNode node, DocumentContent content)
+    private static FoldingRange? TryComputeBraceFold(SyntaxNode node, DocumentContent content)
     {
-        SyntaxToken openBrace = null;
-        SyntaxToken closeBrace = null;
+        SyntaxToken? openBrace = null;
+        SyntaxToken? closeBrace = null;
 
         foreach (SyntaxNode child in node.GetChildren())
         {

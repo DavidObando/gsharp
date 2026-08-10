@@ -25,7 +25,10 @@ public sealed class SliceTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, SliceTypeSymbol> Cache = new();
 
     private SliceTypeSymbol(TypeSymbol elementType)
-        : base($"[]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType())
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation element types.
+        : base($"[]{elementType.Name}", NullableLifting.GetEffectiveClrType(elementType)?.MakeArrayType()!)
     {
         ElementType = elementType;
     }

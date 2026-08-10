@@ -278,7 +278,7 @@ public static class SyntaxFacts
     /// </summary>
     /// <param name="kind">The token syntax kind.</param>
     /// <returns>A string representing the token as defined by the language.</returns>
-    public static string GetText(SyntaxKind kind)
+    public static string? GetText(SyntaxKind kind)
     {
         switch (kind)
         {
@@ -512,4 +512,18 @@ public static class SyntaxFacts
                 return null;
         }
     }
+
+    /// <summary>
+    /// Gets the fixed source text for <paramref name="kind"/>, or
+    /// <see cref="string.Empty"/> when the kind has none.
+    /// </summary>
+    /// <remarks>
+    /// For callers that pass a fixed operator or keyword kind, where
+    /// <see cref="GetText"/> cannot return <see langword="null"/>. Keeps the
+    /// null-returning overload honest without scattering `!` across the
+    /// parser's synthetic-token construction.
+    /// </remarks>
+    /// <param name="kind">The kind of syntax.</param>
+    /// <returns>The text, or an empty string.</returns>
+    public static string GetTextOrEmpty(SyntaxKind kind) => GetText(kind) ?? string.Empty;
 }

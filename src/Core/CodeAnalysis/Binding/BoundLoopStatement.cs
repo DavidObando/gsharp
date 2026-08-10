@@ -17,7 +17,7 @@ public abstract class BoundLoopStatement : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="breakLabel">The break label.</param>
     /// <param name="continueLabel">The continue label.</param>
-    protected BoundLoopStatement(SyntaxNode syntax, BoundLabel breakLabel, BoundLabel continueLabel)
+    protected BoundLoopStatement(SyntaxNode? syntax, BoundLabel breakLabel, BoundLabel continueLabel)
         : base(syntax)
     {
         BreakLabel = breakLabel;

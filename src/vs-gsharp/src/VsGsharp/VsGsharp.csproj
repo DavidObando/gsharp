@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
     <RootNamespace>GSharp.VisualStudio</RootNamespace>
     <AssemblyName>GSharp.VisualStudio</AssemblyName>
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>

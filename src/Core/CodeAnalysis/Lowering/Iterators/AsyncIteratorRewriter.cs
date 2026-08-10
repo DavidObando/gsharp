@@ -104,7 +104,7 @@ public static class AsyncIteratorRewriter
         return new AsyncIteratorRewriteResult(program, plans.ToImmutable());
     }
 
-    private static TypeSymbol GetAsyncIteratorElementType(TypeSymbol type)
+    private static TypeSymbol? GetAsyncIteratorElementType(TypeSymbol type)
         => AsyncIteratorDetection.GetElementType(type);
 
     private static ImmutableArray<(Type PoolKey, TypeSymbol FieldType)> CollectAwaiterTypes(BoundStatement body)

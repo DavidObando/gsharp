@@ -30,7 +30,7 @@ public sealed class BoundAwaitForRangeStatement : BoundLoopStatement
     /// <param name="breakLabel">The break label targeted by <c>break</c> inside the loop body.</param>
     /// <param name="continueLabel">The continue label targeted by <c>continue</c> inside the loop body.</param>
     public BoundAwaitForRangeStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         VariableSymbol valueVariable,
         BoundExpression stream,
         BoundStatement body,

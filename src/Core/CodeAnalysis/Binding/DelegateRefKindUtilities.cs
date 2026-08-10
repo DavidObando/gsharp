@@ -102,7 +102,7 @@ internal static class DelegateRefKindUtilities
 
     private static ImmutableArray<RefKind> GetParameterRefKinds(
         FunctionSymbol function,
-        BoundExpression receiver)
+        BoundExpression? receiver)
     {
         var parameterOffset = function.IsExtension && receiver != null ? 1 : 0;
         return function.Parameters

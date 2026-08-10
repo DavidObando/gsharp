@@ -20,7 +20,7 @@ public sealed class BoundThrowExpression : BoundExpression
     /// <summary>Initializes a new instance of the <see cref="BoundThrowExpression"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The bound exception expression.</param>
-    public BoundThrowExpression(SyntaxNode syntax, BoundExpression expression)
+    public BoundThrowExpression(SyntaxNode? syntax, BoundExpression expression)
         : base(syntax)
     {
         Expression = expression;

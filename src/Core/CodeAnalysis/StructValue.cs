@@ -26,8 +26,8 @@ namespace GSharp.Core.CodeAnalysis;
 /// </summary>
 public sealed class StructValue
 {
-    private readonly LayoutRuntime explicitLayout;
-    private readonly object explicitLayoutValue;
+    private readonly LayoutRuntime? explicitLayout;
+    private readonly object? explicitLayoutValue;
 
     /// <summary>Initializes a new instance of the <see cref="StructValue"/> class.</summary>
     /// <param name="structType">The struct type symbol.</param>
@@ -46,9 +46,9 @@ public sealed class StructValue
 
     private StructValue(
         StructSymbol structType,
-        ConcurrentDictionary<string, object> fields,
-        LayoutRuntime explicitLayout = null,
-        object explicitLayoutValue = null)
+        ConcurrentDictionary<string, object?> fields,
+        LayoutRuntime? explicitLayout = null,
+        object? explicitLayoutValue = null)
     {
         StructType = structType;
         Fields = new FieldCollection(this);
@@ -73,7 +73,7 @@ public sealed class StructValue
     public FieldCollection Fields { get; }
 
     /// <inheritdoc/>
-    public override bool Equals(object obj)
+    public override bool Equals(object? obj)
     {
         if (StructType.IsClass && !StructType.IsData)
         {
@@ -167,11 +167,13 @@ public sealed class StructValue
         }
     }
 
-    private void SetField(string name, object value)
+    private void SetField(string name, object? value)
     {
         if (explicitLayout != null)
         {
-            lock (explicitLayoutValue)
+            // explicitLayoutValue is assigned by the same constructor branch
+            // that sets explicitLayout, tested non-null just above.
+            lock (explicitLayoutValue!)
             {
                 if (explicitLayout.TrySetField(explicitLayoutValue, name, value))
                 {
@@ -214,9 +216,9 @@ public sealed class StructValue
     /// Field storage that routes indexer writes through the owning value so
     /// explicit-layout aliases stay synchronized.
     /// </summary>
-    public sealed class FieldCollection : IEnumerable<KeyValuePair<string, object>>
+    public sealed class FieldCollection : IEnumerable<KeyValuePair<string, object?>>
     {
-        private readonly ConcurrentDictionary<string, object> fields = new();
+        private readonly ConcurrentDictionary<string, object?> fields = new();
         private readonly StructValue owner;
 
         internal FieldCollection(StructValue owner)
@@ -227,7 +229,7 @@ public sealed class StructValue
         /// <summary>Gets or sets a field value.</summary>
         /// <param name="key">Field name.</param>
         /// <returns>Stored field value.</returns>
-        public object this[string key]
+        public object? this[string key]
         {
             get => fields[key];
             set => owner.SetField(key, value);
@@ -242,16 +244,16 @@ public sealed class StructValue
         /// <param name="key">Field name.</param>
         /// <param name="value">Stored value when found.</param>
         /// <returns><see langword="true"/> when the field exists.</returns>
-        public bool TryGetValue(string key, out object value) => fields.TryGetValue(key, out value);
+        public bool TryGetValue(string key, out object? value) => fields.TryGetValue(key, out value);
 
         /// <summary>Enumerates stored fields.</summary>
         /// <returns>Field enumerator.</returns>
-        public IEnumerator<KeyValuePair<string, object>> GetEnumerator() => fields.GetEnumerator();
+        public IEnumerator<KeyValuePair<string, object?>> GetEnumerator() => fields.GetEnumerator();
 
         /// <inheritdoc/>
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 
-        internal void SetRaw(string key, object value) => fields[key] = value;
+        internal void SetRaw(string key, object? value) => fields[key] = value;
     }
 
     private sealed class LayoutRuntime
@@ -262,7 +264,7 @@ public sealed class StructValue
             .DefineDynamicAssembly(new AssemblyName("GSharp.Interpreter.Layouts"), AssemblyBuilderAccess.Run)
             .DefineDynamicModule("Layouts");
 
-        private static readonly MethodInfo ManagedSizeOfMethod = typeof(LayoutRuntime).GetMethod(
+        private static readonly MethodInfo? ManagedSizeOfMethod = typeof(LayoutRuntime).GetMethod(
             nameof(ManagedSizeOf),
             BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -298,9 +300,9 @@ public sealed class StructValue
             }
         }
 
-        public object CreateDefault() => Activator.CreateInstance(Type);
+        public object? CreateDefault() => Activator.CreateInstance(Type);
 
-        public bool TrySetField(object target, string name, object value)
+        public bool TrySetField(object? target, string name, object? value)
         {
             if (!fields.TryGetValue(name, out var runtimeField))
             {
@@ -312,7 +314,7 @@ public sealed class StructValue
             return true;
         }
 
-        public void ReadFields(object source, FieldCollection destination)
+        public void ReadFields(object? source, FieldCollection destination)
         {
             foreach (var field in symbol.Fields)
             {
@@ -325,7 +327,7 @@ public sealed class StructValue
             }
         }
 
-        public void ReadFields(object source, ConcurrentDictionary<string, object> destination)
+        public void ReadFields(object? source, ConcurrentDictionary<string, object?> destination)
         {
             foreach (var field in symbol.Fields)
             {
@@ -336,7 +338,7 @@ public sealed class StructValue
             }
         }
 
-        private object CreateValue(StructValue value)
+        private object? CreateValue(StructValue value)
         {
             if (value.explicitLayout == this)
             {
@@ -400,7 +402,8 @@ public sealed class StructValue
                 }
             }
 
-            var size = (int)ManagedSizeOfMethod.MakeGenericMethod(type).Invoke(null, null);
+            // The method is a private static on LayoutRuntime and returns an int.
+            var size = (int)ManagedSizeOfMethod!.MakeGenericMethod(type).Invoke(null, null)!;
             return new LayoutRuntime(symbol, type, fields, size);
         }
 
@@ -415,13 +418,14 @@ public sealed class StructValue
 
             if (type is EnumSymbol enumType)
             {
-                return enumType.ClrType ?? enumType.UnderlyingType.ClrType;
+                return enumType.ClrType
+                    ?? Invariant.Required(enumType.UnderlyingType.ClrType, "an enum has a CLR underlying type");
             }
 
             return NullableTypeSymbol.GetEffectiveClrType(type) ?? typeof(object);
         }
 
-        private static object ToRuntimeValue(TypeSymbol type, object value)
+        private static object? ToRuntimeValue(TypeSymbol type, object? value)
         {
             if (type is StructSymbol nested
                 && !nested.IsClass
@@ -438,14 +442,14 @@ public sealed class StructValue
             return value;
         }
 
-        private static object ToInterpreterValue(TypeSymbol type, object value)
+        private static object? ToInterpreterValue(TypeSymbol type, object? value)
         {
             if (type is StructSymbol nested
                 && !nested.IsClass
                 && value != null)
             {
                 var runtime = Get(nested);
-                var fields = new ConcurrentDictionary<string, object>();
+                var fields = new ConcurrentDictionary<string, object?>();
                 runtime.ReadFields(value, fields);
                 var keepBacking = nested.LayoutMetadata?.Layout == LayoutKind.Explicit;
                 return new StructValue(
@@ -457,7 +461,10 @@ public sealed class StructValue
 
             if (type is EnumSymbol enumType && enumType.ClrType != null && value != null)
             {
-                return Convert.ChangeType(value, enumType.UnderlyingType.ClrType, CultureInfo.InvariantCulture);
+                return Convert.ChangeType(
+                    value,
+                    Invariant.Required(enumType.UnderlyingType.ClrType, "an enum has a CLR underlying type"),
+                    CultureInfo.InvariantCulture);
             }
 
             return value;

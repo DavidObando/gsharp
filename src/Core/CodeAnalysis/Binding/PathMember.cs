@@ -31,13 +31,13 @@ public readonly struct PathMember : IEquatable<PathMember>
     }
 
     /// <summary>Gets the source member symbol, or <see langword="null"/> for a CLR member.</summary>
-    public Symbol SourceSymbol { get; }
+    public Symbol? SourceSymbol { get; }
 
     /// <summary>Gets the reflected CLR member, or <see langword="null"/> for a source member.</summary>
-    public MemberInfo ClrMember { get; }
+    public MemberInfo? ClrMember { get; }
 
     /// <summary>Gets the member name.</summary>
-    public string Name => SourceSymbol?.Name ?? ClrMember?.Name;
+    public string? Name => SourceSymbol?.Name ?? ClrMember?.Name;
 
     /// <summary>Determines whether two path members identify the same member.</summary>
     /// <param name="left">The first path member.</param>
@@ -69,7 +69,7 @@ public readonly struct PathMember : IEquatable<PathMember>
     }
 
     /// <inheritdoc/>
-    public override bool Equals(object obj) => obj is PathMember other && Equals(other);
+    public override bool Equals(object? obj) => obj is PathMember other && Equals(other);
 
     /// <inheritdoc/>
     public override int GetHashCode()

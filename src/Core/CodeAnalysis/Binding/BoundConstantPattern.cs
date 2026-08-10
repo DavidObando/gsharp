@@ -14,7 +14,7 @@ public sealed class BoundConstantPattern : BoundPattern
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="value">The value expression.</param>
-    public BoundConstantPattern(SyntaxNode syntax, TypeSymbol type, BoundExpression value)
+    public BoundConstantPattern(SyntaxNode? syntax, TypeSymbol type, BoundExpression value)
         : base(syntax, type)
     {
         Value = value;

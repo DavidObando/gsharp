@@ -20,7 +20,7 @@ public sealed class BoundFunctionPointerFromMethodExpression : BoundExpression
     /// <param name="syntax">The originating syntax (may be <see langword="null"/> for lowered nodes).</param>
     /// <param name="method">The target static method whose address is taken.</param>
     /// <param name="type">The managed function-pointer type produced.</param>
-    public BoundFunctionPointerFromMethodExpression(SyntaxNode syntax, FunctionSymbol method, FunctionPointerTypeSymbol type)
+    public BoundFunctionPointerFromMethodExpression(SyntaxNode? syntax, FunctionSymbol method, FunctionPointerTypeSymbol type)
         : base(syntax)
     {
         Method = method;

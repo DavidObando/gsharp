@@ -59,7 +59,7 @@ internal sealed class PatternBinder
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly Func<ExpressionSyntax, BoundExpression> bindExpression;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly Func<BoundExpression, bool> isNilLiteral;
 
     /// <summary>
@@ -85,7 +85,7 @@ internal sealed class PatternBinder
         BinderContext binderCtx,
         ConversionClassifier conversions,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         Func<BoundExpression, bool> isNilLiteral)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -233,8 +233,9 @@ internal sealed class PatternBinder
     {
         switch (expression)
         {
-            case BoundLiteralExpression lit when ExpressionBinder.IsIntegerLiteralValue(lit.Value):
-                value = lit.Value;
+            case BoundLiteralExpression lit when lit.Value is object literalValue
+                && ExpressionBinder.IsIntegerLiteralValue(literalValue):
+                value = literalValue;
                 return true;
 
             case BoundUnaryExpression unary
@@ -249,7 +250,7 @@ internal sealed class PatternBinder
                 return TryNegateIntegerLiteral(operand, out value);
         }
 
-        value = null;
+        value = 0;
         return false;
     }
 
@@ -272,7 +273,7 @@ internal sealed class PatternBinder
             return true;
         }
 
-        negated = null;
+        negated = 0;
         return false;
     }
 
@@ -338,7 +339,8 @@ internal sealed class PatternBinder
         {
             foreach (var tupleFieldSyntax in syntax.Fields)
             {
-                if (!TryGetTupleField(tupleType, tupleFieldSyntax.Identifier.Text, out var tupleField))
+                if (!TryGetTupleField(tupleType, tupleFieldSyntax.Identifier.Text, out var tupleField)
+                    || tupleField is null)
                 {
                     Diagnostics.ReportUndefinedFieldOnType(tupleFieldSyntax.Identifier.Location, tupleFieldSyntax.Identifier.Text, discriminantType);
                     fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(tupleFieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(tupleFieldSyntax.Pattern, TypeSymbol.Error)));
@@ -359,7 +361,8 @@ internal sealed class PatternBinder
 
         foreach (var fieldSyntax in syntax.Fields)
         {
-            if (!TryBindPropertyPatternMember(lookupType, fieldSyntax, out var field))
+            if (!TryBindPropertyPatternMember(lookupType, fieldSyntax, out var field)
+                || field is null)
             {
                 Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
                 fields.Add(new BoundPropertyPatternField(
@@ -378,7 +381,7 @@ internal sealed class PatternBinder
     private bool TryBindPropertyPatternMember(
         TypeSymbol lookupType,
         PropertyPatternFieldSyntax syntax,
-        out BoundPropertyPatternField boundField)
+        out BoundPropertyPatternField? boundField)
     {
         var name = syntax.Identifier.Text;
         if (lookupType is StructSymbol structType)
@@ -477,7 +480,7 @@ internal sealed class PatternBinder
         TypeSymbol receiverType,
         Type clrType,
         PropertyPatternFieldSyntax syntax,
-        out BoundPropertyPatternField boundField)
+        out BoundPropertyPatternField? boundField)
     {
         var name = syntax.Identifier.Text;
         var property = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
@@ -534,7 +537,7 @@ internal sealed class PatternBinder
     // Issue #1887: resolve a tuple's synthetic Item1..ItemN field by name so a
     // property/positional pattern (`{ Item1: 0, Item2: 0 }`) binds against a
     // ValueTuple subject the same way it does against a struct's real fields.
-    private static bool TryGetTupleField(TupleTypeSymbol tupleType, string name, out FieldSymbol field)
+    private static bool TryGetTupleField(TupleTypeSymbol tupleType, string name, out FieldSymbol? field)
     {
         field = null;
         if (name.Length <= 4 || !name.StartsWith("Item", StringComparison.Ordinal))
@@ -561,7 +564,11 @@ internal sealed class PatternBinder
             op = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
         }
 
-        return new BoundRelationalPattern(syntax, discriminantType, op, value);
+        return new BoundRelationalPattern(
+            syntax,
+            discriminantType,
+            op ?? throw new InvalidOperationException("A relational pattern operator must be available."),
+            value);
     }
 
     private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
@@ -611,13 +618,13 @@ internal sealed class PatternBinder
             ? (TypeSymbol)TypeSymbol.Error
             : SliceTypeSymbol.Get(elementType);
 
-        BoundPattern subPattern = null;
+        BoundPattern? subPattern = null;
         if (syntax.Pattern != null)
         {
             subPattern = BindPattern(syntax.Pattern, sliceType);
         }
 
-        LocalVariableSymbol variable = null;
+        LocalVariableSymbol? variable = null;
         if (syntax.CaptureIdentifier != null)
         {
             variable = new LocalVariableSymbol(syntax.CaptureIdentifier.Text, isReadOnly: true, sliceType, declaringSyntax: syntax.CaptureIdentifier);

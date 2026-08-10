@@ -118,7 +118,7 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
-            SyntaxToken length = null;
+            SyntaxToken? length = null;
             if (Current.Kind != SyntaxKind.CloseSquareBracketToken)
             {
                 length = MatchToken(SyntaxKind.NumberToken);
@@ -238,9 +238,9 @@ public partial class Parser
     {
         var dots = ImmutableArray.CreateBuilder<SyntaxToken>();
         var identifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
-        var segmentOpens = new System.Collections.Generic.List<SyntaxToken>();
-        var segmentLists = new System.Collections.Generic.List<SeparatedSyntaxList<TypeClauseSyntax>>();
-        var segmentCloses = new System.Collections.Generic.List<SyntaxToken>();
+        var segmentOpens = new System.Collections.Generic.List<SyntaxToken?>();
+        var segmentLists = new System.Collections.Generic.List<SeparatedSyntaxList<TypeClauseSyntax>?>();
+        var segmentCloses = new System.Collections.Generic.List<SyntaxToken?>();
 
         // Segment 0 (the already-consumed first identifier): optional `[ ... ]`.
         ParseOptionalSegmentTypeArguments(out var firstOpen, out var firstList, out var firstClose);
@@ -259,9 +259,9 @@ public partial class Parser
         }
 
         var lastIndex = segmentOpens.Count - 1;
-        var outerOpens = ImmutableArray.CreateBuilder<SyntaxToken>(lastIndex);
-        var outerLists = ImmutableArray.CreateBuilder<SeparatedSyntaxList<TypeClauseSyntax>>(lastIndex);
-        var outerCloses = ImmutableArray.CreateBuilder<SyntaxToken>(lastIndex);
+        var outerOpens = ImmutableArray.CreateBuilder<SyntaxToken?>(lastIndex);
+        var outerLists = ImmutableArray.CreateBuilder<SeparatedSyntaxList<TypeClauseSyntax>?>(lastIndex);
+        var outerCloses = ImmutableArray.CreateBuilder<SyntaxToken?>(lastIndex);
         for (var i = 0; i < lastIndex; i++)
         {
             outerOpens.Add(segmentOpens[i]);
@@ -289,9 +289,9 @@ public partial class Parser
     /// <param name="list">The argument list, or <c>null</c>.</param>
     /// <param name="close">The closing <c>]</c>, or <c>null</c>.</param>
     private void ParseOptionalSegmentTypeArguments(
-        out SyntaxToken open,
-        out SeparatedSyntaxList<TypeClauseSyntax> list,
-        out SyntaxToken close)
+        out SyntaxToken? open,
+        out SeparatedSyntaxList<TypeClauseSyntax>? list,
+        out SyntaxToken? close)
     {
         open = null;
         list = null;
@@ -404,7 +404,7 @@ public partial class Parser
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
         var keyType = ParseTypeClause();
 
-        SyntaxToken commaToken = null;
+        SyntaxToken? commaToken = null;
         SyntaxToken closeBracket;
         TypeClauseSyntax valueType;
         if (Current.Kind == SyntaxKind.CommaToken)
@@ -506,7 +506,7 @@ public partial class Parser
         return TypeClauseSyntax.CreateAsyncSequence(syntaxTree, asyncModifier, sequenceKeyword, openBracket, elementType, closeBracket, question);
     }
 
-    private TypeClauseSyntax ParseAsyncFunctionTypeClause(SyntaxToken asyncModifier)
+    private TypeClauseSyntax ParseAsyncFunctionTypeClause(SyntaxToken? asyncModifier)
     {
         // ADR-0043: `async func(P) R` is a synonym for `func(P) Task[R]`
         // (with carve-outs for void → Task and IAsyncEnumerable[T] → unchanged).
@@ -517,14 +517,14 @@ public partial class Parser
         Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken?>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
             // ADR-0102 follow-up / issue #818: per-parameter `...` marker
             // for a variadic parameter in an anonymous function-type clause.
-            SyntaxToken ellipsis = null;
+            SyntaxToken? ellipsis = null;
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {
                 ellipsis = MatchToken(SyntaxKind.EllipsisToken);
@@ -569,13 +569,13 @@ public partial class Parser
         Diagnostics.ReportFunctionTypeClauseFuncKeywordDeprecated(funcKeyword.Location);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken?>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
             // ADR-0102 follow-up / issue #818: per-parameter `...` marker.
-            SyntaxToken ellipsis = null;
+            SyntaxToken? ellipsis = null;
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {
                 ellipsis = MatchToken(SyntaxKind.EllipsisToken);
@@ -607,7 +607,7 @@ public partial class Parser
             question);
     }
 
-    private TypeClauseSyntax ParseArrowFunctionTypeClause(SyntaxToken asyncModifier)
+    private TypeClauseSyntax ParseArrowFunctionTypeClause(SyntaxToken? asyncModifier)
     {
         // ADR-0075 / issue #715: canonical arrow-form function type clause
         // `[async] (T1, T2, ...) -> R [?]`. The parameter list is always
@@ -620,12 +620,12 @@ public partial class Parser
         // binder so this site only records the per-slot marker tokens.
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
-        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var ellipsisTokens = ImmutableArray.CreateBuilder<SyntaxToken?>();
 
         while (Current.Kind != SyntaxKind.CloseParenthesisToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            SyntaxToken ellipsis = null;
+            SyntaxToken? ellipsis = null;
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {
                 ellipsis = MatchToken(SyntaxKind.EllipsisToken);
@@ -672,7 +672,7 @@ public partial class Parser
             question);
     }
 
-    private TypeClauseSyntax ParseParenthesizedArrowFunctionTypeClause(SyntaxToken asyncModifier)
+    private TypeClauseSyntax ParseParenthesizedArrowFunctionTypeClause(SyntaxToken? asyncModifier)
     {
         // Issue #1399 / ADR-0137: a nullable function type is spelled by
         // parenthesizing the whole arrow function type, then applying `?`:
@@ -725,9 +725,9 @@ public partial class Parser
         // UnmanagedKeyword property on TypeClauseSyntax.
         var unmanagedKeyword = MatchToken(SyntaxKind.IdentifierToken);
 
-        SyntaxToken openBracket = null;
-        SyntaxToken callingConvention = null;
-        SyntaxToken closeBracket = null;
+        SyntaxToken? openBracket = null;
+        SyntaxToken? callingConvention = null;
+        SyntaxToken? closeBracket = null;
         if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
         {
             openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
@@ -907,7 +907,7 @@ public partial class Parser
         return Peek(offset + 1).Kind == SyntaxKind.RightArrowToken;
     }
 
-    private TypeClauseSyntax ParseOptionalTypeClause()
+    private TypeClauseSyntax? ParseOptionalTypeClause()
     {
         if (!CanStartTypeClause(Current))
         {
@@ -949,12 +949,12 @@ public partial class Parser
         public DottedTypeNameTail(
             ImmutableArray<SyntaxToken> dots,
             ImmutableArray<SyntaxToken> identifiers,
-            SyntaxToken trailingTypeArgumentOpen,
-            SeparatedSyntaxList<TypeClauseSyntax> trailingTypeArguments,
-            SyntaxToken trailingTypeArgumentClose,
-            ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpens,
-            ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists,
-            ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloses)
+            SyntaxToken? trailingTypeArgumentOpen,
+            SeparatedSyntaxList<TypeClauseSyntax>? trailingTypeArguments,
+            SyntaxToken? trailingTypeArgumentClose,
+            ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentOpens,
+            ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> outerSegmentTypeArgumentLists,
+            ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloses)
         {
             Dots = dots;
             Identifiers = identifiers;
@@ -970,16 +970,16 @@ public partial class Parser
 
         public ImmutableArray<SyntaxToken> Identifiers { get; }
 
-        public SyntaxToken TrailingTypeArgumentOpen { get; }
+        public SyntaxToken? TrailingTypeArgumentOpen { get; }
 
-        public SeparatedSyntaxList<TypeClauseSyntax> TrailingTypeArguments { get; }
+        public SeparatedSyntaxList<TypeClauseSyntax>? TrailingTypeArguments { get; }
 
-        public SyntaxToken TrailingTypeArgumentClose { get; }
+        public SyntaxToken? TrailingTypeArgumentClose { get; }
 
-        public ImmutableArray<SyntaxToken> OuterSegmentTypeArgumentOpens { get; }
+        public ImmutableArray<SyntaxToken?> OuterSegmentTypeArgumentOpens { get; }
 
-        public ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> OuterSegmentTypeArgumentLists { get; }
+        public ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> OuterSegmentTypeArgumentLists { get; }
 
-        public ImmutableArray<SyntaxToken> OuterSegmentTypeArgumentCloses { get; }
+        public ImmutableArray<SyntaxToken?> OuterSegmentTypeArgumentCloses { get; }
     }
 }

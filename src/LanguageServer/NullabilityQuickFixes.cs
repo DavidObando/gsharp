@@ -72,7 +72,7 @@ internal static class NullabilityQuickFixes
     /// <param name="content">The cached document content.</param>
     /// <param name="diagnostic">The triggering diagnostic.</param>
     /// <returns>A populated <see cref="CodeAction"/> or <see langword="null"/>.</returns>
-    public static CodeAction TryCreateDotToQuestionDot(DocumentUri uri, DocumentContent content, CoreDiagnostic diagnostic)
+    public static CodeAction? TryCreateDotToQuestionDot(DocumentUri uri, DocumentContent content, CoreDiagnostic diagnostic)
     {
         var accessor = FindAccessorAtRightPart(content.SyntaxTree.Root, diagnostic.Location.Span);
         if (accessor == null || accessor.IsNullConditional)
@@ -128,7 +128,9 @@ internal static class NullabilityQuickFixes
     /// <returns>Zero, one, or two code actions.</returns>
     public static IEnumerable<CodeAction> CreateNullableValueFixes(DocumentUri uri, DocumentContent content, CoreDiagnostic diagnostic)
     {
-        if (!TryGetNullableConversionTypes(diagnostic, out var sourceType, out var targetType))
+        if (!TryGetNullableConversionTypes(diagnostic, out var sourceType, out var targetType)
+            || sourceType is null
+            || targetType is null)
         {
             yield break;
         }
@@ -206,9 +208,9 @@ internal static class NullabilityQuickFixes
     /// is reported at the member-name token, so this rebinds that location
     /// to the surrounding accessor.
     /// </summary>
-    private static AccessorExpressionSyntax FindAccessorAtRightPart(SyntaxNode root, TextSpan span)
+    private static AccessorExpressionSyntax? FindAccessorAtRightPart(SyntaxNode root, TextSpan span)
     {
-        AccessorExpressionSyntax best = null;
+        AccessorExpressionSyntax? best = null;
         foreach (var accessor in EnumerateDescendants<AccessorExpressionSyntax>(root))
         {
             if (!ContainsOrEquals(accessor.RightPart.Span, span))
@@ -301,7 +303,7 @@ internal static class NullabilityQuickFixes
         return false;
     }
 
-    private static bool TypeClauseEndsWithQuestion(TypeClauseSyntax type)
+    private static bool TypeClauseEndsWithQuestion(TypeClauseSyntax? type)
     {
         if (type == null)
         {
@@ -330,7 +332,7 @@ internal static class NullabilityQuickFixes
     /// with <c>?</c> and the target type is the corresponding non-nullable
     /// (or any non-<c>?</c> name); otherwise <see langword="false"/>.
     /// </summary>
-    private static bool TryGetNullableConversionTypes(CoreDiagnostic diagnostic, out string sourceType, out string targetType)
+    private static bool TryGetNullableConversionTypes(CoreDiagnostic diagnostic, out string? sourceType, out string? targetType)
     {
         sourceType = null;
         targetType = null;

@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 #pragma warning disable CS1591
 public sealed class BoundStateMachineBuilderMoveNext : BoundExpression
 {
-    public BoundStateMachineBuilderMoveNext(SyntaxNode syntax, FieldSymbol builderField, VariableSymbol thisParameter, StructSymbol smClass)
+    public BoundStateMachineBuilderMoveNext(SyntaxNode? syntax, FieldSymbol builderField, VariableSymbol thisParameter, StructSymbol smClass)
         : base(syntax)
     {
         BuilderField = builderField;

@@ -308,7 +308,7 @@ internal static class NullableFlagsBuilder
         }
     }
 
-    private static void AppendClrType(Type clrType, ImmutableArray<byte>.Builder builder)
+    private static void AppendClrType(Type? clrType, ImmutableArray<byte>.Builder builder)
     {
         if (clrType == null)
         {

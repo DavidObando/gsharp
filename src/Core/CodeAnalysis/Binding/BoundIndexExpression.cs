@@ -19,7 +19,7 @@ public sealed class BoundIndexExpression : BoundExpression
     /// <param name="target">The target expression (must have an array type).</param>
     /// <param name="index">The index expression (must be int).</param>
     /// <param name="resultType">The element type.</param>
-    public BoundIndexExpression(SyntaxNode syntax, BoundExpression target, BoundExpression index, TypeSymbol resultType)
+    public BoundIndexExpression(SyntaxNode? syntax, BoundExpression target, BoundExpression index, TypeSymbol resultType)
         : base(syntax)
     {
         Target = target;

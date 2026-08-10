@@ -16,12 +16,12 @@ namespace GSharp.LanguageServer;
 /// </summary>
 public static class CodeLensComputer
 {
-    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string uri = null, CancellationToken ct = default)
+    public static IReadOnlyList<CodeLens> ComputeLenses(DocumentContent content, string? uri = null, CancellationToken ct = default)
         => ComputeReferenceLenses(content, uri, ct)
             .Select(lens => CreateReferenceLens(lens.DeclarationRange, lens.ReferenceCount, uri))
             .ToList();
 
-    public static IReadOnlyList<ReferenceCodeLens> ComputeReferenceLenses(DocumentContent content, string uri = null, CancellationToken ct = default)
+    public static IReadOnlyList<ReferenceCodeLens> ComputeReferenceLenses(DocumentContent content, string? uri = null, CancellationToken ct = default)
     {
         var lenses = new List<ReferenceCodeLens>();
 
@@ -101,7 +101,7 @@ public static class CodeLensComputer
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
         List<ReferenceCodeLens> lenses,
         IEnumerable<SyntaxToken> identifiers,
-        string uri,
+        string? uri,
         CancellationToken ct)
     {
         foreach (var identifier in identifiers)
@@ -120,7 +120,7 @@ public static class CodeLensComputer
         GSharp.Core.CodeAnalysis.Compilation.Compilation compilation,
         List<ReferenceCodeLens> lenses,
         SyntaxToken identifier,
-        string uri,
+        string? uri,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -151,7 +151,7 @@ public static class CodeLensComputer
         });
     }
 
-    private static DocumentUri GetDocumentUri(SyntaxToken token, string fallback)
+    private static DocumentUri GetDocumentUri(SyntaxToken token, string? fallback)
     {
         if (!string.IsNullOrEmpty(token.SyntaxTree?.Text?.FileName))
         {
@@ -161,7 +161,7 @@ public static class CodeLensComputer
         return DocumentUri.From(fallback);
     }
 
-    private static CodeLens CreateReferenceLens(Range range, int refCount, string uri)
+    private static CodeLens CreateReferenceLens(Range range, int refCount, string? uri)
     {
         var title = refCount == 1 ? "1 reference" : $"{refCount} references";
         return new CodeLens
@@ -176,7 +176,7 @@ public static class CodeLensComputer
         };
     }
 
-    private static GSharp.Core.CodeAnalysis.Syntax.SyntaxTree ResolveProjectTree(DocumentContent content, string uri)
+    private static GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? ResolveProjectTree(DocumentContent content, string? uri)
     {
         if (content.Project == null || string.IsNullOrEmpty(uri))
         {

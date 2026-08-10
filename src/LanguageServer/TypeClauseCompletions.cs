@@ -138,9 +138,9 @@ internal static class TypeClauseCompletions
     /// <param name="root">The root node to walk.</param>
     /// <param name="offset">The caret offset.</param>
     /// <returns>The deepest enclosing type clause, or <c>null</c>.</returns>
-    public static TypeClauseSyntax FindEnclosingTypeClause(SyntaxNode root, int offset)
+    public static TypeClauseSyntax? FindEnclosingTypeClause(SyntaxNode root, int offset)
     {
-        TypeClauseSyntax best = null;
+        TypeClauseSyntax? best = null;
         foreach (var node in EnumerateAllNodes(root))
         {
             if (node is not TypeClauseSyntax typeClause)
@@ -203,7 +203,7 @@ internal static class TypeClauseCompletions
         }
     }
 
-    private static int GetEarliestEnd(SyntaxToken token, SyntaxNode node)
+    private static int GetEarliestEnd(SyntaxToken? token, SyntaxNode? node)
     {
         if (token != null && !token.IsMissing)
         {

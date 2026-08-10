@@ -55,7 +55,7 @@ internal sealed partial class DeclarationBinder
     /// <param name="syntax">The return type clause syntax.</param>
     /// <param name="isAsync">Whether the enclosing function is async.</param>
     /// <returns>The bound type or <c>null</c>.</returns>
-    internal delegate TypeSymbol BindReturnTypeClauseDelegate(TypeClauseSyntax syntax, bool isAsync);
+    internal delegate TypeSymbol? BindReturnTypeClauseDelegate(TypeClauseSyntax? syntax, bool isAsync);
 
     /// <summary>
     /// Issue #1812: signature for the
@@ -69,25 +69,25 @@ internal sealed partial class DeclarationBinder
     /// <param name="syntax">The interpolated-string syntax.</param>
     /// <param name="targetType">The target type, or <see langword="null"/> for the FormattableString-factory form.</param>
     /// <returns>The bound (re-lowered) expression.</returns>
-    internal delegate BoundExpression BindInterpolatedStringAsFormattableDelegate(InterpolatedStringExpressionSyntax syntax, TypeSymbol targetType);
+    internal delegate BoundExpression BindInterpolatedStringAsFormattableDelegate(InterpolatedStringExpressionSyntax syntax, TypeSymbol? targetType);
 
     private readonly BinderContext binderCtx;
     private readonly ConversionClassifier conversions;
     private readonly BindExpressionDelegate bindExpression;
-    private readonly Func<TypeClauseSyntax, TypeSymbol> bindTypeClause;
+    private readonly Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause;
     private readonly BindReturnTypeClauseDelegate bindReturnTypeClause;
     private readonly BindTypeOfExpressionDelegate bindTypeOfExpression;
     private readonly BindArrayCreationExpressionDelegate bindArrayCreationExpression;
-    private readonly BindInterpolatedStringAsFormattableDelegate bindInterpolatedStringAsFormattable;
-    private readonly Func<SyntaxToken, Accessibility> resolveAccessibility;
-    private readonly Func<string, TypeSymbol> lookupType;
-    private readonly Func<TypeSymbol, Type> getEffectiveArgumentClrType;
+    private readonly BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable;
+    private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
+    private readonly Func<string, TypeSymbol?> lookupType;
+    private readonly Func<TypeSymbol, Type?> getEffectiveArgumentClrType;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncSequenceReturnType;
     private readonly Func<string, bool> isPrimitiveTypeName;
     private readonly Func<RefKind, string> refKindToString;
-    private readonly Func<FunctionSymbol> getCurrentFunction;
-    private readonly Action<FunctionSymbol> setCurrentFunction;
+    private readonly Func<FunctionSymbol?> getCurrentFunction;
+    private readonly Action<FunctionSymbol?> setCurrentFunction;
 
     private readonly List<(StructDeclarationSyntax Syntax, StructSymbol Symbol)> pendingInterfaceImplementationChecks
         = new List<(StructDeclarationSyntax, StructSymbol)>();
@@ -134,20 +134,20 @@ internal sealed partial class DeclarationBinder
         BinderContext binderCtx,
         ConversionClassifier conversions,
         BindExpressionDelegate bindExpression,
-        Func<TypeClauseSyntax, TypeSymbol> bindTypeClause,
+        Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         BindReturnTypeClauseDelegate bindReturnTypeClause,
         BindTypeOfExpressionDelegate bindTypeOfExpression,
         BindArrayCreationExpressionDelegate bindArrayCreationExpression,
-        Func<SyntaxToken, Accessibility> resolveAccessibility,
-        Func<string, TypeSymbol> lookupType,
-        Func<TypeSymbol, Type> getEffectiveArgumentClrType,
+        Func<SyntaxToken?, Accessibility> resolveAccessibility,
+        Func<string, TypeSymbol?> lookupType,
+        Func<TypeSymbol, Type?> getEffectiveArgumentClrType,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncSequenceReturnType,
         Func<string, bool> isPrimitiveTypeName,
         Func<RefKind, string> refKindToString,
-        Func<FunctionSymbol> getCurrentFunction,
-        Action<FunctionSymbol> setCurrentFunction,
-        BindInterpolatedStringAsFormattableDelegate bindInterpolatedStringAsFormattable = null)
+        Func<FunctionSymbol?> getCurrentFunction,
+        Action<FunctionSymbol?> setCurrentFunction,
+        BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -179,7 +179,7 @@ internal sealed partial class DeclarationBinder
     }
 
 #pragma warning disable SA1300 // Element should begin with an uppercase letter
-    private FunctionSymbol function => getCurrentFunction();
+    private FunctionSymbol? function => getCurrentFunction();
 #pragma warning restore SA1300
 
     /// <summary>
@@ -221,7 +221,7 @@ internal sealed partial class DeclarationBinder
             "a type alias declaration",
             System.AttributeTargets.Class);
 
-        if (!scope.TryDeclareTypeAlias(name, aliasedType, package?.Name))
+        if (!scope.TryDeclareTypeAlias(name, aliasedType, package is null ? null : package.Name))
         {
             Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
         }
@@ -233,7 +233,7 @@ internal sealed partial class DeclarationBinder
     /// current scope. Unlike a plain type alias, a named delegate produces a
     /// real CLR TypeDef at emit time.
     /// </summary>
-    internal DelegateTypeSymbol DeclareDelegateSymbol(DelegateDeclarationSyntax syntax, PackageSymbol package)
+    internal DelegateTypeSymbol? DeclareDelegateSymbol(DelegateDeclarationSyntax syntax, PackageSymbol package)
     {
         var name = syntax.Identifier.Text;
 
@@ -305,7 +305,9 @@ internal sealed partial class DeclarationBinder
         {
             var parameterSyntax = syntax.Parameters[pIndex];
             var parameterName = parameterSyntax.Identifier.Text;
-            var parameterType = bindTypeClause(parameterSyntax.Type) ?? TypeSymbol.Error;
+            var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
+                ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
+                : TypeSymbol.Error;
             if (!seenParameterNames.Add(parameterName))
             {
                 Diagnostics.ReportParameterAlreadyDeclared(parameterSyntax.Location, parameterName);
@@ -367,7 +369,7 @@ internal sealed partial class DeclarationBinder
         delegateSymbol.SetAttributes(delegateAttributes);
     }
 
-    internal EnumSymbol BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
+    internal EnumSymbol? BindEnumDeclaration(EnumDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
         var name = syntax.Identifier.Text;
 
@@ -417,13 +419,17 @@ internal sealed partial class DeclarationBinder
                 // `ReadWrite = Read | Write`, or an alias `DefaultError = ServerError`)
                 // overrides the auto-numbered default; later implicit members continue
                 // counting up from it, matching C# §19.4.
-                if (TryFoldEnumMemberValue(memberSyntax.Value, declaredValues, out var folded))
+                if (memberSyntax.Value is { } explicitValue
+                    && TryFoldEnumMemberValue(explicitValue, declaredValues, out var folded))
                 {
                     memberValue = folded;
                 }
                 else
                 {
-                    Diagnostics.ReportEnumMemberValueNotConstant(memberSyntax.Value.Location, memberName, name);
+                    Diagnostics.ReportEnumMemberValueNotConstant(
+                        memberSyntax.Value?.Location ?? memberSyntax.Identifier.Location,
+                        memberName,
+                        name);
                 }
             }
 
@@ -594,7 +600,7 @@ internal sealed partial class DeclarationBinder
     /// recursively from within their container's body rather than through the
     /// top-level two-phase loop.
     /// </summary>
-    internal StructSymbol BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
+    internal StructSymbol? BindStructDeclaration(StructDeclarationSyntax syntax, PackageSymbol package)
     {
         var structSymbol = DeclareStructShell(syntax, package);
         if (structSymbol == null)
@@ -711,7 +717,7 @@ internal sealed partial class DeclarationBinder
     /// with the base clause and all members — are bound and installed later by
     /// <see cref="BindStructDeclarationBody"/>.
     /// </summary>
-    internal StructSymbol DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package, TypeSymbol containingType = null)
+    internal StructSymbol? DeclareStructShell(StructDeclarationSyntax syntax, PackageSymbol package, TypeSymbol? containingType = null)
     {
         var name = syntax.Identifier.Text;
 
@@ -753,7 +759,7 @@ internal sealed partial class DeclarationBinder
         Accessibility accessibility,
         string name,
         ImmutableArray<TypeParameterSymbol> typeParameters,
-        TypeSymbol containingType = null)
+        TypeSymbol? containingType = null)
     {
         // Issue #949 / #973: construct the struct symbol shell now and register
         // it in scope so that (a) the type may reference itself as a generic

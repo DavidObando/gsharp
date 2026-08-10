@@ -38,13 +38,13 @@ public sealed class AnonymousClassExpressionSyntax : ExpressionSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public AnonymousClassExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken dataKeyword,
+        SyntaxToken? dataKeyword,
         SyntaxToken objectKeyword,
-        SyntaxToken baseColonToken,
-        TypeClauseSyntax baseTypeClause,
-        SyntaxToken baseConstructorOpenParenthesisToken,
+        SyntaxToken? baseColonToken,
+        TypeClauseSyntax? baseTypeClause,
+        SyntaxToken? baseConstructorOpenParenthesisToken,
         SeparatedSyntaxList<ExpressionSyntax> baseConstructorArguments,
-        SyntaxToken baseConstructorCloseParenthesisToken,
+        SyntaxToken? baseConstructorCloseParenthesisToken,
         SeparatedSyntaxList<TypeClauseSyntax> additionalBaseTypeClauses,
         SyntaxToken openBraceToken,
         ImmutableArray<SyntaxNode> members,
@@ -68,25 +68,25 @@ public sealed class AnonymousClassExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.AnonymousClassExpression;
 
     /// <summary>Gets the optional <c>data</c> contextual keyword. Non-null for a <c>data object</c>.</summary>
-    public SyntaxToken DataKeyword { get; }
+    public SyntaxToken? DataKeyword { get; }
 
     /// <summary>Gets the <c>object</c> keyword.</summary>
     public SyntaxToken ObjectKeyword { get; }
 
     /// <summary>Gets the optional <c>:</c> token introducing the base/interface clause.</summary>
-    public SyntaxToken BaseColonToken { get; }
+    public SyntaxToken? BaseColonToken { get; }
 
     /// <summary>Gets the optional first base/interface type clause.</summary>
-    public TypeClauseSyntax BaseTypeClause { get; }
+    public TypeClauseSyntax? BaseTypeClause { get; }
 
     /// <summary>Gets the optional base-constructor argument list open paren.</summary>
-    public SyntaxToken BaseConstructorOpenParenthesisToken { get; }
+    public SyntaxToken? BaseConstructorOpenParenthesisToken { get; }
 
     /// <summary>Gets the optional base-constructor arguments.</summary>
     public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments { get; }
 
     /// <summary>Gets the optional base-constructor argument list close paren.</summary>
-    public SyntaxToken BaseConstructorCloseParenthesisToken { get; }
+    public SyntaxToken? BaseConstructorCloseParenthesisToken { get; }
 
     /// <summary>Gets the additional comma-separated interface clauses.</summary>
     public SeparatedSyntaxList<TypeClauseSyntax> AdditionalBaseTypeClauses { get; }

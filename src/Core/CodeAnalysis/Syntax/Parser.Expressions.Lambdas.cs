@@ -16,7 +16,7 @@ public partial class Parser
     private ExpressionSyntax ParseFunctionLiteralExpression()
     {
         // Phase 4.7 + 5.1: function literal `[async] func(p1 T1, p2 T2) R { body }`.
-        SyntaxToken asyncModifier = null;
+        SyntaxToken? asyncModifier = null;
         if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
             asyncModifier = NextToken();
@@ -278,7 +278,7 @@ public partial class Parser
         // an async arrow lambda, and parameter type clauses are optional
         // when a target type is available to infer them (the binder reports
         // GS0304 when no target type is in scope).
-        SyntaxToken asyncModifier = null;
+        SyntaxToken? asyncModifier = null;
         if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
         {
             asyncModifier = NextToken();
@@ -355,7 +355,7 @@ public partial class Parser
         var annotations = ParseAnnotations();
 
         // ADR-0058 / issue #376: optional `scoped` contextual modifier.
-        SyntaxToken scopedModifier = null;
+        SyntaxToken? scopedModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
@@ -363,7 +363,7 @@ public partial class Parser
         }
 
         // ADR-0060: optional `ref`/`out`/`in` contextual modifier.
-        SyntaxToken refKindModifier = null;
+        SyntaxToken? refKindModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken
             && (Current.Text == "ref" || Current.Text == "out" || Current.Text == "in")
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
@@ -372,7 +372,7 @@ public partial class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken ellipsis = null;
+        SyntaxToken? ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
         {
             ellipsis = MatchToken(SyntaxKind.EllipsisToken);
@@ -384,8 +384,8 @@ public partial class Parser
         var type = ParseOptionalTypeClause();
 
         // ADR-0063: optional default-value clause.
-        SyntaxToken equalsToken = null;
-        ExpressionSyntax defaultValue = null;
+        SyntaxToken? equalsToken = null;
+        ExpressionSyntax? defaultValue = null;
         if (Current.Kind == SyntaxKind.EqualsToken)
         {
             equalsToken = NextToken();

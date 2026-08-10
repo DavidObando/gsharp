@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -43,6 +44,16 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// <para>This class is a pure resolution helper. It performs no lowering
 /// and produces no diagnostics; callers that need diagnostics should check
 /// <see cref="IsValid"/> and route errors through their own diagnostic bag.</para>
+/// <para>Every resolved member is declared nullable because member binding is
+/// a best-effort reflection lookup against whatever builder type the target
+/// framework supplies: a builder that does not declare the member yields
+/// <see langword="null"/> rather than an exception, and that is precisely what
+/// <see cref="IsValid"/> reports. <see cref="IsValid"/> carries
+/// <see cref="MemberNotNullWhenAttribute"/> for the four members every valid
+/// builder has, so a caller that checks it first needs no further guard for
+/// those; the kind-dependent members (<see cref="TaskProperty"/> and the
+/// <c>Set*</c> methods) still need one, because which of them are required
+/// depends on <see cref="Kind"/>.</para>
 /// </remarks>
 public sealed class AsyncMethodBuilderInfo
 {
@@ -50,14 +61,14 @@ public sealed class AsyncMethodBuilderInfo
         AsyncMethodBuilderKind kind,
         Type builderType,
         Type resultType,
-        MethodInfo createMethod,
-        PropertyInfo taskProperty,
-        MethodInfo startMethod,
-        MethodInfo setStateMachineMethod,
-        MethodInfo setResultMethod,
-        MethodInfo setExceptionMethod,
-        MethodInfo awaitOnCompletedMethod,
-        MethodInfo awaitUnsafeOnCompletedMethod)
+        MethodInfo? createMethod,
+        PropertyInfo? taskProperty,
+        MethodInfo? startMethod,
+        MethodInfo? setStateMachineMethod,
+        MethodInfo? setResultMethod,
+        MethodInfo? setExceptionMethod,
+        MethodInfo? awaitOnCompletedMethod,
+        MethodInfo? awaitUnsafeOnCompletedMethod)
     {
         Kind = kind;
         BuilderType = builderType;
@@ -82,30 +93,47 @@ public sealed class AsyncMethodBuilderInfo
     /// <c>typeof(void)</c> for <c>Task</c>/<c>void</c>).</summary>
     public Type ResultType { get; }
 
-    /// <summary>Gets <c>Builder.Create()</c> static method.</summary>
-    public MethodInfo CreateMethod { get; }
+    /// <summary>Gets <c>Builder.Create()</c> static method.
+    /// <c>null</c> when the builder type does not declare it, which makes
+    /// <see cref="IsValid"/> false.</summary>
+    public MethodInfo? CreateMethod { get; }
 
     /// <summary>Gets the <c>Task</c> / <c>Task&lt;T&gt;</c> / iterator property.
-    /// <c>null</c> for <c>AsyncVoidMethodBuilder</c>.</summary>
-    public PropertyInfo TaskProperty { get; }
+    /// <c>null</c> for <c>AsyncVoidMethodBuilder</c>, which has no task to
+    /// return, and for an async-iterator builder.</summary>
+    public PropertyInfo? TaskProperty { get; }
 
-    /// <summary>Gets the <c>Start&lt;TStateMachine&gt;(ref TStateMachine)</c> open generic.</summary>
-    public MethodInfo StartMethod { get; }
+    /// <summary>Gets the <c>Start&lt;TStateMachine&gt;(ref TStateMachine)</c> open generic,
+    /// or <c>MoveNext&lt;TStateMachine&gt;(ref TStateMachine)</c> when
+    /// <see cref="Kind"/> is <see cref="AsyncMethodBuilderKind.AsyncIterator"/>.
+    /// <c>null</c> when the builder type declares neither, which makes
+    /// <see cref="IsValid"/> false.</summary>
+    public MethodInfo? StartMethod { get; }
 
-    /// <summary>Gets <c>SetStateMachine(IAsyncStateMachine)</c>.</summary>
-    public MethodInfo SetStateMachineMethod { get; }
+    /// <summary>Gets <c>SetStateMachine(IAsyncStateMachine)</c>.
+    /// <c>null</c> for an async-iterator builder, whose surface does not
+    /// include it.</summary>
+    public MethodInfo? SetStateMachineMethod { get; }
 
-    /// <summary>Gets <c>SetResult([T])</c>.</summary>
-    public MethodInfo SetResultMethod { get; }
+    /// <summary>Gets <c>SetResult([T])</c>.
+    /// <c>null</c> for an async-iterator builder, whose surface does not
+    /// include it.</summary>
+    public MethodInfo? SetResultMethod { get; }
 
-    /// <summary>Gets <c>SetException(Exception)</c>.</summary>
-    public MethodInfo SetExceptionMethod { get; }
+    /// <summary>Gets <c>SetException(Exception)</c>.
+    /// <c>null</c> for an async-iterator builder, whose surface does not
+    /// include it.</summary>
+    public MethodInfo? SetExceptionMethod { get; }
 
-    /// <summary>Gets <c>AwaitOnCompleted&lt;TAwaiter, TStateMachine&gt;(ref TAwaiter, ref TStateMachine)</c>.</summary>
-    public MethodInfo AwaitOnCompletedMethod { get; }
+    /// <summary>Gets <c>AwaitOnCompleted&lt;TAwaiter, TStateMachine&gt;(ref TAwaiter, ref TStateMachine)</c>.
+    /// <c>null</c> when the builder type does not declare it, which makes
+    /// <see cref="IsValid"/> false.</summary>
+    public MethodInfo? AwaitOnCompletedMethod { get; }
 
-    /// <summary>Gets <c>AwaitUnsafeOnCompleted&lt;TAwaiter, TStateMachine&gt;(ref TAwaiter, ref TStateMachine)</c>.</summary>
-    public MethodInfo AwaitUnsafeOnCompletedMethod { get; }
+    /// <summary>Gets <c>AwaitUnsafeOnCompleted&lt;TAwaiter, TStateMachine&gt;(ref TAwaiter, ref TStateMachine)</c>.
+    /// <c>null</c> when the builder type does not declare it, which makes
+    /// <see cref="IsValid"/> false.</summary>
+    public MethodInfo? AwaitUnsafeOnCompletedMethod { get; }
 
     /// <summary>Gets a value indicating whether every member required for
     /// state-machine lowering was successfully resolved. Iterator builders
@@ -113,12 +141,18 @@ public sealed class AsyncMethodBuilderInfo
     /// members (<c>Create</c>, <c>MoveNext</c>, <c>AwaitOnCompleted</c>,
     /// <c>AwaitUnsafeOnCompleted</c>); the rest is bound by the iterator
     /// rewriter directly.</summary>
+    [MemberNotNullWhen(true, nameof(CreateMethod))]
+    [MemberNotNullWhen(true, nameof(StartMethod))]
+    [MemberNotNullWhen(true, nameof(AwaitOnCompletedMethod))]
+    [MemberNotNullWhen(true, nameof(AwaitUnsafeOnCompletedMethod))]
     public bool IsValid
     {
         get
         {
-            if (BuilderType == null
-                || CreateMethod == null
+            // BuilderType is not checked here: it is non-nullable, because the
+            // only caller of the constructor is BindMembers and Resolve returns
+            // null before reaching it when no builder type was chosen.
+            if (CreateMethod == null
                 || AwaitOnCompletedMethod == null
                 || AwaitUnsafeOnCompletedMethod == null)
             {
@@ -164,10 +198,10 @@ public sealed class AsyncMethodBuilderInfo
     /// Takes precedence over a return-type attribute when non-null.</param>
     /// <returns>A populated <see cref="AsyncMethodBuilderInfo"/>, or
     /// <see langword="null"/> when no valid builder could be resolved.</returns>
-    public static AsyncMethodBuilderInfo Resolve(
+    public static AsyncMethodBuilderInfo? Resolve(
         Type kickoffReturnClrType,
-        ReferenceResolver resolver,
-        Type methodAttributeBuilderType = null)
+        ReferenceResolver? resolver,
+        Type? methodAttributeBuilderType = null)
     {
         if (kickoffReturnClrType == null)
         {
@@ -183,12 +217,12 @@ public sealed class AsyncMethodBuilderInfo
         return BindMembers(choice.Kind, choice.BuilderType, choice.ResultType);
     }
 
-    private static (AsyncMethodBuilderKind Kind, Type BuilderType, Type ResultType) ChooseBuilder(
+    private static (AsyncMethodBuilderKind Kind, Type? BuilderType, Type ResultType) ChooseBuilder(
         Type kickoffReturnClrType,
-        ReferenceResolver resolver,
-        Type methodAttributeBuilderType)
+        ReferenceResolver? resolver,
+        Type? methodAttributeBuilderType)
     {
-        Type CoreType(string fullName)
+        Type? CoreType(string fullName)
         {
             if (resolver != null)
             {
@@ -252,10 +286,13 @@ public sealed class AsyncMethodBuilderInfo
             }
         }
 
-        return (AsyncMethodBuilderKind.Unknown, null, null);
+        // No builder. ResultType is unread on this path -- Resolve returns null
+        // as soon as it sees the null BuilderType -- so it carries the same
+        // "no result" value ExtractResultType produces for a non-generic type.
+        return (AsyncMethodBuilderKind.Unknown, null, typeof(void));
     }
 
-    private static Type ConstructBuilder(Type openOrClosed, Type resultType)
+    private static Type? ConstructBuilder(Type openOrClosed, Type resultType)
     {
         if (openOrClosed == null)
         {
@@ -319,7 +356,7 @@ public sealed class AsyncMethodBuilderInfo
         return false;
     }
 
-    private static bool IsAsyncIteratorReturnType(Type returnType, out Type elementType)
+    private static bool IsAsyncIteratorReturnType(Type returnType, [NotNullWhen(true)] out Type? elementType)
     {
         elementType = null;
         if (returnType == null || !returnType.IsGenericType)
@@ -410,15 +447,19 @@ public sealed class AsyncMethodBuilderInfo
         // SetResult: no-arg for void / Task, single-arg for generic.
         MethodInfo setResult;
         if (kind == AsyncMethodBuilderKind.GenericTask
-            || (kind == AsyncMethodBuilderKind.Custom && resultType != null && !resultType.IsSameAs(typeof(void))))
+            || (kind == AsyncMethodBuilderKind.Custom && !resultType.IsSameAs(typeof(void))))
         {
-            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
-                builderType, "SetResult", new[] { resultType });
+            setResult = Invariant.Required(
+                MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                    builderType, "SetResult", new[] { resultType }),
+                "an async method builder has a matching SetResult method");
         }
         else
         {
-            setResult = MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
-                builderType, "SetResult", Type.EmptyTypes);
+            setResult = Invariant.Required(
+                MemberLookup.SafeGetMethodIncludingSelfAndInterfaces(
+                    builderType, "SetResult", Type.EmptyTypes),
+                "an async method builder has a parameterless SetResult method");
         }
 
         var setException = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(builderType, "SetException")

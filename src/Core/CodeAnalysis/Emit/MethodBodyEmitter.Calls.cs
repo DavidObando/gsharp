@@ -165,8 +165,14 @@ internal sealed partial class MethodBodyEmitter
         // signature is `!0`/`!!0` and resolves through the parent
         // TypeSpec.
         var receiverType = (call.Receiver.Type as StructSymbol) ?? (call.Method.ReceiverType as StructSymbol);
-        bool isGenericReceiver = receiverType != null
-            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverType);
+
+        // Hold the receiver rather than a bare `isGenericReceiver` flag: the
+        // token resolver below needs the symbol, and a separate bool would
+        // leave the compiler unable to correlate the two.
+        var genericReceiver = receiverType != null
+            && ReflectionMetadataEmitter.IsUserGenericTypeReference(receiverType)
+            ? receiverType
+            : null;
 
         // ADR-0087 R5 / issue #765: same TypeSpec-parenting requirement
         // for a call dispatched through a user-declared generic interface
@@ -183,16 +189,16 @@ internal sealed partial class MethodBodyEmitter
         // referenced via a MemberRef parented at the CONSTRUCTED base TypeSpec
         // (e.g. `Base`1<int32>`) — never the bare MethodDef on the open generic
         // definition, which the runtime rejects with "the containing type is
-        // not fully instantiated". The `isGenericReceiver` branch already covers
+        // not fully instantiated". The `genericReceiver` branch already covers
         // the case where the receiver itself is the generic type.
-        var inheritedGenericBase = !isGenericReceiver
+        var inheritedGenericBase = genericReceiver is null
             ? this.ResolveInheritedGenericBase(call.Receiver.Type as StructSymbol, call.Method)
             : null;
 
         EntityHandle methodHandle;
-        if (isGenericReceiver)
+        if (genericReceiver != null)
         {
-            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(receiverType, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInstanceMethodToken(genericReceiver, call.Method);
         }
         else if (inheritedGenericBase != null)
         {
@@ -249,7 +255,7 @@ internal sealed partial class MethodBodyEmitter
     // inherited `Base.Hello()`). Returns null when the method is not inherited
     // from a generic base — including when the receiver itself is the declaring
     // type or the declaring type is non-generic.
-    private StructSymbol ResolveInheritedGenericBase(StructSymbol receiver, FunctionSymbol method)
+    private StructSymbol? ResolveInheritedGenericBase(StructSymbol? receiver, FunctionSymbol method)
     {
         if (receiver == null || method == null)
         {
@@ -492,8 +498,8 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        var optionsCtor = typeof(System.Threading.Channels.BoundedChannelOptions)
-            .GetConstructor(new[] { typeof(int) });
+        var optionsCtor = BclMember.Ctor(
+            typeof(System.Threading.Channels.BoundedChannelOptions), typeof(int));
         this.EmitExpression(node.Capacity);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(optionsCtor));
@@ -536,17 +542,31 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
-        var getReader = channelClr.GetProperty("Reader").GetGetMethod();
-        var readAsync = readerClr.GetMethod(
-            "ReadAsync",
-            new[] { typeof(System.Threading.CancellationToken) });
+        // Every member below is looked up on a constructed BCL type the host
+        // runtime supplies, so absence is malformed metadata rather than a
+        // condition the emitter can recover from. Asserting once here keeps the
+        // eighteen uses downstream free of null handling.
+        var getReader = Invariant.Required(
+            Invariant.Required(
+                channelClr.GetProperty("Reader"),
+                "Channel<T> declares the Reader property").GetGetMethod(),
+            "Channel<T>.Reader declares a public getter");
+        var readAsync = Invariant.Required(
+            BclMember.Method(readerClr, "ReadAsync", typeof(System.Threading.CancellationToken)),
+            "ChannelReader<T> declares ReadAsync(CancellationToken)");
 
         var valueTaskGeneric = typeof(System.Threading.Tasks.ValueTask<>).MakeGenericType(elementClr);
-        var asTaskGeneric = valueTaskGeneric.GetMethod("AsTask", Type.EmptyTypes);
+        var asTaskGeneric = Invariant.Required(
+            BclMember.Method(valueTaskGeneric, "AsTask", Type.EmptyTypes),
+            "ValueTask<T> declares AsTask()");
         var taskGeneric = typeof(System.Threading.Tasks.Task<>).MakeGenericType(elementClr);
-        var taskGetAwaiter = taskGeneric.GetMethod("GetAwaiter", Type.EmptyTypes);
+        var taskGetAwaiter = Invariant.Required(
+            BclMember.Method(taskGeneric, "GetAwaiter", Type.EmptyTypes),
+            "Task<T> declares GetAwaiter()");
         var taskAwaiterGeneric = typeof(System.Runtime.CompilerServices.TaskAwaiter<>).MakeGenericType(elementClr);
-        var taskGetResult = taskAwaiterGeneric.GetMethod("GetResult", Type.EmptyTypes);
+        var taskGetResult = Invariant.Required(
+            BclMember.Method(taskAwaiterGeneric, "GetResult", Type.EmptyTypes),
+            "TaskAwaiter<T> declares GetResult()");
         var ccExceptionClr = typeof(System.Threading.Channels.ChannelClosedException);
 
         var (vtSlot, taSlot, resultSlot, _) = this.channelOpSlots[node];
@@ -590,7 +610,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(endLabel);
 
         var catchTypeHandle = (EntityHandle)this.outer.memberRefs.GetTypeReference(ccExceptionClr);
-        this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
+        this.ControlFlow.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
     }
 
     private void EmitChannelCloseExpression(BoundChannelCloseExpression node)
@@ -599,8 +619,8 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
-        var complete = writerClr.GetMethod("Complete", new[] { typeof(Exception) });
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var complete = BclMember.Method(writerClr, "Complete", typeof(Exception));
 
         this.EmitExpression(node.Channel);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -615,7 +635,7 @@ internal sealed partial class MethodBodyEmitter
         // ldc.i4.0; newobj CancellationToken(bool) — the canonical
         // "default" CancellationToken IL pattern. Avoids needing a
         // dedicated local for `default(CancellationToken)`.
-        var ctCtor = typeof(System.Threading.CancellationToken).GetConstructor(new[] { typeof(bool) });
+        var ctCtor = BclMember.Ctor(typeof(System.Threading.CancellationToken), typeof(bool));
         this.il.LoadConstantI4(0);
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(ctCtor));
@@ -745,8 +765,7 @@ internal sealed partial class MethodBodyEmitter
         // (which the runtime rejects with BadImageFormat / "not fully
         // instantiated").
         var baseClass = call.BaseClass;
-        if (baseClass != null
-            && baseClass.TypeArguments.IsDefaultOrEmpty
+        if (baseClass.TypeArguments.IsDefaultOrEmpty
             && !baseClass.TypeParameters.IsDefaultOrEmpty
             && call.Receiver.Type is StructSymbol baseReceiver)
         {
@@ -758,9 +777,9 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        var methodToken = call.Method != null
-            ? this.outer.userTokens.ResolveUserInstanceMethodToken(baseClass, call.Method)
-            : this.outer.userTokens.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor);
+        var methodToken = call.IsPropertyAccessor
+            ? this.outer.userTokens.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor)
+            : this.outer.userTokens.ResolveUserInstanceMethodToken(baseClass, call.Method);
 
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.
@@ -789,20 +808,20 @@ internal sealed partial class MethodBodyEmitter
     private sealed class UnconstrainedNullableLiftPlan
     {
         /// <summary>Gets or sets the full (lifted) MethodSpec type-argument vector.</summary>
-        public TypeSymbol[] TypeArguments { get; set; }
+        public required TypeSymbol[] TypeArguments { get; set; }
 
         /// <summary>Gets or sets, per argument index, the Nullable&lt;X&gt; to wrap the emitted argument into (null = pass through).</summary>
-        public NullableTypeSymbol[] ArgumentWraps { get; set; }
+        public NullableTypeSymbol?[] ArgumentWraps { get; set; } = [];
 
         /// <summary>Gets or sets the Nullable&lt;X&gt; the call leaves on the stack when the declared return is the bare lifted T (null = no unwrap).</summary>
-        public NullableTypeSymbol ReturnUnwrap { get; set; }
+        public NullableTypeSymbol? ReturnUnwrap { get; set; }
     }
 
     // Issue #3226: decide whether (and how) the generic call must be
     // instantiated at Nullable<X> instead of X. Returns null when the call
     // needs no lift (no unconstrained T? slot, reference instantiation, or a
     // shape the lift cannot represent — see the occurrence scan below).
-    private UnconstrainedNullableLiftPlan TryPlanUnconstrainedNullableLift(BoundCallExpression call)
+    private UnconstrainedNullableLiftPlan? TryPlanUnconstrainedNullableLift(BoundCallExpression call)
     {
         var fn = call.Function;
         var tps = fn.TypeParameters;
@@ -821,7 +840,7 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
-        TypeSymbol[] liftedArgs = null;
+        TypeSymbol[]? liftedArgs = null;
         var liftedTps = new bool[tps.Length];
         for (int k = 0; k < tps.Length; k++)
         {
@@ -896,7 +915,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         var plan = new UnconstrainedNullableLiftPlan { TypeArguments = liftedArgs };
-        var wraps = new NullableTypeSymbol[call.Arguments.Length];
+        var wraps = new NullableTypeSymbol?[call.Arguments.Length];
         for (int i = 0; i < fn.Parameters.Length; i++)
         {
             var pt = fn.Parameters[i].Type;

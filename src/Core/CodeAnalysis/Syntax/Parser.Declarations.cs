@@ -83,7 +83,7 @@ public partial class Parser
     /// Issue #1602: depth-guarded — nested type declarations
     /// (<c>class A { class B { … } }</c>) recurse through this method.
     /// </summary>
-    private MemberSyntax ParseAggregateDeclaration(SyntaxToken accessibilityModifier)
+    private MemberSyntax ParseAggregateDeclaration(SyntaxToken? accessibilityModifier)
     {
         EnsureNestedParseAllowed();
         recursionDepth++;
@@ -97,15 +97,15 @@ public partial class Parser
         }
     }
 
-    private MemberSyntax ParseAggregateDeclarationCore(SyntaxToken accessibilityModifier)
+    private MemberSyntax ParseAggregateDeclarationCore(SyntaxToken? accessibilityModifier)
     {
-        SyntaxToken openModifier = null;
-        SyntaxToken sealedModifier = null;
-        SyntaxToken dataKeyword = null;
-        SyntaxToken inlineKeyword = null;
-        SyntaxToken refModifier = null;
-        SyntaxToken unsafeModifier = null;
-        SyntaxToken partialModifier = null;
+        SyntaxToken? openModifier = null;
+        SyntaxToken? sealedModifier = null;
+        SyntaxToken? dataKeyword = null;
+        SyntaxToken? inlineKeyword = null;
+        SyntaxToken? refModifier = null;
+        SyntaxToken? unsafeModifier = null;
+        SyntaxToken? partialModifier = null;
 
         // Collect modifiers in any order. Re-issuing of a modifier is reported
         // as an unexpected token but parsing continues for recovery.
@@ -381,12 +381,12 @@ public partial class Parser
     /// body parser by passing the aggregate keyword as preconsumed.
     /// </summary>
     private StructDeclarationSyntax ParseStructDeclarationNew(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
-        SyntaxToken sealedModifier,
-        SyntaxToken refModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
+        SyntaxToken? sealedModifier,
+        SyntaxToken? refModifier,
         SyntaxToken aggregateKeyword,
         SyntaxToken identifier)
     {
@@ -403,8 +403,8 @@ public partial class Parser
     }
 
     private MemberSyntax ParseEnumDeclarationNew(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken sealedModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? sealedModifier,
         SyntaxToken enumKeyword,
         SyntaxToken identifier)
     {
@@ -447,8 +447,8 @@ public partial class Parser
     }
 
     private StructDeclarationSyntax BuildDiscriminatedUnionDesugaring(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken sealedModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? sealedModifier,
         SyntaxToken enumKeyword,
         SyntaxToken identifier,
         SyntaxToken openBrace,
@@ -477,7 +477,7 @@ public partial class Parser
             primaryConstructorCloseParen: null,
             baseColonToken: null,
             baseTypeIdentifier: null,
-            additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken>.Empty,
+            additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken?>.Empty,
             openBraceToken: openBrace,
             fields: ImmutableArray<FieldDeclarationSyntax>.Empty,
             properties: ImmutableArray<PropertyDeclarationSyntax>.Empty,
@@ -512,7 +512,7 @@ public partial class Parser
                 primaryConstructorCloseParen: primaryClose,
                 baseColonToken: colon,
                 baseTypeIdentifier: identifier,
-                additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken>.Empty,
+                additionalBaseTypeIdentifiers: ImmutableArray<SyntaxToken?>.Empty,
                 openBraceToken: openBrace,
                 fields: ImmutableArray<FieldDeclarationSyntax>.Empty,
                 properties: ImmutableArray<PropertyDeclarationSyntax>.Empty,
@@ -530,11 +530,11 @@ public partial class Parser
     }
 
     private InterfaceDeclarationSyntax ParseInterfaceDeclarationNew(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken sealedModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? sealedModifier,
         SyntaxToken interfaceKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList)
+        TypeParameterListSyntax? typeParameterList)
     {
         // The aggregate `interface` keyword is already consumed. Build the
         // body by hand (mirroring ParseInterfaceDeclaration but without the
@@ -545,7 +545,7 @@ public partial class Parser
         // mirroring `interface B : A` in C#. Reuse the same comma-separated
         // type-clause parsing the class/struct path uses; the binder enforces
         // that every entry resolves to an interface.
-        SyntaxToken baseColon = null;
+        SyntaxToken? baseColon = null;
         var baseTypeClauseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.ColonToken)
@@ -633,7 +633,7 @@ public partial class Parser
         return interfaceDecl;
     }
 
-    private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken accessibilityModifier)
+    private MemberSyntax ParseTypeAliasDeclaration(SyntaxToken? accessibilityModifier)
     {
         var typeKeyword = MatchToken(SyntaxKind.TypeKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -680,20 +680,20 @@ public partial class Parser
     /// high-quality diagnostic instead of a cascade.
     /// </summary>
     private MemberSyntax ReportAndRecoverLegacyAggregateForm(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList)
+        TypeParameterListSyntax? typeParameterList)
     {
         // Collect any legacy modifiers in their original order so the migration
         // suggestion preserves the spelling the user typed.
         var seenSpellings = new List<string>();
-        SyntaxToken openModifier = null;
-        SyntaxToken sealedModifier = null;
-        SyntaxToken dataKeyword = null;
-        SyntaxToken inlineKeyword = null;
-        SyntaxToken refModifier = null;
-        SyntaxToken recordKeyword = null;
+        SyntaxToken? openModifier = null;
+        SyntaxToken? sealedModifier = null;
+        SyntaxToken? dataKeyword = null;
+        SyntaxToken? inlineKeyword = null;
+        SyntaxToken? refModifier = null;
+        SyntaxToken? recordKeyword = null;
         var hadRecord = false;
 
         while (true)
@@ -743,8 +743,8 @@ public partial class Parser
             break;
         }
 
-        SyntaxToken aggregateKeyword = null;
-        string kindText = null;
+        SyntaxToken? aggregateKeyword = null;
+        string? kindText = null;
 
         if (hadRecord)
         {
@@ -752,13 +752,16 @@ public partial class Parser
             // equality-bearing aggregate). We synthesise the class keyword so
             // recovery can run the class-body parser.
             kindText = "data class";
-            aggregateKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ClassKeyword, recordKeyword.Position, "class", null);
+
+            // hadRecord is set by the same step that assigns recordKeyword and
+            // typeKeyword, so both are present throughout this branch.
+            aggregateKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ClassKeyword, recordKeyword!.Position, "class", null);
             if (dataKeyword == null)
             {
-                dataKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, recordKeyword.Position, "data", null);
+                dataKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, recordKeyword!.Position, "data", null);
             }
 
-            Diagnostics.ReportRecordKeywordRemoved(typeKeyword.Location, identifier.Text);
+            Diagnostics.ReportRecordKeywordRemoved(typeKeyword!.Location, identifier.Text);
         }
         else if (Current.Kind == SyntaxKind.ClassKeyword ||
                  Current.Kind == SyntaxKind.StructKeyword ||
@@ -773,7 +776,10 @@ public partial class Parser
                 ? string.Empty
                 : RenderTypeParameterList(typeParameterList);
             var migration = $"{modifierSpelling}{kindText} {identifier.Text}{typeParamSuffix}";
-            Diagnostics.ReportOldTypeDeclarationFormRemoved(typeKeyword.Location, migration);
+
+            // Reached only for the removed `type X <kind>` spelling, whose
+            // `type` keyword this method consumed into typeKeyword.
+            Diagnostics.ReportOldTypeDeclarationFormRemoved(typeKeyword!.Location, migration);
         }
         else
         {
@@ -822,7 +828,7 @@ public partial class Parser
     /// keyword at member position. Emits GS0307 and parses the rest of the
     /// declaration as if the user had written <c>data struct Name ...</c>.
     /// </summary>
-    private MemberSyntax ReportAndRecoverLegacyRecordHead(SyntaxToken accessibilityModifier)
+    private MemberSyntax ReportAndRecoverLegacyRecordHead(SyntaxToken? accessibilityModifier)
     {
         var recordToken = NextToken();
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -870,10 +876,10 @@ public partial class Parser
     }
 
     private MemberSyntax ParseDelegateDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
+        TypeParameterListSyntax? typeParameterList,
         SyntaxToken equalsToken)
     {
         // `delegate` is a contextual keyword that stays as an IdentifierToken
@@ -896,7 +902,7 @@ public partial class Parser
 
         // Return type clause is optional; absence means `void` per the existing
         // `func` declaration convention.
-        TypeClauseSyntax returnType = null;
+        TypeClauseSyntax? returnType = null;
         if (CanStartTypeClause(Current))
         {
             returnType = ParseTypeClause();
@@ -971,8 +977,8 @@ public partial class Parser
     }
 
     private EnumDeclarationSyntax ParseEnumDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier)
     {
         var enumKeyword = MatchToken(SyntaxKind.EnumKeyword);
@@ -1074,13 +1080,13 @@ public partial class Parser
     }
 
     private StructDeclarationSyntax ParseStructDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
-        SyntaxToken preconsumedStructOrClassKeyword = null)
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
+        SyntaxToken? preconsumedStructOrClassKeyword = null)
     {
         var structOrClassKeyword = preconsumedStructOrClassKeyword ?? (Current.Kind == SyntaxKind.ClassKeyword
             ? MatchToken(SyntaxKind.ClassKeyword)
@@ -1096,8 +1102,8 @@ public partial class Parser
         // `class` keyword. Each parameter becomes both a ctor argument and a
         // public field of the same name. Both classes and structs accept a
         // primary constructor parameter list.
-        SyntaxToken primaryCtorOpenParen = null;
-        SyntaxToken primaryCtorCloseParen = null;
+        SyntaxToken? primaryCtorOpenParen = null;
+        SyntaxToken? primaryCtorCloseParen = null;
         SeparatedSyntaxList<ParameterSyntax> primaryCtorParameters = new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
@@ -1113,12 +1119,12 @@ public partial class Parser
         // ADR-0078: structs may carry an implemented-interface clause too;
         // earlier parser-level restrictions are dropped (binder enforces
         // semantic legality, e.g. structs may not have a base class).
-        SyntaxToken baseColon = null;
-        SyntaxToken baseTypeIdentifier = null;
-        SyntaxToken baseCtorOpenParen = null;
+        SyntaxToken? baseColon = null;
+        SyntaxToken? baseTypeIdentifier = null;
+        SyntaxToken? baseCtorOpenParen = null;
         SeparatedSyntaxList<ExpressionSyntax> baseCtorArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
-        SyntaxToken baseCtorCloseParen = null;
-        var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken>();
+        SyntaxToken? baseCtorCloseParen = null;
+        var additionalBaseIdentifiers = ImmutableArray.CreateBuilder<SyntaxToken?>();
         var baseTypeClauseNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
         if (Current.Kind == SyntaxKind.ColonToken)
@@ -1126,9 +1132,12 @@ public partial class Parser
             baseColon = MatchToken(SyntaxKind.ColonToken);
             var firstBaseType = ParseTypeClause();
             baseTypeClauseNodesAndSeparators.Add(firstBaseType);
+
+            // ParseTypeClause always produces an Identifier; DottedName only says
+            // whether the name was spelled with qualifier segments.
             baseTypeIdentifier = firstBaseType.DottedName == null
                 ? null
-                : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, firstBaseType.Identifier.Position, firstBaseType.DottedName, null);
+                : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, firstBaseType.Identifier!.Position, firstBaseType.DottedName, null);
 
             // Issue #306: optional base-constructor argument list immediately
             // after the base-class name, e.g. `: Exception(message)`. Only the
@@ -1148,9 +1157,12 @@ public partial class Parser
                 baseTypeClauseNodesAndSeparators.Add(comma);
                 var nextType = ParseTypeClause();
                 baseTypeClauseNodesAndSeparators.Add(nextType);
+
+                // ParseTypeClause always produces an Identifier; DottedName only says
+                // whether the name was spelled with qualifier segments.
                 var next = nextType.DottedName == null
                     ? null
-                    : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, nextType.Identifier.Position, nextType.DottedName, null);
+                    : new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, nextType.Identifier!.Position, nextType.DottedName, null);
                 additionalBaseIdentifiers.Add(next);
             }
 
@@ -1163,8 +1175,8 @@ public partial class Parser
         var events = ImmutableArray.CreateBuilder<EventDeclarationSyntax>();
         var methods = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>();
         var constructors = ImmutableArray.CreateBuilder<ConstructorDeclarationSyntax>();
-        DeinitDeclarationSyntax structDecl_deinit = null;
-        SharedBlockSyntax structDecl_sharedBlock = null;
+        DeinitDeclarationSyntax? structDecl_deinit = null;
+        SharedBlockSyntax? structDecl_sharedBlock = null;
         var nestedTypes = ImmutableArray.CreateBuilder<MemberSyntax>();
 
         // ADR-0078 / issue #718: the body block `{ ... }` is optional for any
@@ -1236,7 +1248,7 @@ public partial class Parser
 
                 if (TryDetectAggregateDeclarationHead(nestedHeadOffset))
                 {
-                    SyntaxToken nestedAccessibility = null;
+                    SyntaxToken? nestedAccessibility = null;
                     if (nestedHeadOffset == 1)
                     {
                         nestedAccessibility = NextToken();
@@ -1268,7 +1280,7 @@ public partial class Parser
             // Use the existing `func Name(args) Ret { body }` parser; the
             // method has no explicit receiver clause — the receiver is the
             // enclosing class. Struct types reject methods (diagnose+skip).
-            SyntaxToken memberAccessibility = null;
+            SyntaxToken? memberAccessibility = null;
             if (Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
                 Current.Kind == SyntaxKind.PrivateKeyword ||
@@ -1304,8 +1316,8 @@ public partial class Parser
 
             // Phase 3.B.3 sub-step 3: parse optional `open` / `override`
             // modifiers (any order) before the method's `func` keyword.
-            SyntaxToken memberOpenModifier = null;
-            SyntaxToken memberOverrideModifier = null;
+            SyntaxToken? memberOpenModifier = null;
+            SyntaxToken? memberOverrideModifier = null;
             while (Current.Kind == SyntaxKind.OpenKeyword || Current.Kind == SyntaxKind.OverrideKeyword)
             {
                 if (Current.Kind == SyntaxKind.OpenKeyword && memberOpenModifier == null)
@@ -1329,7 +1341,7 @@ public partial class Parser
             // in ParseMember. The modifier is consumed only when immediately
             // followed by `func`; otherwise it is left for ParseFieldDeclaration
             // (or another fallback) to surface a diagnostic.
-            SyntaxToken memberAsyncModifier = null;
+            SyntaxToken? memberAsyncModifier = null;
             if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 memberAsyncModifier = NextToken();
@@ -1338,7 +1350,7 @@ public partial class Parser
             // ADR-0122 / issue #1014: optional `unsafe` contextual modifier on
             // an in-body `func` method. Consumed only when immediately followed
             // by `func` (or `async func`).
-            SyntaxToken memberUnsafeModifier = null;
+            SyntaxToken? memberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
                 && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
             {
@@ -1351,7 +1363,7 @@ public partial class Parser
 
             // ADR-0065 §2: optional `convenience` contextual keyword may
             // precede `init` (or `func init`) on a class constructor.
-            SyntaxToken memberConvenienceModifier = null;
+            SyntaxToken? memberConvenienceModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken
                 && Current.Text == "convenience"
                 && ((Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "init" && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
@@ -1370,7 +1382,9 @@ public partial class Parser
                 // primary-constructor-only shape.
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
-                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    // The enclosing `if` tests these same modifiers for non-null,
+                    // so the coalesce always yields one of them.
+                    var loc = (memberOpenModifier ?? memberOverrideModifier)!.Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.OpenParenthesisToken);
                 }
 
@@ -1408,7 +1422,9 @@ public partial class Parser
 
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
-                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    // The enclosing `if` tests these same modifiers for non-null,
+                    // so the coalesce always yields one of them.
+                    var loc = (memberOpenModifier ?? memberOverrideModifier)!.Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.IdentifierToken);
                 }
 
@@ -1467,7 +1483,9 @@ public partial class Parser
                 // ADR-0053: shared block grouping static member declarations.
                 if (memberAccessibility != null || memberOpenModifier != null || memberOverrideModifier != null)
                 {
-                    var loc = (memberAccessibility ?? memberOpenModifier ?? memberOverrideModifier).Location;
+                    // The enclosing `if` tests these same modifiers for non-null,
+                    // so the coalesce always yields one of them.
+                    var loc = (memberAccessibility ?? memberOpenModifier ?? memberOverrideModifier)!.Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.IdentifierToken, SyntaxKind.OpenBraceToken);
                 }
 
@@ -1498,7 +1516,9 @@ public partial class Parser
 
                     if (memberOpenModifier != null || memberOverrideModifier != null)
                     {
-                        var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                        // The enclosing `if` tests these same modifiers for non-null,
+                        // so the coalesce always yields one of them.
+                        var loc = (memberOpenModifier ?? memberOverrideModifier)!.Location;
                         Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.OpenParenthesisToken);
                     }
 
@@ -1554,7 +1574,9 @@ public partial class Parser
             {
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
-                    var loc = (memberOpenModifier ?? memberOverrideModifier).Location;
+                    // The enclosing `if` tests these same modifiers for non-null,
+                    // so the coalesce always yields one of them.
+                    var loc = (memberOpenModifier ?? memberOverrideModifier)!.Location;
                     Diagnostics.ReportUnexpectedToken(loc, SyntaxKind.OpenKeyword, SyntaxKind.FuncKeyword);
                 }
 

@@ -30,8 +30,8 @@ public static class WorkspaceInitializer
         WorkspaceState workspaceState,
         string rootPath,
         CancellationToken cancellationToken = default,
-        Func<string, string> tryGetOpenBuffer = null,
-        Action<Action> withGate = null)
+        Func<string, string?>? tryGetOpenBuffer = null,
+        Action<Action>? withGate = null)
     {
         if (string.IsNullOrEmpty(rootPath))
         {

@@ -44,7 +44,7 @@ internal sealed class AnonymousTypeCache
     /// <c>PropertyInfo</c> members.
     /// </param>
     /// <returns>The (cached) synthesized anonymous-class <see cref="StructSymbol"/>.</returns>
-    public StructSymbol GetOrCreate(IReadOnlyList<(string Name, TypeSymbol Type)> members, string packageName, bool useFields)
+    public StructSymbol GetOrCreate(IReadOnlyList<(string Name, TypeSymbol Type)> members, string? packageName, bool useFields)
     {
         var key = (useFields ? "data;" : "plain;") + BuildKey(members);
         if (byShape.TryGetValue(key, out var existing))

@@ -18,7 +18,7 @@ public sealed class BoundDefaultExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The type whose default value this expression produces.</param>
-    public BoundDefaultExpression(SyntaxNode syntax, TypeSymbol type)
+    public BoundDefaultExpression(SyntaxNode? syntax, TypeSymbol type)
         : base(syntax)
     {
         Type = type;

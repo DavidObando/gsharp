@@ -2,8 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-#nullable enable
-
 using System.Text.Json;
 
 namespace GSharp.Core.CodeAnalysis.Diagnostics;

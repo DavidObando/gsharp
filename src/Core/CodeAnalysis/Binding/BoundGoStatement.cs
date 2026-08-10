@@ -16,7 +16,7 @@ public sealed class BoundGoStatement : BoundStatement
     /// <summary>Initializes a new instance of the <see cref="BoundGoStatement"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The bound call expression to dispatch.</param>
-    public BoundGoStatement(SyntaxNode syntax, BoundExpression expression)
+    public BoundGoStatement(SyntaxNode? syntax, BoundExpression expression)
         : base(syntax)
     {
         Expression = expression;

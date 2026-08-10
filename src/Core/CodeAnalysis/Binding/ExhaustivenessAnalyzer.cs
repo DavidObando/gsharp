@@ -23,7 +23,7 @@ public static class ExhaustivenessAnalyzer
     /// <returns>True for enum types, sealed interfaces, and sealed-hierarchy classes; otherwise false.</returns>
     public static bool IsExhaustiveDiscriminant(TypeSymbol type)
         => type is EnumSymbol
-        || type?.ClrType.IsEnumSafe() == true
+        || (type.ClrType is { } clrType && clrType.IsEnumSafe())
         || type is InterfaceSymbol { IsSealed: true }
         || type is StructSymbol { IsSealedHierarchy: true };
 
@@ -42,7 +42,8 @@ public static class ExhaustivenessAnalyzer
         ImmutableArray<StructSymbol> structs,
         DiagnosticBag diagnostics)
     {
-        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
+        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames)
+            && discriminantDescription is not null)
         {
             diagnostics.ReportSwitchExpressionNotExhaustive(location, discriminantDescription, missingNames);
         }
@@ -69,7 +70,8 @@ public static class ExhaustivenessAnalyzer
             return false;
         }
 
-        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames))
+        if (TryGetMissingVariants(discriminantType, arms.Where(a => a.Guard == null).Select(a => a.Pattern), structs, out var discriminantDescription, out var missingNames)
+            && discriminantDescription is not null)
         {
             diagnostics.ReportSwitchStatementNotExhaustive(location, discriminantDescription, missingNames);
             return false;
@@ -80,9 +82,9 @@ public static class ExhaustivenessAnalyzer
 
     private static bool TryGetMissingVariants(
         TypeSymbol discriminantType,
-        IEnumerable<BoundPattern> patterns,
+        IEnumerable<BoundPattern?> patterns,
         ImmutableArray<StructSymbol> structs,
-        out string discriminantDescription,
+        out string? discriminantDescription,
         out ImmutableArray<string> missingNames)
     {
         discriminantDescription = null;
@@ -99,10 +101,12 @@ public static class ExhaustivenessAnalyzer
             return false;
         }
 
+        var nonNullPatterns = patternArray.OfType<BoundPattern>().ToArray();
+
         // Issue #1643: an `or` disjunction (`Red or Green`) covers whatever its
         // leaves cover, including a nested discard, so flatten before checking
         // for a wildcard arm. `and` conjunctions narrow and are NOT flattened.
-        if (patternArray.Any(pattern => FlattenDisjunction(pattern).Any(leaf => leaf is BoundDiscardPattern)))
+        if (nonNullPatterns.Any(pattern => FlattenDisjunction(pattern).Any(leaf => leaf is BoundDiscardPattern)))
         {
             return false;
         }
@@ -111,14 +115,17 @@ public static class ExhaustivenessAnalyzer
         {
             discriminantDescription = $"enum '{discriminantType.Name}'";
             var coveredValues = new HashSet<object>();
-            foreach (var pattern in patternArray)
+            foreach (var pattern in nonNullPatterns)
             {
                 foreach (var leaf in FlattenDisjunction(pattern))
                 {
                     if (leaf is BoundConstantPattern constant
                         && constant.Value is BoundLiteralExpression literal)
                     {
-                        coveredValues.Add(literal.Value);
+                        if (literal.Value is { } value)
+                        {
+                            coveredValues.Add(value);
+                        }
                     }
                 }
             }
@@ -139,7 +146,7 @@ public static class ExhaustivenessAnalyzer
                 .ToImmutableArray();
 
             var coveredTypes = new HashSet<StructSymbol>();
-            foreach (var pattern in patternArray)
+            foreach (var pattern in nonNullPatterns)
             {
                 foreach (var leaf in FlattenDisjunction(pattern))
                 {
@@ -172,7 +179,7 @@ public static class ExhaustivenessAnalyzer
                 .ToImmutableArray();
 
             var coveredSubclasses = new HashSet<StructSymbol>();
-            foreach (var pattern in patternArray)
+            foreach (var pattern in nonNullPatterns)
             {
                 foreach (var leaf in FlattenDisjunction(pattern))
                 {
@@ -207,17 +214,31 @@ public static class ExhaustivenessAnalyzer
             return true;
         }
 
-        if (type?.ClrType.IsEnumSafe() != true)
+        if (type?.ClrType is not Type clrType || !clrType.IsEnumSafe())
         {
             variants = ImmutableArray<(string Name, object Value)>.Empty;
             return false;
         }
 
-        variants = ClrTypeUtilities.SafeGetFields(type.ClrType, BindingFlags.Public | BindingFlags.Static)
-            .Where(field => field.IsLiteral)
-            .Select(field => (field.Name, field.GetRawConstantValue()))
-            .ToImmutableArray();
+        variants = GetClrEnumVariants(clrType).ToImmutableArray();
         return true;
+    }
+
+    private static IEnumerable<(string Name, object Value)> GetClrEnumVariants(Type type)
+    {
+        foreach (var field in ClrTypeUtilities.SafeGetFields(type, BindingFlags.Public | BindingFlags.Static))
+        {
+            if (!field.IsLiteral)
+            {
+                continue;
+            }
+
+            var value = field.GetRawConstantValue();
+            if (value is not null)
+            {
+                yield return (field.Name, value);
+            }
+        }
     }
 
     /// <summary>

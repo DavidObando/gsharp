@@ -17,7 +17,7 @@ public sealed class BoundVariableExpression : BoundExpression
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="variable">The variable symbol.</param>
-    public BoundVariableExpression(SyntaxNode syntax, VariableSymbol variable)
+    public BoundVariableExpression(SyntaxNode? syntax, VariableSymbol variable)
         : this(syntax, variable, narrowedType: null)
     {
     }
@@ -35,7 +35,7 @@ public sealed class BoundVariableExpression : BoundExpression
     /// <param name="narrowedType">The narrowed type to report from
     /// <see cref="Type"/>. Pass <c>null</c> to use the variable's declared
     /// type.</param>
-    public BoundVariableExpression(SyntaxNode syntax, VariableSymbol variable, TypeSymbol narrowedType)
+    public BoundVariableExpression(SyntaxNode? syntax, VariableSymbol variable, TypeSymbol? narrowedType)
         : base(syntax)
     {
         Variable = variable;
@@ -55,5 +55,5 @@ public sealed class BoundVariableExpression : BoundExpression
     /// Gets the narrowed type, or <c>null</c> if the variable's declared
     /// type is in effect.
     /// </summary>
-    public TypeSymbol NarrowedType { get; }
+    public TypeSymbol? NarrowedType { get; }
 }

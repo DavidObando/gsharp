@@ -23,11 +23,15 @@ namespace GSharp.LanguageServer;
 
 public static class HoverComputer
 {
-    public static Hover ComputeHover(DocumentContent content, Position position, CancellationToken ct = default)
+    public static Hover? ComputeHover(DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
+        if (token is null)
+        {
+            return null;
+        }
 
         // Issue #713: when hovering a token inside an `async func(...)` (ADR-0043) or
         // `async sequence[T]` (ADR-0042) type clause, surface the ADR-rooted prose
@@ -101,7 +105,7 @@ public static class HoverComputer
         return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Signature, compilation);
     }
 
-    private static Hover TryComputeAsyncTypeClauseHover(SyntaxTree tree, int offset, SyntaxToken token)
+    private static Hover? TryComputeAsyncTypeClauseHover(SyntaxTree tree, int offset, SyntaxToken token)
     {
         if (token == null || token.IsMissing)
         {
@@ -159,7 +163,7 @@ public static class HoverComputer
         return new HoverModel(signature, BuildDocumentation(symbol), overloadCount);
     }
 
-    private static HoverModel BuildImportedClrModel(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    private static HoverModel? BuildImportedClrModel(SyntaxTree tree, Compilation compilation, SyntaxToken token)
     {
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
         {
@@ -182,7 +186,8 @@ public static class HoverComputer
             // instance/extension method, a type-name receiver (`T.M(...)`) only to
             // a plain static method (issue #906).
             var gate = ClassifyCallReceiver(tree, compilation, token, out var receiverClrType);
-            if (SemanticLookup.TryResolveInvokedImportedMethod(compilation, token.Text, invokedCall.Arguments.Count, gate, receiverClrType, out var invokedMethod, out var invokedOverloadCount))
+            if (SemanticLookup.TryResolveInvokedImportedMethod(compilation, token.Text, invokedCall.Arguments.Count, gate, receiverClrType, out var invokedMethod, out var invokedOverloadCount)
+                && invokedMethod is not null)
             {
                 return new HoverModel(
                     SymbolDisplay.ToDisplayString(invokedMethod, SymbolDisplayFormat.Hover),
@@ -252,7 +257,7 @@ public static class HoverComputer
         return false;
     }
 
-    private static HoverModel BuildLiteralModel(SyntaxToken token)
+    private static HoverModel? BuildLiteralModel(SyntaxToken token)
     {
         if (token == null)
         {
@@ -278,7 +283,7 @@ public static class HoverComputer
         return new HoverModel(signature, Array.Empty<HoverDocSection>(), OverloadCount: 1);
     }
 
-    private static string GetNumericTypeName(object value)
+    private static string GetNumericTypeName(object? value)
     {
         return value switch
         {
@@ -293,14 +298,15 @@ public static class HoverComputer
         };
     }
 
-    private static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo member, out int overloadCount)
+    private static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo? member, out int overloadCount)
     {
         member = null;
         overloadCount = 0;
 
         foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
-            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiver))
+            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiver)
+                || receiver is null)
             {
                 continue;
             }
@@ -353,7 +359,7 @@ public static class HoverComputer
     /// <see cref="FieldSymbol"/>, <see cref="EventSymbol"/>, or <see cref="FunctionSymbol"/>
     /// declared on that type.
     /// </summary>
-    private static Symbol TryResolveGSharpMember(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    private static Symbol? TryResolveGSharpMember(SyntaxTree tree, Compilation compilation, SyntaxToken token)
     {
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
         {
@@ -409,7 +415,7 @@ public static class HoverComputer
         return null;
     }
 
-    private static FieldAssignmentExpressionSyntax FindFieldAssignmentWithHoveredField(SyntaxNode root, SyntaxToken token)
+    private static FieldAssignmentExpressionSyntax? FindFieldAssignmentWithHoveredField(SyntaxNode root, SyntaxToken token)
     {
         return FindNodes<FieldAssignmentExpressionSyntax>(root)
             .Where(f => MatchesToken(f.FieldIdentifier, token))
@@ -420,7 +426,7 @@ public static class HoverComputer
     /// Finds the <see cref="StructSymbol"/> for the struct/class whose method body
     /// encloses <paramref name="token"/>, if any. Used for implicit-this resolution.
     /// </summary>
-    private static StructSymbol FindEnclosingStructSymbol(SyntaxTree tree, Compilation compilation, SyntaxToken token)
+    private static StructSymbol? FindEnclosingStructSymbol(SyntaxTree tree, Compilation compilation, SyntaxToken token)
     {
         // Find the innermost StructDeclarationSyntax whose span contains the token.
         var enclosingDecl = FindNodes<StructDeclarationSyntax>(tree.Root)
@@ -450,7 +456,7 @@ public static class HoverComputer
     /// Resolves the receiver expression of an accessor to its <see cref="StructSymbol"/>
     /// type (user-defined G# struct or class).
     /// </summary>
-    private static StructSymbol ResolveReceiverStructSymbol(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression)
+    private static StructSymbol? ResolveReceiverStructSymbol(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression)
     {
         switch (expression)
         {
@@ -483,6 +489,11 @@ public static class HoverComputer
                     return null;
                 }
 
+                if (intermediateName is null)
+                {
+                    return null;
+                }
+
                 var member = LookupMemberOnStruct(outerStruct, intermediateName);
                 return member switch
                 {
@@ -500,7 +511,7 @@ public static class HoverComputer
     /// Looks up a member (property, field, event, or method) by name on a G# struct/class symbol,
     /// including inherited members from base classes.
     /// </summary>
-    private static Symbol LookupMemberOnStruct(StructSymbol structSymbol, string memberName)
+    private static Symbol? LookupMemberOnStruct(StructSymbol structSymbol, string memberName)
     {
         // ADR-0112: route through the canonical member-resolution layer so hover
         // shares the binder's single member lookup. MemberQuery.All preserves the
@@ -520,7 +531,9 @@ public static class HoverComputer
                      .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
                      .OrderBy(a => a.Span.Length))
         {
-            if (TryResolveAccessorMemberContext(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpression, out var memberName))
+            if (TryResolveAccessorMemberContext(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpression, out var memberName)
+                && receiverExpression is not null
+                && memberName is not null)
             {
                 yield return (receiverExpression, memberName);
             }
@@ -548,7 +561,10 @@ public static class HoverComputer
             {
                 if (MatchesToken(initializer.PropertyIdentifier, token))
                 {
-                    yield return (creation.Target, initializer.PropertyIdentifier.Text);
+                    if (creation.Target is not null)
+                    {
+                        yield return (creation.Target, initializer.PropertyIdentifier.Text);
+                    }
                 }
             }
         }
@@ -559,8 +575,8 @@ public static class HoverComputer
         ExpressionSyntax expression,
         ExpressionSyntax receiver,
         SyntaxToken token,
-        out ExpressionSyntax receiverExpression,
-        out string memberName)
+        out ExpressionSyntax? receiverExpression,
+        out string? memberName)
     {
         receiverExpression = null;
         memberName = null;
@@ -589,7 +605,7 @@ public static class HoverComputer
         }
     }
 
-    private static bool TryGetAccessorMemberName(ExpressionSyntax expression, SyntaxToken token, out string memberName)
+    private static bool TryGetAccessorMemberName(ExpressionSyntax expression, SyntaxToken? token, out string? memberName)
     {
         memberName = expression switch
         {
@@ -610,12 +626,13 @@ public static class HoverComputer
                 && string.Equals(candidate.Text, token.Text, StringComparison.Ordinal));
     }
 
-    private static bool TryResolveClrReceiver(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression, out ClrReceiver receiver)
+    private static bool TryResolveClrReceiver(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression, out ClrReceiver? receiver)
     {
         switch (expression)
         {
             case NameExpressionSyntax name:
-                if (TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken), out var symbolType))
+                if (TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken), out var symbolType)
+                    && symbolType is not null)
                 {
                     receiver = new ClrReceiver(symbolType, StaticMembers: false);
                     return true;
@@ -629,7 +646,8 @@ public static class HoverComputer
                 }
 
                 break;
-            case CallExpressionSyntax call when TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, call.Identifier), out var callType):
+            case CallExpressionSyntax call when TryResolveClrTypeFromSymbol(SemanticLookup.ResolveSymbol(compilation, call.Identifier), out var callType)
+                && callType is not null:
                 receiver = new ClrReceiver(callType, StaticMembers: false);
                 return true;
             case CallExpressionSyntax constructorCall:
@@ -645,7 +663,8 @@ public static class HoverComputer
                 }
 
                 break;
-            case AccessorExpressionSyntax accessor when TryResolveClrMemberExpression(tree, compilation, accessor, out var memberType):
+            case AccessorExpressionSyntax accessor when TryResolveClrMemberExpression(tree, compilation, accessor, out var memberType)
+                && memberType is not null:
                 receiver = new ClrReceiver(memberType, StaticMembers: false);
                 return true;
         }
@@ -654,7 +673,7 @@ public static class HoverComputer
         return false;
     }
 
-    private static bool TryResolveClrMemberExpression(SyntaxTree tree, Compilation compilation, AccessorExpressionSyntax accessor, out Type memberType)
+    private static bool TryResolveClrMemberExpression(SyntaxTree tree, Compilation compilation, AccessorExpressionSyntax accessor, out Type? memberType)
     {
         memberType = null;
         if (!TryGetAccessorMemberName(accessor.RightPart, token: null, out var memberName))
@@ -662,7 +681,13 @@ public static class HoverComputer
             return false;
         }
 
-        if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver))
+        if (memberName is null)
+        {
+            return false;
+        }
+
+        if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var receiver)
+            || receiver is null)
         {
             var gsharpReceiver = ResolveReceiverStructSymbol(tree, compilation, accessor.LeftPart);
             if (gsharpReceiver == null)
@@ -707,7 +732,7 @@ public static class HoverComputer
         return true;
     }
 
-    private static bool TryResolveClrTypeFromSymbol(Symbol symbol, out Type clrType)
+    private static bool TryResolveClrTypeFromSymbol(Symbol? symbol, out Type? clrType)
     {
         clrType = symbol switch
         {
@@ -817,7 +842,7 @@ public static class HoverComputer
         SyntaxTree tree,
         Compilation compilation,
         SyntaxToken token,
-        out Type receiverClrType)
+        out Type? receiverClrType)
     {
         receiverClrType = null;
 
@@ -881,7 +906,7 @@ public static class HoverComputer
                 // A dotted name that resolves wholesale to a type is a static receiver
                 // (e.g. `System.Linq.Enumerable.Concat(...)`); otherwise it is a member
                 // access on a value (e.g. `report.Checks.Single(...)`).
-                if (TryFlattenDottedName(accessor, out var dotted))
+                if (TryFlattenDottedName(accessor, out var dotted) && dotted is not null)
                 {
                     var dottedType = SemanticLookup.ResolveImportedClrType(tree, compilation, dotted);
                     if (dottedType != null)
@@ -891,7 +916,9 @@ public static class HoverComputer
                     }
                 }
 
-                if (TryResolveClrReceiver(tree, compilation, accessor, out var clrReceiver) && !clrReceiver.StaticMembers)
+                if (TryResolveClrReceiver(tree, compilation, accessor, out var clrReceiver)
+                    && clrReceiver is not null
+                    && !clrReceiver.StaticMembers)
                 {
                     receiverClrType = clrReceiver.Type;
                 }
@@ -900,7 +927,9 @@ public static class HoverComputer
 
             default:
                 // Call results, indexers, parenthesised/literal receivers are all values.
-                if (TryResolveClrReceiver(tree, compilation, receiverExpression, out var valueReceiver) && !valueReceiver.StaticMembers)
+                if (TryResolveClrReceiver(tree, compilation, receiverExpression, out var valueReceiver)
+                    && valueReceiver is not null
+                    && !valueReceiver.StaticMembers)
                 {
                     receiverClrType = valueReceiver.Type;
                 }
@@ -909,12 +938,12 @@ public static class HoverComputer
         }
     }
 
-    private static bool IsValueSymbol(Symbol symbol)
+    private static bool IsValueSymbol(Symbol? symbol)
     {
         return symbol is VariableSymbol or PropertySymbol or FieldSymbol;
     }
 
-    private static bool TryFlattenDottedName(ExpressionSyntax expression, out string dotted)
+    private static bool TryFlattenDottedName(ExpressionSyntax expression, out string? dotted)
     {
         dotted = expression switch
         {
@@ -929,7 +958,7 @@ public static class HoverComputer
         return dotted != null;
     }
 
-    private static string PrimitiveClrTypeName(string keyword)
+    private static string? PrimitiveClrTypeName(string keyword)
     {
         return keyword switch
         {
@@ -959,7 +988,7 @@ public static class HoverComputer
 /// <summary>A rendered hover documentation section: an optional bold heading and a Markdown body.</summary>
 /// <param name="Heading">The section heading, or null for the lead (summary) section.</param>
 /// <param name="Body">The Markdown body.</param>
-internal sealed record HoverDocSection(string Heading, string Body);
+internal sealed record HoverDocSection(string? Heading, string Body);
 
 public static class ReferencesComputer
 {
@@ -1033,9 +1062,9 @@ public static class ReferencesComputer
         return fallback;
     }
 
-    private static SyntaxNode FindSmallestContainingDeclaration(SyntaxNode node, SyntaxToken token)
+    private static SyntaxNode? FindSmallestContainingDeclaration(SyntaxNode node, SyntaxToken token)
     {
-        SyntaxNode best = null;
+        SyntaxNode? best = null;
         Visit(node);
         return best;
 
@@ -1062,7 +1091,7 @@ public static class ReferencesComputer
 
 public static class RenameComputer
 {
-    public static WorkspaceEdit ComputeRename(DocumentUri uri, DocumentContent content, Position position, string newName, CancellationToken ct = default)
+    public static WorkspaceEdit? ComputeRename(DocumentUri uri, DocumentContent content, Position position, string newName, CancellationToken ct = default)
     {
         if (!SemanticLookup.IsValidIdentifier(newName))
         {
@@ -1073,7 +1102,7 @@ public static class RenameComputer
         var offset = SemanticLookup.ToOffset(content, position);
         var token = SemanticLookup.FindTokenAt(content.SyntaxTree, offset);
         var target = SemanticLookup.ResolveSymbol(compilation, token, ct);
-        if (!SemanticLookup.CanRename(target))
+        if (target is null || !SemanticLookup.CanRename(target))
         {
             return null;
         }
@@ -1117,7 +1146,7 @@ public static class RenameComputer
 
 public static class DefinitionComputer
 {
-    public static Location ComputeDefinition(DocumentUri uri, DocumentContent content, Position position, CancellationToken ct = default)
+    public static Location? ComputeDefinition(DocumentUri uri, DocumentContent content, Position position, CancellationToken ct = default)
     {
         var all = ComputeDefinitions(uri, content, position, ct);
         return all.Count > 0 ? all[0] : null;
@@ -1144,7 +1173,8 @@ public static class DefinitionComputer
 
         // Imported symbols (cross-assembly): try sibling-G#-project source walk
         // first, then portable-PDB navigation. See CrossAssemblyDefinitionResolver.
-        if (TryResolveImportedSymbol(symbol, workspace, out var crossLocation))
+        if (TryResolveImportedSymbol(symbol, workspace, out var crossLocation)
+            && crossLocation is not null)
         {
             return new[] { crossLocation };
         }
@@ -1175,13 +1205,17 @@ public static class DefinitionComputer
         if (token != null && token.Kind == SyntaxKind.IdentifierToken)
         {
             if (ImportedClrMemberResolver.TryResolveClrType(content.SyntaxTree, compilation, token, out var clrType)
-                && CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out var typeLocation))
+                && clrType is not null
+                && CrossAssemblyDefinitionResolver.TryResolveType(workspace, clrType, out var typeLocation)
+                && typeLocation is not null)
             {
                 return new[] { typeLocation };
             }
 
             if (ImportedClrMemberResolver.TryResolveClrMember(content.SyntaxTree, compilation, token, out var clrMember)
-                && TryResolveClrMember(workspace, clrMember, out var memberLocation))
+                && clrMember is not null
+                && TryResolveClrMember(workspace, clrMember, out var memberLocation)
+                && memberLocation is not null)
             {
                 return new[] { memberLocation };
             }
@@ -1196,7 +1230,7 @@ public static class DefinitionComputer
     /// a multi-part partial struct/interface (so the caller falls through to the
     /// ordinary single-declaration path).
     /// </summary>
-    private static IReadOnlyList<Location> GetPartialTypeLocations(Symbol symbol, DocumentUri fallback)
+    private static IReadOnlyList<Location>? GetPartialTypeLocations(Symbol symbol, DocumentUri fallback)
     {
         var partLocations = symbol switch
         {
@@ -1210,16 +1244,25 @@ public static class DefinitionComputer
             return null;
         }
 
-        return partLocations
-            .Select(loc => new Location
+        var locations = new List<Location>();
+        foreach (var loc in partLocations)
+        {
+            if (loc.Text is null)
+            {
+                continue;
+            }
+
+            locations.Add(new Location
             {
                 Uri = !string.IsNullOrEmpty(loc.FileName) ? DocumentUri.FromFileSystemPath(loc.FileName) : fallback,
                 Range = SemanticLookup.ToRange(loc.Text, loc.Span),
-            })
-            .ToArray();
+            });
+        }
+
+        return locations;
     }
 
-    private static bool TryResolveImportedSymbol(Symbol symbol, WorkspaceState workspace, out Location location)
+    private static bool TryResolveImportedSymbol(Symbol? symbol, WorkspaceState? workspace, out Location? location)
     {
         location = null;
         switch (symbol)
@@ -1235,7 +1278,7 @@ public static class DefinitionComputer
         }
     }
 
-    private static bool TryResolveClrMember(WorkspaceState workspace, MemberInfo member, out Location location)
+    private static bool TryResolveClrMember(WorkspaceState? workspace, MemberInfo member, out Location? location)
     {
         location = null;
         switch (member)
@@ -1263,7 +1306,7 @@ public static class DefinitionComputer
         return fallback;
     }
 
-    private static SyntaxToken FindDeclarationToken(Compilation compilation, Symbol symbol, CancellationToken ct = default)
+    private static SyntaxToken? FindDeclarationToken(Compilation compilation, Symbol symbol, CancellationToken ct = default)
     {
         return symbol switch
         {
@@ -1279,7 +1322,7 @@ public static class DefinitionComputer
         };
     }
 
-    private static SyntaxToken FindEnumMemberToken(EnumMemberSymbol member)
+    private static SyntaxToken? FindEnumMemberToken(EnumMemberSymbol member)
     {
         if (member.EnumType?.Declaration == null)
         {
@@ -1291,7 +1334,7 @@ public static class DefinitionComputer
             .FirstOrDefault(id => id.Text == member.Name);
     }
 
-    private static SyntaxToken FindFieldToken(Compilation compilation, FieldSymbol field, CancellationToken ct = default)
+    private static SyntaxToken? FindFieldToken(Compilation compilation, FieldSymbol field, CancellationToken ct = default)
     {
         foreach (var tree in compilation.SyntaxTrees)
         {
@@ -1311,7 +1354,7 @@ public static class DefinitionComputer
         return null;
     }
 
-    private static SyntaxToken FindVariableToken(Compilation compilation, VariableSymbol variable, CancellationToken ct = default)
+    private static SyntaxToken? FindVariableToken(Compilation compilation, VariableSymbol variable, CancellationToken ct = default)
     {
         foreach (var tree in compilation.SyntaxTrees)
         {
@@ -1465,7 +1508,7 @@ public static class DocumentSymbolComputer
 
 public static class SignatureHelpComputer
 {
-    public static SignatureHelp ComputeSignatureHelp(DocumentContent content, Position position, CancellationToken ct = default)
+    public static SignatureHelp? ComputeSignatureHelp(DocumentContent content, Position position, CancellationToken ct = default)
     {
         var compilation = content.Project?.GetCompilation() ?? new Compilation(content.SyntaxTree);
         var offset = SemanticLookup.ToOffset(content, position);
@@ -1691,7 +1734,7 @@ public static class CompletionComputer
     /// an identifier character (e.g. right after a <c>.</c> trigger, or at the start of
     /// a fresh token) so the editor falls back to its own word-range heuristics.
     /// </summary>
-    private static Range ComputeReplacementRange(DocumentContent content, int offset)
+    private static Range? ComputeReplacementRange(DocumentContent content, int offset)
     {
         var text = content.SyntaxTree.Text;
         if (offset <= 0 || offset > text.Length)
@@ -1723,7 +1766,7 @@ public static class CompletionComputer
     /// <see cref="CompletionItem.InsertText"/>) are left untouched. A <see langword="null"/>
     /// range leaves the list unchanged so the editor applies its default word range.
     /// </summary>
-    private static IReadOnlyList<CompletionItem> ApplyReplacementRange(IReadOnlyList<CompletionItem> items, Range replacementRange)
+    private static IReadOnlyList<CompletionItem> ApplyReplacementRange(IReadOnlyList<CompletionItem> items, Range? replacementRange)
     {
         if (replacementRange == null || items.Count == 0)
         {
@@ -1754,7 +1797,7 @@ public static class CompletionComputer
     /// of the constructed type. Returns <see langword="null"/> when the caret is not
     /// in such a position so the caller falls back to the global completion list.
     /// </summary>
-    private static IReadOnlyList<CompletionItem> TryComputeObjectInitializerCompletions(DocumentContent content, Compilation compilation, int offset)
+    private static IReadOnlyList<CompletionItem>? TryComputeObjectInitializerCompletions(DocumentContent content, Compilation compilation, int offset)
     {
         var root = content.SyntaxTree.Root;
 
@@ -1777,7 +1820,7 @@ public static class CompletionComputer
         var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, content.SyntaxTree, offset);
         var receiverType = GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
             compilation.GlobalScope,
-            compilation.References,
+            compilation.References ?? ReferenceResolver.Default(),
             function,
             locals,
             receiver);
@@ -1835,7 +1878,7 @@ public static class CompletionComputer
     /// (e.g. the first property name typed without a trailing <c>=</c>). The block then
     /// parses as a standalone <see cref="BlockStatementSyntax"/> abutting the call.
     /// </summary>
-    private static ExpressionSyntax TryFindOrphanInitializerReceiver(SyntaxNode root, int offset)
+    private static ExpressionSyntax? TryFindOrphanInitializerReceiver(SyntaxNode root, int offset)
     {
         var block = EnumerateNodes(root).OfType<BlockStatementSyntax>()
             .Where(b => b.OpenBraceToken != null
@@ -1853,7 +1896,7 @@ public static class CompletionComputer
 
         // The receiver is a constructor call (or object creation) whose end immediately
         // precedes the block's open brace, separated only by whitespace.
-        ExpressionSyntax best = null;
+        ExpressionSyntax? best = null;
         foreach (var node in EnumerateNodes(root))
         {
             if (node is not ExpressionSyntax candidate)
@@ -1936,9 +1979,9 @@ public static class CompletionComputer
         }
     }
 
-    private static FunctionDeclarationSyntax FindContainingFunction(SyntaxTree tree, int offset)
+    private static FunctionDeclarationSyntax? FindContainingFunction(SyntaxTree tree, int offset)
     {
-        FunctionDeclarationSyntax best = null;
+        FunctionDeclarationSyntax? best = null;
         foreach (var func in tree.Root.Members.OfType<FunctionDeclarationSyntax>())
         {
             if (func.Span.Start <= offset && offset <= func.Span.End)
@@ -1953,7 +1996,7 @@ public static class CompletionComputer
         return best;
     }
 
-    private static IReadOnlyList<CompletionItem> TryComputeMemberCompletions(DocumentContent content, Compilation compilation, int offset)
+    private static IReadOnlyList<CompletionItem>? TryComputeMemberCompletions(DocumentContent content, Compilation compilation, int offset)
     {
         var accessor = FindReceiverAccessor(content.SyntaxTree.Root, offset);
         if (accessor == null)
@@ -1982,7 +2025,7 @@ public static class CompletionComputer
                 var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, content.SyntaxTree, offset);
                 var receiverType = GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
                     compilation.GlobalScope,
-                    compilation.References,
+                    compilation.References ?? ReferenceResolver.Default(),
                     function,
                     locals,
                     receiverExpression);
@@ -2066,7 +2109,7 @@ public static class CompletionComputer
     /// directly; for chained receivers the source text between the chain root and
     /// the trailing dot is re-parsed into a standalone expression.
     /// </summary>
-    private static ExpressionSyntax ReconstructReceiverExpression(DocumentContent content, ExpressionSyntax chainRoot, AccessorExpressionSyntax accessor)
+    private static ExpressionSyntax? ReconstructReceiverExpression(DocumentContent content, ExpressionSyntax chainRoot, AccessorExpressionSyntax accessor)
     {
         if (ReferenceEquals(chainRoot, accessor))
         {
@@ -2102,9 +2145,9 @@ public static class CompletionComputer
         }
     }
 
-    private static AccessorExpressionSyntax FindReceiverAccessor(SyntaxNode node, int offset)
+    private static AccessorExpressionSyntax? FindReceiverAccessor(SyntaxNode node, int offset)
     {
-        AccessorExpressionSyntax best = null;
+        AccessorExpressionSyntax? best = null;
         foreach (var accessor in FindAccessors(node))
         {
             var dot = accessor.DotToken;
@@ -2233,8 +2276,13 @@ public static class CompletionComputer
         }
     }
 
-    private static void AddClrMembers(List<CompletionItem> items, HashSet<string> seen, Type clrType, bool staticMembers)
+    private static void AddClrMembers(List<CompletionItem> items, HashSet<string> seen, Type? clrType, bool staticMembers)
     {
+        if (clrType is null)
+        {
+            return;
+        }
+
         if (clrType == null)
         {
             return;

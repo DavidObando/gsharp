@@ -43,7 +43,7 @@ internal readonly struct TypeArgsKey : System.IEquatable<TypeArgsKey>
         return true;
     }
 
-    public override bool Equals(object obj) => obj is TypeArgsKey other && this.Equals(other);
+    public override bool Equals(object? obj) => obj is TypeArgsKey other && this.Equals(other);
 
     public override int GetHashCode()
     {

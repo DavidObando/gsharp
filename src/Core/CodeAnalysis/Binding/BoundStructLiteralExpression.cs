@@ -16,7 +16,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundStructLiteralExpression : BoundExpression
 {
-    public BoundStructLiteralExpression(SyntaxNode syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
+    public BoundStructLiteralExpression(SyntaxNode? syntax, StructSymbol structType, ImmutableArray<BoundFieldInitializer> initializers)
         : base(syntax)
     {
         StructType = structType;

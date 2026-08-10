@@ -94,7 +94,7 @@ internal sealed class TypeDefEmitter
     private readonly Func<Type, EntityHandle> getImportedTypeHandle;
     private readonly Func<StructSymbol, EntityHandle> getUserStructTypeSpec;
     private readonly Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken;
-    private readonly Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken;
+    private readonly Func<StructSymbol, ConstructorSymbol?, EntityHandle> resolveConstructedBaseExplicitCtorToken;
     private readonly Func<ParameterHandle> nextParameterHandle;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
     private readonly Action<TypeDefinitionHandle> emitNullableContextOnType;
@@ -103,13 +103,13 @@ internal sealed class TypeDefEmitter
     private readonly Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter;
     private readonly Action<ParameterHandle> emitParamArrayAttributeOnParameter;
     private readonly Func<ConstructorInfo, MemberReferenceHandle> getCtorReference;
-    private readonly Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType;
+    private readonly Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType;
     private readonly Func<StructSymbol, int> emitStaticConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes;
     private readonly Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes;
     private readonly Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes;
-    private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
+    private readonly Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes;
     private readonly Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes;
 
     public TypeDefEmitter(
@@ -122,7 +122,7 @@ internal sealed class TypeDefEmitter
         Func<Type, EntityHandle> getImportedTypeHandle,
         Func<StructSymbol, EntityHandle> getUserStructTypeSpec,
         Func<StructSymbol, EntityHandle> resolveConstructedBaseCtorToken,
-        Func<StructSymbol, ConstructorSymbol, EntityHandle> resolveConstructedBaseExplicitCtorToken,
+        Func<StructSymbol, ConstructorSymbol?, EntityHandle> resolveConstructedBaseExplicitCtorToken,
         Func<ParameterHandle> nextParameterHandle,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes,
         Action<TypeDefinitionHandle> emitNullableContextOnType,
@@ -131,13 +131,13 @@ internal sealed class TypeDefEmitter
         Action<ParameterHandle> emitIsReadOnlyAttributeOnParameter,
         Action<ParameterHandle> emitParamArrayAttributeOnParameter,
         Func<ConstructorInfo, MemberReferenceHandle> getCtorReference,
-        Func<ConstructorInfo, TypeSymbol, MemberReferenceHandle> getCtorReferenceForType,
+        Func<ConstructorInfo, TypeSymbol?, MemberReferenceHandle> getCtorReferenceForType,
         Func<StructSymbol, int> emitStaticConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassDefaultConstructorBodyBytes,
         Func<StructSymbol, int> emitValueStructDefaultConstructorBodyBytes,
         Func<StructSymbol, EntityHandle, int> emitClassPrimaryConstructorBodyBytes,
         Func<StructSymbol, ImmutableArray<ParameterSymbol>, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBaseInitializerBodyBytes,
-        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
+        Func<StructSymbol, ConstructorSymbol, BaseConstructorInitializer?, EntityHandle, int> emitClassConstructorWithBodyBodyBytes,
         Func<StructSymbol, DeinitSymbol, BoundBlockStatement, EntityHandle, int> emitClassDeinitializerBodyBytes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -1594,7 +1594,11 @@ internal sealed class TypeDefEmitter
     /// <returns>The emitted constructor's MethodDef handle.</returns>
     public MethodDefinitionHandle EmitClassConstructorWithBaseInitializer(StructSymbol classSym, ImmutableArray<ParameterSymbol> parameters)
     {
-        var init = classSym.BaseConstructorInitializer;
+        // Non-null: both call sites (ReflectionMetadataEmitter.cs, the
+        // synthesized-primary-constructor and single-constructor emission
+        // branches) check `c.BaseConstructorInitializer != null` before
+        // routing to this "WithBaseInitializer" emitter.
+        var init = classSym.BaseConstructorInitializer!;
         var baseCtorToken = this.GetBaseInitializerCtorToken(classSym, init);
 
         int bodyOffset = -1;
@@ -1694,9 +1698,11 @@ internal sealed class TypeDefEmitter
     /// <param name="classSym">The aggregate whose explicit constructor is being emitted.</param>
     /// <param name="ctor">The specific explicit ctor overload to emit. When <see langword="null"/> the legacy single-ctor entry on the aggregate is used.</param>
     /// <returns>The emitted constructor's MethodDef handle.</returns>
-    public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol ctor = null)
+    public MethodDefinitionHandle EmitClassConstructorWithBody(StructSymbol classSym, ConstructorSymbol? ctor = null)
     {
-        ctor ??= classSym.ExplicitConstructor;
+        ctor ??= Invariant.Required(
+            classSym.ExplicitConstructor,
+            "callers either pass an explicit overload from classSym.ExplicitConstructors or rely on the legacy single-constructor fallback, which requires classSym to have declared at least one init(...) constructor");
         var function = ctor.Function;
         var init = ctor.BaseInitializer;
         var baseCtorToken = classSym.IsClass
@@ -1880,7 +1886,8 @@ internal sealed class TypeDefEmitter
                 this.emitCtx.Metadata.GetOrAddBlob(signature));
         }
 
-        return this.getImportedTypeHandle(importedBaseType.ClrType);
+        return this.getImportedTypeHandle(
+            Invariant.Required(importedBaseType.ClrType, "an imported base type has a CLR representation"));
     }
 
     /// <summary>
@@ -1892,8 +1899,8 @@ internal sealed class TypeDefEmitter
     /// </summary>
     private EntityHandle GetImportedBaseDefaultCtorReference(TypeSymbol importedBaseType)
     {
-        var importedBaseClr = importedBaseType.ClrType;
-        ConstructorInfo parameterless = null;
+        var importedBaseClr = Invariant.Required(importedBaseType.ClrType, "an imported base type has a CLR representation");
+        ConstructorInfo? parameterless = null;
         foreach (var ctor in importedBaseClr.GetConstructors(
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
@@ -1931,7 +1938,9 @@ internal sealed class TypeDefEmitter
     {
         if (init.IsClrBase)
         {
-            return this.getCtorReferenceForType(init.ClrConstructor, classSym.ImportedBaseType);
+            return this.getCtorReferenceForType(
+                Invariant.Required(init.ClrConstructor, "a CLR base initializer has a CLR constructor"),
+                classSym.ImportedBaseType);
         }
 
         var gsharpBase = init.GSharpBaseType;
@@ -1950,6 +1959,10 @@ internal sealed class TypeDefEmitter
                 : ((gsharpBase != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(gsharpBase)) ? gsharpBase : null);
         if (constructedGenericBase != null)
         {
+            // GSharpConstructor is null when the initializer targets the base's
+            // PRIMARY constructor rather than an explicit `init(...)` -- the same
+            // case the `init.GSharpConstructor != null` test below handles. The
+            // resolver takes null to mean exactly that.
             return this.resolveConstructedBaseExplicitCtorToken(constructedGenericBase, init.GSharpConstructor);
         }
 
@@ -1964,13 +1977,14 @@ internal sealed class TypeDefEmitter
         }
 
         if (init.Arguments.Length > 0
+            && gsharpBase != null
             && gsharpBase.HasPrimaryConstructor
             && this.cache.ClassPrimaryCtorHandles.TryGetValue(gsharpBase, out var primaryHandle))
         {
             return primaryHandle;
         }
 
-        if (this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
+        if (gsharpBase != null && this.cache.ClassCtorHandles.TryGetValue(gsharpBase, out var defaultHandle))
         {
             return defaultHandle;
         }
@@ -2063,7 +2077,12 @@ internal sealed class TypeDefEmitter
     {
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
-        valueBlob.WriteSerializedString(field.FixedBufferElementType.ClrType?.FullName ?? field.FixedBufferElementType.Name);
+        if (field.FixedBufferElementType is not { } elementType)
+        {
+            throw new InvalidOperationException("Fixed-buffer field is missing its element type.");
+        }
+
+        valueBlob.WriteSerializedString(elementType.ClrType?.FullName ?? elementType.Name);
         valueBlob.WriteInt32(field.FixedBufferLength);
         valueBlob.WriteUInt16(0);
 
@@ -2323,7 +2342,7 @@ internal sealed class TypeDefEmitter
     /// <param name="emitCtx">The current emit context.</param>
     /// <param name="typeDefHandle">The TypeDef handle the layout applies to.</param>
     /// <param name="metadata">The resolved layout metadata, or <c>null</c>.</param>
-    internal static void EmitClassLayout(EmitContext emitCtx, TypeDefinitionHandle typeDefHandle, StructLayoutMetadata metadata)
+    internal static void EmitClassLayout(EmitContext emitCtx, TypeDefinitionHandle typeDefHandle, StructLayoutMetadata? metadata)
     {
         if (metadata == null)
         {

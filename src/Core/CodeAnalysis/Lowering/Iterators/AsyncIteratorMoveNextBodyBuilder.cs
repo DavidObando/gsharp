@@ -200,7 +200,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         stateRead,
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            "int32 equality operator exists for async iterator state dispatch"),
                         Literal(state)),
                     jumpIfTrue: true));
             }
@@ -215,7 +217,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     new BoundBinaryExpression(
                         null,
                         ReadField(stateField),
-                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            "int32 equality operator exists for async iterator state dispatch"),
                         Literal(state)),
                     jumpIfTrue: true));
             }
@@ -240,10 +244,12 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var completingDispose = new BoundBinaryExpression(
                 null,
                 ReadField(disposeModeField),
-                BoundBinaryOperator.Bind(
-                    SyntaxKind.AmpersandAmpersandToken,
-                    TypeSymbol.Bool,
-                    TypeSymbol.Bool),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(
+                        SyntaxKind.AmpersandAmpersandToken,
+                        TypeSymbol.Bool,
+                        TypeSymbol.Bool),
+                    "boolean conjunction operator exists for async iterator disposal"),
                 isDisposeException);
 
             var promiseFieldType = typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>);
@@ -254,7 +260,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
             var call = new BoundImportedInstanceCallExpression(
                 null,
                 promiseAddr,
-                setExceptionMethod,
+                Invariant.Required(
+                    setExceptionMethod,
+                    "an async-iterator MoveNext body is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, and the iterator rewriter binds SetException itself"),
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, exLocal)));
             stmts.Add(new BoundIfStatement(
@@ -276,7 +284,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
             return new BoundImportedInstanceCallExpression(
                 null,
                 promiseAddr,
-                setResultMethod,
+                Invariant.Required(
+                    setResultMethod,
+                    "an async-iterator MoveNext body is only built for a builder that passed AsyncMethodBuilderInfo.IsValid, and the iterator rewriter binds SetResult itself"),
                 TypeSymbol.Void,
                 ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, value)));
         }
@@ -330,7 +340,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 if (rewrittenInit != node.Initializer)
                 {
-                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit);
+                    return new BoundVariableDeclaration(null, node.Variable, rewrittenInit, node.ConstantValue);
                 }
 
                 return node;
@@ -342,7 +352,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var yieldState = ctx.plan.YieldStates.Values.OrderBy(v => v).Reverse().ElementAt(yieldIndex - 1);
 
                 // Find the matching BoundYieldStatement in the plan.
-                BoundYieldStatement matchedYield = null;
+                BoundYieldStatement? matchedYield = null;
                 foreach (var kvp in ctx.plan.YieldStates)
                 {
                     if (kvp.Value == yieldState && ReferenceEquals(kvp.Key, node))
@@ -391,7 +401,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var disposeException = new BoundClrConstructorCallExpression(
                     null,
                     typeof(Exception),
+                    Invariant.Required(
                     typeof(Exception).GetConstructor(Type.EmptyTypes),
+                    "System.Exception declares a public parameterless constructor"),
                     ImmutableArray<BoundExpression>.Empty,
                     TypeSymbol.FromClrType(typeof(Exception)));
                 var throwDispose = new BoundBlockStatement(
@@ -501,8 +513,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 return new BoundGotoStatement(null, ctx.endOfBodyLabel);
             }
 
-            private BoundStatement GuardFinally(
-                BoundStatement finallyBlock,
+            private BoundStatement? GuardFinally(
+                BoundStatement? finallyBlock,
                 ImmutableArray<TryDispatchEntry> awaitEntries,
                 ImmutableArray<IteratorTryDispatchEntry> yieldEntries)
             {
@@ -511,7 +523,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     return null;
                 }
 
-                BoundExpression suspended = null;
+                BoundExpression? suspended = null;
                 foreach (var entry in awaitEntries)
                 {
                     suspended = AddSuspendedState(suspended, entry.State);
@@ -529,7 +541,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
 
                 var notSuspended = new BoundUnaryExpression(
                     null,
-                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    Invariant.Required(
+                        BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                        "the built-in operator table always binds `!` on bool"),
                     suspended);
                 return new BoundBlockStatement(
                     null,
@@ -537,25 +551,29 @@ public static class AsyncIteratorMoveNextBodyBuilder
                         new BoundIfStatement(null, notSuspended, finallyBlock, elseStatement: null)));
             }
 
-            private BoundExpression AddSuspendedState(BoundExpression condition, int state)
+            private BoundExpression AddSuspendedState(BoundExpression? condition, int state)
             {
                 var equalsState = new BoundBinaryExpression(
                     null,
                     ctx.ReadField(ctx.stateField),
-                    BoundBinaryOperator.Bind(
-                        SyntaxKind.EqualsEqualsToken,
-                        TypeSymbol.Int32,
-                        TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(
+                            SyntaxKind.EqualsEqualsToken,
+                            TypeSymbol.Int32,
+                            TypeSymbol.Int32),
+                        "int32 equality operator exists for async iterator state dispatch"),
                     Literal(state));
                 return condition == null
                     ? equalsState
                     : new BoundBinaryExpression(
                         null,
                         condition,
-                        BoundBinaryOperator.Bind(
-                            SyntaxKind.PipePipeToken,
-                            TypeSymbol.Bool,
-                            TypeSymbol.Bool),
+                        Invariant.Required(
+                            BoundBinaryOperator.Bind(
+                                SyntaxKind.PipePipeToken,
+                                TypeSymbol.Bool,
+                                TypeSymbol.Bool),
+                            "boolean disjunction operator exists for async iterator state dispatch"),
                         equalsState);
             }
 
@@ -564,12 +582,14 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var condition = new BoundBinaryExpression(
                     null,
                     ctx.ReadField(ctx.stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for async iterator state dispatch"),
                     Literal(state));
                 return new BoundConditionalGotoStatement(null, target, condition, jumpIfTrue: true);
             }
 
-            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol resultTarget)
+            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol? resultTarget)
             {
                 if (!ctx.plan.AwaitStates.TryGetValue(awaitExpr, out var awaitState))
                 {
@@ -599,7 +619,8 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var stmts = ImmutableArray.CreateBuilder<BoundStatement>();
 
                 // TAwaiter awaiter = <expr>.GetAwaiter();
-                var rewrittenOperand = RewriteExpression(awaitExpr.Expression);
+                var rewrittenOperand = RewriteExpression(
+                    Invariant.Required(awaitExpr.Expression, "an await expression has an operand"));
                 BoundExpression getAwaiterReceiver;
                 var awaitableClrType = awaitExpr.Expression?.Type?.ClrType;
                 if (awaitableClrType != null && awaitableClrType.IsValueType)
@@ -641,7 +662,9 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var isCompletedCall = new BoundImportedInstanceCallExpression(
                     null,
                     isCompletedReceiver,
-                    isCompletedGetter,
+                    Invariant.Required(
+                        isCompletedGetter,
+                        "AwaitableShape.Resolve only returns a shape when the awaiter declares a readable IsCompleted"),
                     TypeSymbol.Bool,
                     ImmutableArray<BoundExpression>.Empty);
                 stmts.Add(new BoundConditionalGotoStatement(null, resumeAfterLabel, isCompletedCall, jumpIfTrue: true));

@@ -29,10 +29,12 @@ public static class AsyncStateMachineRewriter
     /// <paramref name="program"/>.
     /// </summary>
     /// <param name="program">The bound program to inspect.</param>
-    /// <param name="references">The compilation reference resolver.</param>
+    /// <param name="references">The compilation reference resolver, or
+    /// <see langword="null"/> when none is available, in which case no builder
+    /// resolves and no plan is produced.</param>
     /// <returns>A rewrite result containing the original program and one plan
     /// per async function whose builder could be resolved.</returns>
-    public static AsyncStateMachineRewriteResult Rewrite(BoundProgram program, ReferenceResolver references)
+    public static AsyncStateMachineRewriteResult Rewrite(BoundProgram program, ReferenceResolver? references)
     {
         if (program == null)
         {
@@ -97,10 +99,10 @@ public static class AsyncStateMachineRewriter
     /// <param name="references">The compilation reference resolver.</param>
     /// <param name="packageName">The host package name for ordinal allocation.</param>
     /// <returns>A plan, or null if the builder could not be resolved.</returns>
-    public static AsyncStateMachinePlan RewriteSingle(
+    public static AsyncStateMachinePlan? RewriteSingle(
         FunctionSymbol function,
         BoundBlockStatement body,
-        ReferenceResolver references,
+        ReferenceResolver? references,
         string packageName)
     {
         if (function == null || !function.IsAsync)

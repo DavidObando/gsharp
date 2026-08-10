@@ -79,7 +79,7 @@ internal sealed partial class MethodBodyEmitter
             this.EmitFunctionToDelegateConversion(
                 conv.Expression,
                 constructedDelegateSource,
-                constructedDelegateTarget.ClrType,
+                Invariant.Required(constructedDelegateTarget.ClrType, "a constructed delegate has a CLR representation"),
                 this.outer.memberRefs.GetConstructedDelegateCtorRef(constructedDelegateTarget));
             return;
         }
@@ -432,7 +432,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if ((to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)) && ReflectionMetadataEmitter.IsValueTypeSymbol(from))
+        if ((to.ClrType?.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)) && ReflectionMetadataEmitter.IsValueTypeSymbol(from))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
@@ -445,7 +445,7 @@ internal sealed partial class MethodBodyEmitter
         // above and lets inherited Enum/ValueType members receive the boxed
         // receiver/argument (e.g. an enum passed to System.Enum.HasFlag).
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(from)
-            && to?.ClrType is System.Type valueBoxTarget
+            && to.ClrType is System.Type valueBoxTarget
             && (valueBoxTarget.IsSameAs(typeof(System.ValueType))
                 || valueBoxTarget.IsSameAs(typeof(System.Enum))))
         {
@@ -474,7 +474,7 @@ internal sealed partial class MethodBodyEmitter
         // constraint case, so we box the wrapper symbol directly.
         if ((from is TypeParameterSymbol
                 || (from is NullableTypeSymbol fromNullableTp && fromNullableTp.UnderlyingType is TypeParameterSymbol))
-            && (to?.ClrType.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
+            && (to.ClrType?.IsSameAs(typeof(object)) == true || IsInterfaceTargetType(to)))
         {
             this.il.OpCode(ILOpCode.Box);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(from));
@@ -518,8 +518,8 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        if (from?.ClrType.IsSameAs(typeof(object)) == true
-            && to?.ClrType.IsSameAs(typeof(object)) == false
+        if (from.ClrType?.IsSameAs(typeof(object)) == true
+            && to.ClrType?.IsSameAs(typeof(object)) == false
             && to is not TypeParameterSymbol
             && !ReflectionMetadataEmitter.IsValueTypeSymbol(to))
         {
@@ -534,8 +534,8 @@ internal sealed partial class MethodBodyEmitter
         // Expression<TDelegate> subtype requested by the supplied delegate
         // Type, so the synthesized final step is an explicit reference cast
         // from LambdaExpression to Expression<TDelegate>.
-        if (from?.ClrType?.FullName == "System.Linq.Expressions.LambdaExpression"
-            && to?.ClrType != null
+        if (from.ClrType?.FullName == "System.Linq.Expressions.LambdaExpression"
+            && to.ClrType != null
             && to.ClrType.IsGenericType
             && string.Equals(
                 (to.ClrType.IsGenericTypeDefinition ? to.ClrType : to.ClrType.GetGenericTypeDefinition()).FullName,
@@ -590,7 +590,7 @@ internal sealed partial class MethodBodyEmitter
         // Issue #663: fall back to user-defined op_Implicit / op_Explicit when
         // no built-in emit path fires. This covers types like JsonNode that
         // expose conversion operators to string, int, bool, etc.
-        if (from?.ClrType != null && to?.ClrType != null
+        if (from.ClrType != null && to.ClrType != null
             && ClrOperatorResolution.TryResolveConversion(from.ClrType, to.ClrType, allowExplicit: true, out var userConvMethod, out _))
         {
             this.il.OpCode(ILOpCode.Call);
@@ -604,8 +604,8 @@ internal sealed partial class MethodBodyEmitter
         // through the `System.String(char[])` constructor. Resolving the ctor
         // from `to.ClrType` (rather than `typeof(string)`) keeps it in the
         // active reference context (live host vs MetadataLoadContext).
-        if (to?.ClrType != null && to.ClrType.IsSameAs(typeof(string))
-            && from?.ClrType is { IsArray: true } fromArray
+        if (to.ClrType != null && to.ClrType.IsSameAs(typeof(string))
+            && from.ClrType is { IsArray: true } fromArray
             && fromArray.GetElementType() is System.Type fromElement
             && fromElement.IsSameAs(typeof(char)))
         {
@@ -740,8 +740,7 @@ internal sealed partial class MethodBodyEmitter
         if (!this.receiverSpillSlots.TryGetValue(conv, out var srcSlot))
         {
             throw new InvalidOperationException(
-                "No scratch slot pre-allocated for lifted Nullable<T1> -> Nullable<T2> numeric widening — "
-                + "check CollectNullableNumericWideningConversions and the prepass in CollectLocalsAndLabels.");
+                "No scratch slot pre-allocated for lifted Nullable<T1> -> Nullable<T2> numeric widening — check CollectNullableNumericWideningConversions and the prepass in CollectLocalsAndLabels.");
         }
 
         var dstSlot = srcSlot + 1;
@@ -799,13 +798,13 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(end);
     }
 
-    private void EmitErasedObjectReturnWidening(TypeSymbol runtimeReturnType, TypeSymbol expectedType)
+    private void EmitErasedObjectReturnWidening(TypeSymbol runtimeReturnType, TypeSymbol? expectedType)
     {
         if (!IsObjectStackType(runtimeReturnType)
-            || expectedType == null
+            || expectedType is null
             || expectedType == TypeSymbol.Void
             || expectedType == TypeSymbol.Error
-            || expectedType?.ClrType.IsSameAs(typeof(object)) == true)
+            || expectedType.ClrType?.IsSameAs(typeof(object)) == true)
         {
             return;
         }
@@ -847,7 +846,7 @@ internal sealed partial class MethodBodyEmitter
     // true the narrowing is emitted with the overflow-trapping
     // `conv.ovf.*` opcodes so values that don't fit the target throw
     // <see cref="System.OverflowException"/> instead of truncating.
-    private bool TryEmitNumericConversion(TypeSymbol fromSym, TypeSymbol toSym, bool isChecked = false)
+    private bool TryEmitNumericConversion(TypeSymbol? fromSym, TypeSymbol? toSym, bool isChecked = false)
     {
         var from = fromSym?.ClrType;
         var to = toSym?.ClrType;
@@ -984,7 +983,7 @@ internal sealed partial class MethodBodyEmitter
             // signature alone and would throw `AmbiguousMatchException`, so
             // we must disambiguate by BOTH parameter and return type by
             // iterating the operator overloads ourselves.
-            MethodInfo op = null;
+            MethodInfo? op = null;
             foreach (var m in typeof(decimal).GetMethods())
             {
                 if (m.Name == "op_Explicit"
@@ -1228,7 +1227,7 @@ internal sealed partial class MethodBodyEmitter
         var closed = openCreateInstance.MakeGenericMethod(typeof(object));
         var handle = this.outer.memberRefs.GetMethodEntityHandle(
             closed,
-            ImmutableArray.Create<TypeSymbol>(node.TypeParameter));
+            ImmutableArray.Create<TypeSymbol?>(node.TypeParameter));
 
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(handle);

@@ -19,7 +19,7 @@ public sealed class BoundSizeOfExpression : BoundExpression
     /// <summary>Initializes a new instance of the <see cref="BoundSizeOfExpression"/> class.</summary>
     /// <param name="syntax">The originating syntax (may be <see langword="null"/> for lowered nodes).</param>
     /// <param name="measuredType">The type whose unmanaged size is measured.</param>
-    public BoundSizeOfExpression(SyntaxNode syntax, TypeSymbol measuredType)
+    public BoundSizeOfExpression(SyntaxNode? syntax, TypeSymbol measuredType)
         : base(syntax)
     {
         MeasuredType = measuredType;

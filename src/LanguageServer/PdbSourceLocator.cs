@@ -298,7 +298,7 @@ public static class PdbSourceLocator
         var pathLock = PathLocks.GetOrAdd(assemblyFilePath, static _ => new object());
         Monitor.Enter(pathLock);
 
-        MetadataReaderProvider loadedProvider = null;
+        MetadataReaderProvider? loadedProvider = null;
         try
         {
             if (!File.Exists(assemblyFilePath))
@@ -358,7 +358,7 @@ public static class PdbSourceLocator
         }
     }
 
-    private static MetadataReaderProvider LoadReaderProvider(string assemblyFilePath)
+    private static MetadataReaderProvider? LoadReaderProvider(string assemblyFilePath)
     {
         try
         {
@@ -470,7 +470,7 @@ public static class PdbSourceLocator
         /// </summary>
         public static readonly ReaderLease Invalid = default;
 
-        private readonly object pathLock;
+        private readonly object? pathLock;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ReaderLease"/> struct

@@ -20,7 +20,7 @@ public sealed class BoundSwitchExpression : BoundExpression
     /// <param name="discriminant">The bound discriminant expression.</param>
     /// <param name="arms">The bound switch-expression arms.</param>
     /// <param name="type">The unified result type.</param>
-    public BoundSwitchExpression(SyntaxNode syntax, BoundExpression discriminant, ImmutableArray<BoundSwitchExpressionArm> arms, TypeSymbol type)
+    public BoundSwitchExpression(SyntaxNode? syntax, BoundExpression discriminant, ImmutableArray<BoundSwitchExpressionArm> arms, TypeSymbol type)
         : base(syntax)
     {
         Discriminant = discriminant;

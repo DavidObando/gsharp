@@ -13,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
@@ -231,7 +232,9 @@ internal sealed class UserTokenResolver
         }
 
         var args = new TypeSymbol[tps.Length];
-        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(call.Function, call.ReturnType);
+        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(
+            call.Function,
+            Invariant.Required(call.ReturnType, "a generic call has a return type for inference"));
         for (int i = 0; i < tps.Length; i++)
         {
             args[i] = InferMethodTypeArgument(call.Function, call.Arguments, inferenceReturn, tps[i]);
@@ -380,7 +383,7 @@ internal sealed class UserTokenResolver
         return expr;
     }
 
-    private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, out TypeSymbol inferred)
+    private static bool TryUnify(TypeSymbol formal, TypeSymbol actual, TypeParameterSymbol tp, [NotNullWhen(true)] out TypeSymbol? inferred)
     {
         // Issue #1570: a `ref`/`out`/`in` parameter whose declared type mentions
         // the method (or containing) type parameter arrives here with a byref
@@ -468,7 +471,7 @@ internal sealed class UserTokenResolver
             if (actual?.ClrType is { } actualClrSeq)
             {
                 var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
-                System.Type matched = null;
+                System.Type? matched = null;
                 if (actualClrSeq.IsArray)
                 {
                     var elt = actualClrSeq.GetElementType();
@@ -517,7 +520,7 @@ internal sealed class UserTokenResolver
         if (formal is AsyncSequenceTypeSymbol faseqAny && actual?.ClrType is { } actualClrAseq)
         {
             var openIAsync = typeof(System.Collections.Generic.IAsyncEnumerable<>);
-            System.Type matched = null;
+            System.Type? matched = null;
             if (actualClrAseq.IsGenericType
                 && actualClrAseq.GetGenericTypeDefinition() == openIAsync)
             {
@@ -617,7 +620,7 @@ internal sealed class UserTokenResolver
             && (actual is SliceTypeSymbol || actual is ArrayTypeSymbol)
             && actual?.ClrType is { IsArray: true } actualClrArray)
         {
-            Type matched = null;
+            Type? matched = null;
             foreach (var iface in actualClrArray.GetInterfaces())
             {
                 if (iface.IsGenericType
@@ -696,7 +699,7 @@ internal sealed class UserTokenResolver
         return false;
     }
 
-    private static bool TryGetFunctionShapeSlots(TypeSymbol type, out ImmutableArray<TypeSymbol> slots)
+    private static bool TryGetFunctionShapeSlots(TypeSymbol? type, out ImmutableArray<TypeSymbol> slots)
     {
         // Issue #1431: normalise a function shape into a flat slot list of
         // [parameter types..., return type?] so a native `FunctionTypeSymbol`
@@ -752,7 +755,7 @@ internal sealed class UserTokenResolver
             || name.StartsWith("Action`", StringComparison.Ordinal);
     }
 
-    private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol type)
+    private static ImmutableArray<TypeSymbol> GetGenericTypeArguments(TypeSymbol? type)
     {
         var args = type switch
         {
@@ -1244,7 +1247,7 @@ internal sealed class UserTokenResolver
     internal EntityHandle GetUserStructFieldRef(StructSymbol containingType, FieldSymbol fieldOnContaining)
     {
         var def = containingType.Definition ?? containingType;
-        FieldSymbol defField = null;
+        FieldSymbol? defField = null;
         foreach (var candidate in def.Fields)
         {
             if (candidate.Name == fieldOnContaining.Name)
@@ -1965,7 +1968,7 @@ internal sealed class UserTokenResolver
     /// type; a MemberRef parented at the constructed base's TypeSpec is emitted
     /// with the open ctor's signature (type-parameter slots encode as VAR).
     /// </summary>
-    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol ctor)
+    internal EntityHandle ResolveConstructedBaseExplicitCtorToken(StructSymbol constructedBase, ConstructorSymbol? ctor)
     {
         if (ctor == null || !this.cache.ExplicitCtorHandles.TryGetValue(ctor, out var ctorDef))
         {
@@ -2157,7 +2160,7 @@ internal sealed class UserTokenResolver
     internal bool TryGetSymbolicSubstitutedPropertyReturn(
         TypeSymbol receiverType,
         PropertyInfo property,
-        out TypeSymbol substitutedReturn)
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (property == null
@@ -2229,7 +2232,7 @@ internal sealed class UserTokenResolver
     internal bool TryGetSymbolicSubstitutedInstanceMethodReturn(
         TypeSymbol receiverType,
         MethodInfo method,
-        out TypeSymbol substitutedReturn)
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (method == null
@@ -2310,8 +2313,8 @@ internal sealed class UserTokenResolver
     /// must be skipped.</returns>
     internal bool TryGetSymbolicSubstitutedImportedCallReturn(
         MethodInfo method,
-        ImmutableArray<TypeSymbol> typeArgSymbols,
-        out TypeSymbol substitutedReturn)
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        [NotNullWhen(true)] out TypeSymbol? substitutedReturn)
     {
         substitutedReturn = null;
         if (method == null

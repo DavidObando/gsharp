@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -17,18 +18,18 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundScope
 {
-    private ImmutableDictionary<string, Symbol>.Builder symbols;
-    private ImmutableArray<string>.Builder symbolKeys;
-    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder functions;
-    private ImmutableArray<string>.Builder functionKeys;
-    private ImmutableArray<ImportSymbol>.Builder imports;
-    private ImmutableDictionary<string, TypeSymbol>.Builder typeAliases;
+    private ImmutableDictionary<string, Symbol>.Builder? symbols;
+    private ImmutableArray<string>.Builder? symbolKeys;
+    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder? functions;
+    private ImmutableArray<string>.Builder? functionKeys;
+    private ImmutableArray<ImportSymbol>.Builder? imports;
+    private ImmutableDictionary<string, TypeSymbol>.Builder? typeAliases;
 
     // ADR-0156 Phase 2: registered on the root scope of an interactive
     // submission's scope chain; exposed via SubmissionImports.
-    private SubmissionImports submissionImports;
-    private ImmutableArray<string>.Builder typeAliasKeys;
-    private ImmutableArray<FunctionSymbol>.Builder extensionFunctions;
+    private SubmissionImports? submissionImports;
+    private ImmutableArray<string>.Builder? typeAliasKeys;
+    private ImmutableArray<FunctionSymbol>.Builder? extensionFunctions;
 
     // Issue #2342 follow-up: per-storage-key override recording the
     // DECLARING package of a plain `type Name = Target` alias (see
@@ -39,7 +40,7 @@ public sealed class BoundScope
     // interface/delegate declarations leave their key unregistered here since
     // their stored value already carries accurate package identity
     // intrinsically (see TypePackageName).
-    private ImmutableDictionary<string, string>.Builder aliasDeclaringPackages;
+    private ImmutableDictionary<string, string>.Builder? aliasDeclaringPackages;
 
     // Issue #2224: lazily created only on the root scope of whatever chain
     // this scope belongs to. Every Binder in a single BindGlobalScope/
@@ -48,12 +49,12 @@ public sealed class BoundScope
     // that pass — top-level statements, function bodies, method bodies,
     // lambdas — unify against one shape cache, mirroring Roslyn's
     // per-compilation anonymous-type cache.
-    private AnonymousTypeCache anonymousTypeCache;
+    private AnonymousTypeCache? anonymousTypeCache;
 
     // Issue #2342: the ambient "current declaring package" (see
     // SetCurrentDeclaringPackage), lazily set/cleared only on the root scope
     // of the chain, exactly like anonymousTypeCache above.
-    private AsyncLocal<string> currentDeclaringPackageName = new AsyncLocal<string>();
+    private AsyncLocal<string?> currentDeclaringPackageName = new AsyncLocal<string?>();
 
     // Issue #2456 (per-file import scoping / #2395 follow-up): the ambient
     // "current referencing syntax tree" (see SetCurrentReferencingSyntaxTree),
@@ -61,8 +62,8 @@ public sealed class BoundScope
     // single member body, mirroring currentDeclaringPackageName exactly.
     // Import enumeration consults this to expose only imports declared in the
     // same file as the reference being resolved, plus implicit imports.
-    private AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree> currentReferencingSyntaxTree =
-        new AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree>();
+    private AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?> currentReferencingSyntaxTree =
+        new AsyncLocal<GSharp.Core.CodeAnalysis.Syntax.SyntaxTree?>();
 
     // Issue #2455: the ambient "qualified construction package hint" (see
     // SetQualifiedConstructionPackageHint), set only while re-binding the
@@ -75,9 +76,9 @@ public sealed class BoundScope
     // even though the qualification already disambiguates it. Lazily set/
     // cleared only on the root scope of the chain, exactly like
     // currentDeclaringPackageName above.
-    private AsyncLocal<string> qualifiedConstructionPackageHint = new AsyncLocal<string>();
+    private AsyncLocal<string?> qualifiedConstructionPackageHint = new AsyncLocal<string?>();
 
-    private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> richAnonymousClassMap;
+    private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>? richAnonymousClassMap;
 
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
     // per-call-site hot path run for every member call that doesn't resolve as an
@@ -89,13 +90,13 @@ public sealed class BoundScope
     // logic as before over the narrowed candidate set. This changes only how
     // candidates are FOUND, never which one wins: same receiver-matching rules, same
     // scope/shadowing order, so resolution and diagnostics are unchanged.
-    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder extensionFunctionsByName;
+    private ImmutableDictionary<string, ImmutableArray<FunctionSymbol>.Builder>.Builder? extensionFunctionsByName;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundScope"/> class.
     /// </summary>
-    /// <param name="parent">The parent scope.</param>
-    public BoundScope(BoundScope parent)
+    /// <param name="parent">The parent scope, or <see langword="null"/> for a root scope.</param>
+    public BoundScope(BoundScope? parent)
         : this(parent, references: null, preprocessorSymbols: null)
     {
     }
@@ -105,9 +106,9 @@ public sealed class BoundScope
     /// an explicit reference resolver. Child scopes inherit the parent's
     /// resolver when one is not supplied.
     /// </summary>
-    /// <param name="parent">The parent scope.</param>
+    /// <param name="parent">The parent scope, or <see langword="null"/> for a root scope.</param>
     /// <param name="references">The reference resolver; defaults to the parent's resolver, or <see cref="ReferenceResolver.Default"/> if none.</param>
-    public BoundScope(BoundScope parent, ReferenceResolver references)
+    public BoundScope(BoundScope? parent, ReferenceResolver? references)
         : this(parent, references, preprocessorSymbols: null)
     {
     }
@@ -118,10 +119,10 @@ public sealed class BoundScope
     /// (ADR-0047 §6 / issue #176). Child scopes inherit both from the parent
     /// when not supplied.
     /// </summary>
-    /// <param name="parent">The parent scope.</param>
+    /// <param name="parent">The parent scope, or <see langword="null"/> for a root scope (see <see cref="Binder.CreateRootScope"/>).</param>
     /// <param name="references">The reference resolver; defaults to the parent's resolver, or <see cref="ReferenceResolver.Default"/> if none.</param>
     /// <param name="preprocessorSymbols">The active preprocessor symbol set; defaults to the parent's set, or an empty set if none.</param>
-    public BoundScope(BoundScope parent, ReferenceResolver references, ImmutableHashSet<string> preprocessorSymbols)
+    public BoundScope(BoundScope? parent, ReferenceResolver? references, ImmutableHashSet<string>? preprocessorSymbols)
     {
         // Issue #1647: symbolKeys/functionKeys/imports/typeAliases/typeAliasKeys
         // are kept PER-SCOPE only (declared-here entries), just like the
@@ -135,9 +136,10 @@ public sealed class BoundScope
     }
 
     /// <summary>
-    /// Gets the parent scope.
+    /// Gets the parent scope, or <see langword="null"/> for a root scope (see
+    /// <see cref="Binder.CreateRootScope"/>, which passes <c>parent: null</c>).
     /// </summary>
-    public BoundScope Parent { get; }
+    public BoundScope? Parent { get; }
 
     /// <summary>
     /// Gets the reference resolver used to look up imported CLR types.
@@ -157,7 +159,25 @@ public sealed class BoundScope
     /// from this scope, walking the parent chain to the root scope it was
     /// registered on; <see langword="null"/> for ordinary compilations.
     /// </summary>
-    public SubmissionImports SubmissionImports => submissionImports ?? Parent?.SubmissionImports;
+    public SubmissionImports? SubmissionImports => submissionImports ?? Parent?.SubmissionImports;
+
+    /// <summary>
+    /// Returns the enclosing scope, for a pop that pairs with an earlier
+    /// <c>scope = new BoundScope(scope)</c> push.
+    /// </summary>
+    /// <remarks>
+    /// Binders push and pop scopes in matched pairs, so a scope being popped
+    /// always has a parent -- only the root from <see cref="Binder.CreateRootScope"/>
+    /// has none, and nothing pops the root. Stating that once here replaces the
+    /// twenty identical <c>scope.Parent!</c> suppressions the binders carried,
+    /// and upgrades the failure mode from a null that propagates into an NRE
+    /// somewhere later into a GS9998 naming the cause at the pop itself.
+    /// </remarks>
+    /// <returns>The enclosing scope.</returns>
+    public BoundScope Pop()
+        => Invariant.Required(
+            Parent,
+            "a scope being popped was pushed as a child of an enclosing scope; only the root scope has no parent, and the root is never popped");
 
     /// <summary>
     /// Tries to add an import to this scope.
@@ -465,7 +485,7 @@ public sealed class BoundScope
     /// <param name="name">The method name at the call site.</param>
     /// <param name="function">The matching extension function, when found.</param>
     /// <returns>True when an extension function matches.</returns>
-    public bool TryLookupExtensionFunction(TypeSymbol receiverType, string name, out FunctionSymbol function)
+    public bool TryLookupExtensionFunction(TypeSymbol receiverType, string name, [NotNullWhen(true)] out FunctionSymbol? function)
     {
         function = null;
 
@@ -553,7 +573,7 @@ public sealed class BoundScope
         // colliding extension under this name still sees every OTHER
         // extension by simple name via the plain-key fallback below.
         var currentPackage = GetCurrentDeclaringPackage();
-        string ownKey = null;
+        string? ownKey = null;
         if (currentPackage != null)
         {
             ownKey = PackageQualifiedName(currentPackage, name);
@@ -590,9 +610,9 @@ public sealed class BoundScope
     /// <summary>
     /// Tries to look up a symbol by its name in this scope.
     /// </summary>
-    /// <param name="name">The symbol name.</param>
-    /// <returns>The symbol.</returns>
-    public Symbol TryLookupSymbol(string name)
+    /// <param name="name">The symbol name; <see langword="null"/> is accepted and always misses (see the recursive <see cref="Parent"/> call below, which propagates whatever name was passed in).</param>
+    /// <returns>The symbol, or <see langword="null"/> when not found.</returns>
+    public Symbol? TryLookupSymbol(string? name)
     {
         if (name != null && symbols != null && symbols.TryGetValue(name, out var symbol))
         {
@@ -629,7 +649,7 @@ public sealed class BoundScope
     /// <param name="arity">The number of type parameters.</param>
     /// <param name="type">The resolved open generic <see cref="System.Type"/> on success.</param>
     /// <returns>Whether a matching open generic type was found.</returns>
-    public bool TryLookupImportedGenericClass(string name, int arity, out System.Type type)
+    public bool TryLookupImportedGenericClass(string name, int arity, [NotNullWhen(true)] out System.Type? type)
     {
         type = null;
         if (arity <= 0)
@@ -668,7 +688,7 @@ public sealed class BoundScope
     /// <param name="declaration">The declaration.</param>
     /// <param name="importedClass">The result, if found.</param>
     /// <returns>Whether a class was found or not.</returns>
-    public bool TryLookupImportedClass(string name, ExpressionSyntax declaration, out ImportedClassSymbol importedClass)
+    public bool TryLookupImportedClass(string name, ExpressionSyntax? declaration, [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
     {
         importedClass = null;
 
@@ -717,7 +737,7 @@ public sealed class BoundScope
             yield break;
         }
 
-        System.Collections.Generic.HashSet<System.Type> seen = null;
+        System.Collections.Generic.HashSet<System.Type>? seen = null;
         foreach (var import in EnumerateImports())
         {
             if (import.IsImplicit || import.IsAlias)
@@ -743,7 +763,7 @@ public sealed class BoundScope
     /// <param name="name">The name as it appears in user code.</param>
     /// <param name="import">The matching import, when found.</param>
     /// <returns>Whether a matching import exists.</returns>
-    public bool TryLookupImport(string name, out ImportSymbol import)
+    public bool TryLookupImport(string name, [NotNullWhen(true)] out ImportSymbol? import)
     {
         import = null;
 
@@ -779,7 +799,13 @@ public sealed class BoundScope
         }
 
         var builder = ImmutableArray.CreateBuilder<FunctionSymbol>();
-        foreach (var key in functionKeys)
+
+        // functionKeys is always assigned together with functions, in the same
+        // `functions ??= ...; functionKeys ??= ...;` pair at the top of
+        // TryDeclareFunction — the only place either field is populated.
+        // functions != null (checked above) therefore guarantees functionKeys
+        // != null too.
+        foreach (var key in functionKeys!)
         {
             if (functions.TryGetValue(key, out var bucket))
             {
@@ -851,7 +877,7 @@ public sealed class BoundScope
     /// carries accurate, stable package identity intrinsically.
     /// </param>
     /// <returns>Whether the alias was declared (false if the name was already taken).</returns>
-    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string declaringPackageName)
+    public bool TryDeclareTypeAlias(string name, TypeSymbol target, string? declaringPackageName)
     {
         if (name == null)
         {
@@ -930,7 +956,12 @@ public sealed class BoundScope
                 return false;
             }
 
-            AddTypeAlias(existingQualifiedKey, existing);
+            // existingEnclosing (= TypeContainingType(existing), checked non-null
+            // above) can only be non-null when `existing` matched one of
+            // TypeContainingType's StructSymbol/EnumSymbol/InterfaceSymbol type
+            // patterns — a null `existing` always falls through to `_ => null`
+            // (type patterns never match null) — so existing is non-null here.
+            AddTypeAlias(existingQualifiedKey, existing!);
             if (TryGetAliasDeclaringPackageInChain(key, out var carriedOverPackage))
             {
                 RegisterAliasDeclaringPackage(existingQualifiedKey, carriedOverPackage);
@@ -988,7 +1019,7 @@ public sealed class BoundScope
     /// <param name="name">The alias name.</param>
     /// <param name="type">The aliased type, when found.</param>
     /// <returns>Whether an alias exists.</returns>
-    public bool TryLookupTypeAlias(string name, out TypeSymbol type)
+    public bool TryLookupTypeAlias(string name, [NotNullWhen(true)] out TypeSymbol? type)
         => TryLookupTypeAlias(name, preferredArity: -1, out type);
 
     /// <summary>
@@ -1003,7 +1034,7 @@ public sealed class BoundScope
     /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
     /// <param name="type">The aliased type, when found.</param>
     /// <returns>Whether an alias exists.</returns>
-    public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type)
+    public bool TryLookupTypeAlias(string name, int preferredArity, [NotNullWhen(true)] out TypeSymbol? type)
         => TryLookupTypeAlias(name, preferredArity, out type, out _);
 
     /// <summary>
@@ -1028,7 +1059,7 @@ public sealed class BoundScope
     /// match at all).
     /// </param>
     /// <returns>Whether an alias exists.</returns>
-    public bool TryLookupTypeAlias(string name, int preferredArity, out TypeSymbol type, out bool ambiguousAcrossImportedPackages)
+    public bool TryLookupTypeAlias(string name, int preferredArity, [NotNullWhen(true)] out TypeSymbol? type, out bool ambiguousAcrossImportedPackages)
     {
         type = null;
         ambiguousAcrossImportedPackages = false;
@@ -1137,7 +1168,7 @@ public sealed class BoundScope
 
         // No arity-0 type: resolve the lowest-arity same-name generic variant
         // so a lone generic definition keeps resolving by simple name.
-        TypeSymbol best = null;
+        TypeSymbol? best = null;
         var bestArity = int.MaxValue;
         foreach (var pair in EnumerateTypeAliasesInChain())
         {
@@ -1174,7 +1205,7 @@ public sealed class BoundScope
     /// <param name="preferredArity">The preferred generic arity, or -1 for none.</param>
     /// <param name="type">The resolved nested type, when found.</param>
     /// <returns>Whether a nested type with that container and name exists.</returns>
-    public bool TryLookupNestedTypeAlias(TypeSymbol container, string simpleName, int preferredArity, out TypeSymbol type)
+    public bool TryLookupNestedTypeAlias(TypeSymbol container, string simpleName, int preferredArity, [NotNullWhen(true)] out TypeSymbol? type)
     {
         type = null;
         if (container == null || string.IsNullOrEmpty(simpleName))
@@ -1207,7 +1238,7 @@ public sealed class BoundScope
         }
 
         // Lowest-arity same-name generic variant under the qualified key.
-        TypeSymbol best = null;
+        TypeSymbol? best = null;
         var bestArity = int.MaxValue;
         foreach (var pair in EnumerateTypeAliasesInChain())
         {
@@ -1281,8 +1312,8 @@ public sealed class BoundScope
         StructSymbol container,
         string simpleName,
         int preferredArity,
-        out TypeSymbol type,
-        out StructSymbol declaringContainer)
+        [NotNullWhen(true)] out TypeSymbol? type,
+        [NotNullWhen(true)] out StructSymbol? declaringContainer)
     {
         for (var c = container.BaseClass; c != null; c = c.BaseClass)
         {
@@ -1361,7 +1392,7 @@ public sealed class BoundScope
     /// this (root) scope; exposed to child scopes via <see cref="SubmissionImports"/>.
     /// </summary>
     /// <param name="imports">The submission import set; may be <see langword="null"/>.</param>
-    internal void SetSubmissionImports(SubmissionImports imports) => submissionImports = imports;
+    internal void SetSubmissionImports(SubmissionImports? imports) => submissionImports = imports;
 
     /// <summary>
     /// Gets the per-compile-pass anonymous-class-literal type cache (issue
@@ -1388,7 +1419,7 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="packageName">The package name to make ambient for lookup, or <see langword="null"/> to clear it.</param>
     /// <returns>The previous ambient package name.</returns>
-    internal string SetCurrentDeclaringPackage(string packageName)
+    internal string? SetCurrentDeclaringPackage(string? packageName)
     {
         if (Parent != null)
         {
@@ -1417,7 +1448,7 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="tree">The syntax tree to make ambient for lookup, or <see langword="null"/> to clear it.</param>
     /// <returns>The previous ambient referencing syntax tree.</returns>
-    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree SetCurrentReferencingSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree)
+    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? SetCurrentReferencingSyntaxTree(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? tree)
     {
         if (Parent != null)
         {
@@ -1429,7 +1460,7 @@ public sealed class BoundScope
         return previous;
     }
 
-    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree GetCurrentReferencingSyntaxTreeForCache()
+    internal GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTreeForCache()
         => GetCurrentReferencingSyntaxTree();
 
     /// <summary>
@@ -1465,7 +1496,7 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="packageName">The explicitly-qualified package name to make ambient for lookup, or <see langword="null"/> to clear it.</param>
     /// <returns>The previous ambient qualified-construction package hint.</returns>
-    internal string SetQualifiedConstructionPackageHint(string packageName)
+    internal string? SetQualifiedConstructionPackageHint(string? packageName)
     {
         if (Parent != null)
         {
@@ -1482,7 +1513,7 @@ public sealed class BoundScope
     /// <see cref="SetCurrentDeclaringPackage"/>, or <see langword="null"/> when
     /// none is set.
     /// </summary>
-    private string GetCurrentDeclaringPackage()
+    private string? GetCurrentDeclaringPackage()
         => Parent != null ? Parent.GetCurrentDeclaringPackage() : currentDeclaringPackageName.Value;
 
     /// <summary>
@@ -1491,7 +1522,7 @@ public sealed class BoundScope
     /// when none is set (no per-file import restriction available; the
     /// import-based disambiguation this fix adds simply does not fire).
     /// </summary>
-    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree GetCurrentReferencingSyntaxTree()
+    private GSharp.Core.CodeAnalysis.Syntax.SyntaxTree? GetCurrentReferencingSyntaxTree()
         => Parent != null ? Parent.GetCurrentReferencingSyntaxTree() : currentReferencingSyntaxTree.Value;
 
     /// <summary>
@@ -1499,7 +1530,7 @@ public sealed class BoundScope
     /// by <see cref="SetQualifiedConstructionPackageHint"/>, or
     /// <see langword="null"/> when none is set.
     /// </summary>
-    private string GetQualifiedConstructionPackageHint()
+    private string? GetQualifiedConstructionPackageHint()
         => Parent != null ? Parent.GetQualifiedConstructionPackageHint() : qualifiedConstructionPackageHint.Value;
 
     /// <summary>
@@ -1518,7 +1549,7 @@ public sealed class BoundScope
     /// <param name="hintPackage">The explicitly-qualified package name.</param>
     /// <param name="type">The type declared by exactly that package, when found.</param>
     /// <returns>Whether a type declared by the hinted package was found.</returns>
-    private bool TryResolveTypeAliasByExplicitPackageHint(string name, int arity, string hintPackage, out TypeSymbol type)
+    private bool TryResolveTypeAliasByExplicitPackageHint(string name, int arity, string hintPackage, [NotNullWhen(true)] out TypeSymbol? type)
     {
         type = null;
 
@@ -1581,7 +1612,7 @@ public sealed class BoundScope
     /// when <paramref name="declaringPackageName"/> is <see langword="null"/>
     /// (the caller is declaring a real symbol, not a plain alias).
     /// </summary>
-    private void RegisterAliasDeclaringPackage(string key, string declaringPackageName)
+    private void RegisterAliasDeclaringPackage(string key, string? declaringPackageName)
     {
         if (declaringPackageName == null)
         {
@@ -1600,7 +1631,7 @@ public sealed class BoundScope
     /// is a real symbol (no override was ever registered for it) rather than a
     /// plain alias.
     /// </summary>
-    private bool TryGetAliasDeclaringPackageInChain(string key, out string declaringPackageName)
+    private bool TryGetAliasDeclaringPackageInChain(string key, [NotNullWhen(true)] out string? declaringPackageName)
     {
         for (var s = this; s != null; s = s.Parent)
         {
@@ -1633,7 +1664,7 @@ public sealed class BoundScope
     /// Parent chain, so a nearer (child) scope's value shadows a farther
     /// (ancestor) scope's value for the same key.
     /// </summary>
-    private bool TryGetTypeAliasInChain(string key, out TypeSymbol value)
+    private bool TryGetTypeAliasInChain(string key, [NotNullWhen(true)] out TypeSymbol? value)
     {
         for (var s = this; s != null; s = s.Parent)
         {
@@ -1697,13 +1728,13 @@ public sealed class BoundScope
     /// <param name="type">The single imported-package-matched type, when unambiguous.</param>
     /// <param name="ambiguous">Whether two or more colliding packages are each imported.</param>
     /// <returns>Whether a single import-disambiguated type was found.</returns>
-    private bool TryResolveCollidingTypeAliasByImport(string name, int arity, out TypeSymbol type, out bool ambiguous)
+    private bool TryResolveCollidingTypeAliasByImport(string name, int arity, [NotNullWhen(true)] out TypeSymbol? type, out bool ambiguous)
     {
         type = null;
         ambiguous = false;
 
         var suffix = "#" + MangleArity(name, arity);
-        Dictionary<string, TypeSymbol> byPackage = null;
+        Dictionary<string, TypeSymbol>? byPackage = null;
         foreach (var pair in EnumerateTypeAliasesInChain())
         {
             var key = pair.Key;
@@ -1757,7 +1788,7 @@ public sealed class BoundScope
             return false;
         }
 
-        TypeSymbol matched = null;
+        TypeSymbol? matched = null;
         foreach (var import in GetDeclaredImports())
         {
             if (import.Target == null || !byPackage.TryGetValue(import.Target, out var candidate))
@@ -1807,7 +1838,7 @@ public sealed class BoundScope
     /// <returns>The overload set stored under <paramref name="key"/>, or empty.</returns>
     private ImmutableArray<FunctionSymbol> CollectFunctionBucket(string key)
     {
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        ImmutableArray<FunctionSymbol>.Builder? builder = null;
         for (var s = this; s != null; s = s.Parent)
         {
             if (s.functions != null && s.functions.TryGetValue(key, out var bucket) && bucket.Count > 0)
@@ -1832,7 +1863,7 @@ public sealed class BoundScope
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <param name="function">The matching extension function, when found.</param>
     /// <returns>True when an extension function in <paramref name="bucket"/> matches.</returns>
-    private bool TryFindExtensionInBucket(ImmutableArray<FunctionSymbol>.Builder bucket, TypeSymbol receiverType, out FunctionSymbol function)
+    private bool TryFindExtensionInBucket(ImmutableArray<FunctionSymbol>.Builder bucket, TypeSymbol receiverType, [NotNullWhen(true)] out FunctionSymbol? function)
     {
         function = null;
 
@@ -1863,7 +1894,7 @@ public sealed class BoundScope
         // Mutually-incomparable cases fall through to the first declared
         // candidate so the call site is not silently ambiguous (the existing
         // GS0160 will surface from the call-binding path if applicable).
-        FunctionSymbol candidate = null;
+        FunctionSymbol? candidate = null;
         int candidateSpecificity = -1;
         foreach (var ext in bucket)
         {
@@ -1908,7 +1939,7 @@ public sealed class BoundScope
         // (most-derived) declared receiver so this singular path stays
         // deterministic (e.g. `string` beats `object`); ties fall back to
         // declaration order.
-        FunctionSymbol subtypeCandidate = null;
+        FunctionSymbol? subtypeCandidate = null;
         var subtypeSpecificity = -1;
         foreach (var ext in bucket)
         {
@@ -1959,7 +1990,7 @@ public sealed class BoundScope
     /// <returns>The matching extension overloads, or an empty array when none match.</returns>
     private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatches(string key, TypeSymbol receiverType)
     {
-        ImmutableArray<FunctionSymbol>.Builder builder = null;
+        ImmutableArray<FunctionSymbol>.Builder? builder = null;
         for (var s = this; s != null; s = s.Parent)
         {
             if (s.extensionFunctionsByName == null
@@ -2030,10 +2061,10 @@ public sealed class BoundScope
     /// <param name="excludeKey">The caller's own package-qualified key, already probed by the caller; skipped here.</param>
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <returns>The matching extension overloads from other packages' qualified buckets, or an empty array when none match.</returns>
-    private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatchesFromOtherPackages(string name, string excludeKey, TypeSymbol receiverType)
+    private ImmutableArray<FunctionSymbol> CollectExtensionFunctionMatchesFromOtherPackages(string name, string? excludeKey, TypeSymbol receiverType)
     {
         var suffix = "#" + name;
-        HashSet<string> otherKeys = null;
+        HashSet<string>? otherKeys = null;
         for (var s = this; s != null; s = s.Parent)
         {
             if (s.extensionFunctionsByName == null)
@@ -2059,7 +2090,7 @@ public sealed class BoundScope
             return ImmutableArray<FunctionSymbol>.Empty;
         }
 
-        ImmutableArray<FunctionSymbol>.Builder combined = null;
+        ImmutableArray<FunctionSymbol>.Builder? combined = null;
         foreach (var key in otherKeys)
         {
             var matches = CollectExtensionFunctionMatches(key, receiverType);
@@ -2191,7 +2222,7 @@ public sealed class BoundScope
     /// <param name="declaredReceiverType">The extension's declared receiver type.</param>
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <returns><c>true</c> when the receiver types match.</returns>
-    private static bool ReceiverMatches(TypeSymbol declaredReceiverType, TypeSymbol receiverType)
+    private static bool ReceiverMatches(TypeSymbol? declaredReceiverType, TypeSymbol receiverType)
     {
         if (declaredReceiverType == receiverType)
         {
@@ -2227,7 +2258,7 @@ public sealed class BoundScope
     /// <param name="declaredReceiverType">The extension's declared receiver type.</param>
     /// <param name="receiverType">The static type of the call receiver.</param>
     /// <returns><c>true</c> when the call receiver is implicitly convertible to the declared receiver.</returns>
-    private static bool ReceiverConvertible(TypeSymbol declaredReceiverType, TypeSymbol receiverType)
+    private static bool ReceiverConvertible([NotNullWhen(true)] TypeSymbol? declaredReceiverType, TypeSymbol receiverType)
     {
         if (declaredReceiverType == null
             || receiverType == null
@@ -2292,7 +2323,7 @@ public sealed class BoundScope
     /// symbol — the value set via <c>SetContainingType</c> during declaration
     /// binding — or <c>null</c> for a top-level type or a non-aggregate symbol.
     /// </summary>
-    private static TypeSymbol TypeContainingType(TypeSymbol type) => type switch
+    private static TypeSymbol? TypeContainingType(TypeSymbol? type) => type switch
     {
         StructSymbol s => s.ContainingType,
         EnumSymbol e => e.ContainingType,
@@ -2304,7 +2335,7 @@ public sealed class BoundScope
     /// Issue #1174: whether <paramref name="type"/> is a user aggregate nested
     /// directly inside <paramref name="container"/>.
     /// </summary>
-    private static bool IsNestedDirectlyIn(TypeSymbol type, TypeSymbol container)
+    private static bool IsNestedDirectlyIn(TypeSymbol? type, TypeSymbol container)
         => ReferenceEquals(TypeContainingType(type), container);
 
     /// <summary>
@@ -2320,7 +2351,7 @@ public sealed class BoundScope
     /// an imported/BCL/primitive alias target, preserving prior same-scope
     /// behavior for those).
     /// </summary>
-    private static string TypePackageName(TypeSymbol type) => type switch
+    private static string? TypePackageName(TypeSymbol? type) => type switch
     {
         StructSymbol s => s.PackageName,
         EnumSymbol e => e.PackageName,
@@ -2347,7 +2378,7 @@ public sealed class BoundScope
     /// declaring-package identity independent of whatever package (if any) its
     /// target happens to belong to.
     /// </summary>
-    private bool IsSameDeclarationScope(TypeSymbol existing, TypeSymbol target, string key, string targetDeclaringPackageOverride)
+    private bool IsSameDeclarationScope(TypeSymbol? existing, TypeSymbol target, string key, string? targetDeclaringPackageOverride)
     {
         var existingEnclosing = TypeContainingType(existing);
         var targetEnclosing = TypeContainingType(target);
@@ -2371,7 +2402,7 @@ public sealed class BoundScope
     /// already taken by a differently-scoped type, so it remains a distinct
     /// stored value without colliding.
     /// </summary>
-    private static string QualifiedTypeName(TypeSymbol type)
+    private static string QualifiedTypeName(TypeSymbol? type)
     {
         var parts = new List<string>();
         for (var current = type; current != null; current = TypeContainingType(current))
@@ -2395,7 +2426,7 @@ public sealed class BoundScope
     /// <see cref="QualifiedTypeName"/>, so this key space never collides with
     /// either of those.
     /// </summary>
-    private static string PackageQualifiedName(string packageName, string simpleName)
+    private static string PackageQualifiedName(string? packageName, string simpleName)
         => (packageName ?? string.Empty) + "#" + simpleName;
 
     /// <summary>
@@ -2545,8 +2576,14 @@ public sealed class BoundScope
         }
     }
 
+    [MemberNotNull(nameof(symbols), nameof(symbolKeys))]
     private void AddSymbol(string name, Symbol symbol)
     {
+        // Both callers (TryDeclareFunction, TryDeclareSymbol) already assign
+        // `symbols ??= ...` immediately before calling AddSymbol; this mirrors
+        // that so the method is correct standalone and the [MemberNotNull]
+        // claim above is honest, not just assumed from the caller.
+        symbols ??= ImmutableDictionary.CreateBuilder<string, Symbol>();
         symbols.Add(name, symbol);
         symbolKeys ??= ImmutableArray.CreateBuilder<string>();
         symbolKeys.Add(name);
@@ -2579,7 +2616,12 @@ public sealed class BoundScope
         }
 
         var builder = ImmutableArray.CreateBuilder<TSymbol>();
-        foreach (var key in symbolKeys)
+
+        // symbolKeys is always populated together with symbols, in the same
+        // call, by AddSymbol (marked [MemberNotNull] on both) — the only place
+        // either field is ever assigned. symbols != null (checked above)
+        // therefore guarantees symbolKeys != null too.
+        foreach (var key in symbolKeys!)
         {
             if (symbols.TryGetValue(key, out var symbol) && symbol is TSymbol typed)
             {
@@ -2699,11 +2741,23 @@ public sealed class BoundScope
     private static bool TryUnifyAndCheckConstraints(FunctionSymbol extension, TypeSymbol receiverType, out int specificity)
     {
         specificity = 0;
+
+        // Both call sites (TryFindExtensionInBucket, CollectExtensionFunctionMatches)
+        // already check ext.ExtensionReceiverType != null immediately before calling
+        // this method. Mirroring that guard here — rather than asserting it — keeps
+        // this helper correct standalone: unifying against an absent declared
+        // receiver simply fails, exactly like the "skip and try the next candidate"
+        // behavior both callers already implement around the null check.
+        if (extension.ExtensionReceiverType is not { } declaredReceiver)
+        {
+            return false;
+        }
+
         var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
-        Binder.InferTypeArguments(extension.ExtensionReceiverType, receiverType, substitution);
+        Binder.InferTypeArguments(declaredReceiver, receiverType, substitution);
 
         var mentioned = new HashSet<TypeParameterSymbol>();
-        CollectTypeParameters(extension.ExtensionReceiverType, mentioned, depth: 0);
+        CollectTypeParameters(declaredReceiver, mentioned, depth: 0);
         foreach (var tp in mentioned)
         {
             if (!substitution.TryGetValue(tp, out var arg))

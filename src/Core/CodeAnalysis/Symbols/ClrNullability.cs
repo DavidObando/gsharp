@@ -140,7 +140,7 @@ public static class ClrNullability
             return false;
         }
 
-        ImmutableArray<string>.Builder builder = null;
+        ImmutableArray<string>.Builder? builder = null;
         foreach (var ad in attrs)
         {
             if (ad.AttributeType?.FullName != MemberNotNullAttributeFullName || ad.ConstructorArguments.Count == 0)
@@ -195,7 +195,7 @@ public static class ClrNullability
                 continue;
             }
 
-            ImmutableArray<string>.Builder builder = null;
+            ImmutableArray<string>.Builder? builder = null;
             for (var i = 1; i < ad.ConstructorArguments.Count; i++)
             {
                 CollectStringOrArray(ad.ConstructorArguments[i], ref builder);
@@ -221,7 +221,7 @@ public static class ClrNullability
     /// <param name="declaration">The attribute provider to inspect (parameter, return parameter, etc.).</param>
     /// <param name="enclosingMember">The enclosing member used to walk up to <c>[NullableContext]</c>.</param>
     /// <returns>The full byte array, or an empty array when no annotation is available.</returns>
-    internal static ImmutableArray<byte> ReadNullableFlags(ICustomAttributeProvider declaration, MemberInfo enclosingMember)
+    internal static ImmutableArray<byte> ReadNullableFlags(ICustomAttributeProvider declaration, MemberInfo? enclosingMember)
     {
         var attrs = SafeGetCustomAttributesData(declaration);
         if (attrs != null)
@@ -398,7 +398,7 @@ public static class ClrNullability
         return result;
     }
 
-    private static TypeSymbol ApplyReferenceNullabilityFull(TypeSymbol baseSymbol, Type clrType, ICustomAttributeProvider declaration, MemberInfo enclosingMember)
+    private static TypeSymbol ApplyReferenceNullabilityFull(TypeSymbol baseSymbol, Type? clrType, ICustomAttributeProvider declaration, MemberInfo? enclosingMember)
     {
         if (baseSymbol is NullableTypeSymbol)
         {
@@ -464,7 +464,7 @@ public static class ClrNullability
 
     private static void CollectStringOrArray(
         CustomAttributeTypedArgument arg,
-        ref ImmutableArray<string>.Builder builder)
+        ref ImmutableArray<string>.Builder? builder)
     {
         if (arg.Value is string s && !string.IsNullOrEmpty(s))
         {
@@ -482,7 +482,7 @@ public static class ClrNullability
         }
     }
 
-    private static System.Collections.Generic.IList<CustomAttributeData> SafeGetCustomAttributesData(ICustomAttributeProvider provider)
+    private static System.Collections.Generic.IList<CustomAttributeData>? SafeGetCustomAttributesData(ICustomAttributeProvider provider)
     {
         try
         {

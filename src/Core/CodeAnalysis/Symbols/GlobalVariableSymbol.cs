@@ -23,7 +23,7 @@ public sealed class GlobalVariableSymbol : VariableSymbol
     /// synthesised globals such as host-package bootstrap state). Used by the
     /// PDB emitter to anchor field-declaration locations per ADR-0027 §7.7a.
     /// </param>
-    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, Accessibility accessibility = Accessibility.Public, SyntaxNode declaringSyntax = null)
+    public GlobalVariableSymbol(string name, bool isReadOnly, TypeSymbol type, Accessibility accessibility = Accessibility.Public, SyntaxNode? declaringSyntax = null)
         : base(name, isReadOnly, type, declaringSyntax)
     {
         Accessibility = accessibility;

@@ -33,7 +33,7 @@ internal static class ExpressionTreeRestrictionValidator
             diagnostics.ReportExpressionTreeTargetMustBeDelegate(
                 literal.Syntax != null
                     ? literal.Syntax.Location
-                    : literal.Function.Declaration != null ? literal.Function.Declaration.Location : default,
+                    : literal.Function.Declaration?.Location ?? default,
                 targetType ?? TypeSymbol.Error);
             return;
         }
@@ -42,7 +42,7 @@ internal static class ExpressionTreeRestrictionValidator
         {
             if (lambdaSyntax.IsAsync)
             {
-                diagnostics.ReportExpressionTreeUnsupported(lambdaSyntax.AsyncModifier.Location, "an async lambda");
+                diagnostics.ReportExpressionTreeUnsupported(lambdaSyntax.AsyncModifier?.Location ?? default, "an async lambda");
             }
 
             if (lambdaSyntax.Body is BlockExpressionSyntax)
@@ -56,28 +56,28 @@ internal static class ExpressionTreeRestrictionValidator
             if (parameter.Name == "_")
             {
                 diagnostics.ReportExpressionTreeUnsupported(
-                    parameter.DeclaringSyntax != null ? parameter.DeclaringSyntax.Location : literal.Syntax.Location,
+                    parameter.DeclaringSyntax?.Location ?? literal.Syntax?.Location ?? default,
                     "a discard parameter");
             }
 
             if (parameter.RefKind != RefKind.None)
             {
                 diagnostics.ReportExpressionTreeUnsupported(
-                    parameter.DeclaringSyntax != null ? parameter.DeclaringSyntax.Location : literal.Syntax.Location,
+                    parameter.DeclaringSyntax?.Location ?? literal.Syntax?.Location ?? default,
                     $"a '{parameter.RefKind.ToString().ToLowerInvariant()}' parameter");
             }
 
             if (parameter.IsVariadic)
             {
                 diagnostics.ReportExpressionTreeUnsupported(
-                    parameter.DeclaringSyntax != null ? parameter.DeclaringSyntax.Location : literal.Syntax.Location,
+                    parameter.DeclaringSyntax?.Location ?? literal.Syntax?.Location ?? default,
                     "a variadic parameter");
             }
 
             if (TypeSymbol.IsByRefLike(parameter.Type) || parameter.Type is ByRefTypeSymbol or PointerTypeSymbol)
             {
                 diagnostics.ReportExpressionTreeUnsupported(
-                    parameter.DeclaringSyntax != null ? parameter.DeclaringSyntax.Location : literal.Syntax.Location,
+                    parameter.DeclaringSyntax?.Location ?? literal.Syntax?.Location ?? default,
                     $"the restricted type '{parameter.Type}'");
             }
         }
@@ -85,7 +85,7 @@ internal static class ExpressionTreeRestrictionValidator
         ValidateStatement(literal.Body, diagnostics);
     }
 
-    private static void ValidateStatement(BoundStatement statement, DiagnosticBag diagnostics)
+    private static void ValidateStatement(BoundStatement? statement, DiagnosticBag diagnostics)
     {
         switch (statement)
         {
@@ -110,7 +110,7 @@ internal static class ExpressionTreeRestrictionValidator
         }
     }
 
-    private static void ValidateExpression(BoundExpression expression, DiagnosticBag diagnostics)
+    private static void ValidateExpression(BoundExpression? expression, DiagnosticBag diagnostics)
     {
         if (expression == null)
         {
@@ -383,7 +383,7 @@ internal static class ExpressionTreeRestrictionValidator
     private static void ValidateClrArguments(
         System.Collections.Immutable.ImmutableArray<BoundExpression> arguments,
         System.Collections.Immutable.ImmutableArray<RefKind> argumentRefKinds,
-        MethodBase method,
+        MethodBase? method,
         DiagnosticBag diagnostics)
     {
         if (method != null && (method.CallingConvention & CallingConventions.VarArgs) != 0)
@@ -402,7 +402,7 @@ internal static class ExpressionTreeRestrictionValidator
         }
     }
 
-    private static TextLocation LocationOf(SyntaxNode syntax)
+    private static TextLocation LocationOf(SyntaxNode? syntax)
         => syntax != null ? syntax.Location : default;
 
     private static bool TryValidateObjectInitializer(BoundBlockExpression block, DiagnosticBag diagnostics)
@@ -450,8 +450,8 @@ internal static class ExpressionTreeRestrictionValidator
 
     private static bool TryMatchObjectInitializer(
         BoundBlockExpression block,
-        out VariableSymbol receiver,
-        out BoundExpression initializer,
+        out VariableSymbol? receiver,
+        out BoundExpression? initializer,
         out System.Collections.Immutable.ImmutableArray<BoundStatement> statements)
     {
         receiver = null;
@@ -472,18 +472,18 @@ internal static class ExpressionTreeRestrictionValidator
         return true;
     }
 
-    private static bool ReferencesReceiver(BoundExpression expression, VariableSymbol receiver)
+    private static bool ReferencesReceiver(BoundExpression? expression, VariableSymbol? receiver)
         => expression is BoundVariableExpression variable && ReferenceEquals(variable.Variable, receiver);
 
-    private static bool ReferencesReceiver(BoundFieldAssignmentExpression assignment, VariableSymbol receiver)
+    private static bool ReferencesReceiver(BoundFieldAssignmentExpression assignment, VariableSymbol? receiver)
         => ReferenceEquals(assignment.Receiver, receiver)
             || ReferencesReceiver(assignment.ReceiverExpression, receiver);
 
-    private static bool ReferencesReceiver(BoundClrIndexAssignmentExpression assignment, VariableSymbol receiver)
+    private static bool ReferencesReceiver(BoundClrIndexAssignmentExpression assignment, VariableSymbol? receiver)
         => ReferenceEquals(assignment.Target, receiver)
             || ReferencesReceiver(assignment.TargetExpression, receiver);
 
-    private static bool ReferencesReceiver(BoundIndexAssignmentExpression assignment, VariableSymbol receiver)
+    private static bool ReferencesReceiver(BoundIndexAssignmentExpression assignment, VariableSymbol? receiver)
         => ReferenceEquals(assignment.Target, receiver)
             || ReferencesReceiver(assignment.TargetExpression, receiver);
 }

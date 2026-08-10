@@ -92,7 +92,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(ILOpCode.Endfinally);
         this.il.MarkLabel(finallyEnd);
-        this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        this.ControlFlow.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
     }
 
     // Array-pin form: pin the array reference (`T[] pinned`) and derive
@@ -148,12 +148,14 @@ internal sealed partial class MethodBodyEmitter
         this.il.Branch(ILOpCode.Brfalse, nullLabel);
 
         this.il.LoadLocal(pinnedSlot);
-        var getPinnableReference = typeof(string).GetMethod(
-            "GetPinnableReference",
-            BindingFlags.Public | BindingFlags.Instance,
-            binder: null,
-            types: Type.EmptyTypes,
-            modifiers: null);
+        var getPinnableReference = Invariant.Required(
+            typeof(string).GetMethod(
+                "GetPinnableReference",
+                BindingFlags.Public | BindingFlags.Instance,
+                binder: null,
+                types: Type.EmptyTypes,
+                modifiers: null),
+            "System.String declares the public instance GetPinnableReference()");
         this.il.Call(this.outer.memberRefs.GetMethodReference(getPinnableReference));
         this.EmitManagedPointerAsUnmanagedPointer(TypeSymbol.Char);
         this.il.StoreLocal(pointerSlot);
@@ -174,7 +176,10 @@ internal sealed partial class MethodBodyEmitter
     // null/empty guard is required.
     private void EmitFixedPinnableReferencePin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
     {
-        var sourceSlot = this.locals[node.SourceVariable];
+        var sourceVariable = Invariant.Required(
+            node.SourceVariable,
+            "the binder gives every PinnableReference-form fixed statement a source local; the caller dispatched on that PinKind to reach here");
+        var sourceSlot = this.locals[sourceVariable];
 
         var sourceClr = node.PinnedSource.Type?.ClrType
             ?? throw new InvalidOperationException(
@@ -222,16 +227,16 @@ internal sealed partial class MethodBodyEmitter
         var closedAsPointer = openAsPointer.MakeGenericMethod(pointeeType.ClrType ?? typeof(object));
         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(
             closedAsPointer,
-            ImmutableArray.Create(pointeeType)));
+            ImmutableArray.Create<TypeSymbol?>(pointeeType)));
     }
 
     private void EmitTryStatement(BoundTryStatement node)
     {
         var endLabel = this.il.DefineLabel();
         var hasCatches = node.CatchClauses.Length > 0;
-        var hasFinally = node.FinallyBlock != null;
+        var finallyBlock = node.FinallyBlock;
 
-        if (hasCatches && hasFinally)
+        if (hasCatches && finallyBlock != null)
         {
             // Nested: outer try-finally wrapping inner try-catch.
             var outerTryStart = this.il.DefineLabel();
@@ -249,11 +254,11 @@ internal sealed partial class MethodBodyEmitter
             this.EmitCatchClauses(node.CatchClauses, innerTryStart, innerTryEnd, leaveTarget: endLabel);
 
             this.il.MarkLabel(finallyStart);
-            this.EmitProtectedRegion((BoundBlockStatement)node.FinallyBlock);
+            this.EmitProtectedRegion((BoundBlockStatement)finallyBlock);
             this.il.OpCode(ILOpCode.Endfinally);
             this.il.MarkLabel(finallyEnd);
 
-            this.il.ControlFlowBuilder.AddFinallyRegion(outerTryStart, finallyStart, finallyStart, finallyEnd);
+            this.ControlFlow.AddFinallyRegion(outerTryStart, finallyStart, finallyStart, finallyEnd);
         }
         else if (hasCatches)
         {
@@ -278,11 +283,13 @@ internal sealed partial class MethodBodyEmitter
             this.il.Branch(ILOpCode.Leave, finallyEnd);
 
             this.il.MarkLabel(finallyStart);
-            this.EmitProtectedRegion((BoundBlockStatement)node.FinallyBlock);
+            this.EmitProtectedRegion((BoundBlockStatement)Invariant.Required(
+                finallyBlock,
+                "this is the no-catch branch, and the binder does not produce a try with neither catch nor finally"));
             this.il.OpCode(ILOpCode.Endfinally);
             this.il.MarkLabel(finallyEnd);
 
-            this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+            this.ControlFlow.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
         }
 
         this.il.MarkLabel(endLabel);
@@ -328,7 +335,7 @@ internal sealed partial class MethodBodyEmitter
             // via GetElementTypeToken (which handles both CLR-backed and source-defined
             // types) instead of dereferencing ClrType directly.
             var catchTypeHandle = this.outer.memberRefs.GetElementTypeToken(clause.ExceptionType);
-            this.il.ControlFlowBuilder.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
+            this.ControlFlow.AddCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchTypeHandle);
         }
     }
 
@@ -351,10 +358,12 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitGoStatement(BoundGoStatement node)
     {
-        var hasScope = this.goEnclosingScopes.TryGetValue(node, out var scope);
-        if (hasScope)
+        // Hold the scope rather than a `hasScope` bool: the slot lookup below
+        // needs the key, and a separate flag would not carry its presence.
+        this.goEnclosingScopes.TryGetValue(node, out var enclosingScope);
+        if (enclosingScope != null)
         {
-            this.il.LoadLocal(this.scopeFrameSlots[scope].Tasks);
+            this.il.LoadLocal(this.scopeFrameSlots[enclosingScope].Tasks);
         }
 
         this.EmitGoAction(node);
@@ -365,23 +374,25 @@ internal sealed partial class MethodBodyEmitter
         MethodInfo run;
         if (isAsync)
         {
-            run = typeof(System.Threading.Tasks.Task).GetMethod(
+            run = BclMember.Method(
+                typeof(System.Threading.Tasks.Task),
                 nameof(System.Threading.Tasks.Task.Run),
-                new[] { typeof(Func<System.Threading.Tasks.Task>) });
+                typeof(Func<System.Threading.Tasks.Task>));
         }
         else
         {
-            run = typeof(System.Threading.Tasks.Task).GetMethod(
+            run = BclMember.Method(
+                typeof(System.Threading.Tasks.Task),
                 nameof(System.Threading.Tasks.Task.Run),
-                new[] { typeof(Action) });
+                typeof(Action));
         }
 
         this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(run));
 
-        if (hasScope)
+        if (enclosingScope != null)
         {
             var listType = typeof(List<System.Threading.Tasks.Task>);
-            var add = listType.GetMethod(nameof(List<System.Threading.Tasks.Task>.Add), new[] { typeof(System.Threading.Tasks.Task) });
+            var add = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.Add), typeof(System.Threading.Tasks.Task));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.outer.memberRefs.GetMethodReference(add));
         }
@@ -449,7 +460,7 @@ internal sealed partial class MethodBodyEmitter
 
         if (isAsync)
         {
-            var funcTaskCtor = typeof(Func<System.Threading.Tasks.Task>).GetConstructor(new[] { typeof(object), typeof(nint) });
+            var funcTaskCtor = BclMember.Ctor(typeof(Func<System.Threading.Tasks.Task>), typeof(object), typeof(nint));
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
@@ -457,7 +468,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            var actionCtor = typeof(Action).GetConstructor(new[] { typeof(object), typeof(nint) });
+            var actionCtor = BclMember.Ctor(typeof(Action), typeof(object), typeof(nint));
             this.il.OpCode(ILOpCode.Ldftn);
             this.il.Token(invokeToken);
             this.il.OpCode(ILOpCode.Newobj);
@@ -469,8 +480,8 @@ internal sealed partial class MethodBodyEmitter
     {
         var slots = this.scopeFrameSlots[node];
         var listType = typeof(List<System.Threading.Tasks.Task>);
-        var listCtor = listType.GetConstructor(Type.EmptyTypes);
-        var ctsCtor = typeof(System.Threading.CancellationTokenSource).GetConstructor(Type.EmptyTypes);
+        var listCtor = BclMember.Ctor(listType);
+        var ctsCtor = BclMember.Ctor(typeof(System.Threading.CancellationTokenSource));
 
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(listCtor));
@@ -500,7 +511,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(finallyEnd);
         this.il.MarkLabel(endLabel);
 
-        this.il.ControlFlowBuilder.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
+        this.ControlFlow.AddFinallyRegion(tryStart, finallyStart, finallyStart, finallyEnd);
     }
 
     private void EmitScopeWaitAndDispose((int Tasks, int Cts, int Awaiter) slots)
@@ -522,7 +533,8 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.MarkLabel(catchStart);
         this.il.OpCode(ILOpCode.Pop);
-        var cancel = typeof(System.Threading.CancellationTokenSource).GetMethod(
+        var cancel = BclMember.Method(
+            typeof(System.Threading.CancellationTokenSource),
             nameof(System.Threading.CancellationTokenSource.Cancel),
             Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
@@ -532,7 +544,8 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(catchEnd);
 
         this.il.MarkLabel(disposeStart);
-        var dispose = typeof(System.Threading.CancellationTokenSource).GetMethod(
+        var dispose = BclMember.Method(
+            typeof(System.Threading.CancellationTokenSource),
             nameof(System.Threading.CancellationTokenSource.Dispose),
             Type.EmptyTypes);
         this.il.LoadLocal(slots.Cts);
@@ -542,26 +555,29 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(disposeEnd);
         this.il.MarkLabel(afterNested);
 
-        this.il.ControlFlowBuilder.AddCatchRegion(
+        this.ControlFlow.AddCatchRegion(
             innerTryStart,
             innerTryEnd,
             catchStart,
             catchEnd,
             (EntityHandle)this.outer.memberRefs.GetTypeReference(typeof(Exception)));
-        this.il.ControlFlowBuilder.AddFinallyRegion(outerTryStart, disposeStart, disposeStart, disposeEnd);
+        this.ControlFlow.AddFinallyRegion(outerTryStart, disposeStart, disposeStart, disposeEnd);
     }
 
     private void EmitScopeWait((int Tasks, int Cts, int Awaiter) slots)
     {
         var listType = typeof(List<System.Threading.Tasks.Task>);
-        var toArray = listType.GetMethod(nameof(List<System.Threading.Tasks.Task>.ToArray), Type.EmptyTypes);
-        var whenAll = typeof(System.Threading.Tasks.Task).GetMethod(
+        var toArray = BclMember.Method(listType, nameof(List<System.Threading.Tasks.Task>.ToArray), Type.EmptyTypes);
+        var whenAll = BclMember.Method(
+            typeof(System.Threading.Tasks.Task),
             nameof(System.Threading.Tasks.Task.WhenAll),
-            new[] { typeof(System.Threading.Tasks.Task[]) });
-        var getAwaiter = typeof(System.Threading.Tasks.Task).GetMethod(
+            typeof(System.Threading.Tasks.Task[]));
+        var getAwaiter = BclMember.Method(
+            typeof(System.Threading.Tasks.Task),
             nameof(System.Threading.Tasks.Task.GetAwaiter),
             Type.EmptyTypes);
-        var getResult = typeof(System.Runtime.CompilerServices.TaskAwaiter).GetMethod(
+        var getResult = BclMember.Method(
+            typeof(System.Runtime.CompilerServices.TaskAwaiter),
             nameof(System.Runtime.CompilerServices.TaskAwaiter.GetResult),
             Type.EmptyTypes);
 
@@ -588,11 +604,11 @@ internal sealed partial class MethodBodyEmitter
                 continue;
             }
 
-            this.EmitExpression(arm.Channel);
+            this.EmitExpression(Invariant.Required(arm.Channel, "a send or receive select arm binds a channel expression; only the default arm has none"));
             this.il.StoreLocal(slots.ChannelSlots[i]);
             if (arm.CaseKind == SelectCaseKind.Send)
             {
-                this.EmitExpression(arm.Value);
+                this.EmitExpression(Invariant.Required(arm.Value, "a send arm binds the value being sent; the one shape that does not -- the binder's recovery arm for an unbindable channel -- reported a diagnostic, so emit never runs"));
                 this.il.StoreLocal(slots.ValueSlots[i]);
             }
         }
@@ -642,14 +658,14 @@ internal sealed partial class MethodBodyEmitter
     {
         var nextLabel = this.il.DefineLabel();
         var closedLabel = this.il.DefineLabel();
-        var chType = (ChannelTypeSymbol)arm.Channel.Type;
+        var chType = (ChannelTypeSymbol)Invariant.Required(arm.Channel, "a send or receive select arm binds a channel expression; only the default arm has none").Type;
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
-        var getReader = channelClr.GetProperty("Reader").GetGetMethod();
-        var tryRead = readerClr.GetMethod("TryRead", new[] { elementClr.MakeByRefType() });
-        var completion = readerClr.GetProperty("Completion").GetGetMethod();
-        var isCompleted = typeof(System.Threading.Tasks.Task).GetProperty("IsCompleted").GetGetMethod();
+        var getReader = BclMember.Getter(channelClr, "Reader");
+        var tryRead = BclMember.Method(readerClr, "TryRead", elementClr.MakeByRefType());
+        var completion = BclMember.Getter(readerClr, "Completion");
+        var isCompleted = BclMember.Getter(typeof(System.Threading.Tasks.Task), "IsCompleted");
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -678,7 +694,7 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitSelectReceiveArmBody(BoundSelectCase arm, int outSlot)
     {
-        FieldSymbol hoistedField = null;
+        FieldSymbol? hoistedField = null;
         if (arm.Variable != null
             && ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(arm.Variable, out hoistedField))
                 || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(arm.Variable, out hoistedField))))
@@ -701,12 +717,12 @@ internal sealed partial class MethodBodyEmitter
         LabelHandle endLabel)
     {
         var nextLabel = this.il.DefineLabel();
-        var chType = (ChannelTypeSymbol)arm.Channel.Type;
+        var chType = (ChannelTypeSymbol)Invariant.Required(arm.Channel, "a send or receive select arm binds a channel expression; only the default arm has none").Type;
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
-        var tryWrite = writerClr.GetMethod("TryWrite", new[] { elementClr });
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var tryWrite = BclMember.Method(writerClr, "TryWrite", elementClr);
 
         this.il.LoadLocal(slots.ChannelSlots[index]);
         this.il.OpCode(ILOpCode.Callvirt);
@@ -723,13 +739,14 @@ internal sealed partial class MethodBodyEmitter
     private void EmitSelectWait(BoundSelectStatement node, SelectSlots slots)
     {
         var taskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task));
-        var whenAny = typeof(System.Threading.Tasks.Task).GetMethod(
+        var whenAny = BclMember.Method(
+            typeof(System.Threading.Tasks.Task),
             nameof(System.Threading.Tasks.Task.WhenAny),
-            new[] { typeof(System.Threading.Tasks.Task[]) });
+            typeof(System.Threading.Tasks.Task[]));
         var taskOfTask = typeof(System.Threading.Tasks.Task<System.Threading.Tasks.Task>);
-        var getAwaiter = taskOfTask.GetMethod("GetAwaiter", Type.EmptyTypes);
+        var getAwaiter = BclMember.Method(taskOfTask, "GetAwaiter", Type.EmptyTypes);
         var awaiter = typeof(System.Runtime.CompilerServices.TaskAwaiter<System.Threading.Tasks.Task>);
-        var getResult = awaiter.GetMethod("GetResult", Type.EmptyTypes);
+        var getResult = BclMember.Method(awaiter, "GetResult", Type.EmptyTypes);
 
         var waitCount = 0;
         foreach (var arm in node.Cases)
@@ -776,19 +793,17 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitSelectWaitTask(BoundSelectCase arm, SelectSlots slots, int index)
     {
-        var chType = (ChannelTypeSymbol)arm.Channel.Type;
+        var chType = (ChannelTypeSymbol)Invariant.Required(arm.Channel, "a send or receive select arm binds a channel expression; only the default arm has none").Type;
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var valueTaskBool = typeof(System.Threading.Tasks.ValueTask<bool>);
-        var asTask = valueTaskBool.GetMethod("AsTask", Type.EmptyTypes);
+        var asTask = BclMember.Method(valueTaskBool, "AsTask", Type.EmptyTypes);
 
         if (arm.CaseKind == SelectCaseKind.Send)
         {
             var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-            var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
-            var waitToWrite = writerClr.GetMethod(
-                "WaitToWriteAsync",
-                new[] { typeof(System.Threading.CancellationToken) });
+            var getWriter = BclMember.Getter(channelClr, "Writer");
+            var waitToWrite = BclMember.Method(writerClr, "WaitToWriteAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(getWriter, chType.ElementType));
@@ -799,10 +814,8 @@ internal sealed partial class MethodBodyEmitter
         else
         {
             var readerClr = typeof(System.Threading.Channels.ChannelReader<>).MakeGenericType(elementClr);
-            var getReader = channelClr.GetProperty("Reader").GetGetMethod();
-            var waitToRead = readerClr.GetMethod(
-                "WaitToReadAsync",
-                new[] { typeof(System.Threading.CancellationToken) });
+            var getReader = BclMember.Getter(channelClr, "Reader");
+            var waitToRead = BclMember.Method(readerClr, "WaitToReadAsync", typeof(System.Threading.CancellationToken));
             this.il.LoadLocal(slots.ChannelSlots[index]);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(this.GetChannelMethodEntityHandle(getReader, chType.ElementType));
@@ -823,13 +836,11 @@ internal sealed partial class MethodBodyEmitter
         var elementClr = ResolveChannelElementClrType(chType.ElementType);
         var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
         var writerClr = typeof(System.Threading.Channels.ChannelWriter<>).MakeGenericType(elementClr);
-        var getWriter = channelClr.GetProperty("Writer").GetGetMethod();
-        var writeAsync = writerClr.GetMethod(
-            "WriteAsync",
-            new[] { elementClr, typeof(System.Threading.CancellationToken) });
-        var asTaskNonGeneric = typeof(System.Threading.Tasks.ValueTask).GetMethod("AsTask", Type.EmptyTypes);
-        var getAwaiter = typeof(System.Threading.Tasks.Task).GetMethod("GetAwaiter", Type.EmptyTypes);
-        var getResult = typeof(System.Runtime.CompilerServices.TaskAwaiter).GetMethod("GetResult", Type.EmptyTypes);
+        var getWriter = BclMember.Getter(channelClr, "Writer");
+        var writeAsync = BclMember.Method(writerClr, "WriteAsync", elementClr, typeof(System.Threading.CancellationToken));
+        var asTaskNonGeneric = BclMember.Method(typeof(System.Threading.Tasks.ValueTask), "AsTask", Type.EmptyTypes);
+        var getAwaiter = BclMember.Method(typeof(System.Threading.Tasks.Task), "GetAwaiter", Type.EmptyTypes);
+        var getResult = BclMember.Method(typeof(System.Runtime.CompilerServices.TaskAwaiter), "GetResult", Type.EmptyTypes);
 
         var (vtSlot, taSlot, _, _) = this.channelOpSlots[node];
 

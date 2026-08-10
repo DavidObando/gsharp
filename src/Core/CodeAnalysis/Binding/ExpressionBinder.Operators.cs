@@ -61,7 +61,10 @@ internal sealed partial class ExpressionBinder
         // the interpreter operating on a boxed Char.
         if (TryGetPromotedCharUnaryType(syntax.OperatorToken.Kind, boundOperand.Type, out var promotedUnaryType))
         {
-            boundOperand = conversions.BindConversion(syntax.Operand.Location, boundOperand, promotedUnaryType);
+            boundOperand = conversions.BindConversion(
+                syntax.Operand.Location,
+                boundOperand,
+                Invariant.Required(promotedUnaryType, "a promoted char operand has a target type"));
         }
 
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);
@@ -78,7 +81,7 @@ internal sealed partial class ExpressionBinder
             var userOpName = OperatorNames.TryGetUnaryName(syntax.OperatorToken.Kind);
             if (userOpName != null && boundOperand.Type != null)
             {
-                FunctionSymbol userOp = null;
+                FunctionSymbol? userOp = null;
                 if (boundOperand.Type is StructSymbol operandStruct && TypeMemberModel.TryGetStaticMethodIncludingInherited(operandStruct, userOpName, out var structOp))
                 {
                     userOp = structOp;
@@ -114,7 +117,10 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundOperand.Type);
+            Diagnostics.ReportUndefinedUnaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                boundOperand.Type ?? TypeSymbol.Error);
             return new BoundErrorExpression(null);
         }
 
@@ -364,7 +370,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="left">The bound left operand.</param>
     /// <param name="right">The bound right operand.</param>
     /// <returns>The lowered bound expression, or <see langword="null"/>.</returns>
-    private BoundExpression TryBindPointerBinaryExpression(BinaryExpressionSyntax syntax, BoundExpression left, BoundExpression right) =>
+    private BoundExpression? TryBindPointerBinaryExpression(BinaryExpressionSyntax syntax, BoundExpression left, BoundExpression right) =>
         TryBindPointerBinaryOperation(syntax.OperatorToken.Kind, syntax.OperatorToken.Location, left, right);
 
     /// <summary>
@@ -380,7 +386,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="left">The bound left operand.</param>
     /// <param name="right">The bound right operand.</param>
     /// <returns>The lowered bound expression, or <see langword="null"/>.</returns>
-    private BoundExpression TryBindPointerBinaryOperation(SyntaxKind operatorKind, TextLocation operatorLocation, BoundExpression left, BoundExpression right)
+    private BoundExpression? TryBindPointerBinaryOperation(SyntaxKind operatorKind, TextLocation operatorLocation, BoundExpression left, BoundExpression right)
     {
         var leftPtr = left.Type as PointerTypeSymbol;
         var rightPtr = right.Type as PointerTypeSymbol;
@@ -540,13 +546,17 @@ internal sealed partial class ExpressionBinder
         BoundExpression scaled = offsetNint;
         if (!isOne)
         {
-            var mulOp = BoundBinaryOperator.Bind(SyntaxKind.StarToken, TypeSymbol.NInt, TypeSymbol.NInt);
+            var mulOp = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.StarToken, TypeSymbol.NInt, TypeSymbol.NInt),
+                "native-int multiplication is a built-in operator");
             scaled = new BoundBinaryExpression(null, offsetNint, mulOp, sizeExpr);
         }
 
         var pointerNint = new BoundConversionExpression(null, TypeSymbol.NInt, pointer);
         var addKind = subtract ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
-        var addOp = BoundBinaryOperator.Bind(addKind, TypeSymbol.NInt, TypeSymbol.NInt);
+        var addOp = Invariant.Required(
+            BoundBinaryOperator.Bind(addKind, TypeSymbol.NInt, TypeSymbol.NInt),
+            "native-int addition is a built-in operator");
         var resultNint = new BoundBinaryExpression(null, pointerNint, addOp, scaled);
         return new BoundConversionExpression(null, pointerType, resultNint);
     }
@@ -568,7 +578,9 @@ internal sealed partial class ExpressionBinder
     {
         var leftNint = new BoundConversionExpression(null, TypeSymbol.NInt, left);
         var rightNint = new BoundConversionExpression(null, TypeSymbol.NInt, right);
-        var subOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.NInt, TypeSymbol.NInt);
+        var subOp = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.NInt, TypeSymbol.NInt),
+            "native-int subtraction is a built-in operator");
         var byteDiff = new BoundBinaryExpression(null, leftNint, subOp, rightNint);
 
         var sizeExpr = PointeeSizeAsNint(pointerType.PointeeType, out var isOne);
@@ -577,11 +589,13 @@ internal sealed partial class ExpressionBinder
             return byteDiff;
         }
 
-        var divOp = BoundBinaryOperator.Bind(SyntaxKind.SlashToken, TypeSymbol.NInt, TypeSymbol.NInt);
+        var divOp = Invariant.Required(
+            BoundBinaryOperator.Bind(SyntaxKind.SlashToken, TypeSymbol.NInt, TypeSymbol.NInt),
+            "native-int division is a built-in operator");
         return new BoundBinaryExpression(null, byteDiff, divOp, sizeExpr);
     }
 
-    private BoundExpression LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)
+    private BoundExpression? LowerPointerComparison(SyntaxKind operatorKind, BoundExpression left, BoundExpression right)
     {
         if (!CanLowerPointerComparisonOperand(left.Type) || !CanLowerPointerComparisonOperand(right.Type))
         {
@@ -670,7 +684,7 @@ internal sealed partial class ExpressionBinder
     /// validate the operand of a throw-expression. Mirrors
     /// <see cref="StatementBinder.ResolveExceptionType"/>.
     /// </summary>
-    private TypeSymbol ResolveExceptionType()
+    private TypeSymbol? ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
         {
@@ -683,7 +697,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax)
         => BindConditionalExpression(syntax, targetType: null);
 
-    private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax, TypeSymbol targetType)
+    private BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax, TypeSymbol? targetType)
     {
         // Issue #1238: when this conditional is a bare call/constructor argument
         // whose target parameter type is not yet known, the argument-binding
@@ -787,7 +801,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIfExpression(
         IfExpressionSyntax syntax,
-        TypeSymbol targetType,
+        TypeSymbol? targetType,
         bool canBeVoid = false)
     {
         // A tail if/else in a discarded lambda/statement position may have
@@ -812,15 +826,17 @@ internal sealed partial class ExpressionBinder
         // Issue #2640: an if-expression branch observes the same nil-guard
         // narrowing as an if-statement. Otherwise a nullable hole can poison
         // the interpolation before handler overload resolution runs.
-        Dictionary<AccessPath, TypeSymbol> whenTrueNarrowing = null;
-        Dictionary<AccessPath, TypeSymbol> whenFalseNarrowing = null;
+        Dictionary<AccessPath, TypeSymbol>? whenTrueNarrowing = null;
+        Dictionary<AccessPath, TypeSymbol>? whenFalseNarrowing = null;
         if (SmartCastStability.TryClassifyNilGuardLeaf(
             condition,
             restrictBareVariableToLocalsAndParams: false,
             referenceNullableOnly: false,
             out var target,
             out var underlying,
-            out var nonNilWhenTrue))
+            out var nonNilWhenTrue)
+            && target != null
+            && underlying != null)
         {
             var frame = new Dictionary<AccessPath, TypeSymbol> { [target] = underlying };
             if (nonNilWhenTrue)
@@ -908,7 +924,7 @@ internal sealed partial class ExpressionBinder
     }
 
     private BoundExpression BindWithNarrowing(
-        Dictionary<AccessPath, TypeSymbol> narrowing,
+        Dictionary<AccessPath, TypeSymbol>? narrowing,
         Func<BoundExpression> bind)
     {
         if (narrowing == null)
@@ -947,8 +963,8 @@ internal sealed partial class ExpressionBinder
             return (bindStatementList(statements, null), BindExpression(expression, canBeVoid));
         }
 
-        BoundExpression boundExpression = null;
-        VariableSymbol result = null;
+        BoundExpression? boundExpression = null;
+        VariableSymbol? result = null;
         var boundStatements = bindStatementList(
             statements,
             () =>
@@ -1083,8 +1099,13 @@ internal sealed partial class ExpressionBinder
     /// <param name="right">The false-arm type.</param>
     /// <param name="targetType">The optional target type (C#-style target-typing), or <see langword="null"/>.</param>
     /// <returns>The chosen result type, or <see langword="null"/>.</returns>
-    private static TypeSymbol ComputeConditionalResultType(TypeSymbol left, TypeSymbol right, TypeSymbol targetType)
+    private static TypeSymbol? ComputeConditionalResultType(TypeSymbol? left, TypeSymbol? right, TypeSymbol? targetType)
     {
+        if (left == null || right == null)
+        {
+            return null;
+        }
+
         // (a) Target-typing: honor an explicit, valid target when both arms
         // implicitly convert to it.
         if (targetType != null
@@ -1123,7 +1144,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="left">The true-arm type.</param>
     /// <param name="right">The false-arm type.</param>
     /// <returns>The result lifted to nullable when either arm is nullable; otherwise <paramref name="result"/>.</returns>
-    private static TypeSymbol UnionArmNullability(TypeSymbol result, TypeSymbol left, TypeSymbol right)
+    private static TypeSymbol? UnionArmNullability(TypeSymbol? result, TypeSymbol? left, TypeSymbol? right)
     {
         if (result == null
             || result == TypeSymbol.Error
@@ -1188,7 +1209,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="left">The true-arm type.</param>
     /// <param name="right">The false-arm type.</param>
     /// <returns>The chosen common type, or <see langword="null"/>.</returns>
-    private static TypeSymbol ComputeConditionalCommonType(TypeSymbol left, TypeSymbol right)
+    private static TypeSymbol? ComputeConditionalCommonType(TypeSymbol? left, TypeSymbol? right)
     {
         if (left == null || right == null)
         {
@@ -1281,7 +1302,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     /// <param name="type">The non-nil arm's type.</param>
     /// <returns><c>T?</c> for a non-nullable value type <c>T</c>; otherwise <paramref name="type"/>.</returns>
-    private static TypeSymbol LiftForNilArm(TypeSymbol type)
+    private static TypeSymbol? LiftForNilArm(TypeSymbol? type)
     {
         if (type is not NullableTypeSymbol && type?.ClrType is { IsValueType: true })
         {
@@ -1296,7 +1317,7 @@ internal sealed partial class ExpressionBinder
     /// pick the wider canonical type using a simple rank. Returns
     /// <see langword="null"/> when either type isn't a recognised primitive.
     /// </summary>
-    private static TypeSymbol TryNumericTieBreak(TypeSymbol a, TypeSymbol b)
+    private static TypeSymbol? TryNumericTieBreak(TypeSymbol a, TypeSymbol b)
     {
         int ra = NumericRank(a);
         int rb = NumericRank(b);
@@ -1385,7 +1406,10 @@ internal sealed partial class ExpressionBinder
             return branch;
         }
 
-        return conversions.BindConversion(location, branch, target);
+        return conversions.BindConversion(
+            location,
+            branch,
+            Invariant.Required(target, "a conditional branch has a result type"));
     }
 
     private BoundExpression BindChannelReceiveExpression(UnaryExpressionSyntax syntax)
@@ -1412,7 +1436,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)
         => BindBinaryExpression(syntax, coalesceTargetType: null);
 
-    private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax, TypeSymbol coalesceTargetType)
+    private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax, TypeSymbol? coalesceTargetType)
     {
         // Issue #1480: when a `??` argument has no contextual target type and the
         // overload binder requested deferral (DeferTargetlessConditional), a
@@ -1679,7 +1703,7 @@ internal sealed partial class ExpressionBinder
 
     private static bool IsExplicitlyNonNullImportedResult(BoundExpression expression)
     {
-        MethodInfo method = expression switch
+        MethodInfo? method = expression switch
         {
             BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,
             BoundImportedCallExpression staticCall => staticCall.Function.Method,
@@ -1731,7 +1755,7 @@ internal sealed partial class ExpressionBinder
         TextLocation leftLocation,
         TextLocation rightLocation,
         TypeSymbol naturalResultType,
-        out TypeSymbol liftedResultType)
+        out TypeSymbol? liftedResultType)
     {
         liftedResultType = null;
 
@@ -1792,7 +1816,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="value">The bound right-hand operand.</param>
     /// <param name="valueLocation">The source location of the right-hand operand.</param>
     /// <returns>The bound in-place operator call, or <see langword="null"/> when none applies.</returns>
-    private BoundExpression TryBindUserCompoundAssignmentOperator(
+    private BoundExpression? TryBindUserCompoundAssignmentOperator(
         SyntaxKind compoundOperatorKind,
         BoundExpression target,
         BoundExpression value,
@@ -1857,7 +1881,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="rightLocation">The source location of the right operand.</param>
     /// <param name="ambiguous">Set to <see langword="true"/> when CLR operator resolution found multiple equally-applicable candidates.</param>
     /// <returns>The bound user/CLR operator call, or <see langword="null"/> when neither resolves.</returns>
-    private BoundExpression TryBindBinaryWithUserAndClrFallback(
+    private BoundExpression? TryBindBinaryWithUserAndClrFallback(
         SyntaxKind opKind,
         ref BoundExpression left,
         ref BoundExpression right,
@@ -1890,8 +1914,8 @@ internal sealed partial class ExpressionBinder
                 ? rightNullableForStruct.UnderlyingType as StructSymbol
                 : right.Type as StructSymbol;
 
-            FunctionSymbol userOp = null;
-            StructSymbol userOpOwner = null;
+            FunctionSymbol? userOp = null;
+            StructSymbol? userOpOwner = null;
             if (leftStructType != null
                 && TypeMemberModel.TryGetStaticMethodIncludingInherited(leftStructType, userOpName, out var leftOp, out var leftOwner))
             {
@@ -1930,7 +1954,14 @@ internal sealed partial class ExpressionBinder
                     && CanApplyLiftedUserOperator(right.Type, rightParameterType)
                     && TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, resultType, out var liftedResultType))
                 {
-                    return new BoundClrBinaryOperatorExpression(null, opKind, left, right, userOp, userOpOwner, liftedResultType);
+                    return new BoundClrBinaryOperatorExpression(
+                        null,
+                        opKind,
+                        left,
+                        right,
+                        userOp,
+                        userOpOwner,
+                        Invariant.Required(liftedResultType, "a lifted operator has a result type"));
                 }
 
                 var convertedLeft = conversions.BindConversion(leftLocation, left, leftParameterType);
@@ -1973,7 +2004,13 @@ internal sealed partial class ExpressionBinder
             // table already lifts `int32? + int32?` et al.
             if (TryLiftNullableClrOperatorOperands(opKind, ref left, ref right, leftLocation, rightLocation, TypeSymbol.FromClrType(clrMethod.ReturnType), out var liftedClrResultType))
             {
-                return new BoundClrBinaryOperatorExpression(null, opKind, left, right, clrMethod, liftedClrResultType);
+                return new BoundClrBinaryOperatorExpression(
+                    null,
+                    opKind,
+                    left,
+                    right,
+                    clrMethod,
+                    Invariant.Required(liftedClrResultType, "a lifted CLR operator has a result type"));
             }
 
             return new BoundClrBinaryOperatorExpression(
@@ -1988,12 +2025,14 @@ internal sealed partial class ExpressionBinder
         return null;
     }
 
-    private static bool CanApplyLiftedUserOperator(TypeSymbol operandType, TypeSymbol parameterType)
+    private static bool CanApplyLiftedUserOperator(TypeSymbol? operandType, TypeSymbol parameterType)
     {
         var underlyingOperand = operandType is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
             : operandType;
-        var conversion = Conversion.Classify(underlyingOperand, parameterType);
+        var conversion = Conversion.Classify(
+            Invariant.Required(underlyingOperand, "an operator operand has a type"),
+            parameterType);
         return conversion.Exists && conversion.IsImplicit;
     }
 
@@ -2012,7 +2051,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="target">The contextual target type, or <see langword="null"/>.</param>
     /// <param name="op">The synthesized NullCoalesce operator on success.</param>
     /// <returns><see langword="true"/> when a target-typed operator was built.</returns>
-    private bool TryBindTargetTypedNullCoalesce(BoundExpression boundLeft, BoundExpression boundRight, TypeSymbol target, out BoundBinaryOperator op)
+    private bool TryBindTargetTypedNullCoalesce(BoundExpression boundLeft, BoundExpression boundRight, TypeSymbol? target, out BoundBinaryOperator? op)
     {
         op = null;
         if (target == null
@@ -2057,7 +2096,7 @@ internal sealed partial class ExpressionBinder
     /// bind (the caller then reports GS0129 or tries user/CLR operator
     /// fallbacks).
     /// </summary>
-    private BoundBinaryOperator BindBinaryOperatorWithNumericAdaptation(
+    private BoundBinaryOperator? BindBinaryOperatorWithNumericAdaptation(
         SyntaxKind operatorKind,
         ref BoundExpression boundLeft,
         ref BoundExpression boundRight,
@@ -2096,11 +2135,17 @@ internal sealed partial class ExpressionBinder
         if ((boundOperator == null || IsPromotedCharOperator(operatorKind))
             && TryGetPromotedCharBinaryType(operatorKind, boundLeft.Type, boundRight.Type, out var promotedBinaryType))
         {
-            var promotedOperator = BoundBinaryOperator.Bind(operatorKind, promotedBinaryType, promotedBinaryType);
+            var promotedOperator = BoundBinaryOperator.Bind(
+                operatorKind,
+                Invariant.Required(promotedBinaryType, "a promoted char operator has a type"),
+                Invariant.Required(promotedBinaryType, "a promoted char operator has a type"));
             if (promotedOperator != null)
             {
-                boundLeft = conversions.BindConversion(leftLocation, boundLeft, promotedBinaryType);
-                boundRight = conversions.BindConversion(rightLocation, boundRight, promotedBinaryType);
+                var promotedType = Invariant.Required(
+                    promotedBinaryType,
+                    "a promoted char operator has a type");
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, promotedType);
+                boundRight = conversions.BindConversion(rightLocation, boundRight, promotedType);
                 boundOperator = promotedOperator;
             }
         }
@@ -2306,7 +2351,7 @@ internal sealed partial class ExpressionBinder
         {
             var leftUnderlying = boundLeft.Type is NullableTypeSymbol leftNum ? leftNum.UnderlyingType : boundLeft.Type;
             var rightUnderlying = boundRight.Type is NullableTypeSymbol rightNum ? rightNum.UnderlyingType : boundRight.Type;
-            TypeSymbol commonUnderlying = null;
+            TypeSymbol? commonUnderlying = null;
 
             if (leftUnderlying != null && rightUnderlying != null)
             {
@@ -2361,7 +2406,7 @@ internal sealed partial class ExpressionBinder
         return boundOperator;
     }
 
-    private static bool TryGetPromotedCharUnaryType(SyntaxKind operatorKind, TypeSymbol operandType, out TypeSymbol promotedType)
+    private static bool TryGetPromotedCharUnaryType(SyntaxKind operatorKind, TypeSymbol operandType, out TypeSymbol? promotedType)
     {
         var nullable = operandType as NullableTypeSymbol;
         if ((nullable?.UnderlyingType ?? operandType) == TypeSymbol.Char
@@ -2379,7 +2424,7 @@ internal sealed partial class ExpressionBinder
         SyntaxKind operatorKind,
         TypeSymbol leftType,
         TypeSymbol rightType,
-        out TypeSymbol promotedType)
+        out TypeSymbol? promotedType)
     {
         promotedType = null;
         if (!IsPromotedCharOperator(operatorKind))
@@ -2454,13 +2499,13 @@ internal sealed partial class ExpressionBinder
             or SyntaxKind.LessToken or SyntaxKind.LessOrEqualsToken
             or SyntaxKind.GreaterToken or SyntaxKind.GreaterOrEqualsToken;
 
-    private static TypeSymbol GetNullableUnderlying(TypeSymbol type) =>
+    private static TypeSymbol? GetNullableUnderlying(TypeSymbol type) =>
         type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     // issue #1144: the ten G# integer primitive types (signed + unsigned,
     // including the native-int pair). Membership mirrors the integral sets in
     // BoundBinaryOperator.
-    internal static bool IsIntegerType(TypeSymbol type)
+    internal static bool IsIntegerType(TypeSymbol? type)
     {
         return type == TypeSymbol.Int8 || type == TypeSymbol.Int16 || type == TypeSymbol.Int32
             || type == TypeSymbol.Int64 || type == TypeSymbol.NInt
@@ -2470,14 +2515,14 @@ internal sealed partial class ExpressionBinder
 
     // issue #1144: true when the boxed literal value is a compile-time constant
     // INTEGER (excludes char/bool/float/decimal/string/enum, which never adapt).
-    internal static bool IsIntegerLiteralValue(object value)
+    internal static bool IsIntegerLiteralValue(object? value)
     {
         return value is sbyte or byte or short or ushort or int or uint or long or ulong or nint or nuint;
     }
 
     // issue #1183: widen a boxed integer literal value to a sign-agnostic
     // BigInteger carrier so the full int64/uint64 range round-trips.
-    internal static BigInteger ToBigInteger(object value)
+    internal static BigInteger ToBigInteger(object? value)
     {
         return value switch
         {
@@ -2526,7 +2571,7 @@ internal sealed partial class ExpressionBinder
     // InferType) to EXACTLY the target type. Native ints are range-tested
     // conservatively as int64 (nint) / uint64 (nuint) so the result is stable
     // regardless of the host process pointer width.
-    internal static bool TryAdaptIntegerLiteral(object value, TypeSymbol target, out object converted)
+    internal static bool TryAdaptIntegerLiteral(object? value, TypeSymbol? target, out object? converted)
     {
         converted = null;
         if (!IsIntegerLiteralValue(value))
@@ -2542,7 +2587,7 @@ internal sealed partial class ExpressionBinder
     // literal adaptation above. Range-checks against the target integer type's
     // min/max before producing a boxed value whose CLR type maps (via
     // BoundLiteralExpression.InferType) to EXACTLY the target type.
-    internal static bool TryAdaptIntegerLiteral(BigInteger v, TypeSymbol target, out object converted)
+    internal static bool TryAdaptIntegerLiteral(BigInteger v, TypeSymbol? target, out object? converted)
     {
         converted = null;
         BigInteger min;
@@ -2652,7 +2697,7 @@ internal sealed partial class ExpressionBinder
     // `var x uint16 = 5` already does. Non-constant operands and `char` targets
     // are excluded, matching C# (char is not a §10.2.11 destination type, and a
     // non-constant narrowing/cross-sign value still requires an explicit cast).
-    internal static bool IsImplicitConstantNarrowingArgument(BoundExpression argument, TypeSymbol parameterType)
+    internal static bool IsImplicitConstantNarrowingArgument(BoundExpression? argument, TypeSymbol? parameterType)
     {
         return argument != null
             && parameterType != null
@@ -2669,8 +2714,8 @@ internal sealed partial class ExpressionBinder
     // cross-sign) integer parameter — i.e. the same §10.2.11 rule applied on the
     // user-method path. `argumentOffset` accounts for a synthesised leading
     // receiver slot (imported extension calls pass [receiver, args…], offset 1).
-    internal static Func<int, System.Type, bool> MakeConstantNarrowingArgumentCheck(
-        IReadOnlyList<BoundExpression> boundArguments,
+    internal static Func<int, System.Type, bool>? MakeConstantNarrowingArgumentCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)
     {
         if (boundArguments == null)
@@ -2691,7 +2736,9 @@ internal sealed partial class ExpressionBinder
             // pointer (which TypeSymbol.FromClrType cannot represent).
             if (clrParameterType.IsByRef)
             {
-                clrParameterType = clrParameterType.GetElementType();
+                clrParameterType = Invariant.Required(
+                    clrParameterType.GetElementType(),
+                    "a by-ref parameter has an element type");
             }
 
             return IsImplicitConstantNarrowingArgument(boundArguments[argIndex], TypeSymbol.FromClrType(clrParameterType));
@@ -2701,8 +2748,8 @@ internal sealed partial class ExpressionBinder
     // ADR-0148: imported overload resolution works on CLR Type surrogates and
     // cannot see a G# argument's symbolic public shape. Supply that context as
     // a call-local applicability callback; by-ref parameters remain excluded.
-    internal static Func<int, System.Type, bool> MakeStructuralProjectionArgumentCheck(
-        IReadOnlyList<BoundExpression> boundArguments,
+    internal static Func<int, System.Type, bool>? MakeStructuralProjectionArgumentCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)
     {
         if (boundArguments == null)
@@ -2728,8 +2775,8 @@ internal sealed partial class ExpressionBinder
         };
     }
 
-    internal static Func<int, System.Type, bool?> MakeDelegateRefKindArgumentCheck(
-        IReadOnlyList<BoundExpression> boundArguments,
+    internal static Func<int, System.Type, bool?>? MakeDelegateRefKindArgumentCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)
     {
         if (boundArguments == null)

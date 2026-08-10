@@ -19,13 +19,19 @@ public class SyntaxToken : SyntaxNode
     /// <param name="position">The position of the syntax token.</param>
     /// <param name="text">The text of the syntax token.</param>
     /// <param name="value">The value of the syntax token.</param>
-    public SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object value)
+    public SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object? value)
+        : this(syntaxTree, kind, position, text, value, isMissing: false)
+    {
+    }
+
+    private SyntaxToken(SyntaxTree syntaxTree, SyntaxKind kind, int position, string text, object? value, bool isMissing)
         : base(syntaxTree)
     {
         Kind = kind;
         Position = position;
         Text = text;
         Value = value;
+        IsMissing = isMissing;
     }
 
     /// <summary>
@@ -46,7 +52,7 @@ public class SyntaxToken : SyntaxNode
     /// <summary>
     /// Gets the value of this syntax token, if any.
     /// </summary>
-    public object Value { get; }
+    public object? Value { get; }
 
     /// <summary>
     /// Gets the text span associated to the token.
@@ -56,5 +62,30 @@ public class SyntaxToken : SyntaxNode
     /// <summary>
     /// Gets a value indicating whether the token was inserted by the parser and doesn't appear in source.
     /// </summary>
-    public bool IsMissing => Text == null;
+    /// <remarks>
+    /// Issue #3332: this was previously derived from <c>Text == null</c>. It is
+    /// now carried explicitly, so a missing token can hold
+    /// <see cref="string.Empty"/> text without losing the distinction that
+    /// CodeLens, semantic lookup and function declaration all rely on.
+    /// </remarks>
+    public bool IsMissing { get; }
+
+    /// <summary>
+    /// Creates a token the parser inserted during error recovery, which does not
+    /// appear in source.
+    /// </summary>
+    /// <remarks>
+    /// Issue #3332: the text is <see cref="string.Empty"/>, never
+    /// <see langword="null"/>. Missing tokens flow on through the rest of the
+    /// parse, so a null <see cref="Text"/> made every consumer of it a latent
+    /// <see cref="System.NullReferenceException"/> on any recovery path — the
+    /// shape that produced issue #2144. <see cref="IsMissing"/> carries the
+    /// distinction instead.
+    /// </remarks>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="kind">The kind of token the parser expected.</param>
+    /// <param name="position">The position at which it was expected.</param>
+    /// <returns>A zero-width token with empty text.</returns>
+    public static SyntaxToken Missing(SyntaxTree syntaxTree, SyntaxKind kind, int position)
+        => new SyntaxToken(syntaxTree, kind, position, string.Empty, null, isMissing: true);
 }

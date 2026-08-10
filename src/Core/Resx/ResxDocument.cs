@@ -44,7 +44,7 @@ public sealed class ResxDocument
         {
             foreach (var data in root.Elements("data"))
             {
-                var name = (string)data.Attribute("name");
+                var name = (string?)data.Attribute("name");
                 if (string.IsNullOrEmpty(name))
                 {
                     continue;
@@ -60,8 +60,8 @@ public sealed class ResxDocument
 
                 var value = data.Element("value")?.Value ?? string.Empty;
                 var comment = data.Element("comment")?.Value ?? string.Empty;
-                var typeName = (string)data.Attribute("type") ?? string.Empty;
-                var mimeType = (string)data.Attribute("mimetype") ?? string.Empty;
+                var typeName = (string?)data.Attribute("type") ?? string.Empty;
+                var mimeType = (string?)data.Attribute("mimetype") ?? string.Empty;
                 entries.Add(new ResxEntry(name, value, comment, typeName, mimeType));
             }
         }

@@ -27,7 +27,7 @@ public sealed class BoundBaseInterfaceCallExpression : BoundExpression
     /// <param name="method">The interface method whose default body is invoked. Must satisfy <see cref="InterfaceSymbol.HasDefaultBody"/>.</param>
     /// <param name="arguments">The bound argument expressions in declared order.</param>
     public BoundBaseInterfaceCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         InterfaceSymbol interfaceSymbol,
         FunctionSymbol method,

@@ -21,7 +21,7 @@ public sealed class BoundMapLiteralExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="mapType">The map type symbol.</param>
     /// <param name="entries">The bound key/value entries.</param>
-    public BoundMapLiteralExpression(SyntaxNode syntax, MapTypeSymbol mapType, ImmutableArray<BoundMapEntry> entries)
+    public BoundMapLiteralExpression(SyntaxNode? syntax, MapTypeSymbol mapType, ImmutableArray<BoundMapEntry> entries)
         : base(syntax)
     {
         MapType = mapType ?? throw new ArgumentNullException(nameof(mapType));

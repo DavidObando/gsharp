@@ -21,7 +21,7 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="refKindModifier">The literal <c>ref</c>/<c>out</c>/<c>in</c> token.</param>
     /// <param name="expression">The lvalue expression being passed by reference.</param>
-    public RefArgumentExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken refKindModifier, ExpressionSyntax expression)
+    public RefArgumentExpressionSyntax(SyntaxTree syntaxTree, SyntaxToken refKindModifier, ExpressionSyntax? expression)
         : base(syntaxTree)
     {
         RefKindModifier = refKindModifier;
@@ -45,10 +45,10 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     public RefArgumentExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken refKindModifier,
-        SyntaxToken declarationKeyword,
-        SyntaxToken declarationIdentifier,
-        SyntaxToken discardToken,
-        TypeClauseSyntax declaredType)
+        SyntaxToken? declarationKeyword,
+        SyntaxToken? declarationIdentifier,
+        SyntaxToken? discardToken,
+        TypeClauseSyntax? declaredType)
         : base(syntaxTree)
     {
         RefKindModifier = refKindModifier;
@@ -66,19 +66,19 @@ public sealed class RefArgumentExpressionSyntax : ExpressionSyntax
     public SyntaxToken RefKindModifier { get; }
 
     /// <summary>Gets the lvalue expression for the plain form, or <see langword="null"/> for the declaration/discard forms.</summary>
-    public ExpressionSyntax Expression { get; }
+    public ExpressionSyntax? Expression { get; }
 
     /// <summary>Gets the <c>var</c> or <c>let</c> declaration keyword for <c>out var/let name</c>; <see langword="null"/> otherwise.</summary>
-    public SyntaxToken DeclarationKeyword { get; }
+    public SyntaxToken? DeclarationKeyword { get; }
 
     /// <summary>Gets the new local's identifier for <c>out var/let name</c>; <see langword="null"/> otherwise.</summary>
-    public SyntaxToken DeclarationIdentifier { get; }
+    public SyntaxToken? DeclarationIdentifier { get; }
 
     /// <summary>Gets the underscore token for <c>out _</c>; <see langword="null"/> otherwise.</summary>
-    public SyntaxToken DiscardToken { get; }
+    public SyntaxToken? DiscardToken { get; }
 
     /// <summary>Gets the optional type clause for the inline-declared local (<c>out var name T</c>).</summary>
-    public TypeClauseSyntax DeclaredType { get; }
+    public TypeClauseSyntax? DeclaredType { get; }
 
     /// <summary>Gets a value indicating whether this argument is an inline-declaration form (<c>out var/let name</c> or <c>out _</c>).</summary>
     public bool IsInlineDeclaration => DeclarationKeyword != null || DiscardToken != null;

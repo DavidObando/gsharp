@@ -31,11 +31,11 @@ public sealed class IfLetExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         SyntaxToken ifKeyword,
         SeparatedSyntaxList<IfLetBindingClauseSyntax> bindings,
-        SyntaxToken ampersandAmpersandToken,
-        ExpressionSyntax guard,
+        SyntaxToken? ampersandAmpersandToken,
+        ExpressionSyntax? guard,
         BlockExpressionSyntax thenBlock,
-        SyntaxToken elseKeyword,
-        ExpressionSyntax elseExpression)
+        SyntaxToken? elseKeyword,
+        ExpressionSyntax? elseExpression)
         : base(syntaxTree)
     {
         IfKeyword = ifKeyword;
@@ -57,19 +57,19 @@ public sealed class IfLetExpressionSyntax : ExpressionSyntax
     public SeparatedSyntaxList<IfLetBindingClauseSyntax> Bindings { get; }
 
     /// <summary>Gets the optional <c>&amp;&amp;</c> token introducing the guard; <c>null</c> when there is no guard.</summary>
-    public SyntaxToken AmpersandAmpersandToken { get; }
+    public SyntaxToken? AmpersandAmpersandToken { get; }
 
     /// <summary>
     /// Gets the optional guard expression evaluated after every binding
     /// succeeded (with all bound names in scope); <c>null</c> when absent.
     /// </summary>
-    public ExpressionSyntax Guard { get; }
+    public ExpressionSyntax? Guard { get; }
 
     /// <summary>Gets the then-block expression.</summary>
     public BlockExpressionSyntax ThenBlock { get; }
 
     /// <summary>Gets the <c>else</c> keyword token; <c>null</c> only when the source omitted it.</summary>
-    public SyntaxToken ElseKeyword { get; }
+    public SyntaxToken? ElseKeyword { get; }
 
     /// <summary>
     /// Gets the else branch: a <see cref="BlockExpressionSyntax"/> for a plain
@@ -77,5 +77,5 @@ public sealed class IfLetExpressionSyntax : ExpressionSyntax
     /// <see cref="IfLetExpressionSyntax"/> for an <c>else if</c> chain.
     /// <c>null</c> only when the source omitted the else branch (GS0276).
     /// </summary>
-    public ExpressionSyntax ElseExpression { get; }
+    public ExpressionSyntax? ElseExpression { get; }
 }

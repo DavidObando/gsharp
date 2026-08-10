@@ -44,10 +44,10 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     /// <param name="body">The lambda body — a single expression, or a brace-delimited block expression.</param>
     public LambdaExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
-        SyntaxToken openParenToken,
+        SyntaxToken? asyncModifier,
+        SyntaxToken? openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
-        SyntaxToken closeParenToken,
+        SyntaxToken? closeParenToken,
         SyntaxToken arrowToken,
         ExpressionSyntax body)
         : base(syntaxTree)
@@ -72,9 +72,9 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     /// <param name="body">The lambda body — a single expression, or a brace-delimited block expression.</param>
     public LambdaExpressionSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openParenToken,
+        SyntaxToken? openParenToken,
         SeparatedSyntaxList<ParameterSyntax> parameters,
-        SyntaxToken closeParenToken,
+        SyntaxToken? closeParenToken,
         SyntaxToken arrowToken,
         ExpressionSyntax body)
         : this(syntaxTree, asyncModifier: null, openParenToken, parameters, closeParenToken, arrowToken, body)
@@ -85,19 +85,19 @@ public sealed class LambdaExpressionSyntax : ExpressionSyntax
     public override SyntaxKind Kind => SyntaxKind.LambdaExpression;
 
     /// <summary>Gets the optional <c>async</c> modifier preceding the parameter list (ADR-0076 / issue #716). <c>null</c> when the lambda is synchronous.</summary>
-    public SyntaxToken AsyncModifier { get; }
+    public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets a value indicating whether the lambda carries an <c>async</c> modifier.</summary>
     public bool IsAsync => AsyncModifier != null;
 
     /// <summary>Gets the opening <c>(</c> token of the parameter list.</summary>
-    public SyntaxToken OpenParenToken { get; }
+    public SyntaxToken? OpenParenToken { get; }
 
     /// <summary>Gets the parenthesised parameter list (possibly empty).</summary>
     public SeparatedSyntaxList<ParameterSyntax> Parameters { get; }
 
     /// <summary>Gets the closing <c>)</c> token of the parameter list.</summary>
-    public SyntaxToken CloseParenToken { get; }
+    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the <c>-&gt;</c> arrow token.</summary>
     public SyntaxToken ArrowToken { get; }

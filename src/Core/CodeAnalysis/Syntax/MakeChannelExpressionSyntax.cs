@@ -17,7 +17,7 @@ public sealed class MakeChannelExpressionSyntax : ExpressionSyntax
     /// <param name="makeIdentifier">The <c>make</c> identifier token.</param>
     /// <param name="openParenthesis">The <c>(</c> token.</param>
     /// <param name="channelTypeClause">The <c>chan T</c> type clause argument.</param>
-    /// <param name="commaToken">The optional <c>,</c> token before the capacity, or <c>null</c>.</param>
+    /// <param name="commaToken">The optional <c>,</c> token before the? capacity, or <c>null</c>.</param>
     /// <param name="capacity">The optional capacity expression, or <c>null</c>.</param>
     /// <param name="closeParenthesis">The <c>)</c> token.</param>
     public MakeChannelExpressionSyntax(
@@ -25,8 +25,8 @@ public sealed class MakeChannelExpressionSyntax : ExpressionSyntax
         SyntaxToken makeIdentifier,
         SyntaxToken openParenthesis,
         TypeClauseSyntax channelTypeClause,
-        SyntaxToken commaToken,
-        ExpressionSyntax capacity,
+        SyntaxToken? commaToken,
+        ExpressionSyntax? capacity,
         SyntaxToken closeParenthesis)
         : base(syntaxTree)
     {
@@ -50,11 +50,11 @@ public sealed class MakeChannelExpressionSyntax : ExpressionSyntax
     /// <summary>Gets the <c>chan T</c> type-clause argument.</summary>
     public TypeClauseSyntax ChannelTypeClause { get; }
 
-    /// <summary>Gets the optional <c>,</c> separator before the capacity, or <c>null</c>.</summary>
-    public SyntaxToken CommaToken { get; }
+    /// <summary>Gets the optional <c>,</c> separator before the? capacity, or <c>null</c>.</summary>
+    public SyntaxToken? CommaToken { get; }
 
     /// <summary>Gets the optional capacity expression, or <c>null</c> for an unbounded channel.</summary>
-    public ExpressionSyntax Capacity { get; }
+    public ExpressionSyntax? Capacity { get; }
 
     /// <summary>Gets the closing <c>)</c> token.</summary>
     public SyntaxToken CloseParenthesis { get; }

@@ -100,7 +100,7 @@ public static class AsyncIteratorDetection
     /// <param name="type">The candidate async-iterator return type.</param>
     /// <returns>The element type, or <see langword="null"/> when
     /// <paramref name="type"/> is not an async-iterator return type.</returns>
-    public static TypeSymbol GetElementType(TypeSymbol type)
+    public static TypeSymbol? GetElementType(TypeSymbol type)
     {
         // Issue #798: `async sequence[T]` (AsyncSequenceTypeSymbol) carries
         // its element symbolically; honor it directly so an open T does not

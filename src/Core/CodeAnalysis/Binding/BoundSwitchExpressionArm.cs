@@ -3,6 +3,7 @@
 // </copyright>
 
 using GSharp.Core.CodeAnalysis.Syntax;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -18,7 +19,7 @@ public sealed class BoundSwitchExpressionArm : BoundNode
     /// <param name="pattern">The case pattern, or null for <c>default</c>.</param>
     /// <param name="guard">The optional boolean guard expression (<c>when</c> clause), or null.</param>
     /// <param name="result">The result expression.</param>
-    public BoundSwitchExpressionArm(SyntaxNode syntax, BoundPattern pattern, BoundExpression guard, BoundExpression result)
+    public BoundSwitchExpressionArm(SyntaxNode? syntax, BoundPattern? pattern, BoundExpression? guard, BoundExpression result)
         : base(syntax)
     {
         Pattern = pattern;
@@ -30,14 +31,15 @@ public sealed class BoundSwitchExpressionArm : BoundNode
     public override BoundNodeKind Kind => BoundNodeKind.SwitchExpressionArm;
 
     /// <summary>Gets the case pattern expression, or null when this arm is <c>default</c>.</summary>
-    public BoundPattern Pattern { get; }
+    public BoundPattern? Pattern { get; }
 
     /// <summary>Gets the optional boolean guard expression (<c>when</c> clause), or null when the arm has no guard.</summary>
-    public BoundExpression Guard { get; }
+    public BoundExpression? Guard { get; }
 
     /// <summary>Gets the result expression.</summary>
     public BoundExpression Result { get; }
 
     /// <summary>Gets a value indicating whether this is the <c>default</c> arm.</summary>
+    [MemberNotNullWhen(false, nameof(Pattern))]
     public bool IsDefault => Pattern == null;
 }

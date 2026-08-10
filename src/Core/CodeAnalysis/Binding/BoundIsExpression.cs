@@ -17,7 +17,7 @@ public sealed class BoundIsExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression whose runtime type is tested.</param>
     /// <param name="targetType">The type to test against.</param>
-    public BoundIsExpression(SyntaxNode syntax, BoundExpression expression, TypeSymbol targetType)
+    public BoundIsExpression(SyntaxNode? syntax, BoundExpression expression, TypeSymbol targetType)
         : base(syntax)
     {
         Expression = expression;

@@ -16,7 +16,7 @@ public sealed class BoundExpressionStatement : BoundStatement
     /// </summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression.</param>
-    public BoundExpressionStatement(SyntaxNode syntax, BoundExpression expression)
+    public BoundExpressionStatement(SyntaxNode? syntax, BoundExpression expression)
         : base(syntax)
     {
         Expression = expression;

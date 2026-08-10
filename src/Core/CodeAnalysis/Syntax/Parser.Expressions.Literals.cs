@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Text;
@@ -179,8 +180,8 @@ public partial class Parser
         var makeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var channelType = ParseChanTypeClause();
-        SyntaxToken comma = null;
-        ExpressionSyntax capacity = null;
+        SyntaxToken? comma = null;
+        ExpressionSyntax? capacity = null;
         if (Current.Kind == SyntaxKind.CommaToken)
         {
             comma = MatchToken(SyntaxKind.CommaToken);
@@ -371,12 +372,7 @@ public partial class Parser
         builder.AddRange(existing);
         if (existing.Length > 0 && existing[existing.Length - 1] is not SyntaxToken)
         {
-            var syntheticComma = new SyntaxToken(
-                syntaxTree,
-                SyntaxKind.CommaToken,
-                lambda.Span.Start,
-                null,
-                null);
+            var syntheticComma = SyntaxToken.Missing(syntaxTree, SyntaxKind.CommaToken, lambda.Span.Start);
             builder.Add(syntheticComma);
         }
 
@@ -552,7 +548,7 @@ public partial class Parser
     //   out <ident>                     -> out lvalue
     // Otherwise the identifier `ref`/`out`/`in` is left as a plain expression
     // (e.g. a user-defined parameter actually named `out`).
-    private bool TryParseRefArgument(out RefArgumentExpressionSyntax result)
+    private bool TryParseRefArgument([MaybeNullWhen(false)] out RefArgumentExpressionSyntax result)
     {
         result = null;
         if (Current.Kind != SyntaxKind.IdentifierToken)
@@ -607,7 +603,7 @@ public partial class Parser
             {
                 var keyword = NextToken();
                 var ident = MatchToken(SyntaxKind.IdentifierToken);
-                TypeClauseSyntax declType = null;
+                TypeClauseSyntax? declType = null;
                 if (CanStartTypeClause(Current))
                 {
                     declType = ParseTypeClause();
@@ -620,7 +616,7 @@ public partial class Parser
             if (payloadIsDiscard)
             {
                 var underscore = NextToken();
-                TypeClauseSyntax declType = null;
+                TypeClauseSyntax? declType = null;
                 if (CanStartTypeClause(Current))
                 {
                     declType = ParseTypeClause();
@@ -703,7 +699,7 @@ public partial class Parser
     // ADR-0061 transitional: kept only to avoid touching the few callers
     // that still want the legacy ref-only node when the `?` follows
     // certain ref-context shapes. Forwards to ParseConditionalTail.
-    private ExpressionSyntax MaybeParseConditionalRefArgumentTail(ExpressionSyntax condition, SyntaxToken outerModifier)
+    private ExpressionSyntax MaybeParseConditionalRefArgumentTail(ExpressionSyntax condition, SyntaxToken? outerModifier)
     {
         if (Current.Kind != SyntaxKind.QuestionToken)
         {
@@ -716,7 +712,7 @@ public partial class Parser
 
     // ADR-0061: parse an optional inner `ref`/`in`/`out` modifier on a branch
     // of a conditional ref-argument. Returns the consumed token or null.
-    private SyntaxToken TryConsumeInnerRefModifier()
+    private SyntaxToken? TryConsumeInnerRefModifier()
     {
         if (Current.Kind != SyntaxKind.IdentifierToken)
         {
@@ -779,8 +775,8 @@ public partial class Parser
 
         var thenBlock = ParseBlockExpression(valueRequired: true);
 
-        SyntaxToken elseKeyword = null;
-        ExpressionSyntax elseExpression = null;
+        SyntaxToken? elseKeyword = null;
+        ExpressionSyntax? elseExpression = null;
         if (Current.Kind == SyntaxKind.ElseKeyword)
         {
             elseKeyword = NextToken();
@@ -813,7 +809,7 @@ public partial class Parser
     private BlockExpressionSyntax ParseBlockExpression(bool valueRequired = false)
     {
         var statements = ImmutableArray.CreateBuilder<StatementSyntax>();
-        ExpressionSyntax trailingExpression = null;
+        ExpressionSyntax? trailingExpression = null;
 
         var openBraceToken = MatchToken(SyntaxKind.OpenBraceToken);
 
@@ -1145,15 +1141,15 @@ public partial class Parser
     }
 
     private (
-        SyntaxToken SpreadToken,
-        ExpressionSyntax SpreadExpression,
-        SyntaxToken SpreadSeparator,
+        SyntaxToken? SpreadToken,
+        ExpressionSyntax? SpreadExpression,
+        SyntaxToken? SpreadSeparator,
         SeparatedSyntaxList<FieldInitializerSyntax> Initializers)
         ParseStructLiteralInitializers()
     {
-        SyntaxToken spreadToken = null;
-        ExpressionSyntax spreadExpression = null;
-        SyntaxToken spreadSeparator = null;
+        SyntaxToken? spreadToken = null;
+        ExpressionSyntax? spreadExpression = null;
+        SyntaxToken? spreadSeparator = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
         {
             spreadToken = MatchToken(SyntaxKind.EllipsisToken);
@@ -1340,7 +1336,10 @@ public partial class Parser
     private ExpressionSyntax ParseInterpolatedStringLiteral()
     {
         var token = MatchToken(SyntaxKind.InterpolatedStringToken);
-        var fragments = (ImmutableArray<InterpolationFragment>)token.Value;
+
+        // MatchToken(InterpolatedStringToken) guarantees the lexer attached the
+        // fragment array as the token's value.
+        var fragments = (ImmutableArray<InterpolationFragment>)token.Value!;
         var segments = ImmutableArray.CreateBuilder<InterpolatedStringSegment>(fragments.Length);
         foreach (var fragment in fragments)
         {
@@ -1428,8 +1427,8 @@ public partial class Parser
         string hole,
         int expressionLength,
         out string expr,
-        out string alignment,
-        out string format)
+        out string? alignment,
+        out string? format)
     {
         expr = hole.Substring(0, expressionLength);
         alignment = null;
@@ -1455,7 +1454,7 @@ public partial class Parser
         }
     }
 
-    private static ExpressionSyntax ExtractFirstExpression(CompilationUnitSyntax innerRoot)
+    private static ExpressionSyntax? ExtractFirstExpression(CompilationUnitSyntax innerRoot)
     {
         foreach (var member in innerRoot.Members)
         {

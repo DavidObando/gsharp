@@ -15,17 +15,17 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     // invalidate the node's cached span (issue #1675) so a span computed before the mutation is
     // never served afterwards.
     private SeparatedSyntaxList<TypeClauseSyntax> baseTypeClauses = new SeparatedSyntaxList<TypeClauseSyntax>(ImmutableArray<SyntaxNode>.Empty);
-    private SyntaxToken unsafeModifier;
-    private SyntaxToken partialModifier;
-    private TypeParameterListSyntax typeParameterList;
-    private SyntaxToken refModifier;
-    private SharedBlockSyntax sharedBlock;
-    private SyntaxToken baseConstructorOpenParenthesisToken;
-    private SeparatedSyntaxList<ExpressionSyntax> baseConstructorArguments;
-    private SyntaxToken baseConstructorCloseParenthesisToken;
-    private SyntaxToken sealedKeyword;
+    private SyntaxToken? unsafeModifier;
+    private SyntaxToken? partialModifier;
+    private TypeParameterListSyntax? typeParameterList;
+    private SyntaxToken? refModifier;
+    private SharedBlockSyntax? sharedBlock;
+    private SyntaxToken? baseConstructorOpenParenthesisToken;
+    private SeparatedSyntaxList<ExpressionSyntax>? baseConstructorArguments;
+    private SyntaxToken? baseConstructorCloseParenthesisToken;
+    private SyntaxToken? sealedKeyword;
     private ImmutableArray<ConstructorDeclarationSyntax> constructors = ImmutableArray<ConstructorDeclarationSyntax>.Empty;
-    private DeinitDeclarationSyntax deinitializer;
+    private DeinitDeclarationSyntax? deinitializer;
     private ImmutableArray<MemberSyntax> nestedTypes = ImmutableArray<MemberSyntax>.Empty;
 
     /// <summary>
@@ -41,8 +41,8 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
         SyntaxToken structKeyword,
         SyntaxToken openBraceToken,
@@ -67,11 +67,11 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
         SyntaxToken structKeyword,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
@@ -98,15 +98,15 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         SyntaxToken closeBraceToken)
@@ -133,15 +133,15 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
@@ -172,23 +172,23 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
-        SyntaxToken baseColonToken,
-        SyntaxToken baseTypeIdentifier,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
+        SyntaxToken? baseColonToken,
+        SyntaxToken? baseTypeIdentifier,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
         SyntaxToken closeBraceToken)
-        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken, baseTypeIdentifier, ImmutableArray<SyntaxToken>.Empty, openBraceToken, fields, methods, closeBraceToken)
+        : this(syntaxTree, accessibilityModifier, typeKeyword, identifier, dataKeyword, inlineKeyword, openModifier, structKeyword, primaryConstructorOpenParen, primaryConstructorParameters, primaryConstructorCloseParen, baseColonToken, baseTypeIdentifier, ImmutableArray<SyntaxToken?>.Empty, openBraceToken, fields, methods, closeBraceToken)
     {
     }
 
@@ -213,19 +213,19 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
-        SyntaxToken baseColonToken,
-        SyntaxToken baseTypeIdentifier,
-        ImmutableArray<SyntaxToken> additionalBaseTypeIdentifiers,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
+        SyntaxToken? baseColonToken,
+        SyntaxToken? baseTypeIdentifier,
+        ImmutableArray<SyntaxToken?> additionalBaseTypeIdentifiers,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<FunctionDeclarationSyntax> methods,
@@ -256,19 +256,19 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
-        SyntaxToken baseColonToken,
-        SyntaxToken baseTypeIdentifier,
-        ImmutableArray<SyntaxToken> additionalBaseTypeIdentifiers,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
+        SyntaxToken? baseColonToken,
+        SyntaxToken? baseTypeIdentifier,
+        ImmutableArray<SyntaxToken?> additionalBaseTypeIdentifiers,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<PropertyDeclarationSyntax> properties,
@@ -321,19 +321,19 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        SyntaxToken dataKeyword,
-        SyntaxToken inlineKeyword,
-        SyntaxToken openModifier,
+        SyntaxToken? dataKeyword,
+        SyntaxToken? inlineKeyword,
+        SyntaxToken? openModifier,
         SyntaxToken structKeyword,
-        SyntaxToken primaryConstructorOpenParen,
-        SeparatedSyntaxList<ParameterSyntax> primaryConstructorParameters,
-        SyntaxToken primaryConstructorCloseParen,
-        SyntaxToken baseColonToken,
-        SyntaxToken baseTypeIdentifier,
-        ImmutableArray<SyntaxToken> additionalBaseTypeIdentifiers,
+        SyntaxToken? primaryConstructorOpenParen,
+        SeparatedSyntaxList<ParameterSyntax>? primaryConstructorParameters,
+        SyntaxToken? primaryConstructorCloseParen,
+        SyntaxToken? baseColonToken,
+        SyntaxToken? baseTypeIdentifier,
+        ImmutableArray<SyntaxToken?> additionalBaseTypeIdentifiers,
         SyntaxToken openBraceToken,
         ImmutableArray<FieldDeclarationSyntax> fields,
         ImmutableArray<PropertyDeclarationSyntax> properties,
@@ -367,22 +367,22 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     public override SyntaxKind Kind => SyntaxKind.StructDeclaration;
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the <c>type</c> keyword.</summary>
-    public SyntaxToken TypeKeyword { get; }
+    public SyntaxToken? TypeKeyword { get; }
 
     /// <summary>Gets the struct identifier.</summary>
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional <c>data</c> contextual keyword. Non-null when this is a <c>data struct</c> (Phase 3.B.2).</summary>
-    public SyntaxToken DataKeyword { get; }
+    public SyntaxToken? DataKeyword { get; }
 
     /// <summary>Gets the optional <c>inline</c> contextual keyword. Non-null when this is an <c>inline struct</c> (ADR-0033).</summary>
-    public SyntaxToken InlineKeyword { get; }
+    public SyntaxToken? InlineKeyword { get; }
 
     /// <summary>Gets the optional <c>open</c> contextual keyword (Phase 3.B.3 sub-step 3 — classes only). Non-null marks the class as inheritable per ADR-0017.</summary>
-    public SyntaxToken OpenModifier { get; }
+    public SyntaxToken? OpenModifier { get; }
 
     /// <summary>Gets a value indicating whether this aggregate is declared <c>open</c> (inheritable). Always false for <c>struct</c>.</summary>
     public bool IsOpen => OpenModifier != null;
@@ -391,22 +391,22 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     public SyntaxToken StructKeyword { get; }
 
     /// <summary>Gets the optional opening paren of a Kotlin-style primary constructor parameter list (Phase 3.B.3 sub-step 2); null when none was declared.</summary>
-    public SyntaxToken PrimaryConstructorOpenParenthesisToken { get; }
+    public SyntaxToken? PrimaryConstructorOpenParenthesisToken { get; }
 
     /// <summary>Gets the primary constructor parameter list. Empty when no primary constructor was declared.</summary>
-    public SeparatedSyntaxList<ParameterSyntax> PrimaryConstructorParameters { get; }
+    public SeparatedSyntaxList<ParameterSyntax>? PrimaryConstructorParameters { get; }
 
     /// <summary>Gets the optional closing paren of the primary constructor parameter list; null when none was declared.</summary>
-    public SyntaxToken PrimaryConstructorCloseParenthesisToken { get; }
+    public SyntaxToken? PrimaryConstructorCloseParenthesisToken { get; }
 
     /// <summary>Gets the optional <c>:</c> token introducing a base class clause (Phase 3.B.3 sub-step 3). Null when this class has no explicit base.</summary>
-    public SyntaxToken BaseColonToken { get; }
+    public SyntaxToken? BaseColonToken { get; }
 
     /// <summary>Gets the optional identifier of the base class. Non-null only when <see cref="BaseColonToken"/> is non-null.</summary>
-    public SyntaxToken BaseTypeIdentifier { get; }
+    public SyntaxToken? BaseTypeIdentifier { get; }
 
     /// <summary>Gets the additional comma-separated identifiers in the base/interface clause (Phase 3.B.4). Empty when only the first identifier was provided.</summary>
-    public ImmutableArray<SyntaxToken> AdditionalBaseTypeIdentifiers { get; }
+    public ImmutableArray<SyntaxToken?> AdditionalBaseTypeIdentifiers { get; }
 
     /// <summary>
     /// Gets a value indicating whether this declaration carries an explicit base/interface clause.
@@ -447,7 +447,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// unmanaged raw pointers (<c>*T</c> → CLR <c>ELEMENT_TYPE_PTR</c>).
     /// Assigned by the parser; <c>null</c> otherwise.
     /// </summary>
-    public SyntaxToken UnsafeModifier
+    public SyntaxToken? UnsafeModifier
     {
         get => unsafeModifier;
         set
@@ -468,7 +468,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// Assigned by the parser; <c>null</c> otherwise. Rejected on <c>enum</c>
     /// (GS0484).
     /// </summary>
-    public SyntaxToken PartialModifier
+    public SyntaxToken? PartialModifier
     {
         get => partialModifier;
         set
@@ -514,7 +514,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     public SyntaxToken CloseBraceToken { get; }
 
     /// <summary>Gets or sets the optional type-parameter list (Phase 4.3 / ADR-0020), e.g. <c>[T any]</c> in <c>class Box[T any] { ... }</c>. Assigned by the parser when the declaration is generic; <c>null</c> otherwise.</summary>
-    public TypeParameterListSyntax TypeParameterList
+    public TypeParameterListSyntax? TypeParameterList
     {
         get => typeParameterList;
         set
@@ -525,7 +525,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional <c>ref</c> contextual keyword (issue #367). Non-null marks this <c>struct</c> as by-ref-like (<c>ref struct</c>). Assigned by the parser; <c>null</c> otherwise.</summary>
-    public SyntaxToken RefModifier
+    public SyntaxToken? RefModifier
     {
         get => refModifier;
         set
@@ -536,7 +536,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional <c>shared { … }</c> block (ADR-0053) grouping static member declarations. Null when the type has no shared block.</summary>
-    public SharedBlockSyntax SharedBlock
+    public SharedBlockSyntax? SharedBlock
     {
         get => sharedBlock;
         set
@@ -547,7 +547,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional opening paren of a base-constructor argument list (issue #306), e.g. the <c>(</c> in <c>: Exception(message)</c>. Null when the base clause supplies no constructor arguments. Assigned by the parser.</summary>
-    public SyntaxToken BaseConstructorOpenParenthesisToken
+    public SyntaxToken? BaseConstructorOpenParenthesisToken
     {
         get => baseConstructorOpenParenthesisToken;
         set
@@ -558,7 +558,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the base-constructor argument expressions (issue #306). Empty/default when no base-constructor argument list was declared.</summary>
-    public SeparatedSyntaxList<ExpressionSyntax> BaseConstructorArguments
+    public SeparatedSyntaxList<ExpressionSyntax>? BaseConstructorArguments
     {
         get => baseConstructorArguments;
         set
@@ -569,7 +569,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional closing paren of the base-constructor argument list (issue #306). Null when none was declared.</summary>
-    public SyntaxToken BaseConstructorCloseParenthesisToken
+    public SyntaxToken? BaseConstructorCloseParenthesisToken
     {
         get => baseConstructorCloseParenthesisToken;
         set
@@ -583,7 +583,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     public bool HasBaseConstructorArguments => BaseConstructorOpenParenthesisToken != null;
 
     /// <summary>Gets or sets the optional <c>sealed</c> contextual keyword (ADR-0078). Non-null marks a class as forming a closed hierarchy (subtypes confined to the same package). Always null for <c>struct</c>; the parser diagnoses <c>sealed struct</c> with GS0310.</summary>
-    public SyntaxToken SealedKeyword
+    public SyntaxToken? SealedKeyword
     {
         get => sealedKeyword;
         set
@@ -608,7 +608,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     }
 
     /// <summary>Gets or sets the optional user-defined <c>deinit</c> declaration (ADR-0068 / issue #698). Non-null only when the class body declares exactly one <c>deinit</c>; assigned by the parser. The parser reports GS0290 on any subsequent duplicate and stores only the first.</summary>
-    public DeinitDeclarationSyntax Deinitializer
+    public DeinitDeclarationSyntax? Deinitializer
     {
         get => deinitializer;
         set

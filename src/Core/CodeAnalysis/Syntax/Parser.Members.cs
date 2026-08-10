@@ -76,18 +76,18 @@ public partial class Parser
     /// ADR-0065 §2: accepts an optional leading <c>convenience</c> contextual
     /// modifier passed in by the caller.
     /// </summary>
-    private ConstructorDeclarationSyntax ParseConstructorDeclaration(SyntaxToken accessibilityModifier, SyntaxToken convenienceModifier = null)
+    private ConstructorDeclarationSyntax ParseConstructorDeclaration(SyntaxToken? accessibilityModifier, SyntaxToken? convenienceModifier = null)
     {
         var initKeyword = NextToken(); // consume the contextual "init" identifier
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
 
-        SyntaxToken baseColon = null;
-        SyntaxToken baseKeyword = null;
-        SyntaxToken baseOpenParen = null;
+        SyntaxToken? baseColon = null;
+        SyntaxToken? baseKeyword = null;
+        SyntaxToken? baseOpenParen = null;
         SeparatedSyntaxList<ExpressionSyntax> baseArguments = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
-        SyntaxToken baseCloseParen = null;
+        SyntaxToken? baseCloseParen = null;
         if (Current.Kind == SyntaxKind.ColonToken)
         {
             baseColon = MatchToken(SyntaxKind.ColonToken);
@@ -136,7 +136,7 @@ public partial class Parser
             // target follows the member kind (field/method/property/event).
             var memberAnnotations = ParseAnnotations();
 
-            SyntaxToken memberAccessibility = null;
+            SyntaxToken? memberAccessibility = null;
             if (Current.Kind == SyntaxKind.PublicKeyword ||
                 Current.Kind == SyntaxKind.InternalKeyword ||
                 Current.Kind == SyntaxKind.PrivateKeyword ||
@@ -163,7 +163,7 @@ public partial class Parser
 
             // Issue #502: `async` modifier is allowed on static methods inside
             // a `shared` block, mirroring the instance-method path above.
-            SyntaxToken sharedMemberAsyncModifier = null;
+            SyntaxToken? sharedMemberAsyncModifier = null;
             if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 sharedMemberAsyncModifier = NextToken();
@@ -174,7 +174,7 @@ public partial class Parser
             // instance-method path. Consumed only when immediately followed by
             // `func` (or `async func`), so its SIGNATURE binds in an unsafe
             // context too (the binder consults the per-method `IsUnsafe` flag).
-            SyntaxToken sharedMemberUnsafeModifier = null;
+            SyntaxToken? sharedMemberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
                 && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
             {
@@ -287,11 +287,11 @@ public partial class Parser
     }
 
     private InterfaceDeclarationSyntax ParseInterfaceDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken typeKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? typeKeyword,
         SyntaxToken identifier,
-        TypeParameterListSyntax typeParameterList,
-        SyntaxToken sealedModifier)
+        TypeParameterListSyntax? typeParameterList,
+        SyntaxToken? sealedModifier)
     {
         var interfaceKeyword = MatchToken(SyntaxKind.InterfaceKeyword);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -401,7 +401,7 @@ public partial class Parser
         // now declared inside a `shared { … }` block (see
         // <see cref="ParseInterfaceSharedBlock"/>); the `static` contextual
         // keyword is no longer parsed here.
-        SyntaxToken accessibilityModifier = null;
+        SyntaxToken? accessibilityModifier = null;
         if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
             accessibilityModifier = NextToken();
@@ -421,8 +421,8 @@ public partial class Parser
     /// <see cref="FunctionDeclarationSyntax.HasStaticModifier"/>.
     /// </summary>
     private FunctionDeclarationSyntax ParseInterfaceMethodSignatureCore(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken staticModifier)
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? staticModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
@@ -446,8 +446,8 @@ public partial class Parser
         // pipeline and the emitter produces a CLR DIM (virtual, non-abstract);
         // a bodied method takes no ';'. ADR-0089 extends the same
         // body-vs-no-body discriminator to static-virtual (shared) members.
-        BlockStatementSyntax body = null;
-        SyntaxToken semicolonBody = null;
+        BlockStatementSyntax? body = null;
+        SyntaxToken? semicolonBody = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             body = ParseBlockStatement();
@@ -516,7 +516,7 @@ public partial class Parser
         {
             var startToken = Current;
 
-            SyntaxToken accessibilityModifier = null;
+            SyntaxToken? accessibilityModifier = null;
             if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 accessibilityModifier = NextToken();
@@ -592,9 +592,9 @@ public partial class Parser
     }
 
     private PropertyDeclarationSyntax ParsePropertyDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier)
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier)
     {
         var propKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "prop"
 
@@ -602,9 +602,9 @@ public partial class Parser
         // `prop (IFoo) P T` / `prop (IFoo) this[...] T`. Properties/indexers
         // have no competing receiver-clause grammar, so any `(` here
         // unambiguously starts this clause.
-        SyntaxToken explicitIfaceOpenParen = null;
-        TypeClauseSyntax explicitIfaceType = null;
-        SyntaxToken explicitIfaceCloseParen = null;
+        SyntaxToken? explicitIfaceOpenParen = null;
+        TypeClauseSyntax? explicitIfaceType = null;
+        SyntaxToken? explicitIfaceCloseParen = null;
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
@@ -681,9 +681,9 @@ public partial class Parser
     // The leading `prop` keyword has already been consumed. The `this` token is
     // current. The resulting PropertyDeclarationSyntax carries IsIndexer = true.
     private PropertyDeclarationSyntax ParseIndexerDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken propKeyword)
     {
         var thisKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "this"
@@ -692,9 +692,9 @@ public partial class Parser
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
         var type = ParseTypeClause();
 
-        SyntaxToken openBrace = null;
+        SyntaxToken? openBrace = null;
         var accessors = ImmutableArray<PropertyAccessorSyntax>.Empty;
-        SyntaxToken closeBrace = null;
+        SyntaxToken? closeBrace = null;
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             openBrace = MatchToken(SyntaxKind.OpenBraceToken);
@@ -752,18 +752,18 @@ public partial class Parser
     }
 
     private EventDeclarationSyntax ParseEventDeclaration(
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier)
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier)
     {
         var eventKeyword = MatchToken(SyntaxKind.IdentifierToken); // consumes "event"
 
         // ADR-0149: optional explicit-interface qualifier clause
         // `event (IFoo) Changed T`. Events have no competing receiver-clause
         // grammar, so any `(` here unambiguously starts this clause.
-        SyntaxToken explicitIfaceOpenParen = null;
-        TypeClauseSyntax explicitIfaceType = null;
-        SyntaxToken explicitIfaceCloseParen = null;
+        SyntaxToken? explicitIfaceOpenParen = null;
+        TypeClauseSyntax? explicitIfaceType = null;
+        SyntaxToken? explicitIfaceCloseParen = null;
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
@@ -819,8 +819,8 @@ public partial class Parser
             {
                 var accessorKeyword = NextToken();
 
-                BlockStatementSyntax body = null;
-                SyntaxToken semicolon = null;
+                BlockStatementSyntax? body = null;
+                SyntaxToken? semicolon = null;
                 if (Current.Kind == SyntaxKind.OpenBraceToken)
                 {
                     body = ParseBlockStatement();
@@ -855,7 +855,7 @@ public partial class Parser
         {
             var startToken = Current;
 
-            SyntaxToken accessibilityModifier = null;
+            SyntaxToken? accessibilityModifier = null;
             if ((Current.Kind == SyntaxKind.PublicKeyword ||
                  Current.Kind == SyntaxKind.InternalKeyword ||
                  Current.Kind == SyntaxKind.PrivateKeyword ||
@@ -872,9 +872,9 @@ public partial class Parser
                 var accessorKeyword = NextToken();
 
                 // For set/init, optionally parse (paramName)
-                SyntaxToken openParen = null;
-                SyntaxToken paramIdentifier = null;
-                SyntaxToken closeParen = null;
+                SyntaxToken? openParen = null;
+                SyntaxToken? paramIdentifier = null;
+                SyntaxToken? closeParen = null;
                 if ((accessorKeyword.Text == "set" || accessorKeyword.Text == "init") && Current.Kind == SyntaxKind.OpenParenthesisToken)
                 {
                     openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
@@ -883,8 +883,8 @@ public partial class Parser
                 }
 
                 // Optional body or semicolon
-                BlockStatementSyntax body = null;
-                SyntaxToken semicolon = null;
+                BlockStatementSyntax? body = null;
+                SyntaxToken? semicolon = null;
                 if (Current.Kind == SyntaxKind.OpenBraceToken)
                 {
                     body = ParseBlockStatement();
@@ -1048,7 +1048,7 @@ public partial class Parser
 
     private FieldDeclarationSyntax ParseFieldDeclaration()
     {
-        SyntaxToken fieldAccessibility = null;
+        SyntaxToken? fieldAccessibility = null;
         if (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
             Current.Kind == SyntaxKind.PrivateKeyword ||
@@ -1081,7 +1081,7 @@ public partial class Parser
         // FieldSymbol.IsReadOnly / IsConst accordingly. If the user omits the
         // keyword, surface a precise diagnostic and try to recover by treating
         // the next identifier as the field name.
-        SyntaxToken varOrLetKeyword = null;
+        SyntaxToken? varOrLetKeyword = null;
         if (Current.Kind == SyntaxKind.VarKeyword
             || Current.Kind == SyntaxKind.LetKeyword
             || Current.Kind == SyntaxKind.ConstKeyword)
@@ -1097,8 +1097,8 @@ public partial class Parser
         var fieldType = ParseTypeClause();
 
         // Issue #262: optional initializer for static field declarations.
-        SyntaxToken equalsToken = null;
-        ExpressionSyntax initializer = null;
+        SyntaxToken? equalsToken = null;
+        ExpressionSyntax? initializer = null;
         if (Current.Kind == SyntaxKind.EqualsToken)
         {
             equalsToken = NextToken();
@@ -1108,19 +1108,19 @@ public partial class Parser
         return new FieldDeclarationSyntax(syntaxTree, fieldAccessibility, varOrLetKeyword, fieldIdentifier, fieldType, equalsToken, initializer);
     }
 
-    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier)
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken? accessibilityModifier)
         => ParseFunctionDeclaration(accessibilityModifier, openModifier: null, overrideModifier: null, asyncModifier: null);
 
-    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier)
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken? accessibilityModifier, SyntaxToken? openModifier, SyntaxToken? overrideModifier)
         => ParseFunctionDeclaration(accessibilityModifier, openModifier, overrideModifier, asyncModifier: null);
 
-    private MemberSyntax ParseFunctionDeclaration(SyntaxToken accessibilityModifier, SyntaxToken openModifier, SyntaxToken overrideModifier, SyntaxToken asyncModifier)
+    private MemberSyntax ParseFunctionDeclaration(SyntaxToken? accessibilityModifier, SyntaxToken? openModifier, SyntaxToken? overrideModifier, SyntaxToken? asyncModifier)
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
 
-        SyntaxToken explicitIfaceOpenParen = null;
-        TypeClauseSyntax explicitIfaceType = null;
-        SyntaxToken explicitIfaceCloseParen = null;
+        SyntaxToken? explicitIfaceOpenParen = null;
+        TypeClauseSyntax? explicitIfaceType = null;
+        SyntaxToken? explicitIfaceCloseParen = null;
 
         // ADR-0149: optional explicit-interface qualifier clause `func (IFoo) M(...)`.
         // Checked BEFORE the receiver clause since both start with `(' IdentifierToken;
@@ -1130,9 +1130,9 @@ public partial class Parser
             (explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen) = ParseExplicitInterfaceClause();
         }
 
-        SyntaxToken receiverOpenParen = null;
-        ParameterSyntax receiver = null;
-        SyntaxToken receiverCloseParen = null;
+        SyntaxToken? receiverOpenParen = null;
+        ParameterSyntax? receiver = null;
+        SyntaxToken? receiverCloseParen = null;
 
         // Phase 3.B.6 / ADR-0019: optional Go-style receiver clause
         // `func ( recv RecvType ) Name(...)`. We only consume it when the
@@ -1156,7 +1156,7 @@ public partial class Parser
         //   func max(ref a int32, ref b int32) ref int32 { return ref (a > b ? a : b) }
         // The keyword is consumed only when followed by a type-starting token, so a
         // top-level function literally named after the `ref` token is unaffected.
-        SyntaxToken returnRefModifier = null;
+        SyntaxToken? returnRefModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && CanStartTypeClause(Peek(1)))
         {
             returnRefModifier = NextToken();
@@ -1168,8 +1168,8 @@ public partial class Parser
         // declaration as a P/Invoke stub (`@DllImport`-annotated function with
         // no managed body). The binder validates that the annotation is
         // present and well-formed; an unannotated `;` body produces GS0325.
-        BlockStatementSyntax body;
-        SyntaxToken semicolonBody = null;
+        BlockStatementSyntax? body;
+        SyntaxToken? semicolonBody = null;
         if (Current.Kind == SyntaxKind.SemicolonToken)
         {
             semicolonBody = NextToken();
@@ -1286,7 +1286,7 @@ public partial class Parser
         return new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, operatorKeyword.Position, name, null);
     }
 
-    private TypeParameterListSyntax ParseOptionalTypeParameterList()
+    private TypeParameterListSyntax? ParseOptionalTypeParameterList()
     {
         // Phase 4.1 / ADR-0020: a generic type-parameter list `[T any, U any]`
         // appears immediately after the declared name of func/class/struct/
@@ -1440,18 +1440,18 @@ public partial class Parser
 
     private TypeParameterSyntax ParseTypeParameter()
     {
-        SyntaxToken variance = null;
+        SyntaxToken? variance = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && (Current.Text == "in" || Current.Text == "out") && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
             variance = NextToken();
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken constraint = null;
-        SyntaxToken openBracket = null;
-        SeparatedSyntaxList<TypeClauseSyntax> constraintTypeArgs = default;
-        SyntaxToken closeBracket = null;
-        TypeClauseSyntax constraintTypeClause = null;
+        SyntaxToken? constraint = null;
+        SyntaxToken? openBracket = null;
+        SeparatedSyntaxList<TypeClauseSyntax>? constraintTypeArgs = default;
+        SyntaxToken? closeBracket = null;
+        TypeClauseSyntax? constraintTypeClause = null;
 
         if (Current.Kind == SyntaxKind.IdentifierToken)
         {
@@ -1516,12 +1516,12 @@ public partial class Parser
         // issue #997): consume any of `class`, `struct`, `init()` constraints
         // in any order. The binder validates illegal combinations (e.g.
         // `class struct`).
-        SyntaxToken classKw = null;
-        SyntaxToken structKw = null;
-        SyntaxToken initKw = null;
-        SyntaxToken initOpenParen = null;
-        SyntaxToken initCloseParen = null;
-        SyntaxToken unmanagedKw = null;
+        SyntaxToken? classKw = null;
+        SyntaxToken? structKw = null;
+        SyntaxToken? initKw = null;
+        SyntaxToken? initOpenParen = null;
+        SyntaxToken? initCloseParen = null;
+        SyntaxToken? unmanagedKw = null;
         while (true)
         {
             if (Current.Kind == SyntaxKind.ClassKeyword)
@@ -1846,7 +1846,7 @@ public partial class Parser
         // Disambiguate: `scoped` is only a modifier when followed by another identifier (the
         // parameter name). If the current token IS the parameter name (no following identifier),
         // treat it as the identifier, not as a modifier.
-        SyntaxToken scopedModifier = null;
+        SyntaxToken? scopedModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
         {
@@ -1858,7 +1858,7 @@ public partial class Parser
         // modifier is only consumed when the next token is an identifier (the parameter
         // name). If `ref` / `out` / `in` IS the parameter name (no following identifier),
         // treat it as the identifier itself.
-        SyntaxToken refKindModifier = null;
+        SyntaxToken? refKindModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken
             && (Current.Text == "ref" || Current.Text == "out" || Current.Text == "in")
             && Peek(1).Kind == SyntaxKind.IdentifierToken)
@@ -1881,7 +1881,7 @@ public partial class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
-        SyntaxToken ellipsis = null;
+        SyntaxToken? ellipsis = null;
         if (Current.Kind == SyntaxKind.EllipsisToken)
         {
             ellipsis = MatchToken(SyntaxKind.EllipsisToken);
@@ -1892,8 +1892,8 @@ public partial class Parser
         // ADR-0063: optional default-value clause. Parsed as a general expression here;
         // the binder enforces the "compile-time constant representable in CLR parameter
         // metadata" rule and emits diagnostics on misuse.
-        SyntaxToken equalsToken = null;
-        ExpressionSyntax defaultValue = null;
+        SyntaxToken? equalsToken = null;
+        ExpressionSyntax? defaultValue = null;
         if (Current.Kind == SyntaxKind.EqualsToken)
         {
             equalsToken = NextToken();

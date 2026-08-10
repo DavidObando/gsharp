@@ -21,9 +21,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// single <see cref="SeparatedSyntaxList"/> per property; <see cref="OuterSegmentTypeArgumentChildren"/>
     /// re-exposes them for full-fidelity traversal.
     /// </summary>
-    private readonly ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = ImmutableArray<SyntaxToken>.Empty;
-    private readonly ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists = ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>>.Empty;
-    private readonly ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = ImmutableArray<SyntaxToken>.Empty;
+    private readonly ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentOpenBracketTokens = ImmutableArray<SyntaxToken?>.Empty;
+    private readonly ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> outerSegmentTypeArgumentLists = ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?>.Empty;
+    private readonly ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloseBracketTokens = ImmutableArray<SyntaxToken?>.Empty;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a simple type.
@@ -46,9 +46,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="identifier">The element type identifier.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         SyntaxToken identifier)
         : this(syntaxTree, openBracketToken, lengthToken, closeBracketToken, identifier, questionToken: null)
     {
@@ -63,11 +63,11 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable (Phase 3.C.1).</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         SyntaxToken identifier,
-        SyntaxToken questionToken)
+        SyntaxToken? questionToken)
         : this(syntaxTree, openBracketToken, lengthToken, closeBracketToken, identifier, typeArgumentOpenBracketToken: null, typeArguments: default, typeArgumentCloseBracketToken: null, questionToken)
     {
     }
@@ -84,14 +84,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="questionToken">The optional trailing <c>?</c> marking the type nullable.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         SyntaxToken identifier,
-        SyntaxToken typeArgumentOpenBracketToken,
-        SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
-        SyntaxToken typeArgumentCloseBracketToken,
-        SyntaxToken questionToken)
+        SyntaxToken? typeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? typeArguments,
+        SyntaxToken? typeArgumentCloseBracketToken,
+        SyntaxToken? questionToken)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -124,20 +124,20 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="outerSegmentTypeArgumentCloseBracketTokens">Issue #1506: the closing <c>]</c> of the type-argument list carried by each outer (non-last) segment, aligned identically to <paramref name="outerSegmentTypeArgumentOpenBracketTokens"/>.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         SyntaxToken identifier,
         ImmutableArray<SyntaxToken> qualifierDotTokens,
         ImmutableArray<SyntaxToken> qualifierIdentifierTokens,
-        SyntaxToken typeArgumentOpenBracketToken,
-        SeparatedSyntaxList<TypeClauseSyntax> typeArguments,
-        SyntaxToken typeArgumentCloseBracketToken,
-        SyntaxToken questionToken,
-        SyntaxToken arrayQuestionToken = null,
-        ImmutableArray<SyntaxToken> outerSegmentTypeArgumentOpenBracketTokens = default,
-        ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>> outerSegmentTypeArgumentLists = default,
-        ImmutableArray<SyntaxToken> outerSegmentTypeArgumentCloseBracketTokens = default)
+        SyntaxToken? typeArgumentOpenBracketToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? typeArguments,
+        SyntaxToken? typeArgumentCloseBracketToken,
+        SyntaxToken? questionToken,
+        SyntaxToken? arrayQuestionToken = null,
+        ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentOpenBracketTokens = default,
+        ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?> outerSegmentTypeArgumentLists = default,
+        ImmutableArray<SyntaxToken?> outerSegmentTypeArgumentCloseBracketTokens = default)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -151,9 +151,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
         TypeArgumentCloseBracketToken = typeArgumentCloseBracketToken;
         QuestionToken = questionToken;
         ArrayQuestionToken = arrayQuestionToken;
-        this.outerSegmentTypeArgumentOpenBracketTokens = outerSegmentTypeArgumentOpenBracketTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : outerSegmentTypeArgumentOpenBracketTokens;
-        this.outerSegmentTypeArgumentLists = outerSegmentTypeArgumentLists.IsDefault ? ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>>.Empty : outerSegmentTypeArgumentLists;
-        this.outerSegmentTypeArgumentCloseBracketTokens = outerSegmentTypeArgumentCloseBracketTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : outerSegmentTypeArgumentCloseBracketTokens;
+        this.outerSegmentTypeArgumentOpenBracketTokens = outerSegmentTypeArgumentOpenBracketTokens.IsDefault ? ImmutableArray<SyntaxToken?>.Empty : outerSegmentTypeArgumentOpenBracketTokens;
+        this.outerSegmentTypeArgumentLists = outerSegmentTypeArgumentLists.IsDefault ? ImmutableArray<SeparatedSyntaxList<TypeClauseSyntax>?>.Empty : outerSegmentTypeArgumentLists;
+        this.outerSegmentTypeArgumentCloseBracketTokens = outerSegmentTypeArgumentCloseBracketTokens.IsDefault ? ImmutableArray<SyntaxToken?>.Empty : outerSegmentTypeArgumentCloseBracketTokens;
     }
 
     /// <summary>Initializes a new instance of the <see cref="TypeClauseSyntax"/> class for a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
@@ -164,10 +164,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <param name="questionToken">The optional trailing <c>?</c> nullability marker.</param>
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openParenToken,
+        SyntaxToken? openParenToken,
         SeparatedSyntaxList<TypeClauseSyntax> tupleElements,
-        SyntaxToken closeParenToken,
-        SyntaxToken questionToken)
+        SyntaxToken? closeParenToken,
+        SyntaxToken? questionToken)
         : base(syntaxTree)
     {
         OpenParenToken = openParenToken;
@@ -190,10 +190,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxToken mapKeyword,
         SyntaxToken mapOpenBracketToken,
         TypeClauseSyntax mapKeyType,
-        SyntaxToken mapCommaToken,
+        SyntaxToken? mapCommaToken,
         TypeClauseSyntax mapValueType,
         SyntaxToken mapCloseBracketToken,
-        SyntaxToken questionToken)
+        SyntaxToken? questionToken)
         : base(syntaxTree)
     {
         MapKeyword = mapKeyword;
@@ -216,11 +216,11 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
         : this(syntaxTree, asyncModifier: null, funcKeyword, openParenToken, functionParameterTypes, closeParenToken, returnTypeClause, questionToken, isFunction: true)
     {
     }
@@ -234,7 +234,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken chanKeyword,
         TypeClauseSyntax chanElementType,
-        SyntaxToken questionToken)
+        SyntaxToken? questionToken)
         : base(syntaxTree)
     {
         ChanKeyword = chanKeyword;
@@ -248,7 +248,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken starToken,
         TypeClauseSyntax pointeeType,
-        SyntaxToken questionToken,
+        SyntaxToken? questionToken,
         bool isPointer)
         : base(syntaxTree)
     {
@@ -262,13 +262,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         TypeClauseSyntax arrayElementType,
-        SyntaxToken questionToken,
+        SyntaxToken? questionToken,
         bool isNestedArray,
-        SyntaxToken arrayQuestionToken = null)
+        SyntaxToken? arrayQuestionToken = null)
         : base(syntaxTree)
     {
         OpenBracketToken = openBracketToken;
@@ -286,12 +286,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken sequenceKeyword,
-        SyntaxToken openBracketToken,
+        SyntaxToken? openBracketToken,
         TypeClauseSyntax elementType,
-        SyntaxToken closeBracketToken,
-        SyntaxToken questionToken,
+        SyntaxToken? closeBracketToken,
+        SyntaxToken? questionToken,
         bool isSequence)
         : base(syntaxTree)
     {
@@ -308,13 +308,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken,
         bool isFunction)
         : this(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, returnTypeClause, questionToken, isFunction)
     {
@@ -325,14 +325,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken,
         bool isFunction)
         : base(syntaxTree)
     {
@@ -340,7 +340,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         FuncKeyword = funcKeyword;
         OpenParenToken = openParenToken;
         FunctionParameterTypes = functionParameterTypes;
-        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : functionParameterEllipsisTokens;
+        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken?>.Empty : functionParameterEllipsisTokens;
         CloseParenToken = closeParenToken;
         ReturnTypeClause = returnTypeClause;
         QuestionToken = questionToken;
@@ -351,13 +351,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken,
+        SyntaxToken? asyncModifier,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken,
         bool isArrowFunction)
         : this(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction)
     {
@@ -368,21 +368,21 @@ public sealed class TypeClauseSyntax : SyntaxNode
 #pragma warning disable SA1642
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken,
+        SyntaxToken? asyncModifier,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken,
         bool isArrowFunction)
         : base(syntaxTree)
     {
         AsyncModifier = asyncModifier;
         OpenParenToken = openParenToken;
         FunctionParameterTypes = functionParameterTypes;
-        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken>.Empty : functionParameterEllipsisTokens;
+        FunctionParameterEllipsisTokens = functionParameterEllipsisTokens.IsDefault ? ImmutableArray<SyntaxToken?>.Empty : functionParameterEllipsisTokens;
         CloseParenToken = closeParenToken;
         ArrowToken = arrowToken;
         ReturnTypeClause = returnTypeClause;
@@ -395,14 +395,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     private TypeClauseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken unmanagedKeyword,
-        SyntaxToken callingConventionOpenBracketToken,
-        SyntaxToken callingConventionIdentifierToken,
-        SyntaxToken callingConventionCloseBracketToken,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
+        SyntaxToken? callingConventionOpenBracketToken,
+        SyntaxToken? callingConventionIdentifierToken,
+        SyntaxToken? callingConventionCloseBracketToken,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
         bool isFunctionPointer)
         : base(syntaxTree)
     {
@@ -424,10 +424,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken managedFunctionPointerStarToken,
         SyntaxToken managedFunctionPointerFuncKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause)
         : base(syntaxTree)
     {
         ManagedFunctionPointerStarToken = managedFunctionPointerStarToken;
@@ -443,16 +443,16 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
     /// <summary>Gets the opening bracket token, or <c>null</c> for non-array types.</summary>
-    public SyntaxToken OpenBracketToken { get; }
+    public SyntaxToken? OpenBracketToken { get; }
 
     /// <summary>Gets the numeric length token, or <c>null</c> for non-array types.</summary>
-    public SyntaxToken LengthToken { get; }
+    public SyntaxToken? LengthToken { get; }
 
     /// <summary>Gets the closing bracket token, or <c>null</c> for non-array types.</summary>
-    public SyntaxToken CloseBracketToken { get; }
+    public SyntaxToken? CloseBracketToken { get; }
 
     /// <summary>Gets the (element) type identifier. For a dotted-qualifier name (issue #526) this is the outermost segment (e.g. <c>Outer</c> in <c>Outer.Inner</c>).</summary>
-    public SyntaxToken Identifier { get; }
+    public SyntaxToken? Identifier { get; }
 
     /// <summary>Gets the <c>.</c> tokens separating each dotted-qualifier segment (issue #526). Empty when the name is a single identifier.</summary>
     public ImmutableArray<SyntaxToken> QualifierDotTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
@@ -497,7 +497,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public bool IsArray => OpenBracketToken != null;
 
     /// <summary>Gets the nested element type clause for a jagged/nested array (issue #1046), or <c>null</c> when the array element is a plain identifier element carried via <see cref="Identifier"/>/<see cref="QualifierIdentifierTokens"/>/<see cref="TypeArguments"/>.</summary>
-    public TypeClauseSyntax ArrayElementType { get; }
+    public TypeClauseSyntax? ArrayElementType { get; }
 
     /// <summary>Gets a value indicating whether this array/slice clause stores its element as a nested type clause (jagged array, array of pointers, array of maps, …) rather than a flat identifier element (issue #1046).</summary>
     public bool HasNestedArrayElement => ArrayElementType != null;
@@ -506,13 +506,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public bool IsSlice => OpenBracketToken != null && LengthToken == null;
 
     /// <summary>Gets the optional trailing <c>?</c> token marking the type as nullable (Phase 3.C.1 / ADR-0001).</summary>
-    public SyntaxToken QuestionToken { get; }
+    public SyntaxToken? QuestionToken { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a nullable type <c>T?</c> (Phase 3.C.1).</summary>
     public bool IsNullable => QuestionToken != null;
 
     /// <summary>Gets the optional <c>?</c> token placed immediately after the array <c>]</c> (before the element type), marking the whole array reference nullable (<c>[]?T</c> / <c>[N]?T</c>, issue #1212).</summary>
-    public SyntaxToken ArrayQuestionToken { get; }
+    public SyntaxToken? ArrayQuestionToken { get; }
 
     /// <summary>Gets a value indicating whether this array/slice clause is itself a nullable array reference (<c>[]?T</c>), spelled with a <c>?</c> right after <c>]</c> (issue #1212).</summary>
     public bool IsArrayNullable => ArrayQuestionToken != null;
@@ -530,31 +530,31 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// clause is built (the sanctioned parser-time mutation pattern, see
     /// <see cref="SyntaxNode.InvalidateCachedSpan"/>).
     /// </summary>
-    public SyntaxToken ParenthesizedQuestionToken { get; private set; }
+    public SyntaxToken? ParenthesizedQuestionToken { get; private set; }
 
     /// <summary>Gets a value indicating whether this clause carries a parenthesized whole-type <c>?</c> — <c>(chan T)?</c>, <c>([]T)?</c>, … (issue #3315).</summary>
     public bool IsParenthesizedNullable => ParenthesizedQuestionToken != null;
 
     /// <summary>Gets the opening <c>(</c> token for tuple types, or <c>null</c>.</summary>
-    public SyntaxToken OpenParenToken { get; }
+    public SyntaxToken? OpenParenToken { get; }
 
     /// <summary>Gets the closing <c>)</c> token for tuple types, or <c>null</c>.</summary>
-    public SyntaxToken CloseParenToken { get; }
+    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the comma-separated element-type clauses for a tuple type, or the default value.</summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> TupleElements { get; }
+    public SeparatedSyntaxList<TypeClauseSyntax>? TupleElements { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a tuple type <c>(T1, T2, ...)</c> (Phase 4.5).</summary>
     public bool IsTuple => OpenParenToken != null && FuncKeyword == null && ArrowToken == null && UnmanagedKeyword == null && ManagedFunctionPointerFuncKeyword == null;
 
     /// <summary>Gets the <c>func</c> keyword for function-type clauses, or <c>null</c>.</summary>
-    public SyntaxToken FuncKeyword { get; }
+    public SyntaxToken? FuncKeyword { get; }
 
     /// <summary>Gets the <c>-&gt;</c> token for arrow-form function-type clauses (ADR-0075), or <c>null</c>.</summary>
-    public SyntaxToken ArrowToken { get; }
+    public SyntaxToken? ArrowToken { get; }
 
     /// <summary>Gets the function parameter-type clauses, or the default value.</summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> FunctionParameterTypes { get; }
+    public SeparatedSyntaxList<TypeClauseSyntax>? FunctionParameterTypes { get; }
 
     /// <summary>
     /// Gets the per-parameter <c>...</c> tokens for a variadic anonymous
@@ -565,10 +565,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// always non-default; it is <see cref="ImmutableArray{T}.Empty"/> when
     /// the clause is not a function-type clause or carries no variadic.
     /// </summary>
-    public ImmutableArray<SyntaxToken> FunctionParameterEllipsisTokens { get; } = ImmutableArray<SyntaxToken>.Empty;
+    public ImmutableArray<SyntaxToken?> FunctionParameterEllipsisTokens { get; } = ImmutableArray<SyntaxToken?>.Empty;
 
     /// <summary>Gets the function return-type clause, or <c>null</c> when the type is void / not a function type.</summary>
-    public TypeClauseSyntax ReturnTypeClause { get; }
+    public TypeClauseSyntax? ReturnTypeClause { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a function type — either the legacy <c>func(...) R?</c> form (Phase 4.7), the canonical arrow form <c>(...) -&gt; R?</c> (ADR-0075), or the raw function-pointer form <c>unmanaged[CC] (...) -&gt; R</c> (ADR-0095).</summary>
     public bool IsFunction => FuncKeyword != null || ArrowToken != null;
@@ -580,37 +580,37 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public bool IsArrowFunction => ArrowToken != null && UnmanagedKeyword == null;
 
     /// <summary>Gets the <c>unmanaged</c> contextual keyword token introducing a raw function-pointer type clause (ADR-0095 / issue #761), or <c>null</c>.</summary>
-    public SyntaxToken UnmanagedKeyword { get; }
+    public SyntaxToken? UnmanagedKeyword { get; }
 
     /// <summary>Gets the opening <c>[</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
-    public SyntaxToken CallingConventionOpenBracketToken { get; }
+    public SyntaxToken? CallingConventionOpenBracketToken { get; }
 
     /// <summary>Gets the calling-convention identifier inside the <c>[CC]</c> slot of a raw function-pointer type clause (e.g. <c>Cdecl</c>, <c>Stdcall</c>) (ADR-0095), or <c>null</c>.</summary>
-    public SyntaxToken CallingConventionIdentifierToken { get; }
+    public SyntaxToken? CallingConventionIdentifierToken { get; }
 
     /// <summary>Gets the closing <c>]</c> of a raw function-pointer's calling-convention slot (ADR-0095), or <c>null</c>.</summary>
-    public SyntaxToken CallingConventionCloseBracketToken { get; }
+    public SyntaxToken? CallingConventionCloseBracketToken { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a raw function-pointer type <c>unmanaged[CC] (T) -&gt; R</c> (ADR-0095 / issue #761) or the managed form <c>*func(T) R</c> (ADR-0122 §9 / issue #1035).</summary>
     public bool IsFunctionPointer => UnmanagedKeyword != null || ManagedFunctionPointerFuncKeyword != null;
 
     /// <summary>Gets the <c>*</c> token introducing a managed function-pointer type clause <c>*func(T) R</c> (ADR-0122 §9 / issue #1035), or <c>null</c>.</summary>
-    public SyntaxToken ManagedFunctionPointerStarToken { get; }
+    public SyntaxToken? ManagedFunctionPointerStarToken { get; }
 
     /// <summary>Gets the <c>func</c> keyword of a managed function-pointer type clause <c>*func(T) R</c> (ADR-0122 §9 / issue #1035), or <c>null</c>.</summary>
-    public SyntaxToken ManagedFunctionPointerFuncKeyword { get; }
+    public SyntaxToken? ManagedFunctionPointerFuncKeyword { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a managed function-pointer type <c>*func(T) R</c> (ADR-0122 §9 / issue #1035).</summary>
     public bool IsManagedFunctionPointer => ManagedFunctionPointerFuncKeyword != null;
 
     /// <summary>Gets the opening <c>[</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
-    public SyntaxToken TypeArgumentOpenBracketToken { get; }
+    public SyntaxToken? TypeArgumentOpenBracketToken { get; }
 
     /// <summary>Gets the comma-separated type-argument clauses for a constructed generic type (Phase 4.3c), or the default value.</summary>
-    public SeparatedSyntaxList<TypeClauseSyntax> TypeArguments { get; }
+    public SeparatedSyntaxList<TypeClauseSyntax>? TypeArguments { get; }
 
     /// <summary>Gets the closing <c>]</c> of the type-argument list (Phase 4.3c), or <c>null</c>.</summary>
-    public SyntaxToken TypeArgumentCloseBracketToken { get; }
+    public SyntaxToken? TypeArgumentCloseBracketToken { get; }
 
     /// <summary>Gets a value indicating whether this clause carries a type-argument list <c>Foo[T1, T2]</c> (Phase 4.3c). This list attaches to the <em>last</em> (deepest) segment of the dotted name.</summary>
     public bool HasTypeArguments => TypeArgumentOpenBracketToken != null;
@@ -696,61 +696,61 @@ public sealed class TypeClauseSyntax : SyntaxNode
     }
 
     /// <summary>Gets the <c>map</c> keyword for map types, or <c>null</c>.</summary>
-    public SyntaxToken MapKeyword { get; }
+    public SyntaxToken? MapKeyword { get; }
 
     /// <summary>Gets the <c>[</c> opening the map key/value type-argument list (ADR-0104), or <c>null</c>.</summary>
-    public SyntaxToken MapOpenBracketToken { get; }
+    public SyntaxToken? MapOpenBracketToken { get; }
 
     /// <summary>Gets the map key type clause, or <c>null</c>.</summary>
-    public TypeClauseSyntax MapKeyType { get; }
+    public TypeClauseSyntax? MapKeyType { get; }
 
     /// <summary>Gets the <c>,</c> separating the map key type from the map value type (ADR-0104), or <c>null</c> when absent (e.g. parser recovered from a legacy <c>map[K]V</c> shape under GS0366).</summary>
-    public SyntaxToken MapCommaToken { get; }
+    public SyntaxToken? MapCommaToken { get; }
 
     /// <summary>Gets the <c>]</c> closing the map key/value type-argument list (ADR-0104), or <c>null</c>.</summary>
-    public SyntaxToken MapCloseBracketToken { get; }
+    public SyntaxToken? MapCloseBracketToken { get; }
 
     /// <summary>Gets the map value type clause, or <c>null</c>.</summary>
-    public TypeClauseSyntax MapValueType { get; }
+    public TypeClauseSyntax? MapValueType { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a map type <c>map[K,V]</c> (ADR-0104).</summary>
     public bool IsMap => MapKeyword != null;
 
     /// <summary>Gets the <c>chan</c> keyword for channel types, or <c>null</c>.</summary>
-    public SyntaxToken ChanKeyword { get; }
+    public SyntaxToken? ChanKeyword { get; }
 
     /// <summary>Gets the channel element type clause, or <c>null</c>.</summary>
-    public TypeClauseSyntax ChanElementType { get; }
+    public TypeClauseSyntax? ChanElementType { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a channel type <c>chan T</c> (Phase 5.4 / ADR-0022).</summary>
     public bool IsChannel => ChanKeyword != null;
 
     /// <summary>Gets the <c>*</c> token for pointer types, or <c>null</c> (ADR-0039).</summary>
-    public SyntaxToken PointerStarToken { get; }
+    public SyntaxToken? PointerStarToken { get; }
 
     /// <summary>Gets the pointee type clause for pointer types, or <c>null</c> (ADR-0039).</summary>
-    public TypeClauseSyntax PointerPointeeType { get; }
+    public TypeClauseSyntax? PointerPointeeType { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a pointer type <c>*T</c> (ADR-0039).</summary>
     public bool IsPointer => PointerStarToken != null;
 
     /// <summary>Gets the <c>sequence</c> keyword for sequence types, or <c>null</c> (ADR-0040).</summary>
-    public SyntaxToken SequenceKeyword { get; }
+    public SyntaxToken? SequenceKeyword { get; }
 
     /// <summary>Gets the <c>[</c> opening the sequence element type, or <c>null</c> (ADR-0040).</summary>
-    public SyntaxToken SequenceOpenBracketToken { get; }
+    public SyntaxToken? SequenceOpenBracketToken { get; }
 
     /// <summary>Gets the sequence element type clause, or <c>null</c> (ADR-0040).</summary>
-    public TypeClauseSyntax SequenceElementType { get; }
+    public TypeClauseSyntax? SequenceElementType { get; }
 
     /// <summary>Gets the <c>]</c> closing the sequence element type, or <c>null</c> (ADR-0040).</summary>
-    public SyntaxToken SequenceCloseBracketToken { get; }
+    public SyntaxToken? SequenceCloseBracketToken { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes a sequence type <c>sequence[T]</c> (ADR-0040).</summary>
     public bool IsSequence => SequenceKeyword != null;
 
     /// <summary>Gets the optional <c>async</c> modifier preceding a sequence type clause (ADR-0042), or <c>null</c>.</summary>
-    public SyntaxToken AsyncModifier { get; }
+    public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets a value indicating whether this clause denotes an async sequence type <c>async sequence[T]</c> (ADR-0042).</summary>
     public bool IsAsyncSequence => SequenceKeyword != null && AsyncModifier != null;
@@ -797,7 +797,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// </summary>
     /// <param name="segmentIndex">The 0-based segment index.</param>
     /// <returns>The type-argument list, or <c>null</c>.</returns>
-    public SeparatedSyntaxList<TypeClauseSyntax> GetSegmentTypeArguments(int segmentIndex)
+    public SeparatedSyntaxList<TypeClauseSyntax>? GetSegmentTypeArguments(int segmentIndex)
     {
         if (segmentIndex == SegmentCount - 1)
         {
@@ -822,7 +822,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken starToken,
         TypeClauseSyntax pointeeType,
-        SyntaxToken questionToken)
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, starToken, pointeeType, questionToken, isPointer: true);
     }
@@ -838,12 +838,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An array/slice type clause carrying a nested element type clause.</returns>
     public static TypeClauseSyntax CreateArray(
         SyntaxTree syntaxTree,
-        SyntaxToken openBracketToken,
-        SyntaxToken lengthToken,
-        SyntaxToken closeBracketToken,
+        SyntaxToken? openBracketToken,
+        SyntaxToken? lengthToken,
+        SyntaxToken? closeBracketToken,
         TypeClauseSyntax elementType,
-        SyntaxToken questionToken,
-        SyntaxToken arrayQuestionToken = null)
+        SyntaxToken? questionToken,
+        SyntaxToken? arrayQuestionToken = null)
     {
         return new TypeClauseSyntax(syntaxTree, openBracketToken, lengthToken, closeBracketToken, elementType, questionToken, isNestedArray: true, arrayQuestionToken);
     }
@@ -859,10 +859,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public static TypeClauseSyntax CreateSequence(
         SyntaxTree syntaxTree,
         SyntaxToken sequenceKeyword,
-        SyntaxToken openBracketToken,
+        SyntaxToken? openBracketToken,
         TypeClauseSyntax elementType,
-        SyntaxToken closeBracketToken,
-        SyntaxToken questionToken)
+        SyntaxToken? closeBracketToken,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier: null, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
     }
@@ -878,12 +878,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An async sequence type clause.</returns>
     public static TypeClauseSyntax CreateAsyncSequence(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken sequenceKeyword,
-        SyntaxToken openBracketToken,
+        SyntaxToken? openBracketToken,
         TypeClauseSyntax elementType,
-        SyntaxToken closeBracketToken,
-        SyntaxToken questionToken)
+        SyntaxToken? closeBracketToken,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, sequenceKeyword, openBracketToken, elementType, closeBracketToken, questionToken, isSequence: true);
     }
@@ -900,13 +900,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An async function type clause.</returns>
     public static TypeClauseSyntax CreateAsyncFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, returnTypeClause, questionToken, isFunction: true);
     }
@@ -924,14 +924,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An async function type clause.</returns>
     public static TypeClauseSyntax CreateAsyncFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
+        SyntaxToken? asyncModifier,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, returnTypeClause, questionToken, isFunction: true);
     }
@@ -949,12 +949,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public static TypeClauseSyntax CreateLegacyFunction(
         SyntaxTree syntaxTree,
         SyntaxToken funcKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier: null, funcKeyword, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, returnTypeClause, questionToken, isFunction: true);
     }
@@ -970,12 +970,12 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An arrow-form function type clause.</returns>
     public static TypeClauseSyntax CreateArrowFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
@@ -992,13 +992,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An arrow-form function type clause.</returns>
     public static TypeClauseSyntax CreateArrowFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier: null, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
@@ -1015,13 +1015,13 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An async arrow-form function type clause.</returns>
     public static TypeClauseSyntax CreateAsyncArrowFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? asyncModifier,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens: default, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
@@ -1039,14 +1039,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <returns>An async arrow-form function type clause.</returns>
     public static TypeClauseSyntax CreateAsyncArrowFunction(
         SyntaxTree syntaxTree,
-        SyntaxToken asyncModifier,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        ImmutableArray<SyntaxToken> functionParameterEllipsisTokens,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause,
-        SyntaxToken questionToken)
+        SyntaxToken? asyncModifier,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        ImmutableArray<SyntaxToken?> functionParameterEllipsisTokens,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause,
+        SyntaxToken? questionToken)
     {
         return new TypeClauseSyntax(syntaxTree, asyncModifier, openParenToken, functionParameterTypes, functionParameterEllipsisTokens, closeParenToken, arrowToken, returnTypeClause, questionToken, isArrowFunction: true);
     }
@@ -1066,14 +1066,14 @@ public sealed class TypeClauseSyntax : SyntaxNode
     public static TypeClauseSyntax CreateFunctionPointer(
         SyntaxTree syntaxTree,
         SyntaxToken unmanagedKeyword,
-        SyntaxToken callingConventionOpenBracketToken,
-        SyntaxToken callingConventionIdentifierToken,
-        SyntaxToken callingConventionCloseBracketToken,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        SyntaxToken arrowToken,
-        TypeClauseSyntax returnTypeClause)
+        SyntaxToken? callingConventionOpenBracketToken,
+        SyntaxToken? callingConventionIdentifierToken,
+        SyntaxToken? callingConventionCloseBracketToken,
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        SyntaxToken? arrowToken,
+        TypeClauseSyntax? returnTypeClause)
     {
         return new TypeClauseSyntax(
             syntaxTree,
@@ -1105,10 +1105,10 @@ public sealed class TypeClauseSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken managedFunctionPointerStarToken,
         SyntaxToken managedFunctionPointerFuncKeyword,
-        SyntaxToken openParenToken,
-        SeparatedSyntaxList<TypeClauseSyntax> functionParameterTypes,
-        SyntaxToken closeParenToken,
-        TypeClauseSyntax returnTypeClause)
+        SyntaxToken? openParenToken,
+        SeparatedSyntaxList<TypeClauseSyntax>? functionParameterTypes,
+        SyntaxToken? closeParenToken,
+        TypeClauseSyntax? returnTypeClause)
     {
         return new TypeClauseSyntax(
             syntaxTree,
@@ -1131,7 +1131,7 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// new trailing token.
     /// </summary>
     /// <param name="questionToken">The trailing <c>?</c> token.</param>
-    internal void SetParenthesizedQuestionToken(SyntaxToken questionToken)
+    internal void SetParenthesizedQuestionToken(SyntaxToken? questionToken)
     {
         ParenthesizedQuestionToken = questionToken;
         InvalidateCachedSpan();

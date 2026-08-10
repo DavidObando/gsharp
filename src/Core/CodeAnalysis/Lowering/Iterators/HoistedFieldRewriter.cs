@@ -77,7 +77,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             && this.fieldMap.TryGetValue(varExpr.Variable, out var proxyField))
         {
             var rewrittenReceiver = this.FieldRead(proxyField);
-            return new BoundFieldAccessExpression(null, rewrittenReceiver, node.StructType, node.Field);
+            return new BoundFieldAccessExpression(null, rewrittenReceiver, BoundNodeForm.DeclaringType(node), node.Field, node.NarrowedType);
         }
 
         return base.RewriteFieldAccessExpression(node);
@@ -92,7 +92,7 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
         if (node.Receiver != null && this.fieldMap.TryGetValue(node.Receiver, out var proxyField))
         {
             var receiverExpr = this.FieldRead(proxyField);
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value, node.ResultType);
         }
 
         if (node.ReceiverExpression != null)
@@ -100,12 +100,29 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
             var receiverExpr = this.RewriteExpression(node.ReceiverExpression);
             if (!ReferenceEquals(value, node.Value) || !ReferenceEquals(receiverExpr, node.ReceiverExpression))
             {
-                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, node.StructType, node.Field, value);
+                return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiverExpr, BoundNodeForm.DeclaringType(node), node.Field, value, node.ResultType);
             }
         }
         else if (!ReferenceEquals(value, node.Value))
         {
-            return new BoundFieldAssignmentExpression(null, node.Receiver, node.StructType, node.Field, value);
+            // Issue #3333 / #1644: an interface static field write has a null
+            // Receiver and StructType, and carries the owning interface in
+            // InterfaceType. Rebuilding it through the variable-receiver
+            // constructor drops that, and the emitter parents the field at the
+            // open-generic TypeDef instead of a TypeSpec. This override must
+            // carry the same guard the base BoundTreeRewriter does.
+            if (node.InterfaceType != null)
+            {
+                return new BoundFieldAssignmentExpression(null, node.Field, node.InterfaceType, value);
+            }
+
+            return new BoundFieldAssignmentExpression(
+                null,
+                node.Receiver,
+                BoundNodeForm.DeclaringType(node),
+                node.Field,
+                value,
+                node.ResultType);
         }
 
         return node;
@@ -115,7 +132,11 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     {
         if (this.fieldMap.TryGetValue(node.Variable, out var field))
         {
-            return new BoundExpressionStatement(null, this.FieldWrite(field, this.RewriteExpression(node.Initializer)));
+            return new BoundExpressionStatement(
+                null,
+                this.FieldWrite(
+                    field,
+                    this.RewriteExpression(Invariant.Required(node.Initializer, "a variable declaration has an initializer"))));
         }
 
         return base.RewriteVariableDeclaration(node);
@@ -126,6 +147,10 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
     // field through its VariableSymbol target. Switch to the expression
     // target form reading the hoisted field (same fix as closure boxing,
     // issue #618).
+    // GSA0005: The rebuild sits inside `node.Target != null`, so this is the
+    // variable-target form; TargetExpression is null on this path and the
+    // expression-target form falls through to base.
+    #pragma warning disable GSA0005
     protected override BoundExpression RewriteIndexAssignmentExpression(BoundIndexAssignmentExpression node)
     {
         if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
@@ -140,9 +165,13 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
 
         return base.RewriteIndexAssignmentExpression(node);
     }
+    #pragma warning restore GSA0005
 
     // Issue #887: same fix for CLR-indexer writes (e.g. `dict["k"] = v` or
     // `psi.Environment["k"] = v`) whose target temp is hoisted into a field.
+    // GSA0005: Same as RewriteIndexAssignmentExpression: guarded by `node.Target !=
+    // null`, so TargetExpression is null on the path that rebuilds.
+    #pragma warning disable GSA0005
     protected override BoundExpression RewriteClrIndexAssignmentExpression(BoundClrIndexAssignmentExpression node)
     {
         if (node.Target != null && this.fieldMap.TryGetValue(node.Target, out var targetField))
@@ -153,11 +182,14 @@ internal class HoistedFieldRewriter : BoundTreeRewriter
                 node.Indexer,
                 this.RewriteArguments(node.Arguments),
                 this.RewriteExpression(node.Value),
-                node.Type);
+                node.Type,
+                node.ConstrainedReceiverTypeParameter,
+                node.ConstrainedInterfaceType);
         }
 
         return base.RewriteClrIndexAssignmentExpression(node);
     }
+    #pragma warning restore GSA0005
 
     protected ImmutableArray<BoundExpression> RewriteArguments(ImmutableArray<BoundExpression> arguments)
     {

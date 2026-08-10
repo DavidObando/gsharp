@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -44,7 +45,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The method name to resolve.</param>
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
     /// <exception cref="AmbiguousMatchException"><paramref name="name"/> identifies multiple methods.</exception>
-    public static MethodInfo GetMethodSafe(this Type type, string name)
+    public static MethodInfo? GetMethodSafe(this Type? type, string? name)
     {
         if (type is null || name is null)
         {
@@ -78,7 +79,7 @@ public static class ClrTypeUtilities
     /// <returns>The resolved method, or <see langword="null"/> when no matching method exists.</returns>
     /// <exception cref="AmbiguousMatchException">More than one method matches the supplied signature.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="types"/> contains a <see langword="null"/> element.</exception>
-    public static MethodInfo GetMethodSafe(this Type type, string name, Type[] types)
+    public static MethodInfo? GetMethodSafe(this Type? type, string? name, Type[]? types)
     {
         if (type is null || name is null || types is null)
         {
@@ -124,7 +125,7 @@ public static class ClrTypeUtilities
     /// </summary>
     /// <param name="type">The CLR type to probe. May be <see langword="null"/>.</param>
     /// <returns><c>true</c> when <paramref name="type"/> is a real CLR enum.</returns>
-    public static bool IsEnumSafe(this Type type)
+    public static bool IsEnumSafe(this Type? type)
     {
         if (type is null)
         {
@@ -150,9 +151,9 @@ public static class ClrTypeUtilities
     /// </summary>
     /// <param name="type">The candidate enum CLR type. May be <see langword="null"/>.</param>
     /// <returns>The underlying primitive <see cref="Type"/>, or <see langword="null"/> when <paramref name="type"/> is not a genuine CLR enum.</returns>
-    public static Type GetEnumUnderlyingTypeSafe(this Type type)
+    public static Type? GetEnumUnderlyingTypeSafe(this Type? type)
     {
-        if (!type.IsEnumSafe())
+        if (type is null || !type.IsEnumSafe())
         {
             return null;
         }
@@ -192,7 +193,7 @@ public static class ClrTypeUtilities
     /// <param name="a">First type.</param>
     /// <param name="b">Second type.</param>
     /// <returns><c>true</c> when both types are non-null and denote the same logical CLR type.</returns>
-    public static bool AreSame(Type a, Type b) => IsSameAs(a, b);
+    public static bool AreSame(Type? a, Type? b) => IsSameAs(a, b);
 
     /// <summary>
     /// Extension-method companion to <see cref="AreSame(Type, Type)"/>. Reads more
@@ -208,7 +209,7 @@ public static class ClrTypeUtilities
     /// <param name="other">The expected canonical type, typically a host
     /// <c>typeof(...)</c> literal.</param>
     /// <returns><c>true</c> when both types denote the same logical CLR type.</returns>
-    public static bool IsSameAs(this Type self, Type other)
+    public static bool IsSameAs(this Type? self, Type? other)
     {
         if (self is null || other is null)
         {
@@ -287,7 +288,7 @@ public static class ClrTypeUtilities
     /// <param name="target">Target parameter type.</param>
     /// <param name="source">Source argument type.</param>
     /// <returns><c>true</c> when an assignment is permissible.</returns>
-    public static bool IsAssignableByName(Type target, Type source)
+    public static bool IsAssignableByName(Type? target, Type? source)
     {
         if (target is null || source is null)
         {
@@ -406,7 +407,7 @@ public static class ClrTypeUtilities
     /// </summary>
     /// <param name="type">The candidate type.</param>
     /// <returns><c>true</c> when the type is a delegate type.</returns>
-    public static bool IsDelegateType(Type type)
+    public static bool IsDelegateType(Type? type)
     {
         for (var t = type; t != null; t = t.BaseType)
         {
@@ -598,7 +599,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The property name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching property, or <c>null</c> when none is usable.</returns>
-    public static PropertyInfo SafeGetProperty(Type type, string name, BindingFlags flags)
+    public static PropertyInfo? SafeGetProperty(Type type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetProperty(name, f), SafeGetProperties);
 
     /// <summary>
@@ -609,7 +610,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The field name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching field, or <c>null</c> when none is usable.</returns>
-    public static FieldInfo SafeGetField(Type type, string name, BindingFlags flags)
+    public static FieldInfo? SafeGetField(Type? type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetField(name, f), SafeGetFields);
 
     /// <summary>
@@ -628,7 +629,7 @@ public static class ClrTypeUtilities
     /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="name">The field name.</param>
     /// <returns>The matching visible inherited field, or <c>null</c> when none is found.</returns>
-    public static FieldInfo SafeGetInheritedInstanceField(Type type, string name)
+    public static FieldInfo? SafeGetInheritedInstanceField(Type type, string name)
     {
         if (type is null)
         {
@@ -656,7 +657,7 @@ public static class ClrTypeUtilities
     /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="name">The property name.</param>
     /// <returns>The matching visible inherited property, or <c>null</c> when none is found.</returns>
-    public static PropertyInfo SafeGetInheritedInstanceProperty(Type type, string name)
+    public static PropertyInfo? SafeGetInheritedInstanceProperty(Type type, string name)
     {
         if (type is null)
         {
@@ -686,7 +687,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The event name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching event, or <c>null</c> when none is usable.</returns>
-    public static EventInfo SafeGetEvent(Type type, string name, BindingFlags flags)
+    public static EventInfo? SafeGetEvent(Type type, string name, BindingFlags flags)
         => SafeGetMember(type, name, flags, (t, f) => t.GetEvent(name, f), SafeGetEvents);
 
     /// <summary>Looks up an event by name across an interface and its inherited interfaces.</summary>
@@ -694,7 +695,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The event name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching event, or <c>null</c> when none is found.</returns>
-    public static EventInfo SafeGetEventIncludingInterfaces(Type type, string name, BindingFlags flags)
+    public static EventInfo? SafeGetEventIncludingInterfaces(Type type, string name, BindingFlags flags)
     {
         var direct = SafeGetEvent(type, name, flags);
         if (direct != null)
@@ -732,7 +733,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The property name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching property, or <c>null</c> when none is found.</returns>
-    public static PropertyInfo SafeGetPropertyIncludingInterfaces(Type type, string name, BindingFlags flags)
+    public static PropertyInfo? SafeGetPropertyIncludingInterfaces(Type type, string name, BindingFlags flags)
     {
         var direct = SafeGetProperty(type, name, flags);
         if (direct != null)
@@ -765,7 +766,7 @@ public static class ClrTypeUtilities
     /// <param name="name">The field name.</param>
     /// <param name="flags">The binding flags controlling visibility.</param>
     /// <returns>The matching field, or <c>null</c> when none is found.</returns>
-    public static FieldInfo SafeGetFieldIncludingInterfaces(Type type, string name, BindingFlags flags)
+    public static FieldInfo? SafeGetFieldIncludingInterfaces(Type type, string name, BindingFlags flags)
     {
         var direct = SafeGetField(type, name, flags);
         if (direct != null)
@@ -988,7 +989,10 @@ public static class ClrTypeUtilities
 
                 try
                 {
-                    Visit(current.BaseType);
+                    if (current.BaseType is { } baseType)
+                    {
+                        Visit(baseType);
+                    }
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -1001,7 +1005,8 @@ public static class ClrTypeUtilities
         });
     }
 
-    internal static Type RemapHostCoreTypeToContext(Type type, Type contextObject)
+    [return: NotNullIfNotNull(nameof(type))]
+    internal static Type? RemapHostCoreTypeToContext(Type? type, Type? contextObject)
     {
         if (type == null
             || contextObject == null
@@ -1012,17 +1017,23 @@ public static class ClrTypeUtilities
 
         if (type.IsByRef)
         {
-            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakeByRefType();
+            return Invariant.Required(
+                RemapHostCoreTypeToContext(type.GetElementType(), contextObject),
+                "a by-ref CLR type has an element type").MakeByRefType();
         }
 
         if (type.IsPointer)
         {
-            return RemapHostCoreTypeToContext(type.GetElementType(), contextObject).MakePointerType();
+            return Invariant.Required(
+                RemapHostCoreTypeToContext(type.GetElementType(), contextObject),
+                "a pointer CLR type has an element type").MakePointerType();
         }
 
         if (type.IsArray)
         {
-            var element = RemapHostCoreTypeToContext(type.GetElementType(), contextObject);
+            var element = Invariant.Required(
+                RemapHostCoreTypeToContext(type.GetElementType(), contextObject),
+                "an array CLR type has an element type");
             return type.IsSZArray
                 ? element.MakeArrayType()
                 : element.MakeArrayType(type.GetArrayRank());
@@ -1031,9 +1042,10 @@ public static class ClrTypeUtilities
         if (type.IsConstructedGenericType
             && ReferenceEquals(type.GetGenericTypeDefinition().Assembly, typeof(object).Assembly))
         {
-            var open = contextObject.Assembly.GetType(
-                type.GetGenericTypeDefinition().FullName,
-                throwOnError: false);
+            var openName = type.GetGenericTypeDefinition().FullName;
+            var open = openName is null
+                ? null
+                : contextObject.Assembly.GetType(openName, throwOnError: false);
             if (open != null)
             {
                 return open.MakeGenericType(
@@ -1045,7 +1057,9 @@ public static class ClrTypeUtilities
 
         if (ReferenceEquals(type.Assembly, typeof(object).Assembly))
         {
-            return contextObject.Assembly.GetType(type.FullName, throwOnError: false) ?? type;
+            return type.FullName is { } fullName
+                ? contextObject.Assembly.GetType(fullName, throwOnError: false) ?? type
+                : type;
         }
 
         return type;
@@ -1140,7 +1154,7 @@ public static class ClrTypeUtilities
     private static MethodInfo GetConstructedGenericMethod(Type type, MethodInfo openMethod)
     {
         var declaringType = openMethod.DeclaringType;
-        if (!declaringType.IsGenericType)
+        if (declaringType is null || !declaringType.IsGenericType)
         {
             return openMethod;
         }
@@ -1173,7 +1187,7 @@ public static class ClrTypeUtilities
         if (type.HasElementType)
         {
             var elementType = SubstituteGenericTypeArguments(
-                type.GetElementType(),
+                Invariant.Required(type.GetElementType(), "an element-bearing CLR type has an element type"),
                 openTypeArguments,
                 typeArguments);
             if (type.IsByRef)
@@ -1202,7 +1216,7 @@ public static class ClrTypeUtilities
             : type;
     }
 
-    private static MethodInfo FindOpenGenericMethod(
+    private static MethodInfo? FindOpenGenericMethod(
         Type openType,
         string name,
         Type[] parameterTypes,
@@ -1236,11 +1250,16 @@ public static class ClrTypeUtilities
     }
 
     private static bool MatchesConstructedParameterType(
-        Type open,
-        Type constructed,
+        Type? open,
+        Type? constructed,
         Type[] openTypeArguments,
         Type[] typeArguments)
     {
+        if (open is null || constructed is null)
+        {
+            return open is null && constructed is null;
+        }
+
         if (open.IsGenericParameter)
         {
             var position = Array.IndexOf(openTypeArguments, open);
@@ -1305,7 +1324,7 @@ public static class ClrTypeUtilities
         return open == constructed;
     }
 
-    private static bool ContainsTypeBuilderGenericArgument(Type type)
+    private static bool ContainsTypeBuilderGenericArgument(Type? type)
     {
         if (type == null)
         {
@@ -1424,11 +1443,11 @@ public static class ClrTypeUtilities
         });
     }
 
-    private static TMember SafeGetMember<TMember>(
-        Type type,
+    private static TMember? SafeGetMember<TMember>(
+        Type? type,
         string name,
         BindingFlags flags,
-        Func<Type, BindingFlags, TMember> directLookup,
+        Func<Type, BindingFlags, TMember?> directLookup,
         Func<Type, BindingFlags, TMember[]> safeEnumerate)
         where TMember : MemberInfo
     {
@@ -1446,7 +1465,7 @@ public static class ClrTypeUtilities
         {
             for (var declaringType = type; declaringType != null; declaringType = declaringType.BaseType)
             {
-                TMember match = null;
+                TMember? match = null;
                 foreach (var member in safeEnumerate(type, flags))
                 {
                     if (!string.Equals(member.Name, name, StringComparison.Ordinal)

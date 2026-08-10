@@ -10,20 +10,21 @@
 #pragma warning disable SA1201 // method should not follow a class
 #pragma warning disable SA1202 // 'internal' members should come before 'private' members
 
-using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Diagnostics;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Lowering.Iterators;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -95,11 +96,11 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
     private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
     private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots;
-    private readonly ParameterSymbol structThisParameter;
-    private readonly Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap;
-    private readonly Lowering.Async.AsyncStateMachinePlan asyncPlan;
-    private readonly StateMachineEmitter.IteratorEmitContext iteratorEmitCtx;
-    private readonly Dictionary<VariableSymbol, object> constValues;
+    private readonly ParameterSymbol? structThisParameter;
+    private readonly Lowering.Async.AsyncStateMachineFieldMap? asyncFieldMap;
+    private readonly Lowering.Async.AsyncStateMachinePlan? asyncPlan;
+    private readonly StateMachineEmitter.IteratorEmitContext? iteratorEmitCtx;
+    private readonly Dictionary<VariableSymbol, object>? constValues;
     private readonly bool hasFixedReturns;
     private readonly int fixedReturnSlot;
     private LabelHandle? fixedReturnLabel;
@@ -109,19 +110,19 @@ internal sealed partial class MethodBodyEmitter
     // closure are loaded/stored through `this`'s display-class fields
     // instead of looking for a local slot or parameter index. Null when
     // the current method isn't a closure Invoke.
-    private readonly ClosureEmitter.ClosureInfo enclosingClosure;
+    private readonly ClosureEmitter.ClosureInfo? enclosingClosure;
 
     // 6.2 SilentEmitFailure invariant: track the most recently dispatched
     // BoundNode so that any exception thrown from deep in the emit pipeline
     // can be re-anchored at the offending source construct. Updated at the
     // top of EmitStatement and EmitExpression (the two dispatch chokepoints).
-    private BoundNode currentNode;
+    private BoundNode? currentNode;
 
     /// <summary>
     /// Gets the <see cref="SyntaxNode"/> of the most recently dispatched
     /// <see cref="BoundNode"/>, suitable for anchoring emit-failure diagnostics.
     /// </summary>
-    internal SyntaxNode CurrentAnchor => this.currentNode?.Syntax;
+    internal SyntaxNode? CurrentAnchor => this.currentNode?.Syntax;
 
     // Stack of currently-active protected regions; each entry holds the set of
     // bound labels defined lexically within that region (including nested
@@ -160,15 +161,15 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
         Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots = null,
-        Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = null,
-        ParameterSymbol structThisParameter = null,
-        Lowering.Async.AsyncStateMachineFieldMap asyncFieldMap = null,
-        Lowering.Async.AsyncStateMachinePlan asyncPlan = null,
-        StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null,
-        Dictionary<VariableSymbol, object> constValues = null,
-        ClosureEmitter.ClosureInfo enclosingClosure = null,
-        Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = null,
+        Dictionary<BoundExpression, LiftedBinarySlots>? liftedBinarySlots = null,
+        Dictionary<BoundBinaryExpression, int>? nullableCoalesceSpillSlots = null,
+        ParameterSymbol? structThisParameter = null,
+        Lowering.Async.AsyncStateMachineFieldMap? asyncFieldMap = null,
+        Lowering.Async.AsyncStateMachinePlan? asyncPlan = null,
+        StateMachineEmitter.IteratorEmitContext? iteratorEmitCtx = null,
+        Dictionary<VariableSymbol, object>? constValues = null,
+        ClosureEmitter.ClosureInfo? enclosingClosure = null,
+        Dictionary<BoundStackAllocExpression, int>? stackAllocResultSlots = null,
         bool hasFixedReturns = false,
         int fixedReturnSlot = -1)
     {
@@ -266,7 +267,7 @@ internal sealed partial class MethodBodyEmitter
         }
         else if (emitFallthroughGuard)
         {
-            var constructor = typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) });
+            var constructor = BclMember.Ctor(typeof(InvalidOperationException), typeof(string));
             this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(
                 DiagnosticDescriptors.NonVoidFallthroughGuardMessage));
             this.il.OpCode(ILOpCode.Newobj);
@@ -388,7 +389,10 @@ internal sealed partial class MethodBodyEmitter
                     break; // value inlined at read sites; initializer is a side-effect-free literal
                 }
 
-                this.EmitExpression(decl.Initializer);
+                var initializer = Invariant.Required(
+                    decl.Initializer,
+                    "every declaration the binder emits carries an initializer -- an unbindable one is recovered as a BoundErrorExpression, not as an absent initializer");
+                this.EmitExpression(initializer);
                 this.EmitStoreVariable(decl.Variable);
                 break;
             case BoundLocalFunctionDeclaration:
@@ -583,7 +587,7 @@ internal sealed partial class MethodBodyEmitter
             || (type is FunctionTypeSymbol fn && TypeSymbol.ContainsTypeParameter(fn));
     }
 
-    private static TypeSymbol GetEnumUnderlyingTypeSymbol(TypeSymbol type)
+    private static TypeSymbol? GetEnumUnderlyingTypeSymbol(TypeSymbol? type)
     {
         if (type is EnumSymbol enumSym)
         {
@@ -598,7 +602,9 @@ internal sealed partial class MethodBodyEmitter
         // (generalizing the #1100/#2135 pattern) rather than probing
         // `ClrType.IsEnum` directly — a throw means the type is definitely
         // not an enum, matching the guard used by EnumOperatorTable.
-        var underlying = type?.ClrType.GetEnumUnderlyingTypeSafe();
+        var underlying = type?.ClrType is { } clrType
+            ? clrType.GetEnumUnderlyingTypeSafe()
+            : null;
         if (underlying != null)
         {
             // Loaded via a MetadataLoadContext or normal load: map the CLR
@@ -609,7 +615,19 @@ internal sealed partial class MethodBodyEmitter
         return null;
     }
 
-    private static bool IsInterfaceTargetType(TypeSymbol type)
+    /// <summary>
+    /// Gets the encoder's control-flow builder, which every body this emitter
+    /// writes has: both callers that construct a MethodBodyEmitter --
+    /// FunctionEmitter and ConstructorBodyEmitter -- build their
+    /// <see cref="InstructionEncoder"/> with one. (The synthesized bodies in
+    /// DataStructSynthesizer do not, but they contain no protected region and
+    /// never reach this emitter.)
+    /// </summary>
+    private ControlFlowBuilder ControlFlow => Invariant.Required(
+        this.il.ControlFlowBuilder,
+        "FunctionEmitter and ConstructorBodyEmitter build every encoder this emitter writes into with a control-flow builder");
+
+    private static bool IsInterfaceTargetType(TypeSymbol? type)
     {
         if (type is NullableTypeSymbol nullable)
         {
@@ -624,7 +642,7 @@ internal sealed partial class MethodBodyEmitter
         return type?.ClrType != null && type.ClrType.IsInterface;
     }
 
-    private static bool IsInterfaceSourceType(TypeSymbol type)
+    private static bool IsInterfaceSourceType(TypeSymbol? type)
     {
         if (type is NullableTypeSymbol nullable)
         {
@@ -671,7 +689,7 @@ internal sealed partial class MethodBodyEmitter
             || t.IsSameAs(typeof(int)) || t.IsSameAs(typeof(uint))
             || t.IsSameAs(typeof(char)) || t.IsSameAs(typeof(bool));
 
-    private static bool IsReferenceCompatible(TypeSymbol a, TypeSymbol b)
+    private static bool IsReferenceCompatible(TypeSymbol? a, TypeSymbol? b)
     {
         if (a == b)
         {
@@ -1043,7 +1061,7 @@ internal sealed partial class MethodBodyEmitter
     /// substituted target whose <c>ClrType</c> was left in the type-erased
     /// open form while its <c>TypeArguments</c> carry the real arguments.
     /// </summary>
-    private static bool SameClosedReferenceShape(TypeSymbol a, TypeSymbol b)
+    private static bool SameClosedReferenceShape(TypeSymbol? a, TypeSymbol? b)
     {
         if (!TryGetClosedReferenceShape(a, out var aDef, out var aArgs)
             || !TryGetClosedReferenceShape(b, out var bDef, out var bArgs))
@@ -1067,7 +1085,7 @@ internal sealed partial class MethodBodyEmitter
         return true;
     }
 
-    private static bool TryGetClosedReferenceShape(TypeSymbol type, out Type definition, out Type[] args)
+    private static bool TryGetClosedReferenceShape(TypeSymbol? type, [NotNullWhen(true)] out Type? definition, [NotNullWhen(true)] out Type[]? args)
     {
         definition = null;
         args = null;
@@ -1227,7 +1245,7 @@ internal sealed partial class MethodBodyEmitter
     // Recursively collects BoundLabelStatement labels that live inside a
     // BoundExpression sub-tree. This is the inverse-side of CollectLabels
     // for expression-position blocks (BoundBlockExpression et al.).
-    private void CollectLabelsInExpression(BoundExpression expression, HashSet<BoundLabel> sink)
+    private void CollectLabelsInExpression(BoundExpression? expression, HashSet<BoundLabel> sink)
     {
         if (expression == null)
         {
@@ -1237,7 +1255,7 @@ internal sealed partial class MethodBodyEmitter
         this.outer.slotPlanner.CollectExpressionBlockLabels(expression, sink);
     }
 
-    private void EmitBranch(BoundLabel target, BoundExpression conditional, bool jumpIfTrue)
+    private void EmitBranch(BoundLabel target, BoundExpression? conditional, bool jumpIfTrue)
     {
         var targetHandle = this.labels[target];
         var crossesRegion = this.protectedRegionStack.Count > 0
@@ -1308,7 +1326,7 @@ internal sealed partial class MethodBodyEmitter
     // BoundAssignmentExpression whose target is the same VariableSymbol as
     // the receiver. Conservative — false positives are fine because this
     // is a debug-only assertion guarding a code-gen invariant.
-    private static bool ValueExpressionMutatesReceiver(BoundExpression value, VariableSymbol receiver)
+    private static bool ValueExpressionMutatesReceiver(BoundExpression value, VariableSymbol? receiver)
     {
         if (value == null || receiver == null)
         {
@@ -1460,7 +1478,7 @@ internal sealed partial class MethodBodyEmitter
     private static bool IsRuntimeProvidedType(Type type)
         => type.GetType() == typeof(object).GetType();
 
-    private static TypeSymbol ResolveChannelContainerSymbol(
+    private static TypeSymbol? ResolveChannelContainerSymbol(
         Type closedCarrier,
         Type openDefinition,
         TypeSymbol elementType)
@@ -1482,7 +1500,9 @@ internal sealed partial class MethodBodyEmitter
         MethodInfo method,
         TypeSymbol elementType)
     {
-        var closedCarrier = method.DeclaringType;
+        var closedCarrier = Invariant.Required(
+            method.DeclaringType,
+            "a channel member is looked up on a constructed Channel/ChannelReader/ChannelWriter type, which declares it");
         var openDefinition = closedCarrier.GetGenericTypeDefinition();
         return this.outer.memberRefs.GetMethodEntityHandle(
             method,
@@ -1492,5 +1512,10 @@ internal sealed partial class MethodBodyEmitter
     private EntityHandle GetChannelGenericMethodEntityHandle(MethodInfo method, TypeSymbol elementType)
         => this.outer.memberRefs.GetMethodEntityHandle(
             method,
-            ResolveChannelMethodTypeArguments(elementType));
+            ToNullableTypeArguments(ResolveChannelMethodTypeArguments(elementType)));
+
+    private static ImmutableArray<TypeSymbol?> ToNullableTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
+        => typeArguments.IsDefault
+            ? default
+            : typeArguments.Select(static typeArgument => (TypeSymbol?)typeArgument).ToImmutableArray();
 }

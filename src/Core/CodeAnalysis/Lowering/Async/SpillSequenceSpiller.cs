@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -70,7 +71,7 @@ public static class SpillSequenceSpiller
     /// <returns>The spilled body (no <see cref="BoundSpillSequenceExpression"/> nodes survive).</returns>
     public static BoundBlockStatement Rewrite(BoundBlockStatement body)
     {
-        if (body == null || !AsyncBoundTreeQueries.HasAwait(body))
+        if (!AsyncBoundTreeQueries.HasAwait(body))
         {
             return body;
         }
@@ -288,7 +289,7 @@ public static class SpillSequenceSpiller
                 ? (thenBuilder.Count == 1 ? thenBuilder[0] : new BoundBlockStatement(null, thenBuilder.ToImmutable()))
                 : ifStmt.ThenStatement;
 
-            BoundStatement elseStmt = ifStmt.ElseStatement;
+            BoundStatement? elseStmt = ifStmt.ElseStatement;
             var elseChanged = false;
             if (elseStmt != null)
             {
@@ -389,7 +390,8 @@ public static class SpillSequenceSpiller
         /// Spills a try/catch/finally sub-block. Returns the rewritten body and
         /// reports whether anything changed.
         /// </summary>
-        private BoundStatement RewriteNestedBody(BoundStatement body, out bool changed)
+        [return: NotNullIfNotNull(nameof(body))]
+        private BoundStatement? RewriteNestedBody(BoundStatement? body, out bool changed)
         {
             if (body == null)
             {
@@ -501,6 +503,21 @@ public static class SpillSequenceSpiller
                     return SpillClrIndexAssignment(clrIndexAssign);
                 case BoundClrPropertyAccessExpression clrPropAccess:
                     return SpillClrPropertyAccess(clrPropAccess);
+                case BoundClrPropertyAssignmentExpression { Receiver: null } staticPropAssign:
+                    // A static member write has no receiver to spill, but its
+                    // value still can be an await.
+                    return SpillOneOperand(
+                        staticPropAssign,
+                        staticPropAssign.Value,
+                        val => new BoundClrPropertyAssignmentExpression(
+                            null,
+                            null,
+                            staticPropAssign.Member,
+                            val,
+                            staticPropAssign.Type,
+                            staticPropAssign.StaticContainerType,
+                            staticPropAssign.ConstrainedReceiverTypeParameter,
+                            staticPropAssign.ConstrainedInterfaceType));
                 case BoundClrPropertyAssignmentExpression clrPropAssign:
                     return SpillTwoOperand(
                         clrPropAssign,
@@ -537,6 +554,22 @@ public static class SpillSequenceSpiller
                         clrConv.Source,
                         src => new BoundClrConversionCallExpression(null, src, clrConv.Method, clrConv.Type));
                 case BoundClrEventSubscriptionExpression clrEventSub:
+                    if (clrEventSub.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            clrEventSub,
+                            clrEventSub.Handler,
+                            handler => new BoundClrEventSubscriptionExpression(
+                                null,
+                                receiver: null,
+                                clrEventSub.Event,
+                                handler,
+                                clrEventSub.IsAdd,
+                                clrEventSub.ConstrainedReceiverTypeParameter,
+                                clrEventSub.ConstrainedInterfaceType,
+                                clrEventSub.EventContainingType));
+                    }
+
                     return SpillTwoOperand(
                         clrEventSub,
                         clrEventSub.Receiver,
@@ -551,6 +584,20 @@ public static class SpillSequenceSpiller
                             clrEventSub.ConstrainedInterfaceType,
                             clrEventSub.EventContainingType));
                 case BoundEventSubscriptionExpression eventSub:
+                    if (eventSub.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            eventSub,
+                            eventSub.Handler,
+                            handler => new BoundEventSubscriptionExpression(
+                                null,
+                                receiver: null,
+                                eventSub.StructType,
+                                eventSub.Event,
+                                handler,
+                                eventSub.IsAdd));
+                    }
+
                     return SpillTwoOperand(
                         eventSub,
                         eventSub.Receiver,
@@ -560,11 +607,29 @@ public static class SpillSequenceSpiller
                 case BoundFieldAccessExpression fieldAccess:
                     return SpillFieldAccess(fieldAccess);
                 case BoundPropertyAccessExpression propAccess:
+                    if (propAccess.Receiver == null)
+                    {
+                        return Trivial(propAccess);
+                    }
+
                     return SpillOneOperand(
                         propAccess,
                         propAccess.Receiver,
                         recv => new BoundPropertyAccessExpression(null, recv, propAccess.StructType, propAccess.Property, propAccess.NarrowedType));
                 case BoundPropertyAssignmentExpression propAssign:
+                    if (propAssign.Receiver == null)
+                    {
+                        return SpillOneOperand(
+                            propAssign,
+                            propAssign.Value,
+                            value => new BoundPropertyAssignmentExpression(
+                                null,
+                                receiver: null,
+                                propAssign.StructType,
+                                propAssign.Property,
+                                value));
+                    }
+
                     return SpillTwoOperand(
                         propAssign,
                         propAssign.Receiver,
@@ -596,6 +661,11 @@ public static class SpillSequenceSpiller
                 case BoundStructLiteralExpression structLiteral:
                     return SpillStructLiteral(structLiteral);
                 case BoundMakeChannelExpression makeChannel:
+                    if (makeChannel.Capacity == null)
+                    {
+                        return Trivial(makeChannel);
+                    }
+
                     return SpillOneOperand(
                         makeChannel,
                         makeChannel.Capacity,
@@ -718,7 +788,7 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillAwait(BoundAwaitExpression awaitExpr)
         {
             // First, spill the inner expression of the await (e.g. the Task).
-            BoundSpillSequenceExpression innerSpill = null;
+            BoundSpillSequenceExpression? innerSpill = null;
             BoundExpression innerExpr = awaitExpr.Expression;
 
             if (HasAwait(awaitExpr.Expression))
@@ -1160,12 +1230,20 @@ public static class SpillSequenceSpiller
             }
 
             var spilled = SpillExpression(assign.Value);
-            var value = new BoundFieldAssignmentExpression(
-                null,
-                assign.Receiver,
-                assign.StructType,
-                assign.Field,
-                spilled.Value);
+
+            // Issue #3333 / #1644: an interface static field write has a null
+            // Receiver and StructType, and carries the owning interface in
+            // InterfaceType. Rebuilding it through the variable-receiver
+            // constructor drops that, and the emitter parents the field at the
+            // open-generic TypeDef instead of a TypeSpec.
+            var value = assign.InterfaceType != null
+                ? new BoundFieldAssignmentExpression(null, assign.Field, assign.InterfaceType, spilled.Value)
+                : new BoundFieldAssignmentExpression(
+                    null,
+                    assign.Receiver,
+                    BoundNodeForm.DeclaringType(assign),
+                    assign.Field,
+                    spilled.Value);
             return new BoundSpillSequenceExpression(
                 null,
                 spilled.Locals,
@@ -1223,7 +1301,9 @@ public static class SpillSequenceSpiller
                 rhs = assign.Value;
             }
 
-            var value = new BoundIndexAssignmentExpression(null, assign.Target, index, rhs, assign.Type);
+            var value = assign.TargetExpression != null
+                ? BoundIndexAssignmentExpression.WithExpressionTarget(null, assign.TargetExpression, index, rhs, assign.Type)
+                : new BoundIndexAssignmentExpression(null, BoundNodeForm.VariableTarget(assign), index, rhs, assign.Type);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),
@@ -1280,8 +1360,10 @@ public static class SpillSequenceSpiller
                 condition = spilledCondition.Value;
             }
 
-            var isVoid = conditional.Type == TypeSymbol.Void;
-            var resultLocal = isVoid ? null : MakeSpillTemp(conditional.Type);
+            // Null exactly when the conditional is void: testing resultLocal
+            // rather than a separate bool is what lets the analyzer see the
+            // local is present wherever it is assigned or read.
+            var resultLocal = conditional.Type == TypeSymbol.Void ? null : MakeSpillTemp(conditional.Type);
             var elseLabel = MakeLabel();
             var endLabel = MakeLabel();
 
@@ -1292,7 +1374,7 @@ public static class SpillSequenceSpiller
             var spilledTrue = SpillExpression(conditional.WhenTrue);
             locals.AddRange(spilledTrue.Locals);
             sideEffects.AddRange(spilledTrue.SideEffects);
-            if (!isVoid)
+            if (resultLocal != null)
             {
                 sideEffects.Add(new BoundExpressionStatement(
                     null,
@@ -1310,7 +1392,7 @@ public static class SpillSequenceSpiller
             var spilledFalse = SpillExpression(conditional.WhenFalse);
             locals.AddRange(spilledFalse.Locals);
             sideEffects.AddRange(spilledFalse.SideEffects);
-            if (!isVoid)
+            if (resultLocal != null)
             {
                 sideEffects.Add(new BoundExpressionStatement(
                     null,
@@ -1324,7 +1406,7 @@ public static class SpillSequenceSpiller
             // end:
             sideEffects.Add(new BoundLabelStatement(null, endLabel));
 
-            if (isVoid)
+            if (resultLocal == null)
             {
                 return new BoundSpillSequenceExpression(
                     null,
@@ -1364,7 +1446,10 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillSwitch(BoundSwitchExpression switchExpr)
         {
             var discriminantHasAwait = HasAwait(switchExpr.Discriminant);
-            BoundExpression firstGuardAwaitSyntaxHolder = null;
+
+            // Set on exactly the arms that set the bool below, so testing it
+            // directly is equivalent and keeps its non-nullness visible.
+            BoundExpression? firstGuardAwaitSyntaxHolder = null;
             var anyGuardHasAwait = false;
             var anyResultHasAwait = false;
             foreach (var arm in switchExpr.Arms)
@@ -1386,7 +1471,7 @@ public static class SpillSequenceSpiller
                 return Trivial(switchExpr);
             }
 
-            if (anyGuardHasAwait)
+            if (firstGuardAwaitSyntaxHolder != null)
             {
                 var anchor = firstGuardAwaitSyntaxHolder.Syntax
                     ?? AsyncBoundTreeQueries.FindFirstAwaitSyntax(firstGuardAwaitSyntaxHolder);
@@ -1436,7 +1521,9 @@ public static class SpillSequenceSpiller
             // selected arm's (possibly awaiting) result.
             var resultLocal = MakeSpillTemp(switchExpr.Type);
             var endLabel = MakeLabel();
-            var eqOperator = BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32);
+            var eqOperator = Invariant.Required(
+                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                "int32 equality operator exists for spill dispatch");
             var firstArmResultDeclared = false;
 
             for (var i = 0; i < switchExpr.Arms.Length; i++)
@@ -1567,7 +1654,7 @@ public static class SpillSequenceSpiller
             // struct/enum and BCL value-type Nullable<T> operands
             // (NullableValueTypeUnwrapCollector auto-slots any such node it
             // finds in the tree), so no new emitter plumbing is needed here.
-            LocalVariableSymbol wrapperLocal = null;
+            LocalVariableSymbol? wrapperLocal = null;
             BoundExpression guardCondition;
             if (isValueTypeNullableReceiver)
             {
@@ -1588,8 +1675,8 @@ public static class SpillSequenceSpiller
                 guardCondition = new BoundVariableExpression(null, nc.Capture);
             }
 
-            var isVoid = ReferenceEquals(nc.Type, TypeSymbol.Void);
-            var resultLocal = isVoid ? null : MakeSpillTemp(nc.Type);
+            // Null exactly when the chain is void -- see SpillConditional.
+            var resultLocal = ReferenceEquals(nc.Type, TypeSymbol.Void) ? null : MakeSpillTemp(nc.Type);
 
             var nonNullLabel = MakeLabel();
             var endLabel = MakeLabel();
@@ -1598,7 +1685,7 @@ public static class SpillSequenceSpiller
             sideEffects.Add(new BoundConditionalGotoStatement(null, nonNullLabel, guardCondition, jumpIfTrue: true));
 
             // nil branch
-            if (!isVoid)
+            if (resultLocal != null)
             {
                 sideEffects.Add(new BoundVariableDeclaration(null, resultLocal, new BoundDefaultExpression(null, nc.Type)));
             }
@@ -1608,9 +1695,11 @@ public static class SpillSequenceSpiller
             // non-null branch
             sideEffects.Add(new BoundLabelStatement(null, nonNullLabel));
 
-            if (isValueTypeNullableReceiver)
+            if (wrapperLocal != null)
             {
-                var unwrapOp = BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, wrapperLocal.Type);
+                var unwrapOp = Invariant.Required(
+                    BoundUnaryOperator.Bind(SyntaxKind.BangBangToken, wrapperLocal.Type),
+                    "the wrapper local is a nullable value type, for which the operator table always binds `!!`");
                 var unwrap = new BoundUnaryExpression(null, unwrapOp, new BoundVariableExpression(null, wrapperLocal));
                 sideEffects.Add(new BoundExpressionStatement(null, new BoundAssignmentExpression(null, nc.Capture, unwrap)));
             }
@@ -1619,7 +1708,7 @@ public static class SpillSequenceSpiller
             locals.AddRange(spilledWhenNotNull.Locals);
             sideEffects.AddRange(spilledWhenNotNull.SideEffects);
 
-            if (isVoid)
+            if (resultLocal == null)
             {
                 sideEffects.Add(new BoundExpressionStatement(null, spilledWhenNotNull.Value));
             }
@@ -1641,12 +1730,12 @@ public static class SpillSequenceSpiller
 
             sideEffects.Add(new BoundLabelStatement(null, endLabel));
 
-            if (!isVoid)
+            if (resultLocal != null)
             {
                 locals.Add(resultLocal);
             }
 
-            var resultValue = isVoid
+            var resultValue = resultLocal == null
                 ? (BoundExpression)new BoundLiteralExpression(null, null, TypeSymbol.Void)
                 : new BoundVariableExpression(null, resultLocal);
 
@@ -1909,7 +1998,25 @@ public static class SpillSequenceSpiller
             }
 
             var spilledValue = spilled[assign.Arguments.Length];
-            var value = new BoundClrIndexAssignmentExpression(null, assign.Target, assign.Indexer, spilledArgs.ToImmutable(), spilledValue, assign.Type);
+            var value = assign.TargetExpression != null
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    assign.TargetExpression,
+                    assign.Indexer,
+                    spilledArgs.ToImmutable(),
+                    spilledValue,
+                    assign.Type,
+                    assign.ConstrainedReceiverTypeParameter,
+                    assign.ConstrainedInterfaceType)
+                : new BoundClrIndexAssignmentExpression(
+                    null,
+                    BoundNodeForm.VariableTarget(assign),
+                    assign.Indexer,
+                    spilledArgs.ToImmutable(),
+                    spilledValue,
+                    assign.Type,
+                    assign.ConstrainedReceiverTypeParameter,
+                    assign.ConstrainedInterfaceType);
             return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), value);
         }
 
@@ -1938,7 +2045,7 @@ public static class SpillSequenceSpiller
             return SpillOneOperand(
                 fieldAccess,
                 fieldAccess.Receiver,
-                recv => new BoundFieldAccessExpression(null, recv, fieldAccess.StructType, fieldAccess.Field, fieldAccess.NarrowedType));
+                recv => new BoundFieldAccessExpression(null, recv, BoundNodeForm.DeclaringType(fieldAccess), fieldAccess.Field, fieldAccess.NarrowedType));
         }
 
         private BoundSpillSequenceExpression SpillTupleLiteral(BoundTupleLiteralExpression tupleLiteral)
@@ -1964,21 +2071,18 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillInterpolatedString(BoundInterpolatedStringExpression interpolated)
         {
             var holeIndices = new List<int>();
+            var holeValues = ImmutableArray.CreateBuilder<BoundExpression>();
             for (var i = 0; i < interpolated.Parts.Length; i++)
             {
-                if (interpolated.Parts[i].IsHole)
+                var part = interpolated.Parts[i];
+                if (part.IsHole)
                 {
                     holeIndices.Add(i);
+                    holeValues.Add(part.Value);
                 }
             }
 
-            var holeExpressions = ImmutableArray.CreateBuilder<BoundExpression>(holeIndices.Count);
-            foreach (var i in holeIndices)
-            {
-                holeExpressions.Add(interpolated.Parts[i].Value);
-            }
-
-            var (locals, sideEffects, spilledHoles) = SpillArgumentList(holeExpressions.ToImmutable());
+            var (locals, sideEffects, spilledHoles) = SpillArgumentList(holeValues.ToImmutable());
             if (locals.Count == 0 && sideEffects.Count == 0)
             {
                 return Trivial(interpolated);
@@ -2059,7 +2163,11 @@ public static class SpillSequenceSpiller
                 var original = structLiteral.Initializers[i];
                 initializers.Add(original.Field != null
                     ? new BoundFieldInitializer(original.Field, spilledValues[i], original.FieldDeclaringType)
-                    : new BoundFieldInitializer(original.Property, spilledValues[i]));
+                    : new BoundFieldInitializer(
+                        Invariant.Required(
+                            original.Property,
+                            "a field initializer targets either a field or a property, and Field was null"),
+                        spilledValues[i]));
             }
 
             var value = new BoundStructLiteralExpression(null, structLiteral.StructType, initializers.ToImmutable());

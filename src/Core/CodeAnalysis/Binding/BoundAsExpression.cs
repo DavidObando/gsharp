@@ -17,7 +17,7 @@ public sealed class BoundAsExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="expression">The expression being cast.</param>
     /// <param name="targetType">The target type (already includes nullable wrapping if needed).</param>
-    public BoundAsExpression(SyntaxNode syntax, BoundExpression expression, TypeSymbol targetType)
+    public BoundAsExpression(SyntaxNode? syntax, BoundExpression expression, TypeSymbol targetType)
         : base(syntax)
     {
         Expression = expression;

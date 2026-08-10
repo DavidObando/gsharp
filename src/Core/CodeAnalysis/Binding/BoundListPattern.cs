@@ -16,7 +16,7 @@ public sealed class BoundListPattern : BoundPattern
     /// <param name="type">The discriminant type.</param>
     /// <param name="elements">The element patterns.</param>
     /// <param name="elementType">The element type.</param>
-    public BoundListPattern(SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundPattern> elements, TypeSymbol elementType)
+    public BoundListPattern(SyntaxNode? syntax, TypeSymbol type, ImmutableArray<BoundPattern> elements, TypeSymbol elementType)
         : base(syntax, type)
     {
         Elements = elements;

@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -153,7 +154,7 @@ internal sealed class ReflectionMetadataEmitter
     // callers and delegate bindings through the one-line forwarders below
     // (repointed in E-21).
     internal readonly FunctionEmitter functions;
-    private readonly IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources;
+    private readonly IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>? embeddedResources;
 
     // PR-E-3: the well-known BCL MemberRef/TypeRef fields
     // (notImplementedExceptionCtorRef, delegateCombineRef/RemoveRef,
@@ -596,7 +597,7 @@ internal sealed class ReflectionMetadataEmitter
         TypeSymbol nested,
         Dictionary<StructSymbol, ImmutableArray<TypeParameterSymbol>> originalOwnParams)
     {
-        List<ImmutableArray<TypeParameterSymbol>> levels = null;
+        List<ImmutableArray<TypeParameterSymbol>>? levels = null;
         var containingType = nested switch
         {
             StructSymbol s => s.ContainingType,
@@ -716,7 +717,7 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
-    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver references, string assemblyName, bool metadataOnly, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources)
+    private ReflectionMetadataEmitter(BoundProgram program, ReferenceResolver? references, string? assemblyName, bool metadataOnly, IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>? embeddedResources)
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
         this.embeddedResources = embeddedResources;
@@ -727,6 +728,13 @@ internal sealed class ReflectionMetadataEmitter
         this.userTokens = new UserTokenResolver(this);
         this.functions = new FunctionEmitter(this);
         this.slotPlanner = new SlotPlanner(this.emitCtx, this.cache, this.NeedsRvalueReceiverSpill);
+
+        // The dozen PR-E-* sub-emitters below form one dependency chain over
+        // the state above and nothing else -- no sub-emitter constructor reads
+        // an option the factory sets after construction. Wiring them here
+        // rather than at the top of EmitCore makes each field definitely
+        // assigned, which is what lets them stay non-nullable.
+        this.ResolveCoreTypesAndWireEmitters();
     }
 
     /// <summary>
@@ -794,17 +802,17 @@ internal sealed class ReflectionMetadataEmitter
     public static void Emit(
         BoundProgram program,
         Stream peStream,
-        ReferenceResolver references = null,
-        string assemblyName = null,
+        ReferenceResolver? references = null,
+        string? assemblyName = null,
         bool metadataOnly = false,
-        AsyncStateMachineRewriteResult asyncRewriteResult = null,
-        IteratorRewriteResult iteratorRewriteResult = null,
-        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null,
-        DebugInformationOptions debugInformation = null,
-        Stream pdbStream = null,
-        string assemblyVersion = null,
-        string targetFrameworkMoniker = null,
-        IReadOnlyList<(string Name, byte[] Data, bool IsPublic)> embeddedResources = null,
+        AsyncStateMachineRewriteResult? asyncRewriteResult = null,
+        IteratorRewriteResult? iteratorRewriteResult = null,
+        Lowering.Iterators.AsyncIteratorRewriteResult? asyncIteratorRewriteResult = null,
+        DebugInformationOptions? debugInformation = null,
+        Stream? pdbStream = null,
+        string? assemblyVersion = null,
+        string? targetFrameworkMoniker = null,
+        IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>? embeddedResources = null,
         bool optimize = true)
     {
         var emitter = new ReflectionMetadataEmitter(program, references, assemblyName, metadataOnly, embeddedResources);
@@ -875,24 +883,22 @@ internal sealed class ReflectionMetadataEmitter
     private readonly record struct PackageMethodPlan(
         ImmutableArray<PackageSymbol> Packages,
         Dictionary<PackageSymbol, List<FunctionSymbol>> FunctionsByPackage,
-        PackageSymbol EntryPointPackage,
+        PackageSymbol? EntryPointPackage,
         Dictionary<PackageSymbol, int> ConstructorRows,
         MethodDefinitionHandle EntryPointHandle);
 
     private readonly record struct DebugArtifacts(
-        BlobBuilder PdbBlob,
-        DebugDirectoryBuilder DebugDirectory,
-        bool PdbEnabled,
+        BlobBuilder? PdbBlob,
+        DebugDirectoryBuilder? DebugDirectory,
         bool IsEmbedded);
 
     private void EmitCore(
         Stream peStream,
-        AsyncStateMachineRewriteResult asyncRewriteResult = null,
-        IteratorRewriteResult iteratorRewriteResult = null,
-        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult = null)
+        AsyncStateMachineRewriteResult? asyncRewriteResult = null,
+        IteratorRewriteResult? iteratorRewriteResult = null,
+        Lowering.Iterators.AsyncIteratorRewriteResult? asyncIteratorRewriteResult = null)
     {
         this.InitializePortablePdb();
-        this.ResolveCoreTypesAndWireEmitters();
         this.RegisterRewriteResults(asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult);
 
         var lambdaLiterals = this.SynthesizeClosuresAndStateMachines();
@@ -962,33 +968,29 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    [MemberNotNull(
+        nameof(wellKnown),
+        nameof(customAttrEncoder),
+        nameof(assemblyAttrs),
+        nameof(interfaceImpls),
+        nameof(conversionEmitter),
+        nameof(dataStructSynth),
+        nameof(ctorBodies),
+        nameof(memberDefEmitter),
+        nameof(typeDefEmitter),
+        nameof(closures),
+        nameof(stateMachines),
+        nameof(methodBodyPlanner))]
     private void ResolveCoreTypesAndWireEmitters()
     {
-        // 1. Seed Object reference. Resolve from the supplied references so the type-ref
-        //    assembly identity (mscorlib / System.Runtime / netstandard) matches the
-        //    target framework rather than the gsc host's System.Private.CoreLib.
-        this.emitCtx.CoreObjectType = this.ResolveCoreType("System.Object", typeof(object));
-        this.emitCtx.CoreStringType = this.ResolveCoreType("System.String", typeof(string));
-        this.emitCtx.CoreInt32Type = this.ResolveCoreType("System.Int32", typeof(int));
-        this.emitCtx.CoreBooleanType = this.ResolveCoreType("System.Boolean", typeof(bool));
-        this.emitCtx.CoreArrayType = this.ResolveCoreType("System.Array", typeof(System.Array));
-        this.emitCtx.CoreValueType = this.ResolveCoreType("System.ValueType", typeof(System.ValueType));
-        this.emitCtx.CoreSystemType = this.ResolveCoreType("System.Type", typeof(System.Type));
-        this.emitCtx.CoreRuntimeTypeHandleType = this.ResolveCoreType("System.RuntimeTypeHandle", typeof(System.RuntimeTypeHandle));
-
         // Issue #2373: needed to materialise a runtime MethodInfo for a CLR
         // operator method (op_Equality, op_Addition, ...) passed as an
         // Expression factory argument (Expression.Equal(l, r, liftToNull,
         // method), Expression.Add(l, r, method), ...) — see
         // WellKnownReferences.GetMethodFromHandleReference /
         // GetMethodFromHandleWithDeclaringTypeReference.
-        this.emitCtx.CoreRuntimeMethodHandleType = this.ResolveCoreType("System.RuntimeMethodHandle", typeof(System.RuntimeMethodHandle));
-        this.emitCtx.CoreMethodBaseType = this.ResolveCoreType("System.Reflection.MethodBase", typeof(System.Reflection.MethodBase));
-        this.emitCtx.CoreEnumType = this.ResolveCoreType("System.Enum", typeof(System.Enum));
         // ADR-0059 / issue #255: cache the base type and `IntPtr` parameter
         // type for user-declared named delegate emission.
-        this.emitCtx.CoreMulticastDelegateType = this.ResolveCoreType("System.MulticastDelegate", typeof(System.MulticastDelegate));
-        this.emitCtx.CoreIntPtrType = this.ResolveCoreType("System.IntPtr", typeof(nint));
 
         // PR-E-3: WellKnownReferences depends on EmitContext.Core* and on the
         // dedup-cached GetTypeReference / GetMethodReference resolvers that
@@ -1182,9 +1184,9 @@ internal sealed class ReflectionMetadataEmitter
     }
 
     private void RegisterRewriteResults(
-        AsyncStateMachineRewriteResult asyncRewriteResult,
-        IteratorRewriteResult iteratorRewriteResult,
-        Lowering.Iterators.AsyncIteratorRewriteResult asyncIteratorRewriteResult)
+        AsyncStateMachineRewriteResult? asyncRewriteResult,
+        IteratorRewriteResult? iteratorRewriteResult,
+        Lowering.Iterators.AsyncIteratorRewriteResult? asyncIteratorRewriteResult)
     {
         if (asyncRewriteResult != null)
         {
@@ -1230,7 +1232,16 @@ internal sealed class ReflectionMetadataEmitter
             ?? this.emitCtx.Program.EntryPointPackage
             ?? (this.emitCtx.Program.Packages.IsDefaultOrEmpty ? null : this.emitCtx.Program.Packages[0]);
 
-        this.closures.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+        // A program with no package at all has no syntax tree either -- the
+        // binder puts every tree in one, defaulting to "Default" -- so it
+        // declares no literal, go statement or iterator for the synthesis
+        // steps to host, and each was already a no-op for it. Guarding here
+        // keeps that case working rather than asserting a host package that
+        // cannot exist.
+        if (hostPackageGuess != null)
+        {
+            this.closures.SynthesizeClosures(lambdaLiterals, hostPackageGuess);
+        }
 
         // Lower non-capturing literals once so iterator plans and emitted bodies
         // share the same synthesized local symbols.
@@ -1248,10 +1259,13 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         this.RetargetIteratorPlans(lambdaLiterals);
-        this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess);
-        this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess);
-        this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
-        this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
+        if (hostPackageGuess != null)
+        {
+            this.closures.SynthesizeGoClosures(goStatements, hostPackageGuess);
+            this.stateMachines.SynthesizeIteratorStateMachines(hostPackageGuess);
+            this.stateMachines.SynthesizeAsyncIteratorStateMachines(hostPackageGuess);
+            this.stateMachines.SynthesizeAsyncLambdaStateMachines(lambdaLiterals, hostPackageGuess);
+        }
 
         return lambdaLiterals;
     }
@@ -1462,7 +1476,7 @@ internal sealed class ReflectionMetadataEmitter
             _ => false,
         };
 
-        static TypeSymbol ContainingOf(TypeSymbol t) => t switch
+        static TypeSymbol? ContainingOf(TypeSymbol t) => t switch
         {
             StructSymbol ss => ss.ContainingType,
             EnumSymbol es => es.ContainingType,
@@ -2707,7 +2721,7 @@ internal sealed class ReflectionMetadataEmitter
             // resolves against a declared interface.
             if (!c.Methods.IsDefaultOrEmpty)
             {
-                System.Collections.Generic.HashSet<System.Type> bridgeInterfaces = null;
+                System.Collections.Generic.HashSet<System.Type>? bridgeInterfaces = null;
                 foreach (var method in c.Methods)
                 {
                     var declaringIface = method.ExplicitInterfaceSlot?.DeclaringType;
@@ -3032,7 +3046,8 @@ internal sealed class ReflectionMetadataEmitter
                 // ADR-0092 / issue #758: a LibraryImport function emits TWO
                 // MethodDef rows — the user-visible managed stub (handle above)
                 // and a hidden blittable inner P/Invoke that the stub calls.
-                if (fn.IsPInvoke && fn.PInvokeMetadata.IsLibraryImport)
+                if (fn.IsPInvoke
+                    && Invariant.Required(fn.PInvokeMetadata, "a P/Invoke function has P/Invoke metadata").IsLibraryImport)
                 {
                     this.cache.LibraryImportInnerHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
                 }
@@ -3845,7 +3860,7 @@ internal sealed class ReflectionMetadataEmitter
         // The enclosing handle is always a StructSymbol (class or struct).
         void AddUserNestedTypeRow(TypeSymbol nested, TypeDefinitionHandle nestedHandle)
         {
-            TypeSymbol containing = nested switch
+            TypeSymbol? containing = nested switch
             {
                 StructSymbol ss => ss.ContainingType,
                 EnumSymbol es => es.ContainingType,
@@ -3898,8 +3913,13 @@ internal sealed class ReflectionMetadataEmitter
                 continue;
             }
 
+            // A program with no packages at all resolves no state-machine
+            // package either; such a state machine nests in the default
+            // <Program>, which is the same fallback the lookup miss takes.
             var smPkg = this.methodBodyPlanner.GetSmPackage(c, packages, entryPointPackage);
-            var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
+            var enclosingHandle = smPkg != null && programTypeDefHandles.TryGetValue(smPkg, out var ph)
+                ? ph
+                : defaultProgramHandle;
             this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
         }
 
@@ -3918,7 +3938,9 @@ internal sealed class ReflectionMetadataEmitter
             else
             {
                 var smPkg = this.methodBodyPlanner.GetSmPackage(s, packages, entryPointPackage);
-                var enclosingHandle = programTypeDefHandles.TryGetValue(smPkg, out var ph) ? ph : defaultProgramHandle;
+                var enclosingHandle = smPkg != null && programTypeDefHandles.TryGetValue(smPkg, out var ph)
+                    ? ph
+                    : defaultProgramHandle;
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
             }
         }
@@ -3967,14 +3989,16 @@ internal sealed class ReflectionMetadataEmitter
         // (CodeView), SHA-256 checksum (PdbChecksum), and — when embedded —
         // the blob itself into the PE's DebugDirectory. PortablePdbEmitter
         // does not touch any stream here; we own sidecar / embedded routing.
-        BlobBuilder pdbBlob = null;
+        BlobBuilder? pdbBlob = null;
         BlobContentId pdbContentId = default;
-        byte[] pdbChecksum = null;
-        var pdbEnabled = this.emitCtx.Pdb != null;
-        if (pdbEnabled)
+        byte[]? pdbChecksum = null;
+        // Hold the emitter rather than a `pdbEnabled` bool: the serialize call
+        // below needs it, and the bool cannot carry that it is present.
+        var pdb = this.emitCtx.Pdb;
+        if (pdb != null)
         {
             var peRowCounts = this.emitCtx.Metadata.GetRowCounts();
-            (pdbBlob, pdbContentId) = this.emitCtx.Pdb.Serialize(
+            (pdbBlob, pdbContentId) = pdb.Serialize(
                 peRowCounts,
                 this.emitCtx.MetadataOnly ? default : entryHandle,
                 ComputeDeterministicContentId);
@@ -3987,9 +4011,9 @@ internal sealed class ReflectionMetadataEmitter
         // and — when embedded — an EmbeddedPortablePdb entry containing the
         // full PDB blob inline. Pass null to ManagedPEBuilder when PDB is off
         // so the legacy emit path stays bit-for-bit identical.
-        DebugDirectoryBuilder debugDirectory = null;
+        DebugDirectoryBuilder? debugDirectory = null;
         var isEmbedded = this.emitCtx.DebugInformation.Format == DebugInformationFormat.Embedded;
-        if (pdbEnabled)
+        if (pdbBlob != null)
         {
             debugDirectory = new DebugDirectoryBuilder();
 
@@ -4038,7 +4062,7 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        return new DebugArtifacts(pdbBlob, debugDirectory, pdbEnabled, isEmbedded);
+        return new DebugArtifacts(pdbBlob, debugDirectory, isEmbedded);
     }
 
     private void SerializePeAndWriteOutputs(
@@ -4049,7 +4073,6 @@ internal sealed class ReflectionMetadataEmitter
     {
         var pdbBlob = debugArtifacts.PdbBlob;
         var debugDirectory = debugArtifacts.DebugDirectory;
-        var pdbEnabled = debugArtifacts.PdbEnabled;
         var isEmbedded = debugArtifacts.IsEmbedded;
 
         // 9. Serialize PE deterministically: a SHA-256 of the serialized PE
@@ -4104,13 +4127,13 @@ internal sealed class ReflectionMetadataEmitter
         // sidecar — the blob already lives in the PE. Portable format writes
         // to the supplied stream when one was provided (callers that want
         // only an embedded PDB pass `pdbStream: null`).
-        if (pdbEnabled && !isEmbedded && this.emitCtx.PdbStream != null)
+        if (pdbBlob != null && !isEmbedded && this.emitCtx.PdbStream != null)
         {
             pdbBlob.WriteContentTo(this.emitCtx.PdbStream);
         }
     }
 
-    private BlobBuilder BuildManagedResources()
+    private BlobBuilder? BuildManagedResources()
     {
         if (this.emitCtx.MetadataOnly || this.embeddedResources == null || this.embeddedResources.Count == 0)
         {
@@ -4146,8 +4169,7 @@ internal sealed class ReflectionMetadataEmitter
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var blob in pdbBlob.GetBlobs())
         {
-            var bytes = blob.GetBytes();
-            sha.AppendData(bytes.Array, bytes.Offset, bytes.Count);
+            sha.AppendData(blob.GetBytes());
         }
 
         return sha.GetHashAndReset();
@@ -4163,8 +4185,7 @@ internal sealed class ReflectionMetadataEmitter
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var blob in content)
         {
-            var bytes = blob.GetBytes();
-            sha.AppendData(bytes.Array, bytes.Offset, bytes.Count);
+            sha.AppendData(blob.GetBytes());
         }
 
         return BlobContentId.FromHash(sha.GetHashAndReset());
@@ -4235,7 +4256,7 @@ internal sealed class ReflectionMetadataEmitter
         /// </summary>
         /// <param name="body">The bound body region contributing locals/labels.</param>
         /// <param name="function">The owning function, or <see langword="null"/> for synthesized bodies.</param>
-        public void Plan(BoundBlockStatement body, FunctionSymbol function = null)
+        public void Plan(BoundBlockStatement body, FunctionSymbol? function = null)
         {
             if (TryGetFixedReturnType(body, out var fixedReturnType))
             {
@@ -4272,9 +4293,9 @@ internal sealed class ReflectionMetadataEmitter
                 this.stackAllocResultSlots);
         }
 
-        private static bool TryGetFixedReturnType(BoundStatement statement, out TypeSymbol returnType)
+        private static bool TryGetFixedReturnType(BoundStatement statement, [NotNullWhen(true)] out TypeSymbol? returnType)
         {
-            TypeSymbol foundType = null;
+            TypeSymbol? foundType = null;
             var found = Find(statement, insideFixed: false);
             returnType = foundType;
             return found;
@@ -4348,11 +4369,11 @@ internal sealed class ReflectionMetadataEmitter
         /// <returns>A configured <see cref="MethodBodyEmitter"/>.</returns>
         public MethodBodyEmitter CreateEmitter(
             Dictionary<ParameterSymbol, int> parameters,
-            ParameterSymbol structThisParameter = null,
-            AsyncStateMachineFieldMap asyncFieldMap = null,
-            AsyncStateMachinePlan asyncPlan = null,
-            StateMachineEmitter.IteratorEmitContext iteratorEmitCtx = null,
-            ClosureEmitter.ClosureInfo enclosingClosure = null)
+            ParameterSymbol? structThisParameter = null,
+            AsyncStateMachineFieldMap? asyncFieldMap = null,
+            AsyncStateMachinePlan? asyncPlan = null,
+            StateMachineEmitter.IteratorEmitContext? iteratorEmitCtx = null,
+            ClosureEmitter.ClosureInfo? enclosingClosure = null)
         {
             return new MethodBodyEmitter(
                 this.outer,
@@ -4456,7 +4477,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private bool NeedsRvalueReceiverSpill(
         BoundExpression receiver,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         // A constrained type parameter needs an address even though its
@@ -4485,7 +4506,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private bool CanLoadVariableAddressForReceiverSpill(
         VariableSymbol variable,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         if (variable is ParameterSymbol ps
@@ -4526,7 +4547,7 @@ internal sealed class ReflectionMetadataEmitter
 
     private bool IsAddressableFieldAccessForReceiverSpill(
         BoundFieldAccessExpression fa,
-        FunctionSymbol function,
+        FunctionSymbol? function,
         IReadOnlyDictionary<VariableSymbol, int> locals)
     {
         if (fa.Receiver == null)
@@ -4639,7 +4660,7 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="name">The primary-ctor parameter (and target member) name.</param>
     /// <param name="field">The resolved backing field on success.</param>
     /// <returns><see langword="true"/> if a field or auto-property backing field was found.</returns>
-    internal static bool TryGetPrimaryCtorTargetField(StructSymbol type, string name, out FieldSymbol field)
+    internal static bool TryGetPrimaryCtorTargetField(StructSymbol type, string name, [NotNullWhen(true)] out FieldSymbol? field)
     {
         if (type.TryGetField(name, out field))
         {
@@ -4886,9 +4907,9 @@ internal sealed class ReflectionMetadataEmitter
     // UserTokenResolver can call it (ResolveUserInstanceMethodToken /
     // ResolveUserStaticMethodToken). Stays on the root — it is a shared
     // imported-method lookup, not user-token-cache state.
-    internal static MethodInfo FindImportedMethod(Type declaringType, FunctionSymbol method, BindingFlags bindingFlags)
+    internal static MethodInfo? FindImportedMethod(Type declaringType, FunctionSymbol method, BindingFlags bindingFlags)
     {
-        MethodInfo match = null;
+        MethodInfo? match = null;
         foreach (var candidate in declaringType.GetMethods(bindingFlags))
         {
             if (!string.Equals(candidate.Name, method.Name, StringComparison.Ordinal))
@@ -4919,7 +4940,8 @@ internal sealed class ReflectionMetadataEmitter
                     candidateType = candidateType.GetElementType();
                 }
 
-                if (methodType != null && !ClrTypeUtilities.AreSame(candidateType, methodType))
+                if (methodType != null
+                    && (candidateType is null || !ClrTypeUtilities.AreSame(candidateType, methodType)))
                 {
                     matches = false;
                     break;
@@ -4993,7 +5015,7 @@ internal sealed class ReflectionMetadataEmitter
     private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
         => TypeSymbol.RequiresSymbolicProjection(type);
 
-    private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, out TypeSymbol taskType)
+    private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, [NotNullWhen(true)] out TypeSymbol? taskType)
     {
         taskType = null;
         if (stateMachine?.ResultTypeSymbol == null
@@ -5139,8 +5161,13 @@ internal sealed class ReflectionMetadataEmitter
     // reflection-resolved (and, for a same-compilation argument, object-
     // erased) CLR type — instead of re-deriving an equivalent but separately
     // maintained predicate.
-    internal static bool ArgIsSymbolicUserDefined(TypeSymbol arg)
+    internal static bool ArgIsSymbolicUserDefined(TypeSymbol? arg)
     {
+        if (arg is null)
+        {
+            return false;
+        }
+
         // Issue #2876: an IMPORTED data type's semantic aggregate is also a
         // StructSymbol (see ImportedTypeSymbol.BuildSemanticAggregate, which
         // passes `clrType: type`), yet it is fully reflection-resolvable and
@@ -5246,7 +5273,7 @@ internal sealed class ReflectionMetadataEmitter
         {
         }
 
-        public int Compare(FunctionSymbol x, FunctionSymbol y)
+        public int Compare(FunctionSymbol? x, FunctionSymbol? y)
         {
             if (ReferenceEquals(x, y))
             {

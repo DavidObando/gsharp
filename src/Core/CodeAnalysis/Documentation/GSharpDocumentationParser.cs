@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Xml.Linq;
 
@@ -22,7 +23,7 @@ internal static class GSharpDocumentationParser
     /// </summary>
     /// <param name="blockText">The joined lines from the doc block (newline-separated).</param>
     /// <returns>The parsed documentation model, or <see langword="null"/>.</returns>
-    internal static DocumentationComment Parse(string blockText)
+    internal static DocumentationComment? Parse(string blockText)
     {
         if (string.IsNullOrWhiteSpace(blockText))
         {
@@ -112,7 +113,7 @@ internal static class GSharpDocumentationParser
     private static List<Section> SplitIntoSections(string[] lines)
     {
         var sections = new List<Section>();
-        string currentTag = null;
+        string? currentTag = null;
         var currentBody = new StringBuilder();
 
         foreach (var line in lines)
@@ -164,7 +165,7 @@ internal static class GSharpDocumentationParser
         return sections;
     }
 
-    private static bool TryExtractName(string body, out string name, out string remainder)
+    private static bool TryExtractName(string body, [NotNullWhen(true)] out string? name, out string remainder)
     {
         name = null;
         remainder = string.Empty;
@@ -496,13 +497,13 @@ internal static class GSharpDocumentationParser
 
     private readonly struct Section
     {
-        public Section(string tag, string body)
+        public Section(string? tag, string body)
         {
             Tag = tag;
             Body = body;
         }
 
-        public string Tag { get; }
+        public string? Tag { get; }
 
         public string Body { get; }
     }

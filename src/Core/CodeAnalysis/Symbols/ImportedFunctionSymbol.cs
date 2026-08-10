@@ -32,8 +32,8 @@ public sealed class ImportedFunctionSymbol : Symbol
         string name,
         ImportedClassSymbol importedClass,
         MethodInfo method,
-        ExpressionSyntax declaration,
-        TypeSymbol returnTypeOverride = null)
+        ExpressionSyntax? declaration,
+        TypeSymbol? returnTypeOverride = null)
         : base(name)
     {
         ImportedClass = importedClass;
@@ -58,7 +58,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <summary>
     /// Gets the declaration.
     /// </summary>
-    public ExpressionSyntax Declaration { get; }
+    public ExpressionSyntax? Declaration { get; }
 
     /// <summary>
     /// Gets the imported function type.
@@ -66,7 +66,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     public TypeSymbol Type { get; }
 
     /// <inheritdoc/>
-    public override DocumentationComment GetDocumentation()
+    public override DocumentationComment? GetDocumentation()
     {
         return AssemblyDocumentationProvider.Resolve(Method) ?? base.GetDocumentation();
     }
@@ -74,6 +74,6 @@ public sealed class ImportedFunctionSymbol : Symbol
     private TypeSymbol GetMethodType(MethodInfo method)
     {
         var returnType = ClrNullability.GetReturnTypeSymbol(method);
-        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass?.References);
+        return ImportedTypeSymbol.NormalizeSemanticAggregate(returnType, method.ReturnType, ImportedClass.References);
     }
 }

@@ -24,6 +24,9 @@ public sealed class TupleTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<string, TupleTypeSymbol> Cache = new();
 
     private TupleTypeSymbol(ImmutableArray<TypeSymbol> elementTypes)
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation element types.
         : base(BuildName(elementTypes), BuildClrType(elementTypes))
     {
         ElementTypes = elementTypes;
@@ -90,7 +93,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
             _ => throw new ArgumentOutOfRangeException(nameof(arity)),
         };
 
-    internal static Type BuildClrType(Type[] elementTypes)
+    internal static Type? BuildClrType(Type[] elementTypes)
         => BuildClrType(elementTypes, 0, elementTypes.Length);
 
     private static string BuildName(ImmutableArray<TypeSymbol> elementTypes)
@@ -110,7 +113,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
         return sb.ToString();
     }
 
-    private static Type BuildClrType(ImmutableArray<TypeSymbol> elementTypes)
+    private static Type? BuildClrType(ImmutableArray<TypeSymbol> elementTypes)
     {
         // Issues #2119/#2702: a symbolic constructed generic has a non-null but
         // object-erased ClrType. Keep the tuple symbolic so signature encoding
@@ -120,7 +123,9 @@ public sealed class TupleTypeSymbol : TypeSymbol
             return null;
         }
 
-        var clrTypes = elementTypes.Select(t => t.ClrType).ToArray();
+        var clrTypes = elementTypes
+            .Select(t => Invariant.Required(t.ClrType, "a CLR-backed tuple element has a CLR type"))
+            .ToArray();
         return BuildClrType(clrTypes);
     }
 

@@ -100,7 +100,9 @@ public static class IteratorMoveNextBodyBuilder
             new BoundBinaryExpression(
                 null,
                 FieldRead(stateField),
-                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                Invariant.Required(
+                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    "int32 equality operator exists for iterator state dispatch"),
                 new BoundLiteralExpression(null, 0)),
             jumpIfTrue: true));
 
@@ -123,7 +125,9 @@ public static class IteratorMoveNextBodyBuilder
                 new BoundBinaryExpression(
                     null,
                     FieldRead(stateField),
-                    BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                    Invariant.Required(
+                        BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                        "int32 equality operator exists for iterator state dispatch"),
                     new BoundLiteralExpression(null, kvp.Value)),
                 jumpIfTrue: true));
         }
@@ -219,28 +223,35 @@ public static class IteratorMoveNextBodyBuilder
                 }
 
                 // Build OR-chain: savedState == s1 || savedState == s2 || ...
-                BoundExpression condition = null;
-                foreach (var s in insideStates)
-                {
-                    var eq = new BoundBinaryExpression(
-                        null,
-                        new BoundVariableExpression(null, savedStateLocal),
+                // Seeded from the first state rather than from null, so the
+                // chain is non-null by construction -- insideStates is known
+                // non-empty from the guard above.
+                BoundExpression SavedStateIs(int state) => new BoundBinaryExpression(
+                    null,
+                    new BoundVariableExpression(null, savedStateLocal),
+                    Invariant.Required(
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
-                        new BoundLiteralExpression(null, s));
-                    condition = condition == null
-                        ? eq
-                        : new BoundBinaryExpression(
-                            null,
-                            condition,
+                        "int32 equality operator exists for iterator finally dispatch"),
+                    new BoundLiteralExpression(null, state));
+
+                var condition = SavedStateIs(insideStates[0]);
+                for (var i = 1; i < insideStates.Length; i++)
+                {
+                    condition = new BoundBinaryExpression(
+                        null,
+                        condition,
+                        Invariant.Required(
                             BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
-                            eq);
+                            "boolean disjunction operator exists for iterator state dispatch"),
+                        SavedStateIs(insideStates[i]));
                 }
 
                 // Rewrite the user's finally body so any references to
                 // hoisted locals resolve to fields on the state machine
                 // (Dispose has its own `this`, distinct from MoveNext's).
                 var disposeRewriter = new HoistedFieldRewriter(smClass, thisParameter, hoistedFieldMap);
-                var rewrittenFinally = disposeRewriter.RewriteStatement(tryStmt.FinallyBlock);
+                var rewrittenFinally = disposeRewriter.RewriteStatement(
+                    Invariant.Required(tryStmt.FinallyBlock, "a try statement with a lowered finally has a finally block"));
 
                 // try {} finally { … }
                 var emptyTryBody = new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
@@ -351,7 +362,9 @@ public static class IteratorMoveNextBodyBuilder
                         new BoundBinaryExpression(
                             null,
                             this.FieldRead(this.stateField),
-                            BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                            Invariant.Required(
+                                BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
+                                "int32 equality operator exists for iterator finally dispatch"),
                             new BoundLiteralExpression(null, entry.State)),
                         jumpIfTrue: true));
                 }
@@ -379,26 +392,33 @@ public static class IteratorMoveNextBodyBuilder
                 // rewriter is a safe pass-through here).
                 var rewrittenFinally = this.RewriteStatement(node.FinallyBlock);
 
-                BoundExpression suspendedAtOwnYield = null;
-                foreach (var s in statesInside)
-                {
-                    var eq = new BoundBinaryExpression(
-                        null,
-                        this.FieldRead(this.stateField),
+                // Seeded from the first state, as above: statesInside is known
+                // non-empty from the guard at the top of this method.
+                BoundExpression StateIs(int state) => new BoundBinaryExpression(
+                    null,
+                    this.FieldRead(this.stateField),
+                    Invariant.Required(
                         BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
-                        new BoundLiteralExpression(null, s));
-                    suspendedAtOwnYield = suspendedAtOwnYield == null
-                        ? eq
-                        : new BoundBinaryExpression(
-                            null,
-                            suspendedAtOwnYield,
+                        "int32 equality operator exists for iterator state dispatch"),
+                    new BoundLiteralExpression(null, state));
+
+                var suspendedAtOwnYield = StateIs(statesInside[0]);
+                for (var i = 1; i < statesInside.Length; i++)
+                {
+                    suspendedAtOwnYield = new BoundBinaryExpression(
+                        null,
+                        suspendedAtOwnYield,
+                        Invariant.Required(
                             BoundBinaryOperator.Bind(SyntaxKind.PipePipeToken, TypeSymbol.Bool, TypeSymbol.Bool),
-                            eq);
+                            "boolean disjunction operator exists for iterator state dispatch"),
+                        StateIs(statesInside[i]));
                 }
 
                 var notSuspended = new BoundUnaryExpression(
                     null,
-                    BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                    Invariant.Required(
+                        BoundUnaryOperator.Bind(SyntaxKind.BangToken, TypeSymbol.Bool),
+                        "the built-in operator table always binds `!` on bool"),
                     suspendedAtOwnYield);
 
                 var guardedFinally = new BoundIfStatement(null, notSuspended, AsBlock(rewrittenFinally), elseStatement: null);

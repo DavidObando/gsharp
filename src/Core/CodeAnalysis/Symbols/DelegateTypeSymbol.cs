@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -32,7 +33,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
 {
     private static readonly ConcurrentDictionary<(DelegateTypeSymbol Definition, TypeArgsKey ArgsKey), DelegateTypeSymbol> ConstructedCache = new();
 
-    private FunctionTypeSymbol equivalentFunctionType;
+    private FunctionTypeSymbol? equivalentFunctionType;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DelegateTypeSymbol"/> class.
@@ -98,7 +99,7 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// (issue #1503), or <see langword="null"/> when this symbol IS the
     /// definition (or is non-generic). Mirrors <see cref="StructSymbol.Definition"/>.
     /// </summary>
-    public DelegateTypeSymbol Definition { get; private set; }
+    public DelegateTypeSymbol? Definition { get; private set; }
 
     /// <summary>
     /// Gets a value indicating whether this symbol is the OPEN generic
@@ -179,7 +180,8 @@ public sealed class DelegateTypeSymbol : TypeSymbol
     /// <param name="definition">The generic definition to instantiate. Returned unchanged when not an open generic definition.</param>
     /// <param name="typeArguments">The type arguments. Length must match <see cref="TypeParameters"/>.</param>
     /// <returns>A constructed <see cref="DelegateTypeSymbol"/> whose <see cref="Definition"/> is the original.</returns>
-    public static DelegateTypeSymbol Construct(DelegateTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
+    [return: NotNullIfNotNull(nameof(definition))]
+    public static DelegateTypeSymbol? Construct(DelegateTypeSymbol? definition, ImmutableArray<TypeSymbol> typeArguments)
     {
         if (definition == null || !definition.IsGenericDefinition)
         {

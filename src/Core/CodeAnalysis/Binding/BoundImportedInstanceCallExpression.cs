@@ -5,6 +5,7 @@
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
@@ -53,15 +54,15 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// instance calls.
     /// </param>
     public BoundImportedInstanceCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression receiver,
         MethodInfo method,
         TypeSymbol returnType,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default,
-        ImmutableArray<TypeSymbol> typeArgumentSymbols = default,
-        TypeParameterSymbol constrainedReceiverTypeParameter = null,
-        TypeSymbol constrainedInterfaceType = null,
+        ImmutableArray<TypeSymbol?> typeArgumentSymbols = default,
+        TypeParameterSymbol? constrainedReceiverTypeParameter = null,
+        TypeSymbol? constrainedInterfaceType = null,
         bool isNonVirtualBaseCall = false)
         : base(syntax)
     {
@@ -107,7 +108,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// call site supplied a <c>[T1, T2]</c> list closing an imported generic
     /// method (issue #320). Default when there are no explicit type arguments.
     /// </summary>
-    public ImmutableArray<TypeSymbol> TypeArgumentSymbols { get; }
+    public ImmutableArray<TypeSymbol?> TypeArgumentSymbols { get; }
 
     /// <summary>
     /// Gets the type parameter the call is constrained through, when the
@@ -120,7 +121,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// value-type and reference-type substitutions. <c>null</c> for an ordinary
     /// imported instance call.
     /// </summary>
-    public TypeParameterSymbol ConstrainedReceiverTypeParameter { get; }
+    public TypeParameterSymbol? ConstrainedReceiverTypeParameter { get; }
 
     /// <summary>
     /// Gets the (possibly constructed-generic) interface type that parents the
@@ -128,9 +129,10 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// is set (issue #943) — e.g. <c>System.IComparable[T]</c>. <c>null</c> for an
     /// ordinary imported instance call.
     /// </summary>
-    public TypeSymbol ConstrainedInterfaceType { get; }
+    public TypeSymbol? ConstrainedInterfaceType { get; }
 
     /// <summary>Gets a value indicating whether this call dispatches through a type-parameter interface constraint (issue #943).</summary>
+    [MemberNotNullWhen(true, nameof(ConstrainedReceiverTypeParameter))]
     public bool IsConstrainedTypeParameterCall => ConstrainedReceiverTypeParameter != null;
 
     /// <summary>

@@ -21,7 +21,7 @@ public sealed class BoundArrayCreationExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="containerType">The array or slice type symbol.</param>
     /// <param name="elements">The bound element initialisers.</param>
-    public BoundArrayCreationExpression(SyntaxNode syntax, TypeSymbol containerType, ImmutableArray<BoundExpression> elements)
+    public BoundArrayCreationExpression(SyntaxNode? syntax, TypeSymbol containerType, ImmutableArray<BoundExpression> elements)
         : base(syntax)
     {
         ContainerType = containerType ?? throw new ArgumentNullException(nameof(containerType));
@@ -43,7 +43,7 @@ public sealed class BoundArrayCreationExpression : BoundExpression
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="containerType">The array or slice type symbol.</param>
     /// <param name="lengthExpression">The runtime length expression (int32).</param>
-    public BoundArrayCreationExpression(SyntaxNode syntax, TypeSymbol containerType, BoundExpression lengthExpression)
+    public BoundArrayCreationExpression(SyntaxNode? syntax, TypeSymbol containerType, BoundExpression lengthExpression)
         : base(syntax)
     {
         ContainerType = containerType ?? throw new ArgumentNullException(nameof(containerType));
@@ -74,7 +74,7 @@ public sealed class BoundArrayCreationExpression : BoundExpression
     /// (issue #1016 slicing), or <see langword="null"/> when the array is built
     /// from explicit <see cref="Elements"/> initialisers.
     /// </summary>
-    public BoundExpression LengthExpression { get; }
+    public BoundExpression? LengthExpression { get; }
 
     /// <summary>Gets the bound element initialisers.</summary>
     public ImmutableArray<BoundExpression> Elements { get; }

@@ -4,8 +4,10 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -102,7 +104,7 @@ public sealed class InterpolatedStringHandlerInfo
     /// </summary>
     /// <param name="type">The candidate parameter type (already by-ref peeled).</param>
     /// <returns><see langword="true"/> when the type is a handler.</returns>
-    public static bool IsHandlerType(System.Type type)
+    public static bool IsHandlerType(System.Type? type)
     {
         if (type == null)
         {
@@ -144,7 +146,7 @@ public sealed class InterpolatedStringHandlerInfo
     /// </summary>
     /// <param name="parameter">The handler-typed parameter.</param>
     /// <returns>The forwarded names in declaration order; <c>""</c> denotes the receiver.</returns>
-    public static ImmutableArray<string> ReadForwardedNames(ParameterInfo parameter)
+    public static ImmutableArray<string?> ReadForwardedNames(ParameterInfo parameter)
     {
         foreach (var attribute in parameter.GetCustomAttributesData())
         {
@@ -163,13 +165,13 @@ public sealed class InterpolatedStringHandlerInfo
             // The string overload: [InterpolatedStringHandlerArgument("name")].
             if (arg.Value is string single)
             {
-                return ImmutableArray.Create(single);
+                return ImmutableArray.Create<string?>(single);
             }
 
             // The params string[] overload: [InterpolatedStringHandlerArgument("a", "b")].
             if (arg.Value is IReadOnlyList<CustomAttributeTypedArgument> many)
             {
-                var builder = ImmutableArray.CreateBuilder<string>(many.Count);
+                var builder = ImmutableArray.CreateBuilder<string?>(many.Count);
                 foreach (var element in many)
                 {
                     builder.Add(element.Value as string);
@@ -179,7 +181,7 @@ public sealed class InterpolatedStringHandlerInfo
             }
         }
 
-        return ImmutableArray<string>.Empty;
+        return ImmutableArray<string?>.Empty;
     }
 
     /// <summary>
@@ -196,13 +198,13 @@ public sealed class InterpolatedStringHandlerInfo
     /// <param name="receiver">The instance receiver for the call, or <see langword="null"/>.</param>
     /// <param name="failure">A human-readable reason when the result is <see langword="null"/>.</param>
     /// <returns>The resolved handler info, or <see langword="null"/>.</returns>
-    public static InterpolatedStringHandlerInfo TryCreate(
+    public static InterpolatedStringHandlerInfo? TryCreate(
         System.Type handlerClrType,
         ParameterInfo parameter,
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
-        BoundExpression receiver,
-        out string failure)
+        BoundExpression? receiver,
+        out string? failure)
         => TryCreate(
             handlerClrType,
             parameter,
@@ -212,14 +214,14 @@ public sealed class InterpolatedStringHandlerInfo
             ImmutableArray<BoundInterpolatedStringPart>.Empty,
             out failure);
 
-    internal static InterpolatedStringHandlerInfo TryCreate(
+    internal static InterpolatedStringHandlerInfo? TryCreate(
         System.Type handlerClrType,
         ParameterInfo parameter,
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
-        BoundExpression receiver,
+        BoundExpression? receiver,
         ImmutableArray<BoundInterpolatedStringPart> parts,
-        out string failure)
+        out string? failure)
     {
         failure = null;
 
@@ -229,7 +231,12 @@ public sealed class InterpolatedStringHandlerInfo
         // attributes / constructors, and capture the RefKind so the call
         // emitter feeds the constructed handler local by-ref/in/out.
         var paramType = parameter.ParameterType;
-        var peeled = paramType.IsByRef ? paramType.GetElementType() : (handlerClrType ?? paramType);
+        var peeled = paramType.IsByRef ? paramType.GetElementType() : handlerClrType;
+        if (peeled == null)
+        {
+            failure = "the handler parameter has no element type";
+            return null;
+        }
 
         var names = ReadForwardedNames(parameter);
         var forwarded = ImmutableArray.CreateBuilder<BoundExpression>(names.Length);
@@ -306,7 +313,7 @@ public sealed class InterpolatedStringHandlerInfo
         System.Type handlerType,
         BoundInterpolatedStringPart part,
         TypeSymbol holeType,
-        out MethodInfo method,
+        [NotNullWhen(true)] out MethodInfo? method,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
         method = null;
@@ -372,7 +379,7 @@ public sealed class InterpolatedStringHandlerInfo
             var resolution = ClrOverloadResolution.Resolve<MethodInfo>(candidates, argumentTypes);
             if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
             {
-                method = resolution.Best;
+                method = Invariant.Required(resolution.Best, "a resolved CLR overload has a best method");
             }
             else if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
             {
@@ -421,7 +428,7 @@ public sealed class InterpolatedStringHandlerInfo
         return true;
     }
 
-    internal static bool TryResolveAppendLiteral(System.Type handlerType, out MethodInfo method)
+    internal static bool TryResolveAppendLiteral(System.Type handlerType, [NotNullWhen(true)] out MethodInfo? method)
     {
         method = handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .FirstOrDefault(candidate =>
@@ -446,7 +453,7 @@ public sealed class InterpolatedStringHandlerInfo
                 var parameterType = parameter.ParameterType.IsByRef
                     ? parameter.ParameterType.GetElementType()
                     : parameter.ParameterType;
-                if (parameterType.IsSameAs(typeof(int)))
+                if (parameterType is not null && parameterType.IsSameAs(typeof(int)))
                 {
                     return parameterType;
                 }
@@ -459,10 +466,10 @@ public sealed class InterpolatedStringHandlerInfo
     private static bool ValidateAppendMethods(
         System.Type handlerType,
         ImmutableArray<BoundInterpolatedStringPart> parts,
-        out string failure)
+        out string? failure)
     {
         failure = null;
-        if (parts.Any(part => part.IsLiteral && part.Literal.Length > 0)
+        if (parts.Any(part => part.IsLiteral && part.Literal is { Length: > 0 })
             && !TryResolveAppendLiteral(handlerType, out _))
         {
             failure = $"'{handlerType.Name}' has no AppendLiteral(string) method";
@@ -471,31 +478,35 @@ public sealed class InterpolatedStringHandlerInfo
 
         foreach (var part in parts)
         {
-            if (part.IsHole
-                && !TryResolveAppendFormatted(handlerType, part, part.Value.Type, out _, out _))
+            if (part.IsHole)
             {
-                var shape = part.Alignment.HasValue && part.Format != null
-                    ? "(value, int, string)"
-                    : part.Alignment.HasValue
-                        ? "(value, int)"
-                        : part.Format != null
-                            ? "(value, string)"
-                            : "(value)";
-                failure = $"'{handlerType.Name}' has no applicable AppendFormatted{shape} method";
-                return false;
+                var hole = part.Value;
+                if (hole == null
+                    || !TryResolveAppendFormatted(handlerType, part, hole.Type, out _, out _))
+                {
+                    var shape = part.Alignment.HasValue && part.Format != null
+                        ? "(value, int, string)"
+                        : part.Alignment.HasValue
+                            ? "(value, int)"
+                            : part.Format != null
+                                ? "(value, string)"
+                                : "(value)";
+                    failure = $"'{handlerType.Name}' has no applicable AppendFormatted{shape} method";
+                    return false;
+                }
             }
         }
 
         return true;
     }
 
-    private static ConstructorInfo SelectConstructor(
+    private static ConstructorInfo? SelectConstructor(
         System.Type handlerClrType,
         ImmutableArray<BoundExpression> forwardedArgs,
         out bool hasOutBool)
     {
         hasOutBool = false;
-        ConstructorInfo match = null;
+        ConstructorInfo? match = null;
         var matchOutBool = false;
 
         foreach (var ctor in handlerClrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
@@ -564,12 +575,12 @@ public sealed class InterpolatedStringHandlerInfo
         return match;
     }
 
-    private static bool IsInt32(System.Type t)
-        => string.Equals(t.FullName, "System.Int32", System.StringComparison.Ordinal);
+    private static bool IsInt32(System.Type? t)
+        => string.Equals(t?.FullName, "System.Int32", System.StringComparison.Ordinal);
 
-    private static bool IsBoolean(System.Type t)
+    private static bool IsBoolean(System.Type? t)
     {
-        if (t.IsByRef)
+        if (t?.IsByRef == true)
         {
             t = t.GetElementType();
         }

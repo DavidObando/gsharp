@@ -56,13 +56,13 @@ public sealed class BoundFixedStatement : BoundStatement
     /// <c>GetPinnableReference()</c> instance call. Null for the array/string forms.
     /// </param>
     public BoundFixedStatement(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         FixedPinKind pinKind,
         VariableSymbol pinnedVariable,
         VariableSymbol pointerVariable,
         BoundExpression pinnedSource,
         BoundStatement body,
-        VariableSymbol sourceVariable = null)
+        VariableSymbol? sourceVariable = null)
         : base(syntax)
     {
         PinKind = pinKind;
@@ -93,7 +93,7 @@ public sealed class BoundFixedStatement : BoundStatement
     /// <see cref="FixedPinKind.PinnableReference"/> form (whose address feeds the
     /// <c>GetPinnableReference()</c> instance call), or null for other forms.
     /// </summary>
-    public VariableSymbol SourceVariable { get; }
+    public VariableSymbol? SourceVariable { get; }
 
     /// <summary>Gets the block over which the pin is held.</summary>
     public BoundStatement Body { get; }

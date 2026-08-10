@@ -19,7 +19,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 public sealed class BoundIndirectCallExpression : BoundExpression
 {
     public BoundIndirectCallExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression target,
         FunctionTypeSymbol functionType,
         ImmutableArray<BoundExpression> arguments,

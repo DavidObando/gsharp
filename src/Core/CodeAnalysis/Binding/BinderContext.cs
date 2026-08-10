@@ -119,7 +119,7 @@ internal sealed class BinderContext
     private int cachedStaticImportImportCount = -1;
 
     private int cachedStaticImportStructCount = -1;
-    private SyntaxTree cachedStaticImportSyntaxTree;
+    private SyntaxTree? cachedStaticImportSyntaxTree;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
@@ -160,7 +160,7 @@ internal sealed class BinderContext
     public bool InUnsafeContext => UnsafeDepth > 0;
 
     /// <summary>Gets or sets the iterator return clause allowed to carry an unconstrained nullable sequence element.</summary>
-    public TypeClauseSyntax UnconstrainedNullableSequenceElementReturn { get; set; }
+    public TypeClauseSyntax? UnconstrainedNullableSequenceElementReturn { get; set; }
 
     /// <summary>
     /// Gets a value indicating whether the current <c>checked</c>/<c>unchecked</c>
@@ -190,8 +190,8 @@ internal sealed class BinderContext
     /// labeled <c>break</c> / <c>continue</c> resolve their target by
     /// scanning this stack for a matching label name.
     /// </summary>
-    public Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
-        = new Stack<(string LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
+    public Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)> LoopStack { get; }
+        = new Stack<(string? LabelName, BoundLabel BreakLabel, BoundLabel ContinueLabel)>();
 
     /// <summary>
     /// Gets the enclosing function's user-defined <c>goto</c> labels
@@ -260,7 +260,7 @@ internal sealed class BinderContext
     /// generic function body. Indexed by type-parameter name. <c>null</c> when
     /// no generic context is active.
     /// </summary>
-    public Dictionary<string, TypeParameterSymbol> CurrentTypeParameters { get; set; }
+    public Dictionary<string, TypeParameterSymbol>? CurrentTypeParameters { get; set; }
 
     /// <summary>
     /// Gets or sets the cached list of imported static <c>[Extension]</c>
@@ -268,7 +268,7 @@ internal sealed class BinderContext
     /// Recomputed when <see cref="CachedImportedExtensionImportCount"/> falls
     /// out of step with the current import count.
     /// </summary>
-    public List<Type> CachedImportedExtensionClasses { get; set; }
+    public List<Type>? CachedImportedExtensionClasses { get; set; }
 
     /// <summary>
     /// Gets or sets the import count snapshot for the entries cached in
@@ -277,7 +277,7 @@ internal sealed class BinderContext
     /// </summary>
     public int CachedImportedExtensionImportCount { get; set; } = -1;
 
-    public SyntaxTree CachedImportedExtensionSyntaxTree { get; set; }
+    public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
 
     /// <summary>
     /// Issue #1201: resolves the compilation's non-alias type imports
@@ -303,8 +303,8 @@ internal sealed class BinderContext
             return cached;
         }
 
-        ImmutableArray<StructSymbol>.Builder builder = null;
-        HashSet<StructSymbol> seen = null;
+        ImmutableArray<StructSymbol>.Builder? builder = null;
+        HashSet<StructSymbol>? seen = null;
         foreach (var imp in imports)
         {
             // A compiler-synthesized (implicit `import System`) import always
@@ -465,7 +465,7 @@ internal sealed class BinderContext
     /// <param name="builtin">The built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
     /// <param name="receiverType">The bound type of the receiver argument, when known.</param>
     /// <returns>The suggestion snippet (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>, <c>List[T].Add</c>), or <c>null</c> when no clean .NET-idiomatic alternative is documented.</returns>
-    public static string GetGoBuiltinSuggestion(string builtin, TypeSymbol receiverType)
+    public static string? GetGoBuiltinSuggestion(string builtin, TypeSymbol? receiverType)
     {
         switch (builtin)
         {

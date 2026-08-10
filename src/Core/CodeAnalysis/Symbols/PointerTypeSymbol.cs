@@ -25,7 +25,10 @@ public sealed class PointerTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<TypeSymbol, PointerTypeSymbol> Cache = new();
 
     private PointerTypeSymbol(TypeSymbol pointeeType)
-        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakePointerType())
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation pointee types.
+        : base($"*{pointeeType.Name}", pointeeType.ClrType?.MakePointerType()!)
     {
         PointeeType = pointeeType;
     }

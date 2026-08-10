@@ -41,7 +41,7 @@ internal static class ImportedClrMemberResolver
     /// <param name="token">The token under the cursor.</param>
     /// <param name="type">The resolved CLR type on success.</param>
     /// <returns>True when a CLR type was resolved.</returns>
-    public static bool TryResolveClrType(SyntaxTree tree, Compilation compilation, SyntaxToken token, out Type type)
+    public static bool TryResolveClrType(SyntaxTree tree, Compilation compilation, SyntaxToken token, out Type? type)
     {
         type = null;
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
@@ -64,7 +64,7 @@ internal static class ImportedClrMemberResolver
     /// <param name="token">The token under the cursor.</param>
     /// <param name="member">The resolved member on success.</param>
     /// <returns>True when a CLR member was resolved.</returns>
-    public static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo member)
+    public static bool TryResolveClrMember(SyntaxTree tree, Compilation compilation, SyntaxToken token, out MemberInfo? member)
     {
         member = null;
         if (token == null || token.Kind != SyntaxKind.IdentifierToken)
@@ -74,7 +74,8 @@ internal static class ImportedClrMemberResolver
 
         foreach (var context in FindAccessorMemberContexts(tree, token))
         {
-            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiverType, out var staticMembers))
+            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiverType, out var staticMembers)
+                || receiverType is null)
             {
                 continue;
             }
@@ -115,7 +116,7 @@ internal static class ImportedClrMemberResolver
         return false;
     }
 
-    private static bool TryResolveClrReceiver(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression, out Type receiverType, out bool staticMembers)
+    private static bool TryResolveClrReceiver(SyntaxTree tree, Compilation compilation, ExpressionSyntax expression, out Type? receiverType, out bool staticMembers)
     {
         receiverType = null;
         staticMembers = false;
@@ -154,12 +155,14 @@ internal static class ImportedClrMemberResolver
                 // for cursor on `c` requires the type of `a.b`. We resolve
                 // the left part's receiver first, then look up the member's
                 // type on it.
-                if (!TryGetAccessorMemberName(accessor.RightPart, out var intermediateName))
+                if (!TryGetAccessorMemberName(accessor.RightPart, out var intermediateName)
+                    || intermediateName is null)
                 {
                     return false;
                 }
 
-                if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var outerType, out var outerStatic))
+                if (!TryResolveClrReceiver(tree, compilation, accessor.LeftPart, out var outerType, out var outerStatic)
+                    || outerType is null)
                 {
                     return false;
                 }
@@ -174,7 +177,7 @@ internal static class ImportedClrMemberResolver
         }
     }
 
-    private static Type ResolveMemberReturnType(Type receiverType, string memberName, BindingFlags flags)
+    private static Type? ResolveMemberReturnType(Type receiverType, string memberName, BindingFlags flags)
     {
         if (receiverType == null)
         {
@@ -204,7 +207,7 @@ internal static class ImportedClrMemberResolver
         return method?.ReturnType;
     }
 
-    private static bool TryGetClrTypeFromSymbol(Symbol symbol, out Type clrType)
+    private static bool TryGetClrTypeFromSymbol(Symbol? symbol, out Type? clrType)
     {
         clrType = symbol switch
         {
@@ -223,7 +226,7 @@ internal static class ImportedClrMemberResolver
         return clrType != null;
     }
 
-    private static bool TryGetAccessorMemberName(ExpressionSyntax expression, out string memberName)
+    private static bool TryGetAccessorMemberName(ExpressionSyntax expression, out string? memberName)
     {
         memberName = expression switch
         {
@@ -246,7 +249,9 @@ internal static class ImportedClrMemberResolver
                      .Where(a => a.RightPart.Span.Start <= token.Span.Start && token.Span.End <= a.RightPart.Span.End)
                      .OrderBy(a => a.Span.Length))
         {
-            if (TryResolveAccessorMemberContext(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpression, out var memberName))
+            if (TryResolveAccessorMemberContext(tree, accessor.RightPart, accessor.LeftPart, token, out var receiverExpression, out var memberName)
+                && receiverExpression is not null
+                && memberName is not null)
             {
                 yield return (receiverExpression, memberName);
             }
@@ -258,8 +263,8 @@ internal static class ImportedClrMemberResolver
         ExpressionSyntax expression,
         ExpressionSyntax receiver,
         SyntaxToken token,
-        out ExpressionSyntax receiverExpression,
-        out string memberName)
+        out ExpressionSyntax? receiverExpression,
+        out string? memberName)
     {
         receiverExpression = null;
         memberName = null;

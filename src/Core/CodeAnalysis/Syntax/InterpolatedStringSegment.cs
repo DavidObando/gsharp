@@ -11,7 +11,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 public readonly struct InterpolatedStringSegment
 {
-    private InterpolatedStringSegment(string text, ExpressionSyntax expression, int? alignment, string format)
+    private InterpolatedStringSegment(string? text, ExpressionSyntax? expression, int? alignment, string? format)
     {
         Text = text;
         Expression = expression;
@@ -23,10 +23,10 @@ public readonly struct InterpolatedStringSegment
     public bool IsExpression => Expression != null;
 
     /// <summary>Gets the literal text, or <c>null</c> when this segment is an expression.</summary>
-    public string Text { get; }
+    public string? Text { get; }
 
     /// <summary>Gets the embedded expression, or <c>null</c> when this segment is literal text.</summary>
-    public ExpressionSyntax Expression { get; }
+    public ExpressionSyntax? Expression { get; }
 
     /// <summary>
     /// Gets the optional constant alignment from a <c>${expr,alignment}</c> hole
@@ -40,7 +40,7 @@ public readonly struct InterpolatedStringSegment
     /// (ADR-0055), verbatim and without the leading colon. <c>null</c> when no
     /// format clause was present.
     /// </summary>
-    public string Format { get; }
+    public string? Format { get; }
 
     /// <summary>Creates a literal-text segment.</summary>
     /// <param name="text">The literal text.</param>
@@ -52,5 +52,5 @@ public readonly struct InterpolatedStringSegment
     /// <param name="alignment">The optional constant alignment.</param>
     /// <param name="format">The optional format specifier (without the leading colon).</param>
     /// <returns>The segment.</returns>
-    public static InterpolatedStringSegment FromExpression(ExpressionSyntax expression, int? alignment = null, string format = null) => new(text: null, expression, alignment, format);
+    public static InterpolatedStringSegment FromExpression(ExpressionSyntax expression, int? alignment = null, string? format = null) => new(text: null, expression, alignment, format);
 }

@@ -16,15 +16,15 @@ public sealed class SwitchCaseSyntax : SyntaxNode
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="keyword">The <c>case</c> or <c>default</c> keyword.</param>
     /// <param name="value">The case value pattern (null for <c>default</c>).</param>
-    /// <param name="whenKeyword">The optional <c>when</c> contextual keyword introducing a guard, or null.</param>
+    /// <param name="whenKeyword">The optional <c>when</c> contextual keyword introducing a? guard, or null.</param>
     /// <param name="guard">The optional boolean guard expression following <c>when</c>, or null.</param>
     /// <param name="body">The case body block.</param>
     public SwitchCaseSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
-        PatternSyntax value,
-        SyntaxToken whenKeyword,
-        ExpressionSyntax guard,
+        PatternSyntax? value,
+        SyntaxToken? whenKeyword,
+        ExpressionSyntax? guard,
         BlockStatementSyntax body)
         : base(syntaxTree)
     {
@@ -46,17 +46,17 @@ public sealed class SwitchCaseSyntax : SyntaxNode
     /// <summary>
     /// Gets the case value pattern, or null when this arm is <c>default</c>.
     /// </summary>
-    public PatternSyntax Value { get; }
+    public PatternSyntax? Value { get; }
 
     /// <summary>
-    /// Gets the optional <c>when</c> contextual keyword token introducing a guard, or null when the arm has no guard.
+    /// Gets the optional <c>when</c> contextual keyword token introducing a? guard, or null when the arm has no guard.
     /// </summary>
-    public SyntaxToken WhenKeyword { get; }
+    public SyntaxToken? WhenKeyword { get; }
 
     /// <summary>
     /// Gets the optional boolean guard expression following <c>when</c>, or null when the arm has no guard.
     /// </summary>
-    public ExpressionSyntax Guard { get; }
+    public ExpressionSyntax? Guard { get; }
 
     /// <summary>
     /// Gets the case body block.

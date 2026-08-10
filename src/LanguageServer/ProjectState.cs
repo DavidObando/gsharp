@@ -32,13 +32,13 @@ public class ProjectState
     // diagnostics); the infrastructure lands now without user-visible effect.
     private readonly Core.CodeAnalysis.Binding.BoundBodyCache bodyCache = new();
 
-    private Compilation compilation;
+    private Compilation? compilation;
     private bool isDirty = true;
     private IReadOnlyList<string> references = Array.Empty<string>();
-    private string referenceSourcePath;
+    private string? referenceSourcePath;
     private DateTime referenceSourceMtimeUtc = DateTime.MinValue;
-    private ReferenceResolver cachedResolver;
-    private IReadOnlyList<string> resolverReferences;
+    private ReferenceResolver? cachedResolver;
+    private IReadOnlyList<string>? resolverReferences;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ProjectState"/> class.
@@ -47,7 +47,7 @@ public class ProjectState
     public ProjectState(string projectFilePath)
     {
         ProjectFilePath = projectFilePath ?? throw new ArgumentNullException(nameof(projectFilePath));
-        ProjectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectFilePath));
+        ProjectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectFilePath)) ?? string.Empty;
     }
 
     /// <summary>
@@ -69,7 +69,7 @@ public class ProjectState
     /// out of a <c>.gsproj</c>. Cross-project Go-to-Definition consults this
     /// via <see cref="WorkspaceState.TryGetProjectByOutputAssembly"/>.
     /// </summary>
-    public string AssemblyName { get; set; }
+    public string? AssemblyName { get; set; }
 
     /// <summary>
     /// Gets or sets the project's effective <c>RootNamespace</c> (ADR-0142,
@@ -78,7 +78,7 @@ public class ProjectState
     /// MSBuild). Used as the base namespace when the language server regenerates
     /// a <c>.resx</c>'s codebehind class on save.
     /// </summary>
-    public string RootNamespace { get; set; }
+    public string? RootNamespace { get; set; }
 
     /// <summary>
     /// Gets or sets the project's target framework moniker (e.g. <c>net10.0</c>),
@@ -87,7 +87,7 @@ public class ProjectState
     /// <c>&lt;project&gt; (&lt;tfm&gt;)</c> node. May be <c>null</c> or empty when the
     /// project was constructed without discovery or declares no target framework.
     /// </summary>
-    public string TargetFramework { get; set; }
+    public string? TargetFramework { get; set; }
 
     /// <summary>
     /// Gets the set of source file paths currently in this project.
@@ -131,7 +131,7 @@ public class ProjectState
     /// <see cref="GetCompilation"/> call so that a fresh build invalidates the
     /// cached <see cref="ReferenceResolver"/> automatically.
     /// </summary>
-    public string ReferenceSourcePath
+    public string? ReferenceSourcePath
     {
         get => referenceSourcePath;
         set
@@ -177,7 +177,7 @@ public class ProjectState
     /// </summary>
     /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
     /// <returns>The parsed <see cref="SyntaxTree"/>, or null if the file could not be read.</returns>
-    public SyntaxTree AddFileFromDisk(string filePath)
+    public SyntaxTree? AddFileFromDisk(string filePath)
     {
         try
         {
@@ -227,7 +227,7 @@ public class ProjectState
     /// <param name="filePath">Absolute path to the <c>.gs</c> file.</param>
     /// <param name="tree">The syntax tree if found.</param>
     /// <returns>True if the file exists in the project.</returns>
-    public bool TryGetSyntaxTree(string filePath, out SyntaxTree tree)
+    public bool TryGetSyntaxTree(string filePath, out SyntaxTree? tree)
     {
         return syntaxTrees.TryGetValue(NormalizePath(filePath), out tree);
     }
@@ -328,7 +328,9 @@ public class ProjectState
             bool replaced = false;
             for (int i = 0; i < trees.Length; i++)
             {
-                if (string.Equals(NormalizePath(trees[i].Text?.FileName), key, StringComparison.Ordinal))
+                var treePath = trees[i].Text?.FileName;
+                if (!string.IsNullOrEmpty(treePath)
+                    && string.Equals(NormalizePath(treePath), key, StringComparison.Ordinal))
                 {
                     trees[i] = snapshotTree;
                     replaced = true;
@@ -364,7 +366,7 @@ public class ProjectState
     /// <param name="trees">The current set of syntax trees.</param>
     /// <param name="resolver">The current reference resolver (may be null).</param>
     /// <returns>An incrementally-built compilation, or <see langword="null"/> to fall back.</returns>
-    private Compilation TryBuildIncrementalCompilation_NoLock(SyntaxTree[] trees, ReferenceResolver resolver)
+    private Compilation? TryBuildIncrementalCompilation_NoLock(SyntaxTree[] trees, ReferenceResolver? resolver)
     {
         var previous = compilation;
         if (previous == null || trees.Length == 0)
@@ -400,8 +402,8 @@ public class ProjectState
             previousByPath[NormalizePath(name)] = tree;
         }
 
-        SyntaxTree changedPrevious = null;
-        SyntaxTree changedUpdated = null;
+        SyntaxTree? changedPrevious = null;
+        SyntaxTree? changedUpdated = null;
         foreach (var tree in trees)
         {
             var name = tree.Text?.FileName;
@@ -425,7 +427,7 @@ public class ProjectState
             changedUpdated = tree;
         }
 
-        if (changedUpdated == null)
+        if (changedPrevious == null || changedUpdated == null)
         {
             // Nothing actually changed (should not happen when dirty), but if so
             // there is nothing to rebind — let the caller reuse normally.
@@ -489,7 +491,7 @@ public class ProjectState
         }
     }
 
-    private ReferenceResolver GetOrBuildResolver_NoLock()
+    private ReferenceResolver? GetOrBuildResolver_NoLock()
     {
         var effectiveReferences = references;
         if (effectiveReferences.Count == 0)
@@ -501,7 +503,7 @@ public class ProjectState
             // re-validates every DLL (exists + size:mtime) before returning; any
             // missing/changed reference falls back to today's empty/degraded
             // behavior (over-invalidation is always safe).
-            var bootstrapped = ColdStartCache.TryBootstrapReferences(ProjectFilePath, AssemblyName);
+            var bootstrapped = ColdStartCache.TryBootstrapReferences(ProjectFilePath, AssemblyName ?? string.Empty);
             if (bootstrapped != null && bootstrapped.Count > 0)
             {
                 effectiveReferences = bootstrapped;
@@ -539,7 +541,7 @@ public class ProjectState
     // + versions), so a cache written from a bootstrapped reference set is itself
     // reusable. Every step is best-effort — a cache error must never disturb the
     // LSP, so the resolver simply falls back to its eager type-name index.
-    private void WarmOrSeedColdStartCache_NoLock(ReferenceResolver resolver, IReadOnlyList<string> effectiveReferences)
+    private void WarmOrSeedColdStartCache_NoLock(ReferenceResolver? resolver, IReadOnlyList<string> effectiveReferences)
     {
         if (resolver == null || ColdStartCache.Disabled)
         {
@@ -552,7 +554,12 @@ public class ProjectState
             var targetFramework = ProjectDiscovery.ResolveTargetFramework(ProjectFilePath);
 
             var cached = ColdStartCache.TryLoad(
-                ProjectFilePath, AssemblyName, effectiveReferences, referenceSourcePath, sourceFingerprint, targetFramework);
+                ProjectFilePath,
+                AssemblyName ?? string.Empty,
+                effectiveReferences,
+                referenceSourcePath ?? string.Empty,
+                sourceFingerprint,
+                TargetFramework ?? string.Empty);
             if (cached != null && resolver.TryUseMetadataIndex(cached))
             {
                 return;
@@ -561,7 +568,13 @@ public class ProjectState
             var fresh = resolver.ExportMetadataIndex();
             resolver.TryUseMetadataIndex(fresh);
             ColdStartCache.Save(
-                ProjectFilePath, AssemblyName, effectiveReferences, referenceSourcePath, sourceFingerprint, targetFramework, fresh);
+                ProjectFilePath,
+                AssemblyName ?? string.Empty,
+                effectiveReferences,
+                referenceSourcePath,
+                sourceFingerprint,
+                TargetFramework,
+                fresh);
         }
         catch (Exception)
         {
@@ -618,7 +631,7 @@ public class ProjectState
         }
     }
 
-    private static bool ReferenceListsEqual(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    private static bool ReferenceListsEqual(IReadOnlyList<string>? a, IReadOnlyList<string>? b)
     {
         if (ReferenceEquals(a, b))
         {

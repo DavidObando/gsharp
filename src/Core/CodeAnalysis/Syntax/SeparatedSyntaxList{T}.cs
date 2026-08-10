@@ -46,7 +46,7 @@ public class SeparatedSyntaxList<T> : SeparatedSyntaxList, IEnumerable<T>
     /// </summary>
     /// <param name="index">The index of the separator.</param>
     /// <returns>The syntax token representing the separator.</returns>
-    public SyntaxToken GetSeparator(int index)
+    public SyntaxToken? GetSeparator(int index)
     {
         if (index == Count - 1)
         {

@@ -53,7 +53,7 @@ public sealed class NullableTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="typeSymbol">The type symbol to resolve.</param>
     /// <returns>The CLR <see cref="Type"/> to use for overload resolution, or <see langword="null"/> if <paramref name="typeSymbol"/> is <see langword="null"/>.</returns>
-    public static Type GetEffectiveClrType(TypeSymbol typeSymbol)
+    public static Type? GetEffectiveClrType(TypeSymbol? typeSymbol)
         => NullableLifting.GetEffectiveClrType(typeSymbol);
 
     /// <summary>

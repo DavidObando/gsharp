@@ -34,76 +34,76 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
     /// <summary>Gets or sets the full path to gsc.dll.</summary>
     [Required]
-    public string GsharpCompilerFullPath { get; set; }
+    public string? GsharpCompilerFullPath { get; set; }
 
     /// <summary>Gets or sets the directory where the final assembly is written.</summary>
     [Required]
-    public string OutputPath { get; set; }
+    public string? OutputPath { get; set; }
 
     /// <summary>Gets or sets the base name (without extension) of the output assembly.</summary>
     [Required]
-    public string OutputName { get; set; }
+    public string? OutputName { get; set; }
 
     /// <summary>Gets or sets the temporary output (obj) path.</summary>
     [Required]
-    public string TempOutputPath { get; set; }
+    public string? TempOutputPath { get; set; }
 
     /// <summary>Gets or sets the target framework moniker (e.g. net10.0).</summary>
     [Required]
-    public string TargetFramework { get; set; }
+    public string? TargetFramework { get; set; }
 
     /// <summary>Gets or sets the path of the response file to be written.</summary>
-    public string ResponseFilePath { get; set; }
+    public string? ResponseFilePath { get; set; }
 
     /// <summary>Gets or sets the project base directory, used to resolve relative source paths.</summary>
-    public string BasePath { get; set; }
+    public string? BasePath { get; set; }
 
     /// <summary>Gets or sets the optimization level (bool, level number, or "debug"/"release").</summary>
     public string Optimization { get; set; } = bool.TrueString;
 
     /// <summary>Gets or sets the requested debug type (full/portable/embedded/none).</summary>
-    public string DebugType { get; set; }
+    public string? DebugType { get; set; }
 
     /// <summary>Gets or sets the PDB output path.</summary>
-    public string PdbFile { get; set; }
+    public string? PdbFile { get; set; }
 
     /// <summary>Gets or sets the path to a Source Link JSON file (forwarded to <c>gsc /sourcelink:</c>).</summary>
-    public string SourceLink { get; set; }
+    public string? SourceLink { get; set; }
 
     /// <summary>
     /// Gets or sets a value (parsed as a bool) controlling whether all primary
     /// source files are embedded in the Portable PDB (forwarded as
     /// <c>gsc /embed</c>). Maps to MSBuild's <c>EmbedAllSources</c> property.
     /// </summary>
-    public string EmbedAllSources { get; set; }
+    public string? EmbedAllSources { get; set; }
 
     /// <summary>
     /// Gets or sets a value (parsed as a bool) controlling deterministic emit
     /// (forwarded as <c>gsc /deterministic</c>). Maps to MSBuild's
     /// <c>Deterministic</c> property.
     /// </summary>
-    public string Deterministic { get; set; }
+    public string? Deterministic { get; set; }
 
     /// <summary>Gets or sets the assembly version stamped on the output.</summary>
-    public string Version { get; set; }
+    public string? Version { get; set; }
 
     /// <summary>Gets or sets the MSBuild OutputType (Exe / Library).</summary>
-    public string OutputType { get; set; }
+    public string? OutputType { get; set; }
 
     /// <summary>Gets or sets the path of the metadata-only reference assembly to write (refint).</summary>
-    public string RefAssembly { get; set; }
+    public string? RefAssembly { get; set; }
 
     /// <summary>Gets or sets the path of the XML documentation file to write.</summary>
-    public string DocumentationFile { get; set; }
+    public string? DocumentationFile { get; set; }
 
     /// <summary>Gets or sets the comma-separated list of diagnostic IDs to suppress (NoWarn MSBuild property).</summary>
-    public string NoWarn { get; set; }
+    public string? NoWarn { get; set; }
 
     /// <summary>Gets or sets a value indicating whether all warnings should be treated as errors (TreatWarningsAsErrors MSBuild property).</summary>
-    public string TreatWarningsAsErrors { get; set; }
+    public string? TreatWarningsAsErrors { get; set; }
 
     /// <summary>Gets or sets the comma-separated list of diagnostic IDs to promote to errors (WarningsAsErrors MSBuild property).</summary>
-    public string WarningsAsErrors { get; set; }
+    public string? WarningsAsErrors { get; set; }
 
     /// <summary>Gets or sets the Compile item group (the .gs sources).</summary>
     public ITaskItem[] Compile { get; set; } = Array.Empty<ITaskItem>();
@@ -115,10 +115,10 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     public ITaskItem[] Resources { get; set; } = Array.Empty<ITaskItem>();
 
     /// <summary>Gets or sets whether the task should return arguments without invoking gsc.</summary>
-    public string SkipCompilerExecution { get; set; }
+    public string? SkipCompilerExecution { get; set; }
 
     /// <summary>Gets or sets whether the task should expose the generated compiler arguments.</summary>
-    public string ProvideCommandLineArgs { get; set; }
+    public string? ProvideCommandLineArgs { get; set; }
 
     /// <summary>Gets the generated gsc command-line arguments for design-time builds.</summary>
     [Output]
@@ -136,24 +136,40 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             return false;
         }
 
-        var args = new List<string>
+        string gsharpCompilerFullPath = this.GsharpCompilerFullPath ?? string.Empty;
+        string outputPath = this.OutputPath ?? string.Empty;
+        string outputName = this.OutputName ?? string.Empty;
+        string tempOutputPath = this.TempOutputPath ?? string.Empty;
+        string targetFramework = this.TargetFramework ?? string.Empty;
+        if (string.IsNullOrEmpty(gsharpCompilerFullPath) ||
+            string.IsNullOrEmpty(outputPath) ||
+            string.IsNullOrEmpty(outputName) ||
+            string.IsNullOrEmpty(tempOutputPath) ||
+            string.IsNullOrEmpty(targetFramework))
         {
-            QuoteIfNeeded($"/out:{Path.Combine(this.OutputPath, this.OutputName)}.dll"),
-        };
-        if (!string.IsNullOrEmpty(this.OutputName))
-        {
-            args.Add(QuoteIfNeeded($"/assemblyname:{this.OutputName}"));
+            this.Log.LogError("BuildTask requires GsharpCompilerFullPath, OutputPath, OutputName, TempOutputPath, and TargetFramework.");
+            return false;
         }
 
-        if (!string.IsNullOrEmpty(this.OutputType))
+        var args = new List<string>
         {
-            var t = this.OutputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) ? "exe" : "library";
+            QuoteIfNeeded($"/out:{Path.Combine(outputPath, outputName)}.dll"),
+        };
+        if (!string.IsNullOrEmpty(outputName))
+        {
+            args.Add(QuoteIfNeeded($"/assemblyname:{outputName}"));
+        }
+
+        string? outputType = this.OutputType;
+        if (outputType != null && outputType.Length != 0)
+        {
+            var t = outputType.Equals("Exe", StringComparison.OrdinalIgnoreCase) ? "exe" : "library";
             args.Add($"/target:{t}");
         }
 
-        if (!string.IsNullOrEmpty(this.TargetFramework))
+        if (!string.IsNullOrEmpty(targetFramework))
         {
-            args.Add($"/targetframework:{this.TargetFramework}");
+            args.Add($"/targetframework:{targetFramework}");
         }
 
         args.Add(ParseBool(this.Optimization) ? "/optimize+" : "/optimize-");
@@ -271,11 +287,11 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
 
         if (!string.IsNullOrEmpty(this.ResponseFilePath))
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath) ?? ".");
             File.WriteAllLines(this.ResponseFilePath, args, Encoding.UTF8);
         }
 
-        var psi = new ProcessStartInfo("dotnet", $"\"{this.GsharpCompilerFullPath}\" @\"{this.ResponseFilePath}\"")
+        var psi = new ProcessStartInfo("dotnet", $"\"{gsharpCompilerFullPath}\" @\"{this.ResponseFilePath}\"")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -304,8 +320,8 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
             }
         });
 
-        string lastStdoutLine = null;
-        string lastStderrLine = null;
+        string? lastStdoutLine = null;
+        string? lastStderrLine = null;
         proc.OutputDataReceived += (_, e) =>
         {
             if (e.Data != null)
@@ -356,7 +372,7 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
         {
             var anchorFile = this.Compile?.Length > 0
                 ? this.Compile[0].ItemSpec
-                : (this.GsharpCompilerFullPath ?? "gsc");
+                : gsharpCompilerFullPath;
 
             var lastOutput = lastStderrLine ?? lastStdoutLine;
             var breadcrumb = string.IsNullOrWhiteSpace(lastOutput)
@@ -464,6 +480,6 @@ public class BuildTask : Microsoft.Build.Utilities.Task, ICancelableTask
     /// <c>"true"</c> / <c>"false"</c> spellings (case-insensitive) and treats
     /// empty / null / unrecognized values as <see langword="false"/>.
     /// </summary>
-    private static bool ParseBool(string value) =>
+    private static bool ParseBool(string? value) =>
         !string.IsNullOrEmpty(value) && bool.TryParse(value, out var b) && b;
 }

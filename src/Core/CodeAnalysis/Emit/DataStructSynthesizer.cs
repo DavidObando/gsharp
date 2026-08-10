@@ -924,9 +924,10 @@ internal sealed class DataStructSynthesizer
     /// </summary>
     /// <param name="structSym">The data class/struct symbol to check.</param>
     /// <returns><see langword="true"/> when the slot must be <c>final</c>.</returns>
-    public static bool IsDataObjectOverrideFinal(StructSymbol structSym)
+    public static bool IsDataObjectOverrideFinal(StructSymbol? structSym)
     {
-        return !structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy);
+        return structSym is not null
+            && (!structSym.IsClass || (!structSym.IsOpen && !structSym.IsSealedHierarchy));
     }
 
     /// <summary>
@@ -1375,7 +1376,9 @@ internal sealed class DataStructSynthesizer
         {
             for (int i = 0; i < members.Length; i++)
             {
-                var field = GetDeconstructionBackingField(members[i]);
+                var field = Invariant.Required(
+                    GetDeconstructionBackingField(members[i]),
+                    "a deconstruction member is either a field or an auto-property, and both carry a backing field");
                 var fieldHandle = this.resolveUserFieldToken(structSym, field);
                 il.LoadArgument(i + 1);
                 il.LoadArgument(0);
@@ -1444,7 +1447,7 @@ internal sealed class DataStructSynthesizer
         _ => TypeSymbol.Error,
     };
 
-    private static FieldSymbol GetDeconstructionBackingField(Symbol member) => member switch
+    private static FieldSymbol? GetDeconstructionBackingField(Symbol member) => member switch
     {
         FieldSymbol field => field,
         PropertySymbol property => property.BackingField,

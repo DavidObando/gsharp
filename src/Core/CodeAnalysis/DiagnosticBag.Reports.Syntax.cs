@@ -506,7 +506,7 @@ public sealed partial class DiagnosticBag
     /// <param name="location">The source location of the offending built-in identifier.</param>
     /// <param name="builtin">The triggering built-in name (e.g. <c>len</c>, <c>cap</c>, <c>append</c>, <c>delete</c>).</param>
     /// <param name="suggestion">A short alternative form to recommend (e.g. <c>.Length</c>, <c>.Count</c>, <c>.Remove(k)</c>), or <c>null</c> when there is no clean .NET-idiomatic replacement.</param>
-    public void ReportGoBuiltinRequiresImport(TextLocation location, string builtin, string suggestion)
+    public void ReportGoBuiltinRequiresImport(TextLocation location, string builtin, string? suggestion)
     {
         var suggestionText = suggestion is null
             ? string.Empty

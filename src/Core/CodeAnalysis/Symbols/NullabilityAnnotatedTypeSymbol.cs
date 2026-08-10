@@ -86,7 +86,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="targetClrType">The CLR element type to locate.</param>
     /// <returns>The nullified symbol for the first matching argument.</returns>
-    public TypeSymbol GetTypeArgumentSymbolForClrType(Type targetClrType)
+    public TypeSymbol GetTypeArgumentSymbolForClrType(Type? targetClrType)
     {
         if (targetClrType == null)
         {

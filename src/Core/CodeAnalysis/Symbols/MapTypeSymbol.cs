@@ -25,7 +25,10 @@ public sealed class MapTypeSymbol : TypeSymbol
     private static readonly ConcurrentDictionary<(TypeSymbol, TypeSymbol), MapTypeSymbol> Cache = new();
 
     private MapTypeSymbol(TypeSymbol keyType, TypeSymbol valueType)
-        : base($"map[{keyType.Name},{valueType.Name}]", MakeClrType(keyType, valueType))
+
+        // TypeSymbol's legacy CLR-type constructor accepts null for symbolic
+        // same-compilation key/value types.
+        : base($"map[{keyType.Name},{valueType.Name}]", MakeClrType(keyType, valueType)!)
     {
         KeyType = keyType;
         ValueType = valueType;
@@ -66,7 +69,7 @@ public sealed class MapTypeSymbol : TypeSymbol
     /// </summary>
     internal static void ClearCache() => Cache.Clear();
 
-    private static Type MakeClrType(TypeSymbol keyType, TypeSymbol valueType)
+    private static Type? MakeClrType(TypeSymbol keyType, TypeSymbol valueType)
     {
         if (keyType.ClrType == null || valueType.ClrType == null)
         {

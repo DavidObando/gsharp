@@ -13,10 +13,10 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
-    private SyntaxToken staticModifier;
-    private SyntaxToken explicitInterfaceOpenParenToken;
-    private TypeClauseSyntax explicitInterfaceType;
-    private SyntaxToken explicitInterfaceCloseParenToken;
+    private SyntaxToken? staticModifier;
+    private SyntaxToken? explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax? explicitInterfaceType;
+    private SyntaxToken? explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
@@ -33,15 +33,15 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <param name="closeBraceToken">The optional closing brace.</param>
     public PropertyDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken propKeyword,
         SyntaxToken identifier,
-        TypeClauseSyntax type,
-        SyntaxToken openBraceToken,
+        TypeClauseSyntax? type,
+        SyntaxToken? openBraceToken,
         ImmutableArray<PropertyAccessorSyntax> accessors,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
@@ -67,13 +67,13 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the optional <c>open</c> contextual keyword.</summary>
-    public SyntaxToken OpenModifier { get; }
+    public SyntaxToken? OpenModifier { get; }
 
     /// <summary>Gets the optional <c>override</c> contextual keyword.</summary>
-    public SyntaxToken OverrideModifier { get; }
+    public SyntaxToken? OverrideModifier { get; }
 
     /// <summary>
     /// Gets or sets the <c>shared</c> contextual keyword token when this property
@@ -81,7 +81,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>shared { … }</c> block (ADR-0089 / issue #1019), or
     /// <see langword="null"/> for an ordinary instance property.
     /// </summary>
-    public SyntaxToken StaticModifier
+    public SyntaxToken? StaticModifier
     {
         get => staticModifier;
         set
@@ -100,7 +100,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>prop (IFoo) this[...] T</c> (ADR-0149). Assigned by the parser; <see langword="null"/>
     /// for an ordinary property/indexer.
     /// </summary>
-    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    public SyntaxToken? ExplicitInterfaceOpenParenthesisToken
     {
         get => explicitInterfaceOpenParenToken;
         set
@@ -115,7 +115,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// clause (ADR-0149), e.g. the <c>IFoo</c> in <c>prop (IFoo) P T</c>. Assigned by the
     /// parser; <see langword="null"/> when no clause is present.
     /// </summary>
-    public TypeClauseSyntax ExplicitInterfaceType
+    public TypeClauseSyntax? ExplicitInterfaceType
     {
         get => explicitInterfaceType;
         set
@@ -126,7 +126,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     }
 
     /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
-    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    public SyntaxToken? ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
         set
@@ -149,31 +149,31 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// Gets the <c>this</c> contextual keyword token when this declaration is an
     /// indexer member (ADR-0118), or <see langword="null"/> for an ordinary property.
     /// </summary>
-    public SyntaxToken ThisKeyword { get; private set; }
+    public SyntaxToken? ThisKeyword { get; private set; }
 
     /// <summary>Gets the optional opening bracket token of an indexer parameter list (ADR-0118).</summary>
-    public SyntaxToken OpenBracketToken { get; private set; }
+    public SyntaxToken? OpenBracketToken { get; private set; }
 
     /// <summary>Gets the indexer parameter list (ADR-0118). Empty for an ordinary property.</summary>
     public SeparatedSyntaxList<ParameterSyntax> Parameters { get; private set; }
 
     /// <summary>Gets the optional closing bracket token of an indexer parameter list (ADR-0118).</summary>
-    public SyntaxToken CloseBracketToken { get; private set; }
+    public SyntaxToken? CloseBracketToken { get; private set; }
 
     /// <summary>Gets a value indicating whether this declaration is an indexer member (ADR-0118).</summary>
     public bool IsIndexer => ThisKeyword != null;
 
     /// <summary>Gets the property type.</summary>
-    public TypeClauseSyntax Type { get; }
+    public TypeClauseSyntax? Type { get; }
 
     /// <summary>Gets the optional opening brace token.</summary>
-    public SyntaxToken OpenBraceToken { get; }
+    public SyntaxToken? OpenBraceToken { get; }
 
     /// <summary>Gets the get/set accessor list.</summary>
     public ImmutableArray<PropertyAccessorSyntax> Accessors { get; }
 
     /// <summary>Gets the optional closing brace token.</summary>
-    public SyntaxToken CloseBraceToken { get; }
+    public SyntaxToken? CloseBraceToken { get; }
 
     /// <summary>Attaches the given annotation list to this property declaration and returns this same instance for fluent parser use.</summary>
     /// <param name="annotations">The annotation list to attach (may be empty).</param>
@@ -194,7 +194,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <param name="type">The interface type clause, or <see langword="null"/> when no clause is present.</param>
     /// <param name="closeParen">The close parenthesis token, or <see langword="null"/> when no clause is present.</param>
     /// <returns>This same <see cref="PropertyDeclarationSyntax"/>.</returns>
-    internal PropertyDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken openParen, TypeClauseSyntax type, SyntaxToken closeParen)
+    internal PropertyDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken? openParen, TypeClauseSyntax? type, SyntaxToken? closeParen)
     {
         if (type == null)
         {

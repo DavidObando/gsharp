@@ -20,7 +20,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundClrConstructorCallExpression : BoundExpression
 {
-    public BoundClrConstructorCallExpression(SyntaxNode syntax, System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType, ImmutableArray<RefKind> argumentRefKinds = default)
+    public BoundClrConstructorCallExpression(SyntaxNode? syntax, System.Type clrType, ConstructorInfo constructor, ImmutableArray<BoundExpression> arguments, TypeSymbol resultType, ImmutableArray<RefKind> argumentRefKinds = default)
         : base(syntax)
     {
         ClrType = clrType;

@@ -42,7 +42,7 @@ internal sealed partial class StatementBinder
         // not contribute to the merge — they remove themselves from the
         // post-switch dataflow.
         var hasAnyFallThroughArm = false;
-        Dictionary<AccessPath, TypeSymbol> mergedExitFrame = null;
+        Dictionary<AccessPath, TypeSymbol>? mergedExitFrame = null;
         var mergeFailed = false;
 
         foreach (var caseSyntax in syntax.Cases)
@@ -71,31 +71,36 @@ internal sealed partial class StatementBinder
             }
 
             scope = new BoundScope(scope);
-            var pattern = patterns.BindPattern(caseSyntax.Value, switchType);
+            var caseValue = Invariant.Required(caseSyntax.Value, "a non-default switch case has a pattern value");
+            var pattern = patterns.BindPattern(caseValue, switchType);
 
             // Issue #991: a guarded arm (`when <bool>`) can always fail at
             // runtime, so a guarded discard `case _ when …` does NOT act as a
             // default/total arm.
-            var hasGuard = caseSyntax.Guard != null;
+            var guardSyntax = caseSyntax.Guard;
+            var hasGuard = guardSyntax != null;
             if (pattern is BoundDiscardPattern && !hasGuard)
             {
                 if (hasDefault)
                 {
-                    Diagnostics.ReportDuplicateSwitchDefault(caseSyntax.Value.Location);
+                    Diagnostics.ReportDuplicateSwitchDefault(caseValue.Location);
                 }
 
                 hasDefault = true;
             }
 
             var frame = TryClassifyPatternNarrowing(discriminant, pattern);
-            BoundExpression guard = null;
+            BoundExpression? guard = null;
             if (hasGuard)
             {
-                guard = BindGuardExpressionWithNarrowing(caseSyntax.Guard, frame);
+                guard = BindGuardExpressionWithNarrowing(
+                    Invariant.Required(guardSyntax, "a guarded switch case has a guard expression"),
+                    frame);
             }
 
             var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
-            scope = scope.Parent;
+
+            scope = scope.Pop();
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
 
             // Issue #991: a guarded arm may not actually run even when its
@@ -240,12 +245,12 @@ internal sealed partial class StatementBinder
                 exceptionHandlerRegions.Pop();
             }
 
-            scope = scope.Parent;
+            scope = scope.Pop();
 
             catches.Add(new BoundCatchClause(catchType, variable, body));
         }
 
-        BoundStatement finallyBlock = null;
+        BoundStatement? finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
             exceptionHandlerRegions.Push(syntax.FinallyClause);
@@ -362,28 +367,30 @@ internal sealed partial class StatementBinder
         var usingLowering = BindUsingStatementInBlock(syntax);
         if (usingLowering.Cleanup == null)
         {
-            return usingLowering.ErrorStatement;
+            return Invariant.Required(usingLowering.ErrorStatement, "an invalid using lowering has an error statement");
         }
 
+        var cleanup = usingLowering.Cleanup;
+        var initialized = Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialization flag");
         var tryStmt = BuildCleanupTryStatement(
             ImmutableArray<BoundStatement>.Empty,
-            usingLowering.Cleanup,
-            usingLowering.Initialized);
+            cleanup,
+            initialized);
         return new BoundBlockStatement(
             syntax,
             ImmutableArray.Create<BoundStatement>(
-                usingLowering.InitializedDeclaration,
+                Invariant.Required(usingLowering.InitializedDeclaration, "a valid using lowering has an initialization declaration"),
                 usingLowering.Declaration,
-                BuildInitializedAssignment(usingLowering.Initialized),
+                BuildInitializedAssignment(initialized),
                 tryStmt));
     }
 
     private (
-        BoundVariableDeclaration InitializedDeclaration,
+        BoundVariableDeclaration? InitializedDeclaration,
         BoundVariableDeclaration Declaration,
-        VariableSymbol Initialized,
-        BoundExpression Cleanup,
-        BoundStatement ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
+        VariableSymbol? Initialized,
+        BoundExpression? Cleanup,
+        BoundStatement? ErrorStatement) BindUsingStatementInBlock(UsingStatementSyntax syntax)
     {
         var declaration = (BoundVariableDeclaration)BindVariableDeclaration(syntax.Declaration);
         var disposeCall = conversions.TryBuildDisposeCall(declaration.Variable, syntax.UsingKeyword.Location);
@@ -408,28 +415,31 @@ internal sealed partial class StatementBinder
         var awaitUsingLowering = BindAwaitUsingStatementInBlock(syntax);
         if (awaitUsingLowering.Cleanup == null)
         {
-            return awaitUsingLowering.ErrorStatement;
+            return Invariant.Required(awaitUsingLowering.ErrorStatement, "an invalid await using lowering has an error statement");
         }
 
+        var cleanup = awaitUsingLowering.Cleanup;
+        var initialized = Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialization flag");
+        var declaration = Invariant.Required(awaitUsingLowering.Declaration, "a valid await using lowering has a declaration");
         var tryStmt = BuildCleanupTryStatement(
             ImmutableArray<BoundStatement>.Empty,
-            awaitUsingLowering.Cleanup,
-            awaitUsingLowering.Initialized);
+            cleanup,
+            initialized);
         return new BoundBlockStatement(
             syntax,
             ImmutableArray.Create<BoundStatement>(
-                awaitUsingLowering.InitializedDeclaration,
-                awaitUsingLowering.Declaration,
-                BuildInitializedAssignment(awaitUsingLowering.Initialized),
+                Invariant.Required(awaitUsingLowering.InitializedDeclaration, "a valid await using lowering has an initialization declaration"),
+                declaration,
+                BuildInitializedAssignment(initialized),
                 tryStmt));
     }
 
     private (
-        BoundVariableDeclaration InitializedDeclaration,
-        BoundVariableDeclaration Declaration,
-        VariableSymbol Initialized,
-        BoundExpression Cleanup,
-        BoundStatement ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
+        BoundVariableDeclaration? InitializedDeclaration,
+        BoundVariableDeclaration? Declaration,
+        VariableSymbol? Initialized,
+        BoundExpression? Cleanup,
+        BoundStatement? ErrorStatement) BindAwaitUsingStatementInBlock(AwaitUsingStatementSyntax syntax)
     {
         // Gate: await using let requires an async context.
         if (function == null || !function.IsAsync)
@@ -461,7 +471,7 @@ internal sealed partial class StatementBinder
         var defer = BindDeferStatementInBlock(syntax);
         if (defer.Cleanup == null)
         {
-            return defer.ErrorStatement;
+            return Invariant.Required(defer.ErrorStatement, "an invalid defer lowering has an error statement");
         }
 
         var tryStmt = BuildCleanupTryStatement(ImmutableArray<BoundStatement>.Empty, defer.Cleanup);
@@ -471,7 +481,7 @@ internal sealed partial class StatementBinder
         return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
-    private (ImmutableArray<BoundStatement> PrefixStatements, BoundExpression Cleanup, BoundStatement ErrorStatement) BindDeferStatementInBlock(DeferStatementSyntax syntax)
+    private (ImmutableArray<BoundStatement> PrefixStatements, BoundExpression? Cleanup, BoundStatement? ErrorStatement) BindDeferStatementInBlock(DeferStatementSyntax syntax)
     {
         var expression = bindExpression(syntax.Expression, canBeVoid: true);
         if (expression is BoundErrorExpression)
@@ -705,61 +715,76 @@ internal sealed partial class StatementBinder
 
                 sawDefault = true;
                 var defaultBody = BindStatement(caseSyntax.Body);
-                bound.Add(new BoundSelectCase(SelectCaseKind.Default, channel: null, value: null, variable: null, defaultBody));
+                bound.Add(new BoundSelectCase(
+                    SelectCaseKind.Default,
+                    channel: null,
+                    value: null,
+                    variable: null,
+                    Invariant.Required(defaultBody, "a select case has a bound body")));
                 continue;
             }
 
             // All non-default arms reference a channel.
-            var channelExpr = bindExpression(caseSyntax.Channel);
-            ChannelTypeSymbol chan = channelExpr.Type as ChannelTypeSymbol;
+            var channelSyntax = Invariant.Required(caseSyntax.Channel, "a non-default select case has a channel");
+            var channelExpr = bindExpression(channelSyntax);
+            var chan = channelExpr.Type as ChannelTypeSymbol;
             if (channelExpr is BoundErrorExpression || chan == null)
             {
                 if (chan == null && channelExpr is not BoundErrorExpression)
                 {
                     if (caseSyntax.CaseKind == SelectCaseKind.Send)
                     {
-                        Diagnostics.ReportSendTargetIsNotChannel(caseSyntax.Channel.Location, channelExpr.Type);
+                        Diagnostics.ReportSendTargetIsNotChannel(channelSyntax.Location, channelExpr.Type);
                     }
                     else
                     {
-                        Diagnostics.ReportReceiveOperandIsNotChannel(caseSyntax.Channel.Location, channelExpr.Type);
+                        Diagnostics.ReportReceiveOperandIsNotChannel(channelSyntax.Location, channelExpr.Type);
                     }
                 }
 
                 // Best-effort recover: bind the body anyway so further
                 // diagnostics surface.
                 var recoveredBody = BindStatement(caseSyntax.Body);
-                bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, value: null, variable: null, recoveredBody));
+                bound.Add(new BoundSelectCase(
+                    caseSyntax.CaseKind,
+                    channelExpr,
+                    value: null,
+                    variable: null,
+                    Invariant.Required(recoveredBody, "a recovered select case has a bound body")));
                 continue;
             }
 
-            BoundExpression valueExpr = null;
-            VariableSymbol variable = null;
+            BoundExpression? valueExpr = null;
+            VariableSymbol? variable = null;
             BoundStatement body;
 
             if (caseSyntax.CaseKind == SelectCaseKind.Send)
             {
-                valueExpr = conversions.BindConversion(caseSyntax.Value, chan.ElementType);
-                body = BindStatement(caseSyntax.Body);
+                valueExpr = conversions.BindConversion(
+                    Invariant.Required(caseSyntax.Value, "send select cases have a value expression"),
+                    chan.ElementType);
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a send select case has a bound body");
             }
             else if (caseSyntax.CaseKind == SelectCaseKind.ReceiveBind)
             {
                 // Introduce a scope so the bound variable is visible only inside
                 // the case body — matches `for v := range` lexical hygiene.
                 scope = new BoundScope(scope);
-                variable = new LocalVariableSymbol(caseSyntax.Identifier.Text, isReadOnly: true, chan.ElementType, declaringSyntax: caseSyntax.Identifier);
+                var identifier = Invariant.Required(caseSyntax.Identifier, "a receive-bind select case has an identifier");
+                variable = new LocalVariableSymbol(identifier.Text, isReadOnly: true, chan.ElementType, declaringSyntax: identifier);
                 if (!scope.TryDeclareVariable(variable))
                 {
-                    Diagnostics.ReportSymbolAlreadyDeclared(caseSyntax.Identifier.Location, caseSyntax.Identifier.Text);
+                    Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, identifier.Text);
                 }
 
-                body = BindStatement(caseSyntax.Body);
-                scope = scope.Parent;
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-bind select case has a bound body");
+
+                scope = scope.Pop();
             }
             else
             {
                 // ReceiveDiscard
-                body = BindStatement(caseSyntax.Body);
+                body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-discard select case has a bound body");
             }
 
             bound.Add(new BoundSelectCase(caseSyntax.CaseKind, channelExpr, valueExpr, variable, body));
@@ -776,8 +801,9 @@ internal sealed partial class StatementBinder
         // future implicit binding (e.g. `ctx`) can be introduced without
         // leaking into the enclosing function.
         scope = new BoundScope(scope);
-        var body = BindStatement(syntax.Body);
-        scope = scope.Parent;
+        var body = Invariant.Required(BindStatement(syntax.Body), "a scope statement has a bound body");
+
+        scope = scope.Pop();
         return new BoundScopeStatement(syntax, body);
     }
 
@@ -847,7 +873,9 @@ internal sealed partial class StatementBinder
                 // (a `modreq(InAttribute)` ref-return); the method-reference
                 // encoder reproduces that modreq (see EncodeReturnClr).
                 pinKind = FixedPinKind.PinnableReference;
-                elementType = ResolvePinnableElementType(source.Type, pinnableElementClr);
+                elementType = ResolvePinnableElementType(
+                    source.Type,
+                    Invariant.Required(pinnableElementClr, "a successful pinnable lookup has an element type"));
                 pinnedUnderlying = ByRefTypeSymbol.Get(elementType);
             }
             else
@@ -859,7 +887,7 @@ internal sealed partial class StatementBinder
                     ? pointerType
                     : PointerTypeSymbol.Get(TypeSymbol.UInt8);
                 var errorPointer = bindLocalVariable(syntax.Identifier, isReadOnly: true, errorPointerType);
-                var errorBody = BindStatement(syntax.Body);
+                var errorBody = Invariant.Required(BindStatement(syntax.Body), "a fixed statement has a bound body");
                 return new BoundFixedStatement(
                     syntax,
                     FixedPinKind.Array,
@@ -901,20 +929,22 @@ internal sealed partial class StatementBinder
 
             // Span-like form only: a synthetic local holding the source value,
             // whose address (`ldloca`) feeds the `GetPinnableReference()` call.
-            VariableSymbol sourceVariable = null;
+            VariableSymbol? sourceVariable = null;
             if (pinKind == FixedPinKind.PinnableReference)
             {
                 sourceVariable = new LocalVariableSymbol(
-                    $"$pinsrc${pointerVariable.Name}", isReadOnly: false, source.Type);
+                    $"$pinsrc${pointerVariable.Name}",
+                    isReadOnly: false,
+                    Invariant.Required(source.Type, "a fixed source has a type"));
             }
 
-            var body = BindStatement(syntax.Body);
+            var body = Invariant.Required(BindStatement(syntax.Body), "a fixed statement has a bound body");
 
             return new BoundFixedStatement(syntax, pinKind, pinnedVariable, pointerVariable, source, body, sourceVariable);
         }
         finally
         {
-            scope = scope.Parent;
+            scope = scope.Pop();
         }
     }
 
@@ -952,8 +982,8 @@ internal sealed partial class StatementBinder
     // element CLR type (`T`). Used to enable the `GetPinnableReference` pin kind.
     private static bool TryGetPinnableReference(
         TypeSymbol sourceType,
-        out System.Reflection.MethodInfo method,
-        out System.Type elementClrType)
+        out System.Reflection.MethodInfo? method,
+        out System.Type? elementClrType)
     {
         method = null;
         elementClrType = null;
@@ -964,7 +994,7 @@ internal sealed partial class StatementBinder
             return false;
         }
 
-        System.Reflection.MethodInfo found;
+        System.Reflection.MethodInfo? found;
         try
         {
             found = clrType.GetMethod(
@@ -1004,7 +1034,7 @@ internal sealed partial class StatementBinder
         if (sourceType is ImportedTypeSymbol { OpenDefinition: not null } imported
             && !imported.TypeArguments.IsDefaultOrEmpty)
         {
-            System.Reflection.MethodInfo openMethod = null;
+            System.Reflection.MethodInfo? openMethod = null;
             try
             {
                 openMethod = imported.OpenDefinition.GetMethod(
@@ -1040,7 +1070,7 @@ internal sealed partial class StatementBinder
         return BindAwaitForRangeStatementCore(syntax, labelName: null, originatingSyntax: syntax);
     }
 
-    private BoundStatement BindAwaitForRangeStatementCore(AwaitForRangeStatementSyntax syntax, string labelName, SyntaxNode originatingSyntax)
+    private BoundStatement BindAwaitForRangeStatementCore(AwaitForRangeStatementSyntax syntax, string? labelName, SyntaxNode originatingSyntax)
     {
         // Phase 5.8 / ADR-0023: `await for v := range stream { … }`.
         // The stream operand must be an `IAsyncEnumerable[T]` (a CLR type
@@ -1057,14 +1087,18 @@ internal sealed partial class StatementBinder
 
         if (!MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
-            Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type);
+            Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type ?? TypeSymbol.Error);
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
         scope = new BoundScope(scope);
-        var variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: elementType);
+        var variable = bindLocalVariable(
+            syntax.Identifier,
+            isReadOnly: false,
+            type: Invariant.Required(elementType, "an async enumerable has an element type"));
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
-        scope = scope.Parent;
+
+        scope = scope.Pop();
 
         return new BoundAwaitForRangeStatement(originatingSyntax, variable, stream, body, breakLabel, continueLabel);
     }

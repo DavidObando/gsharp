@@ -13,7 +13,7 @@ public sealed class BoundDiscardPattern : BoundPattern
     /// <summary>Initializes a new instance of the <see cref="BoundDiscardPattern"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
-    public BoundDiscardPattern(SyntaxNode syntax, TypeSymbol type)
+    public BoundDiscardPattern(SyntaxNode? syntax, TypeSymbol type)
         : base(syntax, type)
     {
     }

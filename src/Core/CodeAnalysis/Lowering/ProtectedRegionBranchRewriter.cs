@@ -233,10 +233,12 @@ internal static class ProtectedRegionBranchRewriter
                         new BoundBinaryExpression(
                             null,
                             new BoundVariableExpression(null, selector),
-                            BoundBinaryOperator.Bind(
-                                SyntaxKind.EqualsEqualsToken,
-                                TypeSymbol.Int32,
-                                TypeSymbol.Int32),
+                            Invariant.Required(
+                                BoundBinaryOperator.Bind(
+                                    SyntaxKind.EqualsEqualsToken,
+                                    TypeSymbol.Int32,
+                                    TypeSymbol.Int32),
+                                "int32 equality operator exists for protected-region dispatch"),
                             new BoundLiteralExpression(null, entry.Selector)),
                         jumpIfTrue: true));
                 }

@@ -68,7 +68,7 @@ public sealed class FieldSymbol : Symbol
     /// field initializer to a literal and writes it here; the emitter uses it
     /// to add the <c>Constant</c> metadata row and to inline const-field reads.
     /// </summary>
-    public object ConstantValue { get; private set; }
+    public object? ConstantValue { get; private set; }
 
     /// <summary>
     /// Gets the explicit byte offset declared via <c>@FieldOffset(N)</c>
@@ -91,7 +91,7 @@ public sealed class FieldSymbol : Symbol
     public bool IsFixedBuffer { get; private set; }
 
     /// <summary>Gets the fixed-size buffer element type <c>T</c> (ADR-0122 §10 / issue #1035), or <c>null</c> for non-buffer fields.</summary>
-    public TypeSymbol FixedBufferElementType { get; private set; }
+    public TypeSymbol? FixedBufferElementType { get; private set; }
 
     /// <summary>Gets the fixed-size buffer element count <c>N</c> (ADR-0122 §10 / issue #1035), or 0 for non-buffer fields.</summary>
     public int FixedBufferLength { get; private set; }
@@ -101,7 +101,7 @@ public sealed class FieldSymbol : Symbol
     /// called once by the binder after folding the initializer to a literal.
     /// </summary>
     /// <param name="value">The compile-time constant value.</param>
-    public void SetConstantValue(object value)
+    public void SetConstantValue(object? value)
     {
         ConstantValue = value;
     }
@@ -136,7 +136,7 @@ public sealed class FieldSymbol : Symbol
     /// </summary>
     /// <param name="staticConstructorOwner">The type whose <c>.cctor</c> is active, or <c>null</c>.</param>
     /// <returns><c>true</c> when taking the field address is legal.</returns>
-    internal bool IsStaticAddressLegal(Symbol staticConstructorOwner)
+    internal bool IsStaticAddressLegal(Symbol? staticConstructorOwner)
     {
         if (!(IsReadOnly && IsStatic) || IsConst)
         {

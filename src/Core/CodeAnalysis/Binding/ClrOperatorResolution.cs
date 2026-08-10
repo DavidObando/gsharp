@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -72,13 +73,13 @@ internal static class ClrOperatorResolution
     /// <summary>Looks up the CLR operator name for a binary operator token.</summary>
     /// <param name="kind">The operator syntax kind.</param>
     /// <returns>The CLR method name (e.g. <c>op_Addition</c>) or <see langword="null"/>.</returns>
-    public static string TryGetBinaryName(SyntaxKind kind)
+    public static string? TryGetBinaryName(SyntaxKind kind)
         => BinaryNames.TryGetValue(kind, out var name) ? name : null;
 
     /// <summary>Looks up the CLR operator name for a unary operator token.</summary>
     /// <param name="kind">The operator syntax kind.</param>
     /// <returns>The CLR method name (e.g. <c>op_UnaryNegation</c>) or <see langword="null"/>.</returns>
-    public static string TryGetUnaryName(SyntaxKind kind)
+    public static string? TryGetUnaryName(SyntaxKind kind)
         => UnaryNames.TryGetValue(kind, out var name) ? name : null;
 
     /// <summary>Resolves a binary operator overload on the union of operand types.</summary>
@@ -88,7 +89,12 @@ internal static class ClrOperatorResolution
     /// <param name="method">The resolved method on success.</param>
     /// <param name="isAmbiguous">Whether multiple candidates were equally good.</param>
     /// <returns><see langword="true"/> if a unique operator was found.</returns>
-    public static bool TryResolveBinary(SyntaxKind kind, TypeSymbol leftType, TypeSymbol rightType, out MethodInfo method, out bool isAmbiguous)
+    public static bool TryResolveBinary(
+        SyntaxKind kind,
+        TypeSymbol? leftType,
+        TypeSymbol? rightType,
+        [NotNullWhen(true)] out MethodInfo? method,
+        out bool isAmbiguous)
     {
         method = null;
         isAmbiguous = false;
@@ -118,9 +124,10 @@ internal static class ClrOperatorResolution
         // an integer value is a compile-time constant and in range.
         var argTypes = new[] { leftType?.ClrType, rightType?.ClrType };
         var outcome = ClrOverloadResolution.Resolve(candidates, argTypes);
-        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved
+            && outcome.Best is { } best)
         {
-            method = outcome.Best;
+            method = best;
             return true;
         }
 
@@ -138,7 +145,11 @@ internal static class ClrOperatorResolution
     /// <param name="method">The resolved method on success.</param>
     /// <param name="isAmbiguous">Whether multiple candidates were equally good.</param>
     /// <returns><see langword="true"/> if a unique operator was found.</returns>
-    public static bool TryResolveUnary(SyntaxKind kind, TypeSymbol operandType, out MethodInfo method, out bool isAmbiguous)
+    public static bool TryResolveUnary(
+        SyntaxKind kind,
+        TypeSymbol? operandType,
+        [NotNullWhen(true)] out MethodInfo? method,
+        out bool isAmbiguous)
     {
         method = null;
         isAmbiguous = false;
@@ -162,9 +173,10 @@ internal static class ClrOperatorResolution
         // literal value is not present in this type-only helper.
         var argTypes = new[] { operandType.ClrType };
         var outcome = ClrOverloadResolution.Resolve(candidates, argTypes);
-        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
+        if (outcome.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved
+            && outcome.Best is { } best)
         {
-            method = outcome.Best;
+            method = best;
             return true;
         }
 
@@ -176,7 +188,7 @@ internal static class ClrOperatorResolution
         return false;
     }
 
-    private static void CollectOperators(Type type, string name, List<MethodInfo> sink)
+    private static void CollectOperators(Type? type, string name, List<MethodInfo> sink)
     {
         if (type == null)
         {
@@ -253,7 +265,7 @@ internal static class ClrOperatorResolution
         return false;
     }
 
-    private static Type SafeBaseType(Type t)
+    private static Type? SafeBaseType(Type t)
     {
         try
         {
@@ -278,7 +290,12 @@ internal static class ClrOperatorResolution
     /// <param name="isExplicit">Whether the resolved method is an explicit conversion.</param>
     /// <returns><see langword="true"/> if a conversion was found.</returns>
 #pragma warning disable SA1202
-    public static bool TryResolveConversion(Type sourceType, Type targetType, bool allowExplicit, out MethodInfo method, out bool isExplicit)
+    public static bool TryResolveConversion(
+        Type? sourceType,
+        Type? targetType,
+        bool allowExplicit,
+        [NotNullWhen(true)] out MethodInfo? method,
+        out bool isExplicit)
 #pragma warning restore SA1202
     {
         method = null;
@@ -332,7 +349,12 @@ internal static class ClrOperatorResolution
         return new ConversionProbeResult(found: false, method: null, isExplicit: false);
     }
 
-    private static bool TryFind(Type declaring, string name, Type src, Type tgt, out MethodInfo method)
+    private static bool TryFind(
+        Type? declaring,
+        string name,
+        Type src,
+        Type tgt,
+        [NotNullWhen(true)] out MethodInfo? method)
     {
         method = null;
         if (declaring == null)
@@ -375,7 +397,7 @@ internal static class ClrOperatorResolution
 
     private readonly struct ConversionProbeResult
     {
-        public ConversionProbeResult(bool found, MethodInfo method, bool isExplicit)
+        public ConversionProbeResult(bool found, MethodInfo? method, bool isExplicit)
         {
             this.Found = found;
             this.Method = method;
@@ -384,7 +406,7 @@ internal static class ClrOperatorResolution
 
         public bool Found { get; }
 
-        public MethodInfo Method { get; }
+        public MethodInfo? Method { get; }
 
         public bool IsExplicit { get; }
     }

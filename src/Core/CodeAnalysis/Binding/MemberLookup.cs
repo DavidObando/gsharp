@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -118,7 +119,7 @@ internal sealed class MemberLookup
     /// <param name="parameterTypes">Optional parameter types for exact-match filtering.
     /// Pass <c>null</c> to match by name only (first hit).</param>
     /// <returns>The matching <see cref="MethodInfo"/>, or <c>null</c> when none is found.</returns>
-    public static MethodInfo SafeGetMethodIncludingSelfAndInterfaces(Type clrType, string name, Type[] parameterTypes = null)
+    public static MethodInfo? SafeGetMethodIncludingSelfAndInterfaces(Type clrType, string name, Type[]? parameterTypes = null)
     {
         if (clrType == null)
         {
@@ -127,7 +128,7 @@ internal sealed class MemberLookup
 
         foreach (var type in EnumerateSelfAndInterfaces(clrType))
         {
-            MethodInfo method;
+            MethodInfo? method;
             try
             {
                 method = parameterTypes != null
@@ -155,7 +156,7 @@ internal sealed class MemberLookup
     /// <param name="clrType">The imported CLR type.</param>
     /// <param name="isAmbiguous">Whether one declaration level contains multiple matching methods.</param>
     /// <returns>The selected method, or <see langword="null"/>.</returns>
-    public static MethodInfo ResolveGetEnumerator(Type clrType, out bool isAmbiguous)
+    public static MethodInfo? ResolveGetEnumerator(Type clrType, out bool isAmbiguous)
     {
         static List<MethodInfo> GetDeclaredCandidates(Type type) =>
             ClrTypeUtilities.SafeGetMethods(
@@ -167,7 +168,7 @@ internal sealed class MemberLookup
                     method.GetParameters().Length == 0)
                 .ToList();
 
-        static Type GetBaseTypeSafe(Type type)
+        static Type? GetBaseTypeSafe(Type type)
         {
             try
             {
@@ -200,9 +201,9 @@ internal sealed class MemberLookup
             }
         }
 
-        MethodInfo genericEnumerable = null;
-        MethodInfo nonGenericEnumerable = null;
-        MethodInfo fallback = null;
+        MethodInfo? genericEnumerable = null;
+        MethodInfo? nonGenericEnumerable = null;
+        MethodInfo? fallback = null;
         foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
         {
             var candidates = GetDeclaredCandidates(iface);
@@ -250,7 +251,7 @@ internal sealed class MemberLookup
     /// <returns>The candidate list with self-slot methods first.</returns>
     public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(Type clrType, string name)
     {
-        static Type GetBaseTypeSafe(Type type)
+        static Type? GetBaseTypeSafe(Type type)
         {
             try
             {
@@ -365,7 +366,7 @@ internal sealed class MemberLookup
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="name">The property name to match.</param>
     /// <returns>The matching <see cref="PropertyInfo"/>, or <c>null</c> when none is found.</returns>
-    public static PropertyInfo SafeGetPropertyIncludingSelfAndInterfaces(Type clrType, string name)
+    public static PropertyInfo? SafeGetPropertyIncludingSelfAndInterfaces(Type clrType, string name)
     {
         if (clrType == null)
         {
@@ -394,7 +395,7 @@ internal sealed class MemberLookup
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="name">The event name to match.</param>
     /// <returns>The matching <see cref="EventInfo"/>, or <c>null</c>.</returns>
-    public static EventInfo SafeGetEventIncludingSelfAndInterfaces(Type clrType, string name)
+    public static EventInfo? SafeGetEventIncludingSelfAndInterfaces(Type clrType, string name)
     {
         if (clrType == null)
         {
@@ -489,7 +490,7 @@ internal sealed class MemberLookup
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
     /// <param name="clrProp">The CLR property whose contract to check.</param>
     /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
-    public static FieldSymbol FindMatchingFieldForPropertyContract(StructSymbol structSymbol, PropertyInfo clrProp)
+    public static FieldSymbol? FindMatchingFieldForPropertyContract(StructSymbol structSymbol, PropertyInfo clrProp)
     {
         if (!structSymbol.TryGetField(clrProp.Name, out var field))
         {
@@ -535,7 +536,7 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the type implements
     /// <c>IAsyncEnumerable&lt;T&gt;</c> or exposes the pattern-based
     /// <c>await foreach</c> shape.</returns>
-    public static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol elementType)
+    public static bool TryGetAsyncEnumerableElementType(TypeSymbol type, out TypeSymbol? elementType)
     {
         elementType = null;
 
@@ -575,7 +576,8 @@ internal sealed class MemberLookup
                 }
             }
 
-            if (TryResolveClrPatternAsyncEnumerator(importedSym.OpenDefinition, out _, out _, out var openCurrentMember))
+            if (TryResolveClrPatternAsyncEnumerator(importedSym.OpenDefinition, out _, out _, out var openCurrentMember)
+                && openCurrentMember != null)
             {
                 elementType = MapOpenClrTypeToSymbolic(GetClrMemberValueType(openCurrentMember), importedSym);
                 return true;
@@ -605,7 +607,8 @@ internal sealed class MemberLookup
         // what makes `ConfiguredCancelableAsyncEnumerable[T]` (returned by
         // `IAsyncEnumerable[T].ConfigureAwait(false)`) and other
         // fully-pattern-based async enumerables iterable.
-        if (TryResolveClrPatternAsyncEnumerator(clr, out _, out _, out var currentMember))
+        if (TryResolveClrPatternAsyncEnumerator(clr, out _, out _, out var currentMember)
+            && currentMember != null)
         {
             elementType = TypeSymbol.FromClrType(GetClrMemberValueType(currentMember));
             return true;
@@ -632,9 +635,9 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the pattern-based shape matches.</returns>
     public static bool TryResolveClrPatternAsyncEnumerator(
         Type clrType,
-        out MethodInfo getAsyncEnumerator,
-        out MethodInfo moveNextAsync,
-        out MemberInfo currentMember)
+        [NotNullWhen(true)] out MethodInfo? getAsyncEnumerator,
+        [NotNullWhen(true)] out MethodInfo? moveNextAsync,
+        [NotNullWhen(true)] out MemberInfo? currentMember)
     {
         getAsyncEnumerator = null;
         moveNextAsync = null;
@@ -652,8 +655,8 @@ internal sealed class MemberLookup
         // expose both — matching how the interface fast path always wins
         // when present, so the pattern probe's own preference order rarely
         // matters in practice.
-        MethodInfo zeroArgCandidate = null;
-        MethodInfo oneArgCandidate = null;
+        MethodInfo? zeroArgCandidate = null;
+        MethodInfo? oneArgCandidate = null;
         foreach (var candidate in ClrTypeUtilities.SafeGetMethods(clrType, BindingFlags.Public | BindingFlags.Instance))
         {
             if (!string.Equals(candidate.Name, "GetAsyncEnumerator", StringComparison.Ordinal))
@@ -708,7 +711,9 @@ internal sealed class MemberLookup
     /// <param name="enumeratorType">The duck-typed enumerator type.</param>
     /// <param name="currentMember">The resolved <c>Current</c> property or field, on success.</param>
     /// <returns><see langword="true"/> when a <c>Current</c> member exists.</returns>
-    public static bool TryGetClrCurrentMemberIncludingSelfAndInterfaces(Type enumeratorType, out MemberInfo currentMember)
+    public static bool TryGetClrCurrentMemberIncludingSelfAndInterfaces(
+        Type enumeratorType,
+        [NotNullWhen(true)] out MemberInfo? currentMember)
     {
         var currentProperty = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
         if (currentProperty != null)
@@ -754,7 +759,7 @@ internal sealed class MemberLookup
     /// <param name="valueType">The dictionary's value type, on success.</param>
     /// <returns><see langword="true"/> when the type implements
     /// <c>IDictionary&lt;,&gt;</c> or <c>IReadOnlyDictionary&lt;,&gt;</c>.</returns>
-    public static bool TryGetClrDictionaryTypes(Type clrType, out Type keyType, out Type valueType)
+    public static bool TryGetClrDictionaryTypes(Type clrType, out Type? keyType, out Type? valueType)
     {
         // First pass: prefer the writable IDictionary<,> (write scenarios) when
         // a type implements both contracts.
@@ -796,7 +801,9 @@ internal sealed class MemberLookup
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="elementType">The element CLR type, on success.</param>
     /// <returns><see langword="true"/> when the type is enumerable.</returns>
-    public static bool TryGetClrEnumerableElementType(Type clrType, out Type elementType)
+    public static bool TryGetClrEnumerableElementType(
+        Type clrType,
+        [NotNullWhen(true)] out Type? elementType)
     {
         // Issue #2859: walk the interface closure transitively. `GetInterfaces()`
         // on a type projected through a MetadataLoadContext does not always
@@ -848,7 +855,7 @@ internal sealed class MemberLookup
     /// <param name="clrType">The CLR type to probe.</param>
     /// <param name="elementType">The element CLR type, on success.</param>
     /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
-    public static bool TryGetClrPatternEnumerableElementType(Type clrType, out Type elementType)
+    public static bool TryGetClrPatternEnumerableElementType(Type clrType, out Type? elementType)
     {
         var getEnumerator = ResolveGetEnumerator(clrType, out _);
         if (getEnumerator == null)
@@ -886,7 +893,7 @@ internal sealed class MemberLookup
     /// <param name="enumeratorType">The duck-typed enumerator type.</param>
     /// <param name="elementType">The <c>Current</c> member's CLR type, on success.</param>
     /// <returns><see langword="true"/> when a <c>Current</c> member exists.</returns>
-    public static bool TryGetClrCurrentMemberType(Type enumeratorType, out Type elementType)
+    public static bool TryGetClrCurrentMemberType(Type enumeratorType, out Type? elementType)
     {
         var currentProperty = ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
         if (currentProperty != null)
@@ -945,7 +952,7 @@ internal sealed class MemberLookup
     /// <param name="openClr">The open CLR type to map.</param>
     /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
-    public static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, ImportedTypeSymbol openImp)
+    public static TypeSymbol MapOpenClrTypeToSymbolic(Type? openClr, ImportedTypeSymbol? openImp)
         => MapOpenClrTypeToSymbolic(openClr, openImp?.OpenDefinition, openImp?.TypeArguments ?? ImmutableArray<TypeSymbol>.Empty);
 
     /// <summary>
@@ -959,7 +966,7 @@ internal sealed class MemberLookup
     /// <param name="openDefinition">The open generic definition that <paramref name="openClr"/>'s parameters bind against.</param>
     /// <param name="typeArguments">The symbolic arguments at the same ordinals as <paramref name="openDefinition"/>'s generic parameters.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
-    public static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, Type openDefinition, ImmutableArray<TypeSymbol> typeArguments)
+    public static TypeSymbol MapOpenClrTypeToSymbolic(Type? openClr, Type? openDefinition, ImmutableArray<TypeSymbol> typeArguments)
         => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition: null, methodTypeArguments: default);
 
     /// <summary>
@@ -974,11 +981,11 @@ internal sealed class MemberLookup
     /// <param name="methodTypeArguments">The method's symbolic arguments.</param>
     /// <returns>The symbolic parameter value type.</returns>
     public static TypeSymbol MapOpenClrParameterTypeToSymbolic(
-        Type openClr,
-        Type openDefinition,
+        Type? openClr,
+        Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
-        MethodInfo openMethodDefinition = null,
-        ImmutableArray<TypeSymbol> methodTypeArguments = default)
+        MethodInfo? openMethodDefinition = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
     {
         var parameterType = openClr?.IsByRef == true ? openClr.GetElementType() : openClr;
         return MapOpenClrTypeToSymbolic(
@@ -1007,11 +1014,11 @@ internal sealed class MemberLookup
     /// <param name="methodTypeArguments">The symbolic arguments at the same ordinals as <paramref name="openMethodDefinition"/>'s generic parameters; may be default/empty.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
     public static TypeSymbol MapOpenClrTypeToSymbolic(
-        Type openClr,
-        Type openDefinition,
+        Type? openClr,
+        Type? openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
-        MethodInfo openMethodDefinition,
-        ImmutableArray<TypeSymbol> methodTypeArguments)
+        MethodInfo? openMethodDefinition,
+        ImmutableArray<TypeSymbol?> methodTypeArguments)
     {
         if (openClr == null)
         {
@@ -1238,18 +1245,18 @@ internal sealed class MemberLookup
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
     /// <param name="isExpanded">Whether the final params-array parameter consumes individual trailing arguments.</param>
     /// <returns>An array sized to the open method's generic-parameter arity, with one entry per ordinal (<see langword="null"/> when unrecovered).</returns>
-    public static TypeSymbol[] InferSymbolicMethodTypeArguments(
+    public static TypeSymbol?[] InferSymbolicMethodTypeArguments(
         MethodInfo openMethod,
-        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
         bool isExpanded = false)
     {
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
         {
-            return Array.Empty<TypeSymbol>();
+            return Array.Empty<TypeSymbol?>();
         }
 
         var arity = openMethod.GetGenericArguments().Length;
-        var result = new TypeSymbol[arity];
+        var result = new TypeSymbol?[arity];
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
@@ -1268,7 +1275,7 @@ internal sealed class MemberLookup
 
             for (var i = paramsIndex; i < argumentCount; i++)
             {
-                var tailInference = new TypeSymbol[arity];
+                var tailInference = new TypeSymbol?[arity];
                 UnifyForMethodTypeArgs(paramsElementType, symbolicArgTypes[i], openMethod, tailInference);
                 for (var slot = 0; slot < arity; slot++)
                 {
@@ -1317,10 +1324,10 @@ internal sealed class MemberLookup
     /// <param name="symbolicMethodTypeArgs">Per-MVar symbolic type arguments; entries may be <see langword="null"/>.</param>
     /// <param name="receiverType">The receiver's static type symbol (for type-level Var substitution); may be <see langword="null"/>.</param>
     /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
-    public static TypeSymbol ResolveCallReturnTypeFromSymbolicTypeArgs(
-        MethodInfo closed,
-        ImmutableArray<TypeSymbol> symbolicMethodTypeArgs,
-        TypeSymbol receiverType)
+    public static TypeSymbol? ResolveCallReturnTypeFromSymbolicTypeArgs(
+        MethodInfo? closed,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs,
+        TypeSymbol? receiverType)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1334,7 +1341,7 @@ internal sealed class MemberLookup
 
         var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
 
-        Type receiverOpenDef = null;
+        Type? receiverOpenDef = null;
         ImmutableArray<TypeSymbol> receiverTypeArgs = default;
         if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
         {
@@ -1422,8 +1429,8 @@ internal sealed class MemberLookup
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver first when applicable).</param>
     /// <param name="isExpanded">Whether params-array inference should unify trailing scalar arguments with the array element type.</param>
     /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
-    public static ImmutableArray<TypeSymbol> BuildSymbolicMethodTypeArgs(
-        MethodInfo closed,
+    public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
+        MethodInfo? closed,
         ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         ImmutableArray<TypeSymbol> symbolicArgTypes,
         bool isExpanded = false)
@@ -1441,8 +1448,11 @@ internal sealed class MemberLookup
         }
 
         var inferred = !symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0
-            ? InferSymbolicMethodTypeArguments(openMethod, symbolicArgTypes, isExpanded)
-            : new TypeSymbol[arity];
+            ? InferSymbolicMethodTypeArguments(
+                openMethod,
+                ImmutableArray.CreateRange<TypeSymbol, TypeSymbol?>(symbolicArgTypes, static t => t),
+                isExpanded)
+            : new TypeSymbol?[arity];
 
         // Explicit list takes precedence at each slot when present.
         if (!explicitTypeArgSymbols.IsDefaultOrEmpty)
@@ -1464,7 +1474,8 @@ internal sealed class MemberLookup
             // recovered from a `List[Check]` receiver) does too — the closed
             // CLR method erased it to `object`, so without the symbolic vector
             // the call's return type / lambda parameter type would be `object`.
-            if (TypeSymbol.RequiresSymbolicProjection(inferred[i]))
+            if (inferred[i] is { } inferredType
+                && TypeSymbol.RequiresSymbolicProjection(inferredType))
             {
                 anySymbolic = true;
                 break;
@@ -1487,7 +1498,7 @@ internal sealed class MemberLookup
     /// <param name="receiverType">The receiver's symbolic type (for instance/extension calls); may be <see langword="null"/> for static calls.</param>
     /// <param name="argumentTypes">The bound arguments' symbolic types.</param>
     /// <returns>An immutable array with receiver-first ordering when present.</returns>
-    public static ImmutableArray<TypeSymbol> BuildSymbolicArgTypeVector(TypeSymbol receiverType, ImmutableArray<TypeSymbol> argumentTypes)
+    public static ImmutableArray<TypeSymbol> BuildSymbolicArgTypeVector(TypeSymbol? receiverType, ImmutableArray<TypeSymbol> argumentTypes)
     {
         var argCount = argumentTypes.IsDefault ? 0 : argumentTypes.Length;
         var count = (receiverType != null ? 1 : 0) + argCount;
@@ -1529,8 +1540,8 @@ internal sealed class MemberLookup
     public static IEnumerable<MethodInfo> ExcludeErasureOnlyEnumCandidates(
         IEnumerable<MethodInfo> candidates,
         ImmutableArray<TypeSymbol> symbolicArgTypes,
-        IReadOnlyList<string> argumentNames = null,
-        TypeSymbol symbolicReceiverType = null)
+        IReadOnlyList<string?>? argumentNames = null,
+        TypeSymbol? symbolicReceiverType = null)
     {
         if (candidates == null || symbolicArgTypes.IsDefaultOrEmpty)
         {
@@ -1546,8 +1557,8 @@ internal sealed class MemberLookup
         static bool HasErasureOnlyEnumParameterMatch(
             MethodInfo candidate,
             ImmutableArray<TypeSymbol> symbolicArgTypes,
-            IReadOnlyList<string> argumentNames,
-            TypeSymbol symbolicReceiverType)
+            IReadOnlyList<string?>? argumentNames,
+            TypeSymbol? symbolicReceiverType)
         {
             if (candidate == null)
             {
@@ -1557,7 +1568,7 @@ internal sealed class MemberLookup
             MethodInfo openCandidate = candidate.IsGenericMethod && !candidate.IsGenericMethodDefinition
                 ? candidate.GetGenericMethodDefinition()
                 : candidate;
-            Type declaringType = openCandidate.DeclaringType;
+            Type? declaringType = openCandidate.DeclaringType;
             if (declaringType?.IsConstructedGenericType == true
                 && symbolicReceiverType is ImportedTypeSymbol symbolicReceiver
                 && symbolicReceiver.OpenDefinition != null)
@@ -1579,7 +1590,7 @@ internal sealed class MemberLookup
 
                 if (receiverCarriesSymbolicType)
                 {
-                    MethodInfo reopened = TryGetOpenMethodOnDeclaringType(
+                    MethodInfo? reopened = TryGetOpenMethodOnDeclaringType(
                         declaringDefinition,
                         openCandidate);
                     if (reopened != null)
@@ -1654,7 +1665,7 @@ internal sealed class MemberLookup
             return false;
         }
 
-        static bool IsErasureOnlyEnumMatch(Type openParameterType, TypeSymbol symbolicArgumentType)
+        static bool IsErasureOnlyEnumMatch(Type? openParameterType, TypeSymbol? symbolicArgumentType)
         {
             if (openParameterType == null || symbolicArgumentType == null)
             {
@@ -1698,7 +1709,7 @@ internal sealed class MemberLookup
 
             if (symbolicArgumentType is FunctionTypeSymbol functionType)
             {
-                MethodInfo invoke;
+                MethodInfo? invoke;
                 try
                 {
                     invoke = openParameterType.GetMethod("Invoke");
@@ -1749,7 +1760,7 @@ internal sealed class MemberLookup
 
             if (openParameterType.IsArray && openParameterType.GetArrayRank() == 1)
             {
-                TypeSymbol symbolicElement = TryGetElementType(symbolicArgumentType);
+                TypeSymbol? symbolicElement = TryGetElementType(symbolicArgumentType);
                 return symbolicElement != null
                     && IsErasureOnlyEnumMatch(openParameterType.GetElementType(), symbolicElement);
             }
@@ -1777,7 +1788,7 @@ internal sealed class MemberLookup
 
                 if (openArguments.Length == 1)
                 {
-                    TypeSymbol symbolicElement = TryGetElementType(symbolicArgumentType);
+                    TypeSymbol? symbolicElement = TryGetElementType(symbolicArgumentType);
                     if (symbolicElement != null)
                     {
                         return IsErasureOnlyEnumMatch(openArguments[0], symbolicElement);
@@ -1801,7 +1812,7 @@ internal sealed class MemberLookup
             return false;
         }
 
-        static bool TryGetNullableTypeArgument(Type type, out Type argument)
+        static bool TryGetNullableTypeArgument(Type type, out Type? argument)
         {
             argument = null;
             if (type == null || !type.IsGenericType)
@@ -1841,7 +1852,9 @@ internal sealed class MemberLookup
     /// <param name="t">The argument's bound type.</param>
     /// <param name="erased">On success, an erased CLR projection.</param>
     /// <returns><see langword="true"/> when an erasure projection exists.</returns>
-    public static bool TryProjectErasedClrType(TypeSymbol t, out Type erased)
+    public static bool TryProjectErasedClrType(
+        TypeSymbol t,
+        [NotNullWhen(true)] out Type? erased)
     {
         erased = null;
         if (t == null)
@@ -1877,7 +1890,8 @@ internal sealed class MemberLookup
                 erased = typeof(object);
                 return true;
             case SliceTypeSymbol slice:
-                if (TryProjectErasedClrType(slice.ElementType, out var sliceElement))
+                if (TryProjectErasedClrType(slice.ElementType, out var sliceElement)
+                    && sliceElement != null)
                 {
                     erased = sliceElement.MakeArrayType();
                     return true;
@@ -1885,7 +1899,8 @@ internal sealed class MemberLookup
 
                 return false;
             case ArrayTypeSymbol array:
-                if (TryProjectErasedClrType(array.ElementType, out var arrayElement))
+                if (TryProjectErasedClrType(array.ElementType, out var arrayElement)
+                    && arrayElement != null)
                 {
                     erased = arrayElement.MakeArrayType();
                     return true;
@@ -1907,6 +1922,8 @@ internal sealed class MemberLookup
                 // key/value types when a generic candidate is chosen.
                 if (TryProjectErasedClrType(map.KeyType, out var mapKeyErased)
                     && TryProjectErasedClrType(map.ValueType, out var mapValueErased)
+                    && mapKeyErased != null
+                    && mapValueErased != null
                     && !mapKeyErased.IsByRef && !mapKeyErased.IsPointer
                     && !mapValueErased.IsByRef && !mapValueErased.IsPointer)
                 {
@@ -1935,6 +1952,7 @@ internal sealed class MemberLookup
                 // unify; symbolic recovery downstream re-derives the real type
                 // argument for the MethodSpec.
                 if (TryProjectErasedClrType(pointer.PointeeType, out var pointeeErased)
+                    && pointeeErased != null
                     && !pointeeErased.IsByRef)
                 {
                     erased = pointeeErased.MakePointerType();
@@ -1949,7 +1967,8 @@ internal sealed class MemberLookup
                 // constructed enumerable still passes the ClrType gate; the
                 // symbolic-argument recovery downstream re-derives the real
                 // element type for the member's return projection.
-                if (TryProjectErasedClrType(seq.ElementType, out var seqElement))
+                if (TryProjectErasedClrType(seq.ElementType, out var seqElement)
+                    && seqElement != null)
                 {
                     erased = typeof(System.Collections.Generic.IEnumerable<>).MakeGenericType(seqElement);
                     return true;
@@ -1959,7 +1978,8 @@ internal sealed class MemberLookup
             case AsyncSequenceTypeSymbol aseq:
                 // Issue #1320: the async-iterator counterpart, alias for
                 // `IAsyncEnumerable<T>`.
-                if (TryProjectErasedClrType(aseq.ElementType, out var aseqElement))
+                if (TryProjectErasedClrType(aseq.ElementType, out var aseqElement)
+                    && aseqElement != null)
                 {
                     erased = typeof(System.Collections.Generic.IAsyncEnumerable<>).MakeGenericType(aseqElement);
                     return true;
@@ -1968,6 +1988,11 @@ internal sealed class MemberLookup
                 return false;
             case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
                 if (!TryProjectErasedClrType(nullable.UnderlyingType, out var erasedUnderlying))
+                {
+                    return false;
+                }
+
+                if (erasedUnderlying == null)
                 {
                     return false;
                 }
@@ -1982,7 +2007,9 @@ internal sealed class MemberLookup
                 {
                     var nullableDefinition = erasedUnderlying.Assembly == typeof(object).Assembly
                         ? typeof(Nullable<>)
-                        : erasedUnderlying.Assembly.GetType(typeof(Nullable<>).FullName, throwOnError: false);
+                        : erasedUnderlying.Assembly.GetType(
+                            typeof(Nullable<>).FullName ?? "System.Nullable`1",
+                            throwOnError: false);
                     erased = nullableDefinition?.MakeGenericType(erasedUnderlying) ?? erasedUnderlying;
                     return true;
                 }
@@ -2043,7 +2070,8 @@ internal sealed class MemberLookup
                     var erasedElements = new Type[elementTypes.Length];
                     for (int i = 0; i < elementTypes.Length; i++)
                     {
-                        if (!TryProjectErasedClrType(elementTypes[i], out Type erasedElement))
+                        if (!TryProjectErasedClrType(elementTypes[i], out Type? erasedElement)
+                            || erasedElement == null)
                         {
                             return false;
                         }
@@ -2052,7 +2080,7 @@ internal sealed class MemberLookup
                     }
 
                     erased = TupleTypeSymbol.BuildClrType(erasedElements);
-                    return true;
+                    return erased != null;
                 }
 
             case StructSymbol:
@@ -2086,7 +2114,9 @@ internal sealed class MemberLookup
     /// <param name="receiverType">The receiver's static type symbol.</param>
     /// <param name="view">The symbolic Dictionary view, on success.</param>
     /// <returns><see langword="true"/> when a symbolic view was produced.</returns>
-    public static bool TryGetSymbolicOpenMapReceiverView(TypeSymbol receiverType, out ImportedTypeSymbol view)
+    public static bool TryGetSymbolicOpenMapReceiverView(
+        TypeSymbol? receiverType,
+        [NotNullWhen(true)] out ImportedTypeSymbol? view)
     {
         view = null;
         if (receiverType is not MapTypeSymbol map
@@ -2123,7 +2153,7 @@ internal sealed class MemberLookup
     /// <param name="type">The user struct symbol to probe.</param>
     /// <param name="elementType">The element <see cref="TypeSymbol"/>, on success.</param>
     /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
-    public static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol elementType)
+    public static bool TryGetUserPatternEnumerableElementType(StructSymbol type, out TypeSymbol? elementType)
     {
         elementType = null;
         if (!TypeMemberModel.TryGetMethodIncludingInherited(type, "GetEnumerator", out var getEnumerator) ||
@@ -2161,7 +2191,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate delegate-like target type.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when the type is delegate-like.</returns>
-    public static bool TryGetDelegateFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol functionType)
+    public static bool TryGetDelegateFunctionTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         switch (type)
@@ -2222,6 +2254,7 @@ internal sealed class MemberLookup
         if (actual is not FunctionTypeSymbol actualFunction
             || expected is FunctionTypeSymbol
             || !TryGetDelegateFunctionTypeFromSymbol(expected, out var expectedFunction)
+            || expectedFunction == null
             || !FunctionShapesExactlyMatch(actualFunction, expectedFunction))
         {
             return false;
@@ -2264,6 +2297,7 @@ internal sealed class MemberLookup
             return actual is FunctionTypeSymbol actualFunction
                 && expected is not FunctionTypeSymbol
                 && TryGetDelegateFunctionTypeFromSymbol(expected, out var expectedFunction)
+                && expectedFunction != null
                 && FunctionShapesExactlyMatch(actualFunction, expectedFunction);
         }
     }
@@ -2319,7 +2353,7 @@ internal sealed class MemberLookup
             typeof(EventHandler<>),
             ImmutableArray.Create(eventArgsType));
 
-        static bool IsEventArgsType(TypeSymbol type, Type clrType)
+        static bool IsEventArgsType(TypeSymbol type, Type? clrType)
         {
             if (clrType != null)
             {
@@ -2357,7 +2391,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate lambda target type.</param>
     /// <param name="functionType">The effective function-type shape, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
-    public static bool TryGetLambdaTargetFunctionTypeFromSymbol(TypeSymbol type, out FunctionTypeSymbol functionType)
+    public static bool TryGetLambdaTargetFunctionTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         if (TryGetDelegateFunctionTypeFromSymbol(type, out functionType))
         {
@@ -2380,7 +2416,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate lambda target CLR type.</param>
     /// <param name="functionType">The effective function-type shape, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is a valid lambda target.</returns>
-    public static bool TryGetLambdaTargetFunctionType(Type type, out FunctionTypeSymbol functionType)
+    public static bool TryGetLambdaTargetFunctionType(
+        Type type,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         if (TryGetDelegateFunctionType(type, out functionType))
         {
@@ -2403,7 +2441,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate expression-tree target type.</param>
     /// <param name="delegateType">The delegate type argument, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
-    public static bool TryGetExpressionTreeDelegateTypeFromSymbol(TypeSymbol type, out TypeSymbol delegateType)
+    public static bool TryGetExpressionTreeDelegateTypeFromSymbol(
+        TypeSymbol type,
+        [NotNullWhen(true)] out TypeSymbol? delegateType)
     {
         delegateType = null;
         if (type == null)
@@ -2436,7 +2476,9 @@ internal sealed class MemberLookup
     /// <param name="type">The candidate CLR expression-tree target type.</param>
     /// <param name="delegateType">The delegate type argument, on success.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is an expression-tree target.</returns>
-    public static bool TryGetExpressionTreeDelegateType(Type type, out Type delegateType)
+    public static bool TryGetExpressionTreeDelegateType(
+        Type type,
+        [NotNullWhen(true)] out Type? delegateType)
     {
         delegateType = null;
         if (type == null || !type.IsGenericType)
@@ -2469,7 +2511,9 @@ internal sealed class MemberLookup
     /// <param name="delegateType">The candidate delegate CLR type.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when the type is a delegate shape.</returns>
-    public static bool TryGetDelegateFunctionType(Type delegateType, out FunctionTypeSymbol functionType)
+    public static bool TryGetDelegateFunctionType(
+        Type delegateType,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         if (!ClrTypeUtilities.IsDelegateType(delegateType)
@@ -2716,7 +2760,7 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the interface is a symbolic constructed CLR generic.</returns>
     public static bool TryGetSymbolicClrGenericInterface(
         TypeSymbol ifaceSym,
-        out Type openDefinition,
+        [NotNullWhen(true)] out Type? openDefinition,
         out ImmutableArray<TypeSymbol> symbolicArgs)
     {
         openDefinition = null;
@@ -2831,7 +2875,8 @@ internal sealed class MemberLookup
     {
         Type declared;
         ImmutableArray<TypeSymbol> symbolicArgs;
-        if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args))
+        if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
+            && openDefinition != null)
         {
             declared = openDefinition;
             symbolicArgs = args;
@@ -2949,8 +2994,8 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol> implementedClrInterfaces,
         FunctionSymbol first,
         FunctionSymbol second,
-        out FunctionSymbol bridgeMethod,
-        out MethodInfo bridgeSlot)
+        out FunctionSymbol? bridgeMethod,
+        out MethodInfo? bridgeSlot)
     {
         bridgeMethod = null;
         bridgeSlot = null;
@@ -3055,7 +3100,7 @@ internal sealed class MemberLookup
     /// <param name="openProp">The interface property from the open definition.</param>
     /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
     /// <returns>The matching <see cref="PropertySymbol"/>, or <see langword="null"/>.</returns>
-    public static PropertySymbol FindMatchingPropertyForSymbolicClrInterface(
+    public static PropertySymbol? FindMatchingPropertyForSymbolicClrInterface(
         StructSymbol structSymbol,
         PropertyInfo openProp,
         ImmutableArray<TypeSymbol> symbolicArgs)
@@ -3114,7 +3159,7 @@ internal sealed class MemberLookup
     /// <param name="clrProp">The CLR property to match.</param>
     /// <returns>The matching <see cref="PropertySymbol"/>, or
     /// <see langword="null"/> when no match exists.</returns>
-    public static PropertySymbol FindMatchingProperty(StructSymbol structSymbol, PropertyInfo clrProp)
+    public static PropertySymbol? FindMatchingProperty(StructSymbol structSymbol, PropertyInfo clrProp)
     {
         foreach (var implProp in structSymbol.Properties)
         {
@@ -3148,7 +3193,7 @@ internal sealed class MemberLookup
         TypeSymbol targetType,
         Type clrTarget,
         ImmutableArray<BoundExpression> boundArguments,
-        out PropertyInfo indexer,
+        out PropertyInfo? indexer,
         out ImmutableArray<BoundExpression> resolvedArguments)
     {
         indexer = null;
@@ -3241,7 +3286,7 @@ internal sealed class MemberLookup
             }
         }
 
-        var argTypes = new Type[boundArguments.Length];
+        var argTypes = new Type?[boundArguments.Length];
         for (var i = 0; i < boundArguments.Length; i++)
         {
             argTypes[i] = boundArguments[i].Type?.ClrType;
@@ -3258,17 +3303,29 @@ internal sealed class MemberLookup
             }
         }
 
-        var resolution = ClrOverloadResolution.Resolve(properties.Select(static property => property.GetMethod).ToArray(), argTypes);
+        var resolution = ClrOverloadResolution.Resolve(
+            properties
+                .Select(static property => property.GetMethod)
+                .Where(static method => method != null)
+                .Cast<MethodInfo>()
+                .ToArray(),
+            argTypes);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
         }
 
-        indexer = properties.First(property => ReferenceEquals(property.GetMethod, resolution.Best));
+        var best = resolution.Best;
+        if (best == null)
+        {
+            return false;
+        }
+
+        indexer = properties.First(property => ReferenceEquals(property.GetMethod, best));
         resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
             boundArguments,
             resolution.ParameterMapping,
-            resolution.Best.GetParameters());
+            best.GetParameters());
         return true;
     }
 
@@ -3282,7 +3339,7 @@ internal sealed class MemberLookup
     /// <param name="underlying">The value-type underlying type.</param>
     /// <param name="constructed">The constructed nullable CLR type, on success.</param>
     /// <returns><see langword="true"/> when construction succeeded.</returns>
-    public bool TryGetNullableConstructedType(Type underlying, out Type constructed)
+    public bool TryGetNullableConstructedType(Type underlying, [NotNullWhen(true)] out Type? constructed)
         => NullableLifting.TryConstructNullable(this.binderCtx.References, underlying, out constructed);
 
     /// <summary>
@@ -3295,7 +3352,11 @@ internal sealed class MemberLookup
     /// <param name="methodName">The method name to match.</param>
     /// <param name="includeExtensions">Whether to append imported extension-method probes.</param>
     /// <returns>The imported method probe groups in existing lookup order.</returns>
-    public List<ImportedMethodProbe> CollectImportedMethodProbes(Type staticClassType, Type receiverClrType, string methodName, bool includeExtensions)
+    public List<ImportedMethodProbe> CollectImportedMethodProbes(
+        Type? staticClassType,
+        Type? receiverClrType,
+        string methodName,
+        bool includeExtensions)
     {
         var result = new List<ImportedMethodProbe>();
         if (staticClassType != null)
@@ -3422,7 +3483,7 @@ internal sealed class MemberLookup
         {
             foreach (var assembly in this.binderCtx.References.Assemblies)
             {
-                IEnumerable<Type> types;
+                IEnumerable<Type?> types;
                 try
                 {
                     types = assembly.GetTypes();
@@ -3519,7 +3580,8 @@ internal sealed class MemberLookup
                 importedInterface,
                 closedIndexer.DeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             var openIndexer = FindOpenIndexerDefinition(openDefinition, closedIndexer);
             var openParameters = openIndexer?.GetIndexParameters();
@@ -3574,7 +3636,8 @@ internal sealed class MemberLookup
                 imported,
                 closedProperty.DeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             var openProperty = FindOpenIndexerDefinition(openDefinition, closedProperty);
             if (openProperty != null)
@@ -3600,7 +3663,8 @@ internal sealed class MemberLookup
                 imported,
                 closedEvent.DeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             var openEvent = ClrTypeUtilities.SafeGetEvents(
                     openDefinition,
@@ -3634,15 +3698,17 @@ internal sealed class MemberLookup
         MemberInfo member)
     {
         if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
+            && member.DeclaringType is Type memberDeclaringType
             && TryGetSymbolicDeclaringContext(
                 imported,
-                member?.DeclaringType,
+                memberDeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             return openDefinition.IsGenericTypeDefinition
                 ? ImportedTypeSymbol.GetConstructed(
-                    member.DeclaringType,
+                    memberDeclaringType,
                     openDefinition,
                     declaringTypeArguments)
                 : ImportedTypeSymbol.Get(openDefinition);
@@ -3662,9 +3728,10 @@ internal sealed class MemberLookup
         if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
-                closedMethod?.DeclaringType,
+                closedMethod.DeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             var openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
             if (openMethod != null)
@@ -3692,9 +3759,10 @@ internal sealed class MemberLookup
         if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
                 imported,
-                closedMethod?.DeclaringType,
+                closedMethod.DeclaringType,
                 out var openDefinition,
-                out var declaringTypeArguments))
+                out var declaringTypeArguments)
+            && openDefinition != null)
         {
             var openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
             var openParameters = openMethod?.GetParameters();
@@ -3730,8 +3798,8 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when a symbolic declaring context was found.</returns>
     internal static bool TryGetSymbolicDeclaringContext(
         ImportedTypeSymbol imported,
-        Type declaringType,
-        out Type openDefinition,
+        Type? declaringType,
+        out Type? openDefinition,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
         openDefinition = null;
@@ -3784,7 +3852,7 @@ internal sealed class MemberLookup
     /// <summary>Unwraps an imported type from an optional CLR nullability annotation.</summary>
     /// <param name="type">The type symbol to unwrap.</param>
     /// <returns>The imported type symbol, or <c>null</c> for another symbol kind.</returns>
-    internal static ImportedTypeSymbol GetImportedTypeSymbol(TypeSymbol type)
+    internal static ImportedTypeSymbol? GetImportedTypeSymbol(TypeSymbol type)
         => type switch
         {
             ImportedTypeSymbol imported => imported,
@@ -3792,8 +3860,13 @@ internal sealed class MemberLookup
             _ => null,
         };
 
-    internal static PropertyInfo FindOpenIndexerDefinition(Type openDefinition, PropertyInfo closedIndexer)
+    internal static PropertyInfo? FindOpenIndexerDefinition(Type? openDefinition, PropertyInfo closedIndexer)
     {
+        if (openDefinition == null)
+        {
+            return null;
+        }
+
         var candidates = ClrTypeUtilities.SafeGetProperties(
             openDefinition,
             BindingFlags.Public | BindingFlags.Instance);
@@ -3888,7 +3961,7 @@ internal sealed class MemberLookup
         return TypeSymbol.FromClrType(closedType);
     }
 
-    internal static TypeSymbol MergeInferredTypeArgument(TypeSymbol existing, TypeSymbol incoming)
+    internal static TypeSymbol? MergeInferredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
 
     internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
@@ -3900,7 +3973,7 @@ internal sealed class MemberLookup
     internal static bool TryProjectConstructedHierarchyClrType(
         ImportedTypeSymbol source,
         Type targetOpenDefinition,
-        out Type projectedType)
+        out Type? projectedType)
     {
         projectedType = null;
         if (source == null
@@ -3915,12 +3988,14 @@ internal sealed class MemberLookup
         var contextObject = ResolveErasedObjectInContext(targetOpenDefinition);
         for (var i = 0; i < mappedArguments.Length; i++)
         {
-            if (!TryProjectErasedClrType(mappedArguments[i], out projectedArguments[i]))
+            if (!TryProjectErasedClrType(mappedArguments[i], out var projectedArgument)
+                || projectedArgument == null)
             {
                 return false;
             }
 
-            if (projectedArguments[i].IsSameAs(typeof(object)))
+            projectedArguments[i] = projectedArgument;
+            if (projectedArgument.IsSameAs(typeof(object)))
             {
                 projectedArguments[i] = contextObject;
             }
@@ -3949,18 +4024,18 @@ internal sealed class MemberLookup
     /// <param name="enumeratorType">The enumerator type returned by <c>GetEnumerator()</c>.</param>
     /// <param name="elementType">The element <see cref="TypeSymbol"/>, on success.</param>
     /// <returns><see langword="true"/> when the enumerator shape matches.</returns>
-    private static bool TryGetClrEnumeratorElementType(TypeSymbol enumeratorType, out TypeSymbol elementType)
+    private static bool TryGetClrEnumeratorElementType(TypeSymbol enumeratorType, out TypeSymbol? elementType)
     {
         elementType = null;
-        Type enumeratorClr = enumeratorType.ClrType;
+        Type? enumeratorClr = enumeratorType.ClrType;
         if (enumeratorClr == null)
         {
             return false;
         }
 
-        MethodInfo moveNext = SafeGetMethodIncludingSelfAndInterfaces(
+        MethodInfo? moveNext = SafeGetMethodIncludingSelfAndInterfaces(
             enumeratorClr, "MoveNext", Type.EmptyTypes);
-        PropertyInfo current = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorClr, "Current");
+        PropertyInfo? current = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorClr, "Current");
         if (moveNext == null || current == null)
         {
             return false;
@@ -3971,7 +4046,7 @@ internal sealed class MemberLookup
             imported.OpenDefinition != null &&
             !imported.TypeArguments.IsDefaultOrEmpty)
         {
-            PropertyInfo openCurrent = SafeGetPropertyIncludingSelfAndInterfaces(
+            PropertyInfo? openCurrent = SafeGetPropertyIncludingSelfAndInterfaces(
                 imported.OpenDefinition, "Current");
             if (openCurrent != null)
             {
@@ -4021,7 +4096,9 @@ internal sealed class MemberLookup
         return collected
             .Where(candidate => !collected.Any(other =>
                 !ReferenceEquals(candidate, other)
-                && IsMoreDerivedClrType(other.DeclaringType, candidate.DeclaringType)
+                && other.DeclaringType is Type otherDeclaringType
+                && candidate.DeclaringType is Type candidateDeclaringType
+                && IsMoreDerivedClrType(otherDeclaringType, candidateDeclaringType)
                 && HaveSameIndexerSignature(targetType, other, candidate)))
             .ToArray();
     }
@@ -4210,7 +4287,10 @@ internal sealed class MemberLookup
     /// <param name="typeArguments">The symbolic type arguments the delegate was constructed with.</param>
     /// <param name="functionType">The matching function-type symbol, on success.</param>
     /// <returns><see langword="true"/> when every Invoke parameter/return slot could be mapped symbolically.</returns>
-    private static bool TryGetDelegateFunctionTypeFromOpenDefinition(Type openDefinition, ImmutableArray<TypeSymbol> typeArguments, out FunctionTypeSymbol functionType)
+    private static bool TryGetDelegateFunctionTypeFromOpenDefinition(
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        [NotNullWhen(true)] out FunctionTypeSymbol? functionType)
     {
         functionType = null;
         if (openDefinition == null
@@ -4230,7 +4310,7 @@ internal sealed class MemberLookup
             return false;
         }
 
-        MethodInfo invoke;
+        MethodInfo? invoke;
         try
         {
             invoke = openDefinition.GetMethod("Invoke");
@@ -4370,7 +4450,7 @@ internal sealed class MemberLookup
     /// <param name="symbolicArgs">The symbolic type arguments, aligned with <paramref name="openParams"/>.</param>
     /// <param name="contextObject">The <c>object</c> placeholder resolved in <paramref name="openDef"/>'s context.</param>
     /// <returns>The erased closed CLR type, or <see langword="null"/> when no valid closure could be formed.</returns>
-    private static Type TryBuildErasedClosedGeneric(Type openDef, Type[] openParams, ImmutableArray<TypeSymbol> symbolicArgs, Type contextObject)
+    private static Type? TryBuildErasedClosedGeneric(Type openDef, Type[] openParams, ImmutableArray<TypeSymbol> symbolicArgs, Type contextObject)
     {
         var richArgs = new Type[openParams.Length];
         var anyRich = false;
@@ -4430,7 +4510,7 @@ internal sealed class MemberLookup
     /// <param name="symbolicArg">The symbolic type argument.</param>
     /// <param name="contextObject">The <c>object</c> placeholder for the target context.</param>
     /// <returns>The erased CLR type, or <see langword="null"/>.</returns>
-    private static Type ProjectSymbolicArgToErasedClr(TypeSymbol symbolicArg, Type contextObject)
+    private static Type? ProjectSymbolicArgToErasedClr(TypeSymbol symbolicArg, Type contextObject)
     {
         switch (symbolicArg)
         {
@@ -4446,7 +4526,9 @@ internal sealed class MemberLookup
                 // back to the unusable open Echo(Nullable<T>) signature.
                 return contextObject.Assembly == typeof(object).Assembly
                     ? typeof(int)
-                    : contextObject.Assembly.GetType(typeof(int).FullName, throwOnError: false);
+                    : contextObject.Assembly.GetType(
+                        typeof(int).FullName ?? "System.Int32",
+                        throwOnError: false);
             case ImportedTypeSymbol imp when imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty:
                 return TryBuildErasedClosedGeneric(
                     imp.OpenDefinition,
@@ -4500,7 +4582,7 @@ internal sealed class MemberLookup
     /// <param name="tuple">The symbolic tuple type.</param>
     /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
     /// <returns>The erased closed tuple CLR type, or <see langword="null"/> when none could be built.</returns>
-    private static Type BuildErasedTupleInContext(TupleTypeSymbol tuple, Type contextObject)
+    private static Type? BuildErasedTupleInContext(TupleTypeSymbol tuple, Type contextObject)
     {
         var erasedElements = new Type[tuple.ElementTypes.Length];
         for (int i = 0; i < tuple.ElementTypes.Length; i++)
@@ -4511,7 +4593,7 @@ internal sealed class MemberLookup
         return BuildErasedTupleInContext(erasedElements, 0, erasedElements.Length, contextObject);
     }
 
-    private static Type BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)
+    private static Type? BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)
     {
         var tupleOpenDefinition = ResolveErasedValueTupleOpenDefinition(contextObject, count <= 7 ? count : 8);
         if (tupleOpenDefinition == null)
@@ -4524,11 +4606,13 @@ internal sealed class MemberLookup
         Array.Copy(elementTypes, start, arguments, 0, directCount);
         if (count > 7)
         {
-            arguments[7] = BuildErasedTupleInContext(elementTypes, start + 7, count - 7, contextObject);
-            if (arguments[7] == null)
+            var nestedTuple = BuildErasedTupleInContext(elementTypes, start + 7, count - 7, contextObject);
+            if (nestedTuple == null)
             {
                 return null;
             }
+
+            arguments[7] = nestedTuple;
         }
 
         try
@@ -4557,9 +4641,9 @@ internal sealed class MemberLookup
     /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
     /// <param name="arity">The CLR tuple-node arity (1–8).</param>
     /// <returns>The open <c>ValueTuple`N</c> definition, or <see langword="null"/> when unsupported/unresolvable.</returns>
-    private static Type ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
+    private static Type? ResolveErasedValueTupleOpenDefinition(Type contextObject, int arity)
     {
-        Type hostOpenDefinition = arity switch
+        Type? hostOpenDefinition = arity switch
         {
             1 => typeof(ValueTuple<>),
             2 => typeof(ValueTuple<,>),
@@ -4581,7 +4665,9 @@ internal sealed class MemberLookup
             return hostOpenDefinition;
         }
 
-        return contextObject.Assembly.GetType(hostOpenDefinition.FullName, throwOnError: false);
+        return contextObject.Assembly.GetType(
+            hostOpenDefinition.FullName ?? "System.ValueTuple`" + arity,
+            throwOnError: false);
     }
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
@@ -4594,8 +4680,13 @@ internal sealed class MemberLookup
         return ParameterTypeMatchesSubstituted(candidateReturn, openReturn, symbolicArgs);
     }
 
-    private static bool ParameterTypeMatchesSubstituted(TypeSymbol candidate, Type openType, ImmutableArray<TypeSymbol> symbolicArgs)
+    private static bool ParameterTypeMatchesSubstituted(TypeSymbol candidate, Type? openType, ImmutableArray<TypeSymbol> symbolicArgs)
     {
+        if (openType == null)
+        {
+            return false;
+        }
+
         if (openType.IsGenericParameter)
         {
             var position = openType.GenericParameterPosition;
@@ -4666,7 +4757,7 @@ internal sealed class MemberLookup
 
     private static bool TryGetSymbolicConstructedGenericShape(
         TypeSymbol candidate,
-        out Type openDefinition,
+        out Type? openDefinition,
         out ImmutableArray<TypeSymbol> typeArguments)
     {
         if (candidate is ImportedTypeSymbol imported
@@ -4858,7 +4949,7 @@ internal sealed class MemberLookup
     /// <param name="openDeclaringType">The receiver's open generic type definition.</param>
     /// <param name="genericMethod">The method to re-project onto <paramref name="openDeclaringType"/>.</param>
     /// <returns>The fully open method, or <see langword="null"/> when no match is found.</returns>
-    private static MethodInfo TryGetOpenMethodOnDeclaringType(Type openDeclaringType, MethodInfo genericMethod)
+    private static MethodInfo? TryGetOpenMethodOnDeclaringType(Type? openDeclaringType, MethodInfo genericMethod)
     {
         if (openDeclaringType == null || genericMethod == null)
         {
@@ -4892,7 +4983,7 @@ internal sealed class MemberLookup
         return null;
     }
 
-    private static void UnifyForMethodTypeArgs(Type openClr, TypeSymbol actual, MethodInfo openMethod, TypeSymbol[] result)
+    private static void UnifyForMethodTypeArgs(Type? openClr, TypeSymbol? actual, MethodInfo openMethod, TypeSymbol?[] result)
     {
         if (openClr == null || actual == null)
         {
@@ -5019,6 +5110,7 @@ internal sealed class MemberLookup
             // return back into symbolic form.
             if (actual is ImportedTypeSymbol imp
                 && TryGetConstructedImportedProjection(imp, out var projectedImp)
+                && projectedImp != null
                 && ClrTypeUtilities.AreSame(projectedImp.OpenDefinition, openDef)
                 && projectedImp.TypeArguments.Length == openArgs.Length)
             {
@@ -5067,7 +5159,8 @@ internal sealed class MemberLookup
             {
                 var invoke = openClr.GetMethodSafe("Invoke");
                 var invokeParameters = invoke?.GetParameters();
-                if (invokeParameters != null
+                if (invoke != null
+                    && invokeParameters != null
                     && invokeParameters.Length == namedDelegateFunction.ParameterTypes.Length)
                 {
                     for (var j = 0; j < invokeParameters.Length; j++)
@@ -5139,7 +5232,8 @@ internal sealed class MemberLookup
             // a derived/implementing shape (e.g. List<T> formal-matched against
             // IEnumerable<TSource>). Walk the actual's interfaces/base.
             if (actual is ImportedTypeSymbol imp2
-                && TryGetConstructedImportedProjection(imp2, out var projectedImp2))
+                && TryGetConstructedImportedProjection(imp2, out var projectedImp2)
+                && projectedImp2 != null)
             {
                 if (TryMapThroughImplemented(projectedImp2, openDef, out var liftedArgs))
                 {
@@ -5154,7 +5248,7 @@ internal sealed class MemberLookup
 
     private static bool TryGetConstructedImportedProjection(
         ImportedTypeSymbol imported,
-        out ImportedTypeSymbol projected)
+        out ImportedTypeSymbol? projected)
     {
         projected = null;
         if (imported?.OpenDefinition != null
@@ -5201,7 +5295,7 @@ internal sealed class MemberLookup
         return t;
     }
 
-    private static TypeSymbol MergeRecoveredTypeArgument(TypeSymbol existing, TypeSymbol incoming)
+    private static TypeSymbol? MergeRecoveredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
     {
         if (existing == null)
         {
@@ -5230,7 +5324,9 @@ internal sealed class MemberLookup
             if (DeclarationBinder.TypeSignaturesEquivalent(existingUnderlying, incomingUnderlying))
             {
                 return NullableTypeSymbol.Get(
-                    MergeRecoveredTypeArgument(existingUnderlying, incomingUnderlying));
+                    Invariant.Required(
+                        MergeRecoveredTypeArgument(existingUnderlying, incomingUnderlying),
+                        "equivalent nullable type arguments merge to a type"));
             }
         }
 
@@ -5253,6 +5349,11 @@ internal sealed class MemberLookup
                 }
 
                 var item = MergeRecoveredTypeArgument(left, right);
+                if (item == null)
+                {
+                    return existing;
+                }
+
                 changed |= !ReferenceEquals(item, left);
                 merged.Add(item);
             }
@@ -5260,7 +5361,7 @@ internal sealed class MemberLookup
             if (changed)
             {
                 return ImportedTypeSymbol.GetConstructed(
-                    existingImported.ClrType,
+                    Invariant.Required(existingImported.ClrType, "a constructed imported type has a CLR representation"),
                     existingImported.OpenDefinition,
                     merged.MoveToImmutable());
             }
@@ -5271,7 +5372,9 @@ internal sealed class MemberLookup
             && DeclarationBinder.TypeSignaturesEquivalent(existingSlice.ElementType, incomingSlice.ElementType))
         {
             return SliceTypeSymbol.Get(
-                MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType));
+                Invariant.Required(
+                    MergeRecoveredTypeArgument(existingSlice.ElementType, incomingSlice.ElementType),
+                    "equivalent slice type arguments merge to an element type"));
         }
 
         if (existing is ArrayTypeSymbol existingArray
@@ -5280,7 +5383,9 @@ internal sealed class MemberLookup
             && DeclarationBinder.TypeSignaturesEquivalent(existingArray.ElementType, incomingArray.ElementType))
         {
             return ArrayTypeSymbol.Get(
-                MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
+                Invariant.Required(
+                    MergeRecoveredTypeArgument(existingArray.ElementType, incomingArray.ElementType),
+                    "equivalent array type arguments merge to an element type"),
                 existingArray.Length);
         }
 
@@ -5298,9 +5403,15 @@ internal sealed class MemberLookup
                     return existing;
                 }
 
-                merged.Add(MergeRecoveredTypeArgument(
+                var item = MergeRecoveredTypeArgument(
                     existingTuple.ElementTypes[i],
-                    incomingTuple.ElementTypes[i]));
+                    incomingTuple.ElementTypes[i]);
+                if (item == null)
+                {
+                    return existing;
+                }
+
+                merged.Add(item);
             }
 
             return TupleTypeSymbol.Get(merged.MoveToImmutable());
@@ -5313,7 +5424,7 @@ internal sealed class MemberLookup
                 : existing;
     }
 
-    private static TypeSymbol TryGetElementType(TypeSymbol t)
+    private static TypeSymbol? TryGetElementType(TypeSymbol t)
     {
         return t switch
         {
@@ -5385,7 +5496,7 @@ internal sealed class MemberLookup
     /// <param name="functionType">The literal's bound function type.</param>
     /// <param name="erased">On success, the erased delegate CLR type.</param>
     /// <returns><see langword="true"/> when an erased delegate type was built.</returns>
-    private static bool TryProjectErasedDelegateClrType(FunctionTypeSymbol functionType, out Type erased)
+    private static bool TryProjectErasedDelegateClrType(FunctionTypeSymbol functionType, out Type? erased)
     {
         erased = null;
         if (functionType == null)
@@ -5396,15 +5507,23 @@ internal sealed class MemberLookup
         var paramClr = new Type[functionType.ParameterTypes.Length];
         for (var i = 0; i < paramClr.Length; i++)
         {
-            if (!TryEraseDelegateComponentClrType(functionType.ParameterTypes[i], out paramClr[i]))
+            if (!TryEraseDelegateComponentClrType(functionType.ParameterTypes[i], out var parameterClr)
+                || parameterClr == null)
             {
                 return false;
             }
+
+            paramClr[i] = parameterClr;
         }
 
         var isVoid = FunctionTypeSymbol.IsVoidReturn(functionType.ReturnType);
-        Type returnClr = null;
+        Type? returnClr = null;
         if (!isVoid && !TryEraseDelegateComponentClrType(functionType.ReturnType, out returnClr))
+        {
+            return false;
+        }
+
+        if (!isVoid && returnClr == null)
         {
             return false;
         }
@@ -5426,7 +5545,7 @@ internal sealed class MemberLookup
     /// <param name="t">The component type to erase.</param>
     /// <param name="clr">On success, the erased CLR type.</param>
     /// <returns><see langword="true"/> when an erasure exists.</returns>
-    private static bool TryEraseDelegateComponentClrType(TypeSymbol t, out Type clr)
+    private static bool TryEraseDelegateComponentClrType(TypeSymbol t, out Type? clr)
     {
         clr = null;
         if (t == null)
@@ -5453,7 +5572,7 @@ internal sealed class MemberLookup
         }
     }
 
-    private static Type BuildActionClrType(Type[] paramClr) => paramClr.Length switch
+    private static Type? BuildActionClrType(Type[] paramClr) => paramClr.Length switch
     {
         0 => typeof(Action),
         1 => typeof(Action<>).MakeGenericType(paramClr),
@@ -5467,7 +5586,7 @@ internal sealed class MemberLookup
         _ => null,
     };
 
-    private static Type BuildFuncClrType(Type[] paramClr, Type returnClr)
+    private static Type? BuildFuncClrType(Type[] paramClr, Type? returnClr)
     {
         if (returnClr == null)
         {
@@ -5516,7 +5635,7 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the positions match.</returns>
     private static bool ClrParamTypeMatchesGenericMethodParam(
         TypeSymbol candidate,
-        Type openType,
+        Type? openType,
         Type[] methodGenericParams,
         ImmutableArray<TypeParameterSymbol> candidateTypeParams)
     {
@@ -5658,7 +5777,7 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="member">The member to inspect.</param>
     /// <returns>The member's value type.</returns>
-    private static Type GetClrMemberValueType(MemberInfo member)
+    private static Type? GetClrMemberValueType(MemberInfo member)
     {
         return member switch
         {

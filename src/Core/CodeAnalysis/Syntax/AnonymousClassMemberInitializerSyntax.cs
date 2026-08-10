@@ -29,7 +29,7 @@ public sealed class AnonymousClassMemberInitializerSyntax : SyntaxNode
         SyntaxTree syntaxTree,
         SyntaxToken letOrVarKeyword,
         SyntaxToken identifier,
-        TypeClauseSyntax typeClause,
+        TypeClauseSyntax? typeClause,
         SyntaxToken equalsToken,
         ExpressionSyntax value)
         : base(syntaxTree)
@@ -51,7 +51,7 @@ public sealed class AnonymousClassMemberInitializerSyntax : SyntaxNode
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the optional member type clause. Null when the type is inferred from <see cref="Value"/>.</summary>
-    public TypeClauseSyntax TypeClause { get; }
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the member/value separator token.</summary>
     public SyntaxToken EqualsToken { get; }

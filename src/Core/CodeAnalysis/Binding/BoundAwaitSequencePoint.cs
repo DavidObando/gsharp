@@ -19,7 +19,7 @@ public sealed class BoundAwaitSequencePoint : BoundStatement
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="kind">Whether this is a yield point or a resume point.</param>
     /// <param name="state">The await state number for PDB round-trip.</param>
-    public BoundAwaitSequencePoint(SyntaxNode syntax, BoundNodeKind kind, int state)
+    public BoundAwaitSequencePoint(SyntaxNode? syntax, BoundNodeKind kind, int state)
         : base(syntax)
     {
         Kind = kind;

@@ -411,7 +411,7 @@ internal sealed partial class MethodBodyEmitter
 
                 break;
             case BoundIndexAssignmentExpression ixa:
-                var ixaTargetType = ixa.TargetExpression?.Type ?? ixa.Target.Type;
+                var ixaTargetType = ixa.TargetExpression?.Type ?? BoundNodeForm.VariableTarget(ixa).Type;
                 if (ixaTargetType is MapTypeSymbol)
                 {
                     this.EmitMapIndexAssignment(ixa);
@@ -430,7 +430,7 @@ internal sealed partial class MethodBodyEmitter
                     }
                     else
                     {
-                        this.EmitLoadVariable(ixa.Target);
+                        this.EmitLoadVariable(BoundNodeForm.VariableTarget(ixa));
                     }
 
                     this.EmitExpression(ixa.Index);
@@ -743,7 +743,7 @@ internal sealed partial class MethodBodyEmitter
         {
             var asInt = (int)value;
             this.il.LoadConstantI4(asInt);
-            var ctor = typeof(decimal).GetConstructor(new[] { typeof(int) });
+            var ctor = BclMember.Ctor(typeof(decimal), typeof(int));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
@@ -754,7 +754,7 @@ internal sealed partial class MethodBodyEmitter
         {
             var asLong = (long)value;
             this.il.LoadConstantI8(asLong);
-            var ctor = typeof(decimal).GetConstructor(new[] { typeof(long) });
+            var ctor = BclMember.Ctor(typeof(decimal), typeof(long));
             this.il.OpCode(ILOpCode.Newobj);
             this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
             return;
@@ -775,17 +775,20 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadConstantI4(isNegative ? 1 : 0);
         this.il.LoadConstantI4(scale);
 
-        var bigCtor = typeof(decimal).GetConstructor(new[]
-        {
-            typeof(int), typeof(int), typeof(int), typeof(bool), typeof(byte),
-        });
+        var bigCtor = BclMember.Ctor(
+            typeof(decimal),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(bool),
+            typeof(byte));
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(bigCtor));
     }
 
     private void EmitDecimalStaticField(string name)
     {
-        var field = typeof(decimal).GetField(name);
+        var field = BclMember.Field(typeof(decimal), name);
         this.il.OpCode(ILOpCode.Ldsfld);
         this.il.Token(this.outer.memberRefs.GetFieldReference(field));
     }
@@ -1129,7 +1132,9 @@ internal sealed partial class MethodBodyEmitter
         var removeRef = dictType == null
             ? this.outer.memberRefs.GetMapRemoveReference(mapType)
             : this.outer.memberRefs.GetMethodReference(
-                dictType.GetMethod("Remove", new[] { mapType.KeyType.ClrType })
+                dictType.GetMethod(
+                    "Remove",
+                    new[] { Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation") })
                 ?? throw new InvalidOperationException(
                     $"Dictionary type '{dictType.FullName}' has no Remove(K) method."));
 
@@ -1217,22 +1222,25 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 EntityHandle fieldHandle;
+                var initField = Invariant.Required(
+                    init.Field,
+                    "a field initializer targets either a field or a property, and the property form is handled above");
                 if (init.FieldDeclaringType != null)
                 {
                     fieldHandle = this.ResolveStructLiteralFieldToken(literal, init);
                 }
                 else if (isGeneric || literal.StructType.ClrType != null)
                 {
-                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
                 }
-                else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
+                else if (this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle))
                 {
                     fieldHandle = defHandle;
                 }
                 else
                 {
                     throw new InvalidOperationException(
-                        $"Class field '{init.Field.Name}' has no emitted FieldDef.");
+                        $"Class field '{initField.Name}' has no emitted FieldDef.");
                 }
 
                 this.il.OpCode(ILOpCode.Dup);
@@ -1263,7 +1271,7 @@ internal sealed partial class MethodBodyEmitter
         // symbol's InstanceFieldInitializers expressions — the binder injects
         // exactly those instances), so initializer side effects run once.
         var structDefinition = literal.StructType.Definition ?? literal.StructType;
-        HashSet<BoundExpression> declaredInitializerValues = null;
+        HashSet<BoundExpression>? declaredInitializerValues = null;
         if (this.outer.cache.ClassCtorHandles.ContainsKey(structDefinition)
             && ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(structDefinition))
         {
@@ -1320,22 +1328,25 @@ internal sealed partial class MethodBodyEmitter
             }
 
             EntityHandle fieldHandle;
+            var initField = Invariant.Required(
+                init.Field,
+                "a field initializer targets either a field or a property, and the property form is handled above");
             if (init.FieldDeclaringType != null)
             {
                 fieldHandle = this.ResolveStructLiteralFieldToken(literal, init);
             }
             else if (isGeneric || literal.StructType.ClrType != null)
             {
-                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
             }
-            else if (this.outer.cache.StructFieldDefs.TryGetValue(init.Field, out var defHandle))
+            else if (this.outer.cache.StructFieldDefs.TryGetValue(initField, out var defHandle))
             {
                 fieldHandle = defHandle;
             }
             else
             {
                 throw new InvalidOperationException(
-                    $"Struct field '{init.Field.Name}' has no emitted FieldDef.");
+                    $"Struct field '{initField.Name}' has no emitted FieldDef.");
             }
 
             this.il.LoadLocalAddress(slot);
@@ -1355,8 +1366,10 @@ internal sealed partial class MethodBodyEmitter
         var fieldContainer = ResolveFieldReferenceContainer(
             initializer.FieldDeclaringType,
             literal.StructType,
-            initializer.Field);
-        return this.outer.userTokens.ResolveFieldToken(fieldContainer, initializer.Field);
+            Invariant.Required(initializer.Field, "a field initializer targets either a field or a property, and the property form is handled above"));
+        return this.outer.userTokens.ResolveFieldToken(
+            Invariant.Required(fieldContainer, "every caller reaches here only after testing FieldDeclaringType, and ResolveFieldReferenceContainer returns null only for a null declaring type"),
+            Invariant.Required(initializer.Field, "a field initializer targets either a field or a property, and the property form is handled above"));
     }
 
     /// <summary>
@@ -1426,9 +1439,12 @@ internal sealed partial class MethodBodyEmitter
             // This branch executes but resolves to the same token as the else-arm for every
             // expressible program. The !isGeneric guard above excludes imported and user-authored
             // generics, so both that guard and generic-record support must change before this discriminates.
+            var initField = Invariant.Required(
+                init.Field,
+                "a field initializer targets either a field or a property, and the property form is handled above");
             var fieldHandle = init.FieldDeclaringType != null
                 ? this.ResolveStructLiteralFieldToken(literal, init)
-                : this.outer.userTokens.ResolveFieldToken(literal.StructType, init.Field);
+                : this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
             this.il.OpCode(ILOpCode.Dup);
             this.EmitExpression(init.Value);
             this.il.OpCode(ILOpCode.Stfld);
@@ -1443,7 +1459,7 @@ internal sealed partial class MethodBodyEmitter
     /// (`.ctor(SameType)`, recognizable as a single parameter whose type is
     /// the declaring type itself).
     /// </summary>
-    private static ConstructorInfo ResolveImportedPositionalConstructor(Type importedClrType, int parameterCount)
+    private static ConstructorInfo? ResolveImportedPositionalConstructor(Type importedClrType, int parameterCount)
     {
         foreach (var ctor in ClrTypeUtilities.SafeGetConstructors(importedClrType, BindingFlags.Public | BindingFlags.Instance))
         {
@@ -1818,7 +1834,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        ConstructorInfo ctor = null;
+        ConstructorInfo? ctor = null;
         foreach (var candidate in clrType.GetConstructors())
         {
             if (candidate.GetParameters().Length == parameterCount)
@@ -2017,7 +2033,7 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     /// <param name="declared">The statically declared type of the read.</param>
     /// <param name="narrowed">The narrowed type, or <c>null</c> when not narrowed.</param>
-    private void EmitNarrowingCastIfNeeded(TypeSymbol declared, TypeSymbol narrowed)
+    private void EmitNarrowingCastIfNeeded(TypeSymbol declared, TypeSymbol? narrowed)
     {
         if (narrowed == null)
         {

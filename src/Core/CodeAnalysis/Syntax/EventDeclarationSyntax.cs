@@ -13,9 +13,9 @@ public sealed class EventDeclarationSyntax : SyntaxNode
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
-    private SyntaxToken explicitInterfaceOpenParenToken;
-    private TypeClauseSyntax explicitInterfaceType;
-    private SyntaxToken explicitInterfaceCloseParenToken;
+    private SyntaxToken? explicitInterfaceOpenParenToken;
+    private TypeClauseSyntax? explicitInterfaceType;
+    private SyntaxToken? explicitInterfaceCloseParenToken;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EventDeclarationSyntax"/> class.
@@ -32,15 +32,15 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// <param name="closeBraceToken">The optional closing brace.</param>
     public EventDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken openModifier,
-        SyntaxToken overrideModifier,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? openModifier,
+        SyntaxToken? overrideModifier,
         SyntaxToken eventKeyword,
         SyntaxToken identifier,
-        TypeClauseSyntax type,
-        SyntaxToken openBraceToken,
+        TypeClauseSyntax? type,
+        SyntaxToken? openBraceToken,
         ImmutableArray<EventAccessorSyntax> accessors,
-        SyntaxToken closeBraceToken)
+        SyntaxToken? closeBraceToken)
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
@@ -65,13 +65,13 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>Gets the optional <c>open</c> contextual keyword.</summary>
-    public SyntaxToken OpenModifier { get; }
+    public SyntaxToken? OpenModifier { get; }
 
     /// <summary>Gets the optional <c>override</c> contextual keyword.</summary>
-    public SyntaxToken OverrideModifier { get; }
+    public SyntaxToken? OverrideModifier { get; }
 
     /// <summary>Gets the identifier token whose text is <c>event</c>.</summary>
     public SyntaxToken EventKeyword { get; }
@@ -80,23 +80,23 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     public SyntaxToken Identifier { get; }
 
     /// <summary>Gets the event handler type clause.</summary>
-    public TypeClauseSyntax Type { get; }
+    public TypeClauseSyntax? Type { get; }
 
     /// <summary>Gets the optional opening brace token.</summary>
-    public SyntaxToken OpenBraceToken { get; }
+    public SyntaxToken? OpenBraceToken { get; }
 
     /// <summary>Gets the add/remove accessor list. Empty for field-like events.</summary>
     public ImmutableArray<EventAccessorSyntax> Accessors { get; }
 
     /// <summary>Gets the optional closing brace token.</summary>
-    public SyntaxToken CloseBraceToken { get; }
+    public SyntaxToken? CloseBraceToken { get; }
 
     /// <summary>
     /// Gets or sets the optional open parenthesis introducing a dedicated
     /// explicit-interface-implementation qualifier clause, e.g. <c>event (IFoo) Changed T</c>
     /// (ADR-0149). Assigned by the parser; <see langword="null"/> for an ordinary event.
     /// </summary>
-    public SyntaxToken ExplicitInterfaceOpenParenthesisToken
+    public SyntaxToken? ExplicitInterfaceOpenParenthesisToken
     {
         get => explicitInterfaceOpenParenToken;
         set
@@ -110,7 +110,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// Gets or sets the interface type referenced by the explicit-interface qualifier
     /// clause (ADR-0149). Assigned by the parser; <see langword="null"/> when no clause is present.
     /// </summary>
-    public TypeClauseSyntax ExplicitInterfaceType
+    public TypeClauseSyntax? ExplicitInterfaceType
     {
         get => explicitInterfaceType;
         set
@@ -121,7 +121,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     }
 
     /// <summary>Gets or sets the optional close parenthesis terminating the explicit-interface qualifier clause (ADR-0149).</summary>
-    public SyntaxToken ExplicitInterfaceCloseParenthesisToken
+    public SyntaxToken? ExplicitInterfaceCloseParenthesisToken
     {
         get => explicitInterfaceCloseParenToken;
         set
@@ -153,7 +153,7 @@ public sealed class EventDeclarationSyntax : SyntaxNode
     /// <param name="type">The interface type clause, or <see langword="null"/> when no clause is present.</param>
     /// <param name="closeParen">The close parenthesis token, or <see langword="null"/> when no clause is present.</param>
     /// <returns>This same <see cref="EventDeclarationSyntax"/>.</returns>
-    internal EventDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken openParen, TypeClauseSyntax type, SyntaxToken closeParen)
+    internal EventDeclarationSyntax WithExplicitInterfaceClause(SyntaxToken? openParen, TypeClauseSyntax? type, SyntaxToken? closeParen)
     {
         if (type == null)
         {

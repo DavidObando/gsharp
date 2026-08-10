@@ -35,7 +35,7 @@ internal sealed class MvidPEBuilder : ManagedPEBuilder
         MetadataRootBuilder metadataRootBuilder,
         BlobBuilder ilStream,
         MethodDefinitionHandle entryPoint,
-        DebugDirectoryBuilder debugDirectoryBuilder,
+        DebugDirectoryBuilder? debugDirectoryBuilder,
         Func<IEnumerable<Blob>, BlobContentId> deterministicIdProvider)
         : base(
             header,

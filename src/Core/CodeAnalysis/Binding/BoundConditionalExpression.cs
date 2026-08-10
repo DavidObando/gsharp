@@ -25,7 +25,7 @@ public sealed class BoundConditionalExpression : BoundExpression
     /// <param name="whenFalse">The bound false-branch expression, already converted to <paramref name="type"/>.</param>
     /// <param name="type">The common result type chosen for the conditional.</param>
     public BoundConditionalExpression(
-        SyntaxNode syntax,
+        SyntaxNode? syntax,
         BoundExpression condition,
         BoundExpression whenTrue,
         BoundExpression whenFalse,

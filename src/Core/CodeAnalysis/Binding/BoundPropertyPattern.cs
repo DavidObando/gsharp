@@ -15,7 +15,7 @@ public sealed class BoundPropertyPattern : BoundPattern
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="type">The discriminant type.</param>
     /// <param name="fields">The field patterns.</param>
-    public BoundPropertyPattern(SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundPropertyPatternField> fields)
+    public BoundPropertyPattern(SyntaxNode? syntax, TypeSymbol type, ImmutableArray<BoundPropertyPatternField> fields)
         : base(syntax, type)
     {
         Fields = fields;
@@ -48,8 +48,8 @@ public sealed class BoundPropertyPattern : BoundPattern
     public ImmutableArray<BoundPropertyPatternField> Fields { get; }
 
     /// <summary>Gets the temporary holding the pattern input when a getter or nullable value requires capture.</summary>
-    public LocalVariableSymbol InputVariable { get; }
+    public LocalVariableSymbol? InputVariable { get; }
 
     /// <summary>Gets the unwrapped nullable value-type temporary, when required.</summary>
-    public LocalVariableSymbol UnwrappedVariable { get; }
+    public LocalVariableSymbol? UnwrappedVariable { get; }
 }

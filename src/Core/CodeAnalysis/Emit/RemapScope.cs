@@ -45,8 +45,8 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </remarks>
 internal readonly struct RemapScope : IEquatable<RemapScope>
 {
-    private readonly object classRemap;
-    private readonly object methodRemap;
+    private readonly object? classRemap;
+    private readonly object? methodRemap;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RemapScope"/> struct.
@@ -55,7 +55,7 @@ internal readonly struct RemapScope : IEquatable<RemapScope>
     /// </summary>
     /// <param name="classRemap">The active state-machine/nested/closure class remap (VAR channel), or <see langword="null"/>.</param>
     /// <param name="methodRemap">The active generic-promoted lambda method remap (MVAR channel), or <see langword="null"/>.</param>
-    internal RemapScope(object classRemap, object methodRemap)
+    internal RemapScope(object? classRemap, object? methodRemap)
     {
         this.classRemap = classRemap;
         this.methodRemap = methodRemap;
@@ -67,7 +67,7 @@ internal readonly struct RemapScope : IEquatable<RemapScope>
         && ReferenceEquals(this.methodRemap, other.methodRemap);
 
     /// <inheritdoc />
-    public override bool Equals(object obj) => obj is RemapScope other && this.Equals(other);
+    public override bool Equals(object? obj) => obj is RemapScope other && this.Equals(other);
 
     /// <inheritdoc />
     public override int GetHashCode()

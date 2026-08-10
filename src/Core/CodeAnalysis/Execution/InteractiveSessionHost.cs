@@ -26,15 +26,15 @@ public sealed class InteractiveSessionHost : IDisposable
 {
     private readonly object gate = new();
     private readonly IReadOnlyList<string> referencePaths;
-    private Dictionary<string, Assembly> loadedByName;
-    private AssemblyLoadContext loadContext;
+    private Dictionary<string, Assembly>? loadedByName;
+    private AssemblyLoadContext? loadContext;
     private bool disposed;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="InteractiveSessionHost"/> class.
     /// </summary>
     /// <param name="referencePaths">User-supplied reference assembly paths (<c>/r:</c>) made resolvable at runtime; may be <see langword="null"/>.</param>
-    public InteractiveSessionHost(IReadOnlyList<string> referencePaths = null)
+    public InteractiveSessionHost(IReadOnlyList<string>? referencePaths = null)
     {
         this.referencePaths = referencePaths ?? Array.Empty<string>();
         CreateLoadContext();
@@ -64,10 +64,13 @@ public sealed class InteractiveSessionHost : IDisposable
         lock (gate)
         {
             using var stream = new MemoryStream(peImage, writable: false);
-            assembly = loadContext.LoadFromStream(stream);
+
+            // loadContext is assigned in the constructor and cleared only by
+            // Dispose; a disposed host is not reused.
+            assembly = loadContext!.LoadFromStream(stream);
             if (!string.IsNullOrEmpty(assemblyName))
             {
-                loadedByName[assemblyName] = assembly;
+                loadedByName![assemblyName] = assembly;
             }
         }
 
@@ -107,7 +110,7 @@ public sealed class InteractiveSessionHost : IDisposable
     /// <param name="typeFullName">The declaring type's metadata full name (e.g. <c>gsi3.&lt;Program&gt;</c>).</param>
     /// <param name="fieldName">The static field's name.</param>
     /// <returns>The field's current value, or <see langword="null"/>.</returns>
-    public object ReadStaticField(Assembly assembly, string typeFullName, string fieldName)
+    public object? ReadStaticField(Assembly assembly, string typeFullName, string fieldName)
     {
         if (assembly is null)
         {
@@ -136,7 +139,10 @@ public sealed class InteractiveSessionHost : IDisposable
         lock (gate)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            loadContext.Unload();
+
+            // ThrowIf above rules out the disposed state, the only one in
+            // which loadContext is null.
+            loadContext!.Unload();
             CreateLoadContext();
         }
     }
@@ -152,7 +158,10 @@ public sealed class InteractiveSessionHost : IDisposable
             }
 
             disposed = true;
-            loadContext.Unload();
+
+            // The `disposed` guard above returns early on a second call, so
+            // loadContext is still the one the constructor assigned.
+            loadContext!.Unload();
             loadContext = null;
             loadedByName = null;
         }
@@ -165,7 +174,7 @@ public sealed class InteractiveSessionHost : IDisposable
         loadContext.Resolving += ResolveDependency;
     }
 
-    private Assembly ResolveDependency(AssemblyLoadContext context, AssemblyName assemblyName)
+    private Assembly? ResolveDependency(AssemblyLoadContext context, AssemblyName assemblyName)
     {
         if (assemblyName.Name is null)
         {
@@ -220,7 +229,7 @@ public sealed class InteractiveSessionHost : IDisposable
 /// </summary>
 public sealed class SubmissionRunResult
 {
-    internal SubmissionRunResult(Assembly assembly, object returnValue, Exception unhandledException)
+    internal SubmissionRunResult(Assembly assembly, object? returnValue, Exception? unhandledException)
     {
         Assembly = assembly;
         ReturnValue = returnValue;
@@ -231,8 +240,8 @@ public sealed class SubmissionRunResult
     public Assembly Assembly { get; }
 
     /// <summary>Gets the entry point's return value (<see langword="null"/> for void or on failure).</summary>
-    public object ReturnValue { get; }
+    public object? ReturnValue { get; }
 
     /// <summary>Gets the exception the submission's entry point threw, or <see langword="null"/> on success.</summary>
-    public Exception UnhandledException { get; }
+    public Exception? UnhandledException { get; }
 }

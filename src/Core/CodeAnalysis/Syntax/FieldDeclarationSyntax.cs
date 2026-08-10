@@ -23,12 +23,12 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// <param name="initializer">The optional initializer expression.</param>
     public FieldDeclarationSyntax(
         SyntaxTree syntaxTree,
-        SyntaxToken accessibilityModifier,
-        SyntaxToken varOrLetKeyword,
+        SyntaxToken? accessibilityModifier,
+        SyntaxToken? varOrLetKeyword,
         SyntaxToken identifier,
         TypeClauseSyntax type,
-        SyntaxToken equalsToken = null,
-        ExpressionSyntax initializer = null)
+        SyntaxToken? equalsToken = null,
+        ExpressionSyntax? initializer = null)
         : base(syntaxTree)
     {
         Annotations = ImmutableArray<AnnotationSyntax>.Empty;
@@ -55,7 +55,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>Gets the optional accessibility modifier token.</summary>
-    public SyntaxToken AccessibilityModifier { get; }
+    public SyntaxToken? AccessibilityModifier { get; }
 
     /// <summary>
     /// Gets the required <c>var</c> or <c>let</c> binding keyword (ADR-0067).
@@ -64,7 +64,7 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     /// parser is recovering from a missing keyword and has already reported a
     /// diagnostic at the field's position.
     /// </summary>
-    public SyntaxToken VarOrLetKeyword { get; }
+    public SyntaxToken? VarOrLetKeyword { get; }
 
     /// <summary>
     /// Gets a value indicating whether this field was declared with the
@@ -90,17 +90,17 @@ public sealed class FieldDeclarationSyntax : SyntaxNode
     public TypeClauseSyntax Type { get; }
 
     /// <summary>Gets the optional <c>=</c> token preceding the initializer (Issue #262).</summary>
-    public SyntaxToken EqualsToken { get; }
+    public SyntaxToken? EqualsToken { get; }
 
     /// <summary>Gets the optional initializer expression (Issue #262).</summary>
-    public ExpressionSyntax Initializer { get; }
+    public ExpressionSyntax? Initializer { get; }
 
     /// <summary>
     /// Gets the <c>fixed</c> contextual keyword token for a fixed-size buffer
     /// field <c>fixed name [N]T</c> (ADR-0122 §10 / issue #1035), or
     /// <c>null</c> for an ordinary field.
     /// </summary>
-    public SyntaxToken FixedKeyword { get; private set; }
+    public SyntaxToken? FixedKeyword { get; private set; }
 
     /// <summary>Gets a value indicating whether this declaration is a fixed-size buffer field (ADR-0122 §10 / issue #1035).</summary>
     public bool IsFixedBuffer => FixedKeyword != null;

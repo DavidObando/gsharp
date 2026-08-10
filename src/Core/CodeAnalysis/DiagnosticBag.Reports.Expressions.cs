@@ -322,9 +322,14 @@ public sealed partial class DiagnosticBag
     public void ReportNullableDelegateReceiverInvocation(
         TextLocation location,
         string receiverName,
-        string nullSafeInvocation)
+        string? nullSafeInvocation)
     {
-        var advice = $"Use '{nullSafeInvocation}' for null-safe invocation, bind it with 'if let', or assert non-null with '!!' before calling.";
+        // A null token means the caller had no receiver syntax to derive one
+        // from. Interpolating it would render "Use '' for null-safe
+        // invocation"; drop the clause instead so the advice stays readable.
+        var advice = nullSafeInvocation is null
+            ? "Bind it with 'if let', or assert non-null with '!!' before calling."
+            : $"Use '{nullSafeInvocation}' for null-safe invocation, bind it with 'if let', or assert non-null with '!!' before calling.";
         Report(location, DiagnosticDescriptors.NullableDelegateReceiverInvocation, receiverName, advice);
     }
 
@@ -364,7 +369,7 @@ public sealed partial class DiagnosticBag
     /// (typically by adding an explicit type argument or casting). Pass
     /// <see langword="null"/> when the call site only knows the count.
     /// </param>
-    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string> candidateSignatures = null)
+    public void ReportAmbiguousOverload(TextLocation location, string name, int candidateCount, IEnumerable<string>? candidateSignatures = null)
     {
         var candidates = candidateSignatures?
             .Where(s => !string.IsNullOrEmpty(s))
