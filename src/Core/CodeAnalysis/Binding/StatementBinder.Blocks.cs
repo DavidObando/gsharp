@@ -99,7 +99,10 @@ internal sealed partial class StatementBinder
             }
 
             var body = BindStatementWithNarrowing(caseSyntax.Body, frame);
-            scope = scope.Parent;
+
+            // scope was just pushed as a child of the pre-existing (non-null)
+            // scope above, so its Parent is never null here.
+            scope = scope.Parent!;
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
 
             // Issue #991: a guarded arm may not actually run even when its
@@ -244,7 +247,9 @@ internal sealed partial class StatementBinder
                 exceptionHandlerRegions.Pop();
             }
 
-            scope = scope.Parent;
+            // scope was just pushed as a child of the pre-existing (non-null)
+            // scope above, so its Parent is never null here.
+            scope = scope.Parent!;
 
             catches.Add(new BoundCatchClause(catchType, variable, body));
         }
@@ -777,7 +782,10 @@ internal sealed partial class StatementBinder
                 }
 
                 body = Invariant.Required(BindStatement(caseSyntax.Body), "a receive-bind select case has a bound body");
-                scope = scope.Parent;
+
+                // scope was just pushed as a child of the pre-existing (non-null)
+                // scope above, so its Parent is never null here.
+                scope = scope.Parent!;
             }
             else
             {
@@ -800,7 +808,10 @@ internal sealed partial class StatementBinder
         // leaking into the enclosing function.
         scope = new BoundScope(scope);
         var body = Invariant.Required(BindStatement(syntax.Body), "a scope statement has a bound body");
-        scope = scope.Parent;
+
+        // scope was just pushed as a child of the pre-existing (non-null)
+        // scope above, so its Parent is never null here.
+        scope = scope.Parent!;
         return new BoundScopeStatement(syntax, body);
     }
 
@@ -941,7 +952,9 @@ internal sealed partial class StatementBinder
         }
         finally
         {
-            scope = scope.Parent;
+            // scope was just pushed as a child of the pre-existing (non-null)
+            // scope above, so its Parent is never null here.
+            scope = scope.Parent!;
         }
     }
 
@@ -1094,7 +1107,10 @@ internal sealed partial class StatementBinder
             isReadOnly: false,
             type: Invariant.Required(elementType, "an async enumerable has an element type"));
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
-        scope = scope.Parent;
+
+        // scope was just pushed as a child of the pre-existing (non-null)
+        // scope above, so its Parent is never null here.
+        scope = scope.Parent!;
 
         return new BoundAwaitForRangeStatement(originatingSyntax, variable, stream, body, breakLabel, continueLabel);
     }

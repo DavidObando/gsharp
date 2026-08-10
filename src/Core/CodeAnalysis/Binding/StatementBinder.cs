@@ -269,7 +269,9 @@ internal sealed partial class StatementBinder
             BindBlockStatements(syntax.Statements, 0, statements);
         }
 
-        scope = scope.Parent;
+        // scope was just pushed as a child of the pre-existing (non-null)
+        // scope above, so its Parent is never null here.
+        scope = scope.Parent!;
 
         return new BoundBlockStatement(syntax, statements.ToImmutable());
     }

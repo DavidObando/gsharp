@@ -121,7 +121,10 @@ internal sealed partial class ExpressionBinder
         finally
         {
             binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
-            scope = scope.Parent;
+
+            // scope was just pushed as a child of the pre-existing (non-null)
+            // scope above, so its Parent is never null here.
+            scope = scope.Parent!;
         }
 
         // Bound AFTER the binding scope/frame is popped: the else branch never

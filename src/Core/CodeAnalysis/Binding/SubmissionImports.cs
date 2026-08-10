@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -155,7 +156,7 @@ public sealed class SubmissionImports
     /// <param name="preferredArity">The preferred generic arity, or -1/0 for a non-generic use site.</param>
     /// <param name="clrType">The resolved CLR type on success.</param>
     /// <returns>Whether a prior submission declares the type.</returns>
-    public bool TryResolveType(ReferenceResolver references, string name, int preferredArity, out Type? clrType)
+    public bool TryResolveType(ReferenceResolver references, string name, int preferredArity, [NotNullWhen(true)] out Type? clrType)
     {
         clrType = null;
         foreach (var submission in NewestFirst)

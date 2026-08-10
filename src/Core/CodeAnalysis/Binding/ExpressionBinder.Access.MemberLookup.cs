@@ -986,7 +986,9 @@ internal sealed partial class ExpressionBinder
         var captureRef = new BoundVariableExpression(null, capture);
         var whenNotNull = BindIndexAgainstTarget(captureRef, syntax.Index, syntax.Target.Location);
 
-        scope = scope.Parent;
+        // scope was just pushed as a child of the pre-existing (non-null)
+        // scope a few lines above, so its Parent is never null here.
+        scope = scope.Parent!;
 
         if (whenNotNull is BoundErrorExpression || whenNotNull.Type == TypeSymbol.Error)
         {
@@ -1425,7 +1427,9 @@ internal sealed partial class ExpressionBinder
                 diagnosticLocation,
                 outerSyntax);
 
-            scope = scope.Parent;
+            // scope was just pushed as a child of the pre-existing (non-null)
+            // scope a few lines above, so its Parent is never null here.
+            scope = scope.Parent!;
 
             if (whenNotNull is BoundErrorExpression)
             {

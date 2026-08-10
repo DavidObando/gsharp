@@ -1350,7 +1350,9 @@ internal sealed partial class ExpressionBinder
         var captureRef = new BoundVariableExpression(null, capture);
         var whenNotNull = BindAccessorStep(captureRef, null, rightPart);
 
-        scope = scope.Parent;
+        // scope was just pushed as a child of the pre-existing (non-null)
+        // scope a few lines above, so its Parent is never null here.
+        scope = scope.Parent!;
 
         // Issue #1213: a null-conditional invocation whose access produces no
         // value — the canonical event-raise form `evt?.Invoke(args)` where the
@@ -2088,8 +2090,8 @@ internal sealed partial class ExpressionBinder
     {
         var container = outerConstructed.Definition ?? outerConstructed;
         var literalArity = structLiteral.TypeArgumentList != null ? structLiteral.TypeArgumentList.Arguments.Count : -1;
-        TypeSymbol nestedType;
-        StructSymbol declaringContainer = outerConstructed;
+        TypeSymbol? nestedType;
+        StructSymbol? declaringContainer = outerConstructed;
         if (!scope.TryLookupNestedTypeAlias(container, structLiteral.TypeIdentifier.Text, literalArity, out nestedType)
             && !scope.TryLookupNestedTypeAliasIncludingInherited(
                 outerConstructed,
@@ -2110,8 +2112,11 @@ internal sealed partial class ExpressionBinder
 
         // The enclosing construction already flattens its own enclosing chain in
         // EnclosingTypeArguments; append its own TypeArguments so the nested
-        // type sees the full outermost-first vector.
-        var enclosingArgs = FlattenConstructedEnclosingArguments(declaringContainer);
+        // type sees the full outermost-first vector. declaringContainer is
+        // never null here: it starts as outerConstructed (non-null) and is
+        // only ever overwritten by TryLookupNestedTypeAliasIncludingInherited's
+        // out parameter when that call returns true ([NotNullWhen(true)]).
+        var enclosingArgs = FlattenConstructedEnclosingArguments(declaringContainer!);
         return BindStructLiteralExpression(structLiteral, nestedStructDef.Definition ?? nestedStructDef, enclosingArgs);
     }
 
@@ -2151,7 +2156,7 @@ internal sealed partial class ExpressionBinder
         {
             var arity = segments[i].Args.IsDefaultOrEmpty ? -1 : segments[i].Args.Length;
             var lookupContainer = (containerDef as StructSymbol)?.Definition ?? containerDef;
-            TypeSymbol nested;
+            TypeSymbol? nested;
             if (!scope.TryLookupNestedTypeAlias(lookupContainer, segments[i].Name, arity, out nested))
             {
                 if (containerDef is StructSymbol containerStruct
@@ -2177,7 +2182,12 @@ internal sealed partial class ExpressionBinder
                         : enclosingArgs.AddRange(segments[i].Args);
                 }
 
-                containerDef = nested;
+                // nested is never null here: either TryLookupNestedTypeAlias
+                // above returned true ([NotNullWhen(true)]), or it failed and
+                // the recovery branch above reassigned it from inheritedNested
+                // (also [NotNullWhen(true)]) — every other path already
+                // returned false before reaching this point.
+                containerDef = nested!;
                 continue;
             }
 
