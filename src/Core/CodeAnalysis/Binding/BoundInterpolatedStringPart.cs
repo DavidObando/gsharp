@@ -58,12 +58,12 @@ public readonly struct BoundInterpolatedStringPart
     /// <param name="format">The optional format specifier.</param>
     /// <param name="holeSyntax">The hole's own syntax, used to anchor hole-level diagnostics.</param>
     /// <returns>The part.</returns>
-    public static BoundInterpolatedStringPart FromHole(BoundExpression? value, int? alignment, string? format, SyntaxNode? holeSyntax = null)
+    public static BoundInterpolatedStringPart FromHole(BoundExpression value, int? alignment, string? format, SyntaxNode? holeSyntax = null)
         => new(literal: null, value, alignment, format, holeSyntax);
 
     /// <summary>Returns a copy of this hole with a different bound value (used by tree rewriters).</summary>
     /// <param name="value">The replacement hole expression.</param>
     /// <returns>The updated part.</returns>
-    public BoundInterpolatedStringPart WithValue(BoundExpression? value)
+    public BoundInterpolatedStringPart WithValue(BoundExpression value)
         => new(Literal, value, Alignment, Format, HoleSyntax);
 }
