@@ -249,8 +249,14 @@ internal sealed class LambdaBinder
         foreach (var p in syntax.Parameters)
         {
             var pname = p.Identifier.Text;
+
+            // The pre-migration code was `bindTypeClause(p.Type) ?? TypeSymbol.Error`.
+            // Restored: a parameter whose type clause fails to bind should
+            // degrade to Error so the binder's own diagnostic surfaces, not
+            // raise GS9998. Asserting here claims a contract bindTypeClause
+            // does not declare.
             var ptype = p.Type is TypeClauseSyntax type
-                ? bindTypeClause(type)
+                ? bindTypeClause(type) ?? TypeSymbol.Error
                 : TypeSymbol.Error;
 
             // ADR-0101 follow-up / issue #812: variadic parameters are now
@@ -259,7 +265,7 @@ internal sealed class LambdaBinder
             // a typed delegate (the common case), pack/pass-through happens
             // on the indirect-call path inside OverloadResolver.
             var isVariadic = p.IsVariadic;
-            var parameterType = Invariant.Required(ptype, "lambda parameter binding produces a type");
+            var parameterType = ptype;
             if (isVariadic && parameterType != TypeSymbol.Error)
             {
                 parameterType = SliceTypeSymbol.Get(parameterType);

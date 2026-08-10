@@ -2075,7 +2075,13 @@ public abstract class BoundTreeRewriter
     {
         var receiver = node.Receiver != null ? RewriteExpression(node.Receiver) : null;
         var value = RewriteExpression(node.Value);
-        return receiver == node.Receiver && value == node.Value ? node : new BoundPropertyAssignmentExpression(null, Invariant.Required(receiver, "a property assignment has a receiver when rewritten"), node.StructType, node.Property, value);
+
+        // receiver is null for a STATIC property assignment -- the line above
+        // produces null for exactly that shape, and the constructor's receiver
+        // parameter is nullable to accept it. The early return only covers the
+        // case where the value is also unchanged, so asserting here (as this
+        // line briefly did) crashed any rewrite of a static property's RHS.
+        return receiver == node.Receiver && value == node.Value ? node : new BoundPropertyAssignmentExpression(null, receiver, node.StructType, node.Property, value);
     }
 
     /// <summary>Rewrites a null-conditional access expression (Phase 3.C.3b).</summary>

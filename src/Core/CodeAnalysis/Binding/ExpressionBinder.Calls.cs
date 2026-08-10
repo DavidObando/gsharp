@@ -380,15 +380,17 @@ internal sealed partial class ExpressionBinder
         if (function?.IsStaticInitializer == true &&
             function.StaticOwnerType is InterfaceSymbol)
         {
+            // BindInterfaceStaticSpreadStatements branches on
+            // `targetElementType != null` itself, so null is a shape it handles.
+            // Asserting here would make that branch dead code and turn a handled
+            // case into GS9998.
             return BindInterfaceStaticSpreadStatements(
                 collectionLocal,
                 spread,
                 sourceLocal,
                 sourceToken,
                 source,
-                Invariant.Required(
-                    targetElementType,
-                    "an interface static collection spread has a resolved element type"));
+                targetElementType);
         }
 
         var targetName = "$spreadtarget" +
@@ -479,7 +481,7 @@ internal sealed partial class ExpressionBinder
         LocalVariableSymbol sourceLocal,
         SyntaxToken sourceToken,
         BoundExpression source,
-        TypeSymbol targetElementType)
+        TypeSymbol? targetElementType)
     {
         var tree = spread.SyntaxTree;
         var position = spread.Span.Start;

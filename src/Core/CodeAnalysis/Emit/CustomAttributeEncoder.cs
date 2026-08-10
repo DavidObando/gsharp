@@ -496,12 +496,16 @@ internal sealed class CustomAttributeEncoder
             return;
         }
 
-        if (clrType.FullName is not { } fullName)
-        {
-            return;
-        }
-
-        if (!this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved))
+        // Type.FullName is null for a constructed generic whose type argument
+        // has no full name of its own -- reachable via the C#11-style generic
+        // attribute application in DeclarationBinder.Attributes.cs. That is a
+        // resolve FAILURE, not a reason to skip the attribute: TryResolveType
+        // already returned false for a null name (its first statement is an
+        // IsNullOrEmpty check) and the emit continued against the raw CLR type.
+        // Returning here instead silently dropped the CustomAttribute row.
+        var fullName = clrType.FullName;
+        if (fullName == null
+            || !this.emitCtx.References.TryResolveType(fullName, requireExternalVisibility: false, out var resolved))
         {
             resolved = clrType;
         }
