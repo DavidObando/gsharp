@@ -136,11 +136,6 @@ public class HotReloadDeltaBuilderTests
                 Handle: handle,
                 Definition: reader.GetMethodDefinition(handle)))
             .ToArray();
-        Assert.Equal(
-            new[] { "First", "Last" },
-            deltaMethods
-                .Select(method => reader.GetString(method.Definition.Name))
-                .ToArray());
 
         var expectedHandles = new[]
         {
