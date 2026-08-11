@@ -18,13 +18,14 @@ internal static class SymbolDocumentationIdProvider
         return symbol switch
         {
             PackageSymbol package => GetDocumentationId(package),
-            StructSymbol type => GetDocumentationId(type),
+            TypeSymbol type when IsSourceNamedType(type) => GetDocumentationId(type),
+            EnumMemberSymbol enumMember => GetDocumentationId(enumMember),
             FunctionSymbol function => GetDocumentationId(function),
             _ => null,
         };
     }
 
-    public static string? GetDocumentationId(Symbol member, StructSymbol? ownerType)
+    public static string? GetDocumentationId(Symbol member, TypeSymbol? ownerType)
     {
         return member switch
         {
@@ -41,9 +42,9 @@ internal static class SymbolDocumentationIdProvider
         return package is null ? null : $"N:{package.Name}";
     }
 
-    internal static string? GetDocumentationId(StructSymbol type)
+    internal static string? GetDocumentationId(TypeSymbol type)
     {
-        if (type is null)
+        if (type is null || !IsSourceNamedType(type))
         {
             return null;
         }
@@ -61,7 +62,10 @@ internal static class SymbolDocumentationIdProvider
         }
 
         var builder = new StringBuilder("M:");
-        var ownerType = function.ReceiverType as StructSymbol ?? function.StaticOwnerType as StructSymbol;
+        var candidateOwner = function.ReceiverType ?? function.StaticOwnerType;
+        var ownerType = candidateOwner is not null && IsSourceNamedType(candidateOwner)
+            ? candidateOwner
+            : null;
         if (ownerType is not null)
         {
             AppendTypeDeclarationName(builder, ownerType);
@@ -84,10 +88,18 @@ internal static class SymbolDocumentationIdProvider
         }
 
         AppendParameterList(builder, function, ownerType);
+
+        if (string.Equals(function.Name, "op_Implicit", StringComparison.Ordinal) ||
+            string.Equals(function.Name, "op_Explicit", StringComparison.Ordinal))
+        {
+            builder.Append('~');
+            AppendTypeReference(builder, function.Type, ownerType, function);
+        }
+
         return builder.ToString();
     }
 
-    private static string? GetDocumentationId(FieldSymbol field, StructSymbol? ownerType)
+    private static string? GetDocumentationId(FieldSymbol field, TypeSymbol? ownerType)
     {
         if (field is null || ownerType is null)
         {
@@ -100,7 +112,7 @@ internal static class SymbolDocumentationIdProvider
         return builder.ToString();
     }
 
-    private static string? GetDocumentationId(PropertySymbol property, StructSymbol? ownerType)
+    private static string? GetDocumentationId(PropertySymbol property, TypeSymbol? ownerType)
     {
         if (property is null || ownerType is null)
         {
@@ -110,10 +122,11 @@ internal static class SymbolDocumentationIdProvider
         var builder = new StringBuilder("P:");
         AppendTypeDeclarationName(builder, ownerType);
         builder.Append('.').Append(EncodeName(property.Name));
+        AppendParameterList(builder, property.Parameters, ownerType);
         return builder.ToString();
     }
 
-    private static string? GetDocumentationId(EventSymbol @event, StructSymbol? ownerType)
+    private static string? GetDocumentationId(EventSymbol @event, TypeSymbol? ownerType)
     {
         if (@event is null || ownerType is null)
         {
@@ -123,6 +136,19 @@ internal static class SymbolDocumentationIdProvider
         var builder = new StringBuilder("E:");
         AppendTypeDeclarationName(builder, ownerType);
         builder.Append('.').Append(EncodeName(@event.Name));
+        return builder.ToString();
+    }
+
+    private static string? GetDocumentationId(EnumMemberSymbol member)
+    {
+        if (member is null)
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder("F:");
+        AppendTypeDeclarationName(builder, member.EnumType);
+        builder.Append('.').Append(EncodeName(member.Name));
         return builder.ToString();
     }
 
@@ -137,7 +163,7 @@ internal static class SymbolDocumentationIdProvider
         builder.Append(EncodeName(function.Name));
     }
 
-    private static void AppendParameterList(StringBuilder builder, FunctionSymbol function, StructSymbol? ownerType)
+    private static void AppendParameterList(StringBuilder builder, FunctionSymbol function, TypeSymbol? ownerType)
     {
         var start = function.ReceiverType != null && function.ExplicitReceiverParameter != null ? 1 : 0;
         if (function.Parameters.Length <= start)
@@ -168,13 +194,67 @@ internal static class SymbolDocumentationIdProvider
         builder.Append(')');
     }
 
-    private static void AppendTypeDeclarationName(StringBuilder builder, StructSymbol type)
+    private static void AppendParameterList(
+        StringBuilder builder,
+        ImmutableArray<ParameterSymbol> parameters,
+        TypeSymbol? ownerType)
     {
-        var definition = type.Definition ?? type;
-        AppendSourceTypeDeclarationName(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length);
+        if (parameters.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        builder.Append('(');
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(',');
+            }
+
+            AppendTypeReference(builder, parameters[i].Type, ownerType, function: null);
+            if (parameters[i].RefKind != RefKind.None)
+            {
+                builder.Append('@');
+            }
+        }
+
+        builder.Append(')');
     }
 
-    private static void AppendTypeReference(StringBuilder builder, TypeSymbol type, StructSymbol? ownerType, FunctionSymbol function)
+    private static void AppendTypeDeclarationName(StringBuilder builder, TypeSymbol type)
+    {
+        var chain = SourceNestingChain(GetSourceDefinition(type));
+        if (chain.Count == 0)
+        {
+            builder.Append(EncodeName(type.Name));
+            return;
+        }
+
+        var packageName = GetPackageName(chain[0]);
+        if (!string.IsNullOrEmpty(packageName))
+        {
+            builder.Append(packageName).Append('.');
+        }
+
+        for (var i = 0; i < chain.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append('.');
+            }
+
+            var level = chain[i];
+            builder.Append(EncodeName(level.Name));
+            var arity = GetOwnArity(level);
+            if (arity > 0)
+            {
+                builder.Append('`').Append(arity);
+            }
+        }
+    }
+
+    private static void AppendTypeReference(StringBuilder builder, TypeSymbol type, TypeSymbol? ownerType, FunctionSymbol? function)
     {
         switch (type)
         {
@@ -182,7 +262,15 @@ internal static class SymbolDocumentationIdProvider
                 builder.Append("System.Void");
                 return;
             case TypeParameterSymbol typeParameter:
-                builder.Append(IsMethodTypeParameter(typeParameter, function) ? "``" : "`").Append(typeParameter.Ordinal);
+                if (IsMethodTypeParameter(typeParameter, function))
+                {
+                    builder.Append("``").Append(typeParameter.Ordinal);
+                }
+                else
+                {
+                    builder.Append('`').Append(GetTypeParameterOrdinal(typeParameter, ownerType));
+                }
+
                 return;
             case ArrayTypeSymbol arrayType:
                 AppendTypeReference(builder, arrayType.ElementType, ownerType, function);
@@ -199,15 +287,39 @@ internal static class SymbolDocumentationIdProvider
                 builder.Append('@');
                 return;
             case NullableTypeSymbol nullableType:
-                builder.Append("System.Nullable`1{");
-                AppendTypeReference(builder, nullableType.UnderlyingType, ownerType, function);
-                builder.Append('}');
+                if (NullableLifting.IsAnyValueTypeNullable(nullableType))
+                {
+                    builder.Append("System.Nullable{");
+                    AppendTypeReference(builder, nullableType.UnderlyingType, ownerType, function);
+                    builder.Append('}');
+                }
+                else
+                {
+                    AppendTypeReference(builder, nullableType.UnderlyingType, ownerType, function);
+                }
+
+                return;
+            case PointerTypeSymbol pointerType:
+                AppendTypeReference(builder, pointerType.PointeeType, ownerType, function);
+                builder.Append('*');
+                return;
+            case TupleTypeSymbol tupleType:
+                AppendTupleTypeReference(builder, tupleType.ElementTypes, 0, tupleType.Arity, ownerType, function);
+                return;
+            case FunctionTypeSymbol functionType:
+                AppendFunctionTypeReference(builder, functionType, ownerType, function);
                 return;
             case StructSymbol structType:
                 AppendSourceTypeReference(builder, structType, ownerType, function);
                 return;
             case InterfaceSymbol interfaceType:
                 AppendSourceTypeReference(builder, interfaceType, ownerType, function);
+                return;
+            case EnumSymbol enumType:
+                AppendSourceTypeReference(builder, enumType, ownerType, function);
+                return;
+            case DelegateTypeSymbol delegateType:
+                AppendSourceTypeReference(builder, delegateType, ownerType, function);
                 return;
             case ImportedTypeSymbol importedType when importedType.OpenDefinition is not null && !importedType.TypeArguments.IsDefaultOrEmpty:
                 AppendClrConstructedTypeReference(builder, importedType.OpenDefinition, importedType.TypeArguments, ownerType, function);
@@ -229,68 +341,352 @@ internal static class SymbolDocumentationIdProvider
         }
     }
 
-    private static void AppendSourceTypeReference(StringBuilder builder, StructSymbol type, StructSymbol? ownerType, FunctionSymbol function)
-    {
-        var definition = type.Definition ?? type;
-        AppendSourceNamedTypeReference(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length, type.TypeArguments, ownerType, function);
-    }
-
-    private static void AppendSourceTypeReference(StringBuilder builder, InterfaceSymbol type, StructSymbol? ownerType, FunctionSymbol function)
-    {
-        var definition = type.Definition ?? type;
-        AppendSourceNamedTypeReference(builder, definition.PackageName, definition.Name, definition.TypeParameters.Length, type.TypeArguments, ownerType, function);
-    }
-
-    private static void AppendSourceNamedTypeReference(
+    private static void AppendTupleTypeReference(
         StringBuilder builder,
-        string packageName,
-        string name,
-        int arity,
-        ImmutableArray<TypeSymbol> typeArguments,
-        StructSymbol? ownerType,
-        FunctionSymbol function)
+        ImmutableArray<TypeSymbol> elementTypes,
+        int start,
+        int count,
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
     {
-        if (!string.IsNullOrEmpty(packageName))
-        {
-            builder.Append(packageName).Append('.');
-        }
+        // TupleTypeSymbol retains only positional element types, which also
+        // erases tuple element names as required by XML documentation IDs.
+        builder.Append("System.ValueTuple{");
 
-        builder.Append(EncodeName(name));
-        if (!typeArguments.IsDefaultOrEmpty && typeArguments.Length > 0)
+        var directCount = Math.Min(count, 7);
+        for (var i = 0; i < directCount; i++)
         {
-            builder.Append('{');
-            for (var i = 0; i < typeArguments.Length; i++)
+            if (i > 0)
             {
-                if (i > 0)
-                {
-                    builder.Append(',');
-                }
-
-                AppendTypeReference(builder, typeArguments[i], ownerType, function);
+                builder.Append(',');
             }
 
-            builder.Append('}');
+            AppendTypeReference(builder, elementTypes[start + i], ownerType, function);
+        }
+
+        if (count > 7)
+        {
+            builder.Append(',');
+            AppendTupleTypeReference(builder, elementTypes, start + 7, count - 7, ownerType, function);
+        }
+
+        builder.Append('}');
+    }
+
+    private static void AppendFunctionTypeReference(
+        StringBuilder builder,
+        FunctionTypeSymbol type,
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
+    {
+        var returnsVoid = ReferenceEquals(type.ReturnType, TypeSymbol.Void);
+        builder.Append(returnsVoid ? "System.Action" : "System.Func");
+
+        var argumentCount = type.ParameterTypes.Length + (returnsVoid ? 0 : 1);
+        if (argumentCount == 0)
+        {
             return;
         }
 
-        if (arity > 0)
+        builder.Append('{');
+        for (var i = 0; i < type.ParameterTypes.Length; i++)
         {
-            builder.Append('`').Append(arity);
+            if (i > 0)
+            {
+                builder.Append(',');
+            }
+
+            AppendTypeReference(builder, type.ParameterTypes[i], ownerType, function);
         }
+
+        if (!returnsVoid)
+        {
+            if (type.ParameterTypes.Length > 0)
+            {
+                builder.Append(',');
+            }
+
+            AppendTypeReference(builder, type.ReturnType, ownerType, function);
+        }
+
+        builder.Append('}');
     }
 
-    private static void AppendSourceTypeDeclarationName(StringBuilder builder, string packageName, string name, int arity)
+    private static void AppendSourceTypeReference(
+        StringBuilder builder,
+        TypeSymbol type,
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
     {
+        var chain = SourceNestingChain(GetSourceDefinition(type));
+        if (chain.Count == 0)
+        {
+            builder.Append(EncodeName(type.Name));
+            return;
+        }
+
+        var packageName = GetPackageName(chain[0]);
         if (!string.IsNullOrEmpty(packageName))
         {
             builder.Append(packageName).Append('.');
         }
 
-        builder.Append(EncodeName(name));
-        if (arity > 0)
+        var enclosingArguments = GetEnclosingTypeArguments(type);
+        var ownArguments = GetOwnTypeArguments(type);
+        var enclosingArgumentIndex = 0;
+
+        for (var i = 0; i < chain.Count; i++)
         {
+            if (i > 0)
+            {
+                builder.Append('.');
+            }
+
+            var level = chain[i];
+            builder.Append(EncodeName(level.Name));
+
+            var arity = GetOwnArity(level);
+            if (arity == 0)
+            {
+                continue;
+            }
+
+            if (i < chain.Count - 1 &&
+                enclosingArgumentIndex + arity <= enclosingArguments.Length)
+            {
+                AppendSourceTypeArguments(
+                    builder,
+                    enclosingArguments,
+                    enclosingArgumentIndex,
+                    arity,
+                    ownerType,
+                    function);
+                enclosingArgumentIndex += arity;
+                continue;
+            }
+
+            if (i == chain.Count - 1 && ownArguments.Length == arity)
+            {
+                AppendSourceTypeArguments(builder, ownArguments, 0, arity, ownerType, function);
+                continue;
+            }
+
+            if (TryGetOwnerGenericOffset(level, ownerType, out var ownerOffset))
+            {
+                builder.Append('{');
+                for (var a = 0; a < arity; a++)
+                {
+                    if (a > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    builder.Append('`').Append(ownerOffset + a);
+                }
+
+                builder.Append('}');
+                continue;
+            }
+
             builder.Append('`').Append(arity);
         }
+    }
+
+    private static void AppendSourceTypeArguments(
+        StringBuilder builder,
+        ImmutableArray<TypeSymbol> arguments,
+        int start,
+        int count,
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
+    {
+        builder.Append('{');
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(',');
+            }
+
+            AppendTypeReference(builder, arguments[start + i], ownerType, function);
+        }
+
+        builder.Append('}');
+    }
+
+    private static bool IsSourceNamedType(TypeSymbol type)
+    {
+        return type is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol;
+    }
+
+    private static TypeSymbol GetSourceDefinition(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol structType => structType.Definition ?? structType,
+            InterfaceSymbol interfaceType => interfaceType.Definition ?? interfaceType,
+            EnumSymbol enumType => enumType.Definition ?? enumType,
+            DelegateTypeSymbol delegateType => delegateType.Definition ?? delegateType,
+            _ => type,
+        };
+    }
+
+    private static TypeSymbol? GetContainingSourceType(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol structType => structType.ContainingType,
+            InterfaceSymbol interfaceType => interfaceType.ContainingType,
+            EnumSymbol enumType => enumType.ContainingType,
+            _ => null,
+        };
+    }
+
+    private static List<TypeSymbol> SourceNestingChain(TypeSymbol type)
+    {
+        var chain = new List<TypeSymbol>();
+        for (TypeSymbol? current = GetSourceDefinition(type);
+             current is not null;
+             current = GetContainingSourceType(current) is { } containing
+                 ? GetSourceDefinition(containing)
+                 : null)
+        {
+            chain.Insert(0, current);
+        }
+
+        return chain;
+    }
+
+    private static string GetPackageName(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol structType => structType.PackageName,
+            InterfaceSymbol interfaceType => interfaceType.PackageName,
+            EnumSymbol enumType => enumType.PackageName,
+            DelegateTypeSymbol delegateType => delegateType.PackageName,
+            _ => string.Empty,
+        };
+    }
+
+    private static int GetOwnArity(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol { Declaration: { } declaration } =>
+                declaration.TypeParameterList?.Parameters.Count ?? 0,
+            StructSymbol structType => structType.TypeParameters.Length,
+            InterfaceSymbol { Declaration: { } declaration } =>
+                declaration.TypeParameterList?.Parameters.Count ?? 0,
+            InterfaceSymbol interfaceType => interfaceType.TypeParameters.Length,
+            DelegateTypeSymbol { Declaration: { } declaration } =>
+                declaration.TypeParameterList?.Parameters.Count ?? 0,
+            DelegateTypeSymbol delegateType => delegateType.TypeParameters.Length,
+            _ => 0,
+        };
+    }
+
+    private static ImmutableArray<TypeSymbol> GetEnclosingTypeArguments(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol structType => structType.EnclosingTypeArguments,
+            EnumSymbol enumType => enumType.EnclosingTypeArguments,
+            _ => ImmutableArray<TypeSymbol>.Empty,
+        };
+    }
+
+    private static ImmutableArray<TypeSymbol> GetOwnTypeArguments(TypeSymbol type)
+    {
+        return type switch
+        {
+            StructSymbol structType => structType.TypeArguments,
+            InterfaceSymbol interfaceType => interfaceType.TypeArguments,
+            DelegateTypeSymbol delegateType => delegateType.TypeArguments,
+            _ => ImmutableArray<TypeSymbol>.Empty,
+        };
+    }
+
+    private static bool TryGetOwnerGenericOffset(TypeSymbol type, TypeSymbol? ownerType, out int offset)
+    {
+        offset = 0;
+        if (ownerType is null || !IsSourceNamedType(ownerType))
+        {
+            return false;
+        }
+
+        foreach (var ownerLevel in SourceNestingChain(GetSourceDefinition(ownerType)))
+        {
+            if (ReferenceEquals(GetSourceDefinition(ownerLevel), GetSourceDefinition(type)))
+            {
+                return true;
+            }
+
+            offset += GetOwnArity(ownerLevel);
+        }
+
+        offset = 0;
+        return false;
+    }
+
+    private static int GetTypeParameterOrdinal(TypeParameterSymbol typeParameter, TypeSymbol? ownerType)
+    {
+        if (ownerType is null || !IsSourceNamedType(ownerType))
+        {
+            return typeParameter.Ordinal;
+        }
+
+        var chain = SourceNestingChain(GetSourceDefinition(ownerType));
+        var offsets = new int[chain.Count];
+        var offset = 0;
+        for (var i = 0; i < chain.Count; i++)
+        {
+            offsets[i] = offset;
+            offset += GetOwnArity(chain[i]);
+        }
+
+        for (var i = chain.Count - 1; i >= 0; i--)
+        {
+            if (DeclaresTypeParameter(chain[i], typeParameter))
+            {
+                return offsets[i] + typeParameter.Ordinal;
+            }
+        }
+
+        return typeParameter.Ordinal;
+    }
+
+    private static bool DeclaresTypeParameter(TypeSymbol type, TypeParameterSymbol typeParameter)
+    {
+        var ordinal = typeParameter.Ordinal;
+        if (ordinal < 0)
+        {
+            return false;
+        }
+
+        switch (type)
+        {
+            case StructSymbol { Declaration.TypeParameterList: { } list }:
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
+            case InterfaceSymbol { Declaration.TypeParameterList: { } list }:
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
+            case DelegateTypeSymbol { Declaration.TypeParameterList: { } list }:
+                return ordinal < list.Parameters.Count &&
+                    string.Equals(list.Parameters[ordinal].Identifier.Text, typeParameter.Name, StringComparison.Ordinal);
+        }
+
+        var parameters = type switch
+        {
+            StructSymbol structType => structType.TypeParameters,
+            InterfaceSymbol interfaceType => interfaceType.TypeParameters,
+            DelegateTypeSymbol delegateType => delegateType.TypeParameters,
+            _ => ImmutableArray<TypeParameterSymbol>.Empty,
+        };
+        return ordinal < parameters.Length &&
+            (ReferenceEquals(parameters[ordinal], typeParameter) ||
+             string.Equals(parameters[ordinal].Name, typeParameter.Name, StringComparison.Ordinal));
     }
 
     private static void AppendClrTypeReference(StringBuilder builder, Type? type)
@@ -384,8 +780,8 @@ internal static class SymbolDocumentationIdProvider
         StringBuilder builder,
         Type openDefinition,
         ImmutableArray<TypeSymbol> typeArguments,
-        StructSymbol? ownerType,
-        FunctionSymbol function)
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
     {
         var chain = NestingChain(openDefinition);
         var outermost = chain[0];
@@ -475,7 +871,7 @@ internal static class SymbolDocumentationIdProvider
         return tick >= 0 ? name.Substring(0, tick) : name;
     }
 
-    private static bool IsMethodTypeParameter(TypeParameterSymbol typeParameter, FunctionSymbol function)
+    private static bool IsMethodTypeParameter(TypeParameterSymbol typeParameter, FunctionSymbol? function)
     {
         if (function is null || function.TypeParameters.IsDefaultOrEmpty)
         {

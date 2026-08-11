@@ -132,6 +132,15 @@ internal static class DocumentationAttacher
 
         foreach (var member in root.Members)
         {
+            // Named delegates are top-level-only. Keep their attachment path
+            // outside nested aggregate traversal until syntax and binding
+            // support nested delegate declarations.
+            if (member is DelegateDeclarationSyntax @delegate)
+            {
+                result.Add(@delegate);
+                continue;
+            }
+
             CollectFromMember(member, result);
         }
 
@@ -243,6 +252,11 @@ internal static class DocumentationAttacher
                 result.Add(method);
             }
         }
+
+        foreach (var nestedType in structDecl.NestedTypes)
+        {
+            CollectFromMember(nestedType, result);
+        }
     }
 
     private static void CollectFromEnumBody(EnumDeclarationSyntax enumDecl, List<SyntaxNode> result)
@@ -268,6 +282,11 @@ internal static class DocumentationAttacher
         foreach (var method in interfaceDecl.Methods)
         {
             result.Add(method);
+        }
+
+        foreach (var field in interfaceDecl.StaticFields)
+        {
+            result.Add(field);
         }
     }
 
