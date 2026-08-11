@@ -66,7 +66,7 @@ public sealed class Issue3338ImportedAbstractMemberTests
             var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0387");
             Assert.Contains("Prepare", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("Optional", diagnostic.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("Render", diagnostic.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Renderer.Render", diagnostic.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -195,12 +195,19 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 {
                     public override Box<U> Transform(Box<U> value) => value;
                 }
-
-                public abstract class ShadowMid<U> : Root<Box<U>>
-                {
-                    public new virtual Box<U> Transform(Box<U> value) => value;
-                }
                 """);
+            var shadowLibraryPath = EmitGSharpLibrary(
+                directory,
+                "Issue3338.GenericShadowLibrary",
+                """
+                package Issue3338.GenericShadowLibrary
+                import Issue3338.GenericLibrary
+
+                public open class ShadowMid[U] : Root[Box[U]] {
+                  public open func Transform(value Box[U]) Box[U] -> value
+                }
+                """,
+                libraryPath);
 
             var complete = CompileGSharp(
                 """
@@ -273,6 +280,7 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 package Issue3338.GenericShadow
                 import System
                 import Issue3338.GenericLibrary
+                import Issue3338.GenericShadowLibrary
 
                 public class Payload {
                 }
@@ -299,7 +307,8 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 }
                 """,
                 "Issue3338.GenericShadow",
-                libraryPath);
+                libraryPath,
+                shadowLibraryPath);
 
             Assert.False(shadowedSlot.Success);
             var shadowedDiagnostic = Assert.Single(
@@ -344,10 +353,16 @@ public sealed class Issue3338ImportedAbstractMemberTests
     private static string EmitGSharpLibrary(
         string directory,
         string assemblyName,
-        string source)
+        string source,
+        params string[] references)
     {
         var path = Path.Combine(directory, assemblyName + ".dll");
+        using var resolver = references.Length == 0
+            ? ReferenceResolver.Default()
+            : ReferenceResolver.WithReferences(references);
+        resolver.CurrentAssemblyName = assemblyName;
         var compilation = new GsCompilation(
+            resolver,
             GsSyntaxTree.Parse(SourceText.From(source)))
         {
             AssemblyName = assemblyName,

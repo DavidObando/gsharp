@@ -25,7 +25,7 @@ public class Issue1260BaseBclCallBinderTests
     {
         var source = @"
 import System.IO
-class MyStream : Stream {
+open class MyStream : Stream {
     open func Dispose(disposing bool) {
         base.Dispose(disposing)
     }
