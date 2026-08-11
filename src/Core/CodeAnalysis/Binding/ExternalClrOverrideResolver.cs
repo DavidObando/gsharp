@@ -295,6 +295,9 @@ internal static class ExternalClrOverrideResolver
         MethodInfo baseMethod,
         ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
     {
+        derived = GetOpenDeclaringMethod(derived);
+        baseMethod = GetOpenDeclaringMethod(baseMethod);
+
         if (!string.Equals(derived.Name, baseMethod.Name, StringComparison.Ordinal))
         {
             return false;
@@ -338,6 +341,34 @@ internal static class ExternalClrOverrideResolver
         }
 
         return true;
+    }
+
+    private static MethodInfo GetOpenDeclaringMethod(MethodInfo method)
+    {
+        var declaringType = method.DeclaringType;
+        if (declaringType is not { IsGenericType: true, IsGenericTypeDefinition: false })
+        {
+            return method;
+        }
+
+        try
+        {
+            var openDefinition = declaringType.GetGenericTypeDefinition();
+            foreach (var candidate in ClrTypeUtilities.SafeGetMethods(
+                openDefinition,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            {
+                if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+                {
+                    return candidate;
+                }
+            }
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+        }
+
+        return method;
     }
 
     private static ImmutableArray<TypeSymbol?> BuildCanonicalMethodTypeArguments(int arity)
