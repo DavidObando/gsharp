@@ -192,6 +192,10 @@ public class SdkLayoutTests
             .Single(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)");
         Assert.Equal("PreserveNewest", (string)hotReloadManifest.Attribute("CopyToOutputDirectory"));
         Assert.Contains(
+            "$(DesignTimeBuild)",
+            (string)doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single().Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.Contains(
             "$(MSBuildProjectName).manifest",
             doc.Descendants(MsbuildNs + "GsharpHotReloadManifestPath").Single().Value,
             System.StringComparison.Ordinal);
