@@ -24,6 +24,8 @@
                                       '$(DotNetWatchBuild)' == 'true' and
                                       '$(DesignTimeBuild)' == 'true' and
                                       '$(_GsharpHotReloadSupported)' == 'true' ">true</GsharpEnableHotReload>
+    <_GsharpHotReloadActive>false</_GsharpHotReloadActive>
+    <_GsharpHotReloadActive Condition=" '$(GsharpEnableHotReload)' == 'true' ">true</_GsharpHotReloadActive>
     <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(MSBuildProjectName).manifest</GsharpHotReloadManifestPath>
     <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
     <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
@@ -106,8 +108,8 @@
         BootstrapPath="$(GsharpHotReloadBootstrapPath)"
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
         RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
-        CopyRuntime="$(GsharpEnableHotReload)"
-        WriteBootstrap="$(GsharpEnableHotReload)"
+        CopyRuntime="$(_GsharpHotReloadActive)"
+        WriteBootstrap="$(_GsharpHotReloadActive)"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
