@@ -37,7 +37,7 @@ public class Issue3267ExplicitGenericArgumentValidationTests
             }
             Box().Id[int32]("wrong")
             """,
-            "GS0155",
+            "GS0154",
             "\"wrong\""
         },
         {
@@ -45,7 +45,7 @@ public class Issue3267ExplicitGenericArgumentValidationTests
             func (self string) IdExt[T](value T) T -> value
             "receiver".IdExt[int32]("wrong")
             """,
-            "GS0155",
+            "GS0154",
             "\"wrong\""
         },
         {
@@ -79,7 +79,7 @@ public class Issue3267ExplicitGenericArgumentValidationTests
             func (self string) TakeExt[T](values []T) { }
             "receiver".TakeExt[int32]([]string{"wrong"})
             """,
-            "GS0155",
+            "GS0154",
             "[]string{\"wrong\"}"
         },
     };
@@ -176,7 +176,7 @@ public class Issue3267ExplicitGenericArgumentValidationTests
     }
 
     [Fact]
-    public void ExplicitGenericArgumentMismatch_ReportsNoConversion()
+    public void ExplicitGenericInstanceArgumentMismatch_UsesCallArgumentContract()
     {
         const string source = """
             class Box {
@@ -188,7 +188,7 @@ public class Issue3267ExplicitGenericArgumentValidationTests
         var diagnostic = Assert.Single(GetErrors(source));
 
         Assert.Equal(
-            "Cannot convert type 'string' to 'int32'.",
+            "Parameter 'value' requires a value of type 'int32' but was given a value of type 'string'.",
             diagnostic.Message);
     }
 

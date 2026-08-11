@@ -225,7 +225,7 @@ class C {
     }
 
     [Fact]
-    public void WrongTypeArgument_StillDiagnosticGS0155()
+    public void WrongTypeArgument_UsesCallArgumentDiagnostic()
     {
         // Negative: Box[int32].Put expects Holder[int32]; passing Holder[string]
         // must still fail even though the display name 'Holder' matches.
@@ -240,7 +240,7 @@ class C {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0154");
     }
 
     [Fact]

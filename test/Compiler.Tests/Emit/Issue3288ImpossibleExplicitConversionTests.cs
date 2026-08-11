@@ -57,8 +57,8 @@ public sealed class Issue3288ImpossibleExplicitConversionTests
         },
         {
             "class Box { func Id[T](value T) T -> value }\nBox().Id[int32](\"wrong\")",
-            "GS0155",
-            "Cannot convert type 'string' to 'int32'.",
+            "GS0154",
+            "Parameter 'value' requires a value of type 'int32' but was given a value of type 'string'.",
             1,
             16,
             1,
@@ -67,8 +67,8 @@ public sealed class Issue3288ImpossibleExplicitConversionTests
         },
         {
             "func (self string) Id[T](value T) T -> value\n\"receiver\".Id[int32](\"wrong\")",
-            "GS0155",
-            "Cannot convert type 'string' to 'int32'.",
+            "GS0154",
+            "Parameter 'value' requires a value of type 'int32' but was given a value of type 'string'.",
             1,
             21,
             1,

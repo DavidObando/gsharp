@@ -254,7 +254,7 @@ internal sealed class ConversionClassifier
     /// <summary>
     /// Binds <paramref name="syntax"/> as an expression and converts it to
     /// <paramref name="type"/>. Mirrors the
-    /// <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>
+    /// <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool, ParameterSymbol)"/>
     /// core overload after delegating to the still-on-<see cref="Binder"/>
     /// expression-binder for the initial bind.
     /// </summary>
@@ -361,8 +361,15 @@ internal sealed class ConversionClassifier
     /// <param name="allowExplicit">When <see langword="true"/>, suppresses
     /// the "implicit conversion required" diagnostic for an explicit-only
     /// classification.</param>
+    /// <param name="callParameter">The target parameter when binding a call
+    /// argument; supplies the call-specific GS0154 diagnostic contract.</param>
     /// <returns>The shaped bound expression.</returns>
-    public BoundExpression BindConversion(TextLocation diagnosticLocation, BoundExpression expression, TypeSymbol type, bool allowExplicit = false)
+    public BoundExpression BindConversion(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TypeSymbol type,
+        bool allowExplicit = false,
+        ParameterSymbol? callParameter = null)
     {
         // Issue #1238: a deferred target-typed conditional/if/switch argument
         // placeholder (a BoundErrorExpression retaining the branchy syntax,
@@ -462,7 +469,19 @@ internal sealed class ConversionClassifier
 
         if (HasDelegateParameterRefKindMismatch(type, expression))
         {
-            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            if (callParameter == null)
+            {
+                Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            }
+            else
+            {
+                ReportCallArgumentConversionFailure(
+                    diagnosticLocation,
+                    callParameter,
+                    type,
+                    expression.Type);
+            }
+
             return new BoundErrorExpression(expression.Syntax);
         }
 
@@ -486,7 +505,7 @@ internal sealed class ConversionClassifier
             var shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType);
             if (!ReferenceEquals(shaped, neverCandidateLiteral))
             {
-                return BindConversion(diagnosticLocation, shaped, type, allowExplicit);
+                return BindConversion(diagnosticLocation, shaped, type, allowExplicit, callParameter);
             }
         }
 
@@ -510,7 +529,7 @@ internal sealed class ConversionClassifier
             var voidized = createErasedFunctionLiteralAdapter(voidCandidateLiteral, voidTargetFnType);
             if (!ReferenceEquals(voidized, voidCandidateLiteral))
             {
-                return BindConversion(diagnosticLocation, voidized, type, allowExplicit);
+                return BindConversion(diagnosticLocation, voidized, type, allowExplicit, callParameter);
             }
         }
 
@@ -537,7 +556,7 @@ internal sealed class ConversionClassifier
             var widened = createErasedFunctionLiteralAdapter(widenCandidateLiteral, widenTargetFnType);
             if (!ReferenceEquals(widened, widenCandidateLiteral))
             {
-                return BindConversion(diagnosticLocation, widened, type, allowExplicit);
+                return BindConversion(diagnosticLocation, widened, type, allowExplicit, callParameter);
             }
         }
 
@@ -605,7 +624,18 @@ internal sealed class ConversionClassifier
                 }
                 else
                 {
-                    Diagnostics.ReportCannotConvert(diagnosticLocation, sourceType, targetType);
+                    if (callParameter == null)
+                    {
+                        Diagnostics.ReportCannotConvert(diagnosticLocation, sourceType, targetType);
+                    }
+                    else
+                    {
+                        ReportCallArgumentConversionFailure(
+                            diagnosticLocation,
+                            callParameter,
+                            targetType,
+                            sourceType);
+                    }
                 }
             }
 
@@ -614,7 +644,18 @@ internal sealed class ConversionClassifier
 
         if (!allowExplicit && conversion.IsExplicit)
         {
-            Diagnostics.ReportCannotConvertImplicitly(diagnosticLocation, expression.Type, type);
+            if (callParameter == null)
+            {
+                Diagnostics.ReportCannotConvertImplicitly(diagnosticLocation, expression.Type, type);
+            }
+            else
+            {
+                ReportCallArgumentConversionFailure(
+                    diagnosticLocation,
+                    callParameter,
+                    type,
+                    expression.Type);
+            }
         }
 
         if (conversion.IsIdentity)
@@ -1095,7 +1136,7 @@ internal sealed class ConversionClassifier
     /// declared parameter type is reachable only through a user-defined CLR
     /// <c>op_Implicit</c> (e.g. <c>[]T -&gt; System.ReadOnlySpan[T]</c> /
     /// <c>Span[T]</c>) is converted here, the same way local-init / explicit-
-    /// target conversions go through <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>.
+    /// target conversions go through <see cref="BindConversion(TextLocation, BoundExpression, TypeSymbol, bool, ParameterSymbol)"/>.
     /// Built-in conversions (identity, numeric widening, ...) classify
     /// earlier and never reach this fallback, so existing overloads keep
     /// selecting unchanged. Returns true and emits a
@@ -1941,8 +1982,24 @@ internal sealed class ConversionClassifier
             }
         }
 
-        return BindConversion(location, argument, expectedType);
+        return BindConversion(location, argument, expectedType, callParameter: parameter);
     }
+
+    /// <summary>Reports a rejected call argument through the shared GS0154 contract.</summary>
+    /// <param name="location">The offending argument's location.</param>
+    /// <param name="parameter">The target parameter.</param>
+    /// <param name="expectedType">The substituted parameter type.</param>
+    /// <param name="actualType">The argument type.</param>
+    public void ReportCallArgumentConversionFailure(
+        TextLocation location,
+        ParameterSymbol parameter,
+        TypeSymbol expectedType,
+        TypeSymbol actualType)
+        => Diagnostics.ReportWrongArgumentType(
+            location,
+            parameter.Name,
+            expectedType,
+            actualType);
 
     // ----- Optional / default-value argument shaping -----
 

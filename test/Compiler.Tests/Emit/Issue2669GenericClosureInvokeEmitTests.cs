@@ -131,7 +131,7 @@ public class Issue2669GenericClosureInvokeEmitTests
         var result = compilation.Emit(output, pdbStream: null, refStream: null, assemblyName: "Issue2669.Negative");
 
         Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0155");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0154");
     }
 
     private static string CompileAndRun(string source, string caseName)

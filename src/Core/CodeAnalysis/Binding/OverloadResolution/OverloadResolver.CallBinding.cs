@@ -1740,9 +1740,9 @@ internal sealed partial class OverloadResolver
 
                 if (argument.Type != TypeSymbol.Error)
                 {
-                    Diagnostics.ReportWrongArgumentType(
+                    conversions.ReportCallArgumentConversionFailure(
                         Invariant.Required(parameterSyntax[i], "an argument with a conversion error has source syntax").Location,
-                        parameter.Name,
+                        parameter,
                         targetType,
                         argument.Type);
                 }

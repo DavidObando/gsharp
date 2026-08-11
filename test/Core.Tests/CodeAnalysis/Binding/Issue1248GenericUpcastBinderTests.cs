@@ -137,7 +137,7 @@ class C {
     }
 
     [Fact]
-    public void WrongTypeArgument_StillDiagnosticGS0155()
+    public void WrongTypeArgument_UsesCallArgumentDiagnostic()
     {
         // Negative: TransformBase[int64, int64] is NOT a FilterBase[int32].
         var source = @"
@@ -152,11 +152,11 @@ class C {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0154");
     }
 
     [Fact]
-    public void WrongTypeArgument_FlowingParameter_StillDiagnosticGS0155()
+    public void WrongTypeArgument_FlowingParameter_UsesCallArgumentDiagnostic()
     {
         // Negative: the FLOWING parameter is wrong (string instead of int32),
         // even though the non-flowing TOut happens to be int32.
@@ -172,11 +172,11 @@ class C {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0154");
     }
 
     [Fact]
-    public void UnrelatedType_StillDiagnosticGS0155()
+    public void UnrelatedType_UsesCallArgumentDiagnostic()
     {
         // Negative: an unrelated class is not a FilterBase at all.
         var source = @"
@@ -190,7 +190,7 @@ class C {
 }
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0154");
     }
 
     [Fact]

@@ -116,8 +116,8 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 | GS0151 | Error | Type argument inference failed. | The compiler could not infer a type argument from the call arguments. |
 | GS0152 | Error | Type argument does not satisfy constraint. | `f[MyStruct]()` where `MyStruct` does not implement the required interface constraint. |
 | GS0153 | Error | Constraint is neither an interface nor a class. | A generic type-parameter constraint must be an interface (any interface — sealed or not, generic or not;) or a base class; a value type such as a struct or enum is rejected. |
-| GS0154 | Error | Wrong argument type. | A positional argument's type does not match the parameter type. |
-| GS0155 | Error | Cannot convert type. | No built-in or user-defined conversion exists; use a compatible value or an API that performs the transformation (for example, `Parse`/`TryParse` for text). |
+| GS0154 | Error | Wrong argument type. | A free, instance, extension, or shared call argument has no permitted conversion to its parameter type. |
+| GS0155 | Error | Cannot convert type. | Outside call-argument matching, no built-in or user-defined conversion exists; use a compatible value or an API that performs the transformation (for example, `Parse`/`TryParse` for text). |
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `var x int32 = 3.14` — write `var x int32 = int32(3.14)` to apply the available explicit conversion. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
 | GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |

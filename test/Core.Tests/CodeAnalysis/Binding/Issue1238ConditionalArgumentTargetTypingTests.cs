@@ -181,7 +181,7 @@ class C {
     }
 }
 ";
-        Assert.Contains(EmitDiagnostics(Source), d => d.IsError && d.Id == "GS0155");
+        Assert.Contains(EmitDiagnostics(Source), d => d.IsError && d.Id == "GS0154");
     }
 
     [Fact]

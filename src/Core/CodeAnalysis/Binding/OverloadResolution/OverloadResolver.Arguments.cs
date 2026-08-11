@@ -324,7 +324,7 @@ internal sealed partial class OverloadResolver
     /// site. When <paramref name="argument"/> is a constant integer expression
     /// whose value fits the (possibly narrower or cross-sign) integer parameter
     /// type <paramref name="parameterType"/>, re-materialise it as a literal of
-    /// exactly that type through <see cref="ConversionClassifier.BindConversion(TextLocation, BoundExpression, TypeSymbol, bool)"/>
+    /// exactly that type through <see cref="ConversionClassifier.BindConversion(TextLocation, BoundExpression, TypeSymbol, bool, ParameterSymbol)"/>
     /// — mirroring the declaration/assignment behaviour (ADR-0129) so call sites
     /// accept e.g. <c>f(5)</c> for a <c>uint16</c>/<c>uint32</c> parameter the same
     /// way <c>var x uint16 = 5</c> already does. Returns <see langword="true"/>

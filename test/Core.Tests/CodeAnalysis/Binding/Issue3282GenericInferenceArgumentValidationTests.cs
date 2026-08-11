@@ -123,7 +123,7 @@ public class Issue3282GenericInferenceArgumentValidationTests
             }
             Box().Show(131, "str")
             """,
-            "GS0155",
+            "GS0154",
             "\"str\""
         },
         {
@@ -135,7 +135,7 @@ public class Issue3282GenericInferenceArgumentValidationTests
             func (self string) Show(a int32, b int32) { }
             "receiver".Show(131, "str")
             """,
-            "GS0155",
+            "GS0154",
             "\"str\""
         },
     };
@@ -229,7 +229,7 @@ public class Issue3282GenericInferenceArgumentValidationTests
     }
 
     [Fact]
-    public void ConflictingInstanceInference_ReportsNoConversion()
+    public void ConflictingInstanceInference_UsesCallArgumentContract()
     {
         const string source = """
             class Box {
@@ -241,7 +241,7 @@ public class Issue3282GenericInferenceArgumentValidationTests
         var diagnostic = Assert.Single(GetErrors(source));
 
         Assert.Equal(
-            "Cannot convert type 'string' to 'int32'.",
+            "Parameter 'b' requires a value of type 'int32' but was given a value of type 'string'.",
             diagnostic.Message);
     }
 
