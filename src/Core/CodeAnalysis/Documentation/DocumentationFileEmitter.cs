@@ -141,6 +141,16 @@ internal static class DocumentationFileEmitter
                 AddIfDocumented(members, method);
             }
 
+            foreach (var method in type.PrivateMethods)
+            {
+                AddIfDocumented(members, method);
+            }
+
+            foreach (var method in type.StaticPrivateMethods)
+            {
+                AddIfDocumented(members, method);
+            }
+
             foreach (var property in type.Properties)
             {
                 AddIfDocumented(members, property, type);

@@ -193,6 +193,95 @@ data struct Point {
     }
 
     [Fact]
+    public void EmitsDocumentedPrivateInterfaceMethods()
+    {
+        var source = """
+            package PrivateInterfaceDocs
+
+            interface Helpers {
+              /// Formats an instance value.
+              private func Format(value int32) int32 { return value }
+
+              private func UndocumentedInstance() {}
+
+              shared {
+                /// Formats a static value.
+                private func FormatStatic(value string) string { return value }
+
+                private func UndocumentedStatic() {}
+              }
+            }
+            """;
+
+        var xml = EmitDocXml(source, "PrivateInterfaceDocs");
+
+        Assert.Contains(
+            "<member name=\"M:PrivateInterfaceDocs.Helpers.Format(System.Int32)\">",
+            xml);
+        Assert.Contains(
+            "<member name=\"M:PrivateInterfaceDocs.Helpers.FormatStatic(System.String)\">",
+            xml);
+        Assert.DoesNotContain("M:PrivateInterfaceDocs.Helpers.UndocumentedInstance", xml);
+        Assert.DoesNotContain("M:PrivateInterfaceDocs.Helpers.UndocumentedStatic", xml);
+    }
+
+    [Fact]
+    public void EmitsStandardIdsForTupleMemberShapes()
+    {
+        var source = """
+            package TupleDocs
+
+            import System.Collections.Generic
+
+            public class TupleHost[T] {
+              /// Exercises tuple parameter and function-return shapes.
+              public func Shapes(
+                pair (int32, string),
+                nullablePair (int32, string)?,
+                nested (T, (string, bool)),
+                nullableGeneric (T, string)?,
+                generic List[(T, string?)],
+                pairs [](T, string),
+                fixedPairs [2](T, string),
+                nullablePairs [](T, string)?,
+                ref byRef (T, string),
+                projector ((T, string)) -> (bool, T),
+                wide (int8, uint8, int16, uint16, int32, uint32, int64, uint64)) {
+              }
+            }
+
+            public struct TupleSource {
+            }
+
+            /// Converts a source value to a tuple.
+            func operator implicit (value TupleSource) (int32, string) {
+              return (0, "")
+            }
+            """;
+
+        var xml = EmitDocXml(source, "TupleDocs");
+        var expectedDocId =
+            "M:TupleDocs.TupleHost`1.Shapes(" +
+            "System.ValueTuple{System.Int32,System.String}," +
+            "System.Nullable{System.ValueTuple{System.Int32,System.String}}," +
+            "System.ValueTuple{`0,System.ValueTuple{System.String,System.Boolean}}," +
+            "System.Nullable{System.ValueTuple{`0,System.String}}," +
+            "System.Collections.Generic.List{System.ValueTuple{`0,System.String}}," +
+            "System.ValueTuple{`0,System.String}[]," +
+            "System.ValueTuple{`0,System.String}[]," +
+            "System.Nullable{System.ValueTuple{`0,System.String}}[]," +
+            "System.ValueTuple{`0,System.String}@," +
+            "System.Func{System.ValueTuple{`0,System.String},System.ValueTuple{System.Boolean,`0}}," +
+            "System.ValueTuple{System.SByte,System.Byte,System.Int16,System.UInt16," +
+            "System.Int32,System.UInt32,System.Int64,System.ValueTuple{System.UInt64}})";
+
+        Assert.Contains($"<member name=\"{expectedDocId}\">", xml);
+        Assert.Contains(
+            "<member name=\"M:TupleDocs.TupleSource.op_Implicit(TupleDocs.TupleSource)~System.ValueTuple{System.Int32,System.String}\">",
+            xml);
+    }
+
+    [Fact]
     public void EmitsAssemblyName()
     {
         var source = @"package Lib

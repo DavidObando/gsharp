@@ -303,6 +303,9 @@ internal static class SymbolDocumentationIdProvider
                 AppendTypeReference(builder, pointerType.PointeeType, ownerType, function);
                 builder.Append('*');
                 return;
+            case TupleTypeSymbol tupleType:
+                AppendTupleTypeReference(builder, tupleType.ElementTypes, 0, tupleType.Arity, ownerType, function);
+                return;
             case FunctionTypeSymbol functionType:
                 AppendFunctionTypeReference(builder, functionType, ownerType, function);
                 return;
@@ -336,6 +339,38 @@ internal static class SymbolDocumentationIdProvider
 
                 return;
         }
+    }
+
+    private static void AppendTupleTypeReference(
+        StringBuilder builder,
+        ImmutableArray<TypeSymbol> elementTypes,
+        int start,
+        int count,
+        TypeSymbol? ownerType,
+        FunctionSymbol? function)
+    {
+        // TupleTypeSymbol retains only positional element types, which also
+        // erases tuple element names as required by XML documentation IDs.
+        builder.Append("System.ValueTuple{");
+
+        var directCount = Math.Min(count, 7);
+        for (var i = 0; i < directCount; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(',');
+            }
+
+            AppendTypeReference(builder, elementTypes[start + i], ownerType, function);
+        }
+
+        if (count > 7)
+        {
+            builder.Append(',');
+            AppendTupleTypeReference(builder, elementTypes, start + 7, count - 7, ownerType, function);
+        }
+
+        builder.Append('}');
     }
 
     private static void AppendFunctionTypeReference(
