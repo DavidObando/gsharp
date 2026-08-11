@@ -6,6 +6,7 @@
 AnonymousClassLiteralExpression
 ArrayAllocationExpression
 ArrayLiteralExpression
+AssignmentExpression
 AwaitExpression
 BinaryExpression
 CheckedExpression
