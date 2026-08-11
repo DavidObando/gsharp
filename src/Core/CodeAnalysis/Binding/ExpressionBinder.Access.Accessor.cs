@@ -2836,14 +2836,11 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #1201 (C# <c>using static</c>): attempts to resolve an unqualified
-    /// identifier against the <c>shared</c> (static) members — field, property,
-    /// or method group — of a type brought into scope by a non-alias type import
-    /// (<c>import Ns.Type</c>). Binds against the single match through the same
-    /// <see cref="BindUserTypeStaticMemberAccess"/> path used by an explicit
-    /// <c>Type.Member</c> access; reports GS0414 when two or more imported types
-    /// expose a member of that name (the value/identifier analog of the
-    /// call-site ambiguity rule in <c>OverloadResolver</c>).
+    /// Issues #1201 / #3334: attempts to resolve an unqualified identifier
+    /// against static members exposed by a non-alias imported type or referenced
+    /// package. Binds against the single match through the same static-member
+    /// paths used by explicit CLR type access; reports GS0414 when two or more
+    /// imported containers expose a member of that name.
     /// </summary>
     /// <param name="syntax">The bare-name reference being resolved.</param>
     /// <param name="result">The bound static-member access, when one is produced.</param>
@@ -2888,10 +2885,9 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        // ADR-0134 (extended): fall back to referenced-assembly CLR types brought
-        // into scope by a type import (`import System.Math` from C#'s
-        // `using static System.Math`). Only consulted when no same-compilation
-        // source class exposed the member above.
+        // Issues #3334 / ADR-0134: fall back to static members on imported CLR
+        // types and referenced packages' synthetic `<Program>` holders. Only
+        // consulted when no same-compilation source class exposed the member.
         System.Type? clrMatch = null;
         var clrAmbiguous = false;
         foreach (var clrType in scope.EnumerateStaticImportClrTypes())

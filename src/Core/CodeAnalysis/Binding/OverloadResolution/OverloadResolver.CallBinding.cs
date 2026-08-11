@@ -786,12 +786,11 @@ internal sealed partial class OverloadResolver
                     }
                 }
 
-                // ADR-0134 (extended): an unqualified call may also resolve to a
-                // `public static` method of a referenced-assembly CLR type brought
-                // into scope by a type import (`import System.Math` from C#'s
-                // `using static System.Math`). Consulted only when no
-                // same-compilation source class matched above; the imported
-                // qualified static-call binder (`Type.method(args)`) provides full
+                // Issue #3334 / ADR-0134: an unqualified call may also resolve
+                // to a `public static` method on an imported CLR type or a
+                // referenced package's synthetic `<Program>` holder. Consulted
+                // only when no same-compilation source class matched above; the
+                // imported qualified static-call binder provides full
                 // optional/variadic/generic fidelity.
                 if (bindImportedClrStaticCall != null)
                 {
