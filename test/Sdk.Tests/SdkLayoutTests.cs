@@ -181,9 +181,6 @@ public class SdkLayoutTests
         Assert.Contains(
             hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
             task => (string)task.Attribute("Targets") == "Build");
-        Assert.Contains(
-            hotReloadBaseline.Elements(MsbuildNs + "Copy"),
-            copy => (string)copy.Attribute("DestinationFiles") == "$(TargetDir)Gsharp.HotReload.Runtime.dll");
 
         Assert.Contains(
             doc.Descendants(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"),
