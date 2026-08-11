@@ -51,6 +51,15 @@ public class SdkLayoutTests
         Assert.Contains(imports, i =>
             (string)i.Attribute("Sdk") == "Microsoft.NET.Sdk"
             && (string)i.Attribute("Project") == "Sdk.targets");
+
+        var managedDesignTimeImport = imports.Single(i =>
+            ((string)i.Attribute("Project") ?? string.Empty).Contains(
+                "GsharpDesignTimeTargetsPath",
+                System.StringComparison.Ordinal));
+        Assert.Contains(
+            "$(DesignTimeBuild)",
+            (string)managedDesignTimeImport.Attribute("Condition"),
+            System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,6 +155,30 @@ public class SdkLayoutTests
         Assert.Contains(
             compileDesignTime.Descendants(MsbuildNs + "_CompilerCommandLineArgs"),
             item => (string)item.Attribute("Include") == "@(GsharpCommandLineArgs)");
+
+        var prerequisite = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_CheckCompileDesignTimePrerequisite");
+        var prerequisiteError = prerequisite.Element(MsbuildNs + "Error");
+        Assert.NotNull(prerequisiteError);
+        Assert.Contains(
+            "$(SkipCompilerExecution)|$(ProvideCommandLineArgs)",
+            (string)prerequisiteError!.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+
+        var hotReloadCompile = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_GsharpHotReloadCompile");
+        Assert.Contains(
+            "_GsharpWriteHotReloadManifest",
+            (string)hotReloadCompile.Attribute("DependsOnTargets"),
+            System.StringComparison.Ordinal);
+        Assert.NotNull(hotReloadCompile.Element(MsbuildNs + "BuildTask"));
+
+        Assert.Contains(
+            doc.Descendants(MsbuildNs + "ProjectCapability"),
+            capability => (string)capability.Attribute("Include") == "SupportsHotReload");
+        var hotReloadManifest = doc.Descendants(MsbuildNs + "None")
+            .Single(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)");
+        Assert.Equal("PreserveNewest", (string)hotReloadManifest.Attribute("CopyToOutputDirectory"));
     }
 
     [Fact]
@@ -187,6 +220,8 @@ public class SdkLayoutTests
         Assert.Contains("netstandard2.0", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.Build.Framework", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.Build.Utilities.Core", text, System.StringComparison.Ordinal);
+        Assert.Contains("tools\\hotreload\\", text, System.StringComparison.Ordinal);
+        Assert.Contains("Gsharp.HotReload.Runtime.dll", text, System.StringComparison.Ordinal);
     }
 
     [Fact]

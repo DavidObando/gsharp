@@ -171,6 +171,12 @@
           "System.Reflection.MetadataLoadContext": "[9.0.0, )"
         }
       },
+      "Gsharp.HotReload.Runtime": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
       "gsharp.net.sdk": {
         "type": "Project",
         "dependencies": {

@@ -14,7 +14,7 @@
   <!-- Managed design-time targets must precede Microsoft.NET.Sdk's NuGet
        targets so the SDK can override their compatibility fallbacks. -->
   <Import Project="$(GsharpDesignTimeTargetsPath)"
-          Condition="'$(BuildingInsideVisualStudio)' == 'true' and Exists('$(GsharpDesignTimeTargetsPath)')" />
+          Condition="('$(BuildingInsideVisualStudio)' == 'true' or '$(DesignTimeBuild)' == 'true') and Exists('$(GsharpDesignTimeTargetsPath)')" />
 
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 

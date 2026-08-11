@@ -3,9 +3,10 @@
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.BuildTask" />
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.GsgenTask" />
   <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.WriteGsharpAssemblyInfoTask" />
+  <UsingTask AssemblyFile="$(GsharpToolFullPath)" TaskName="Gsharp.NET.Sdk.Tools.WriteGsharpHotReloadArtifactsTask" />
 
   <PropertyGroup>
-    <CoreCompileDependsOn>_ComputeNonExistentFileProperty</CoreCompileDependsOn>
+    <CoreCompileDependsOn>_ComputeNonExistentFileProperty;_GsharpWriteHotReloadManifest</CoreCompileDependsOn>
     <!-- Avalonia's CompileAvaloniaXaml target hooks AfterCompile, a standard
          Microsoft.Managed.Core target that the G# language SDK does not import. -->
     <CompileDependsOn>$(CompileDependsOn);AfterCompile</CompileDependsOn>
@@ -14,7 +15,88 @@
          includes the reference assembly under ref/<tfm>/. The runtime assembly
          under lib/<tfm>/ is handled by the standard Microsoft.NET.Sdk pack. -->
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
+
+    <!-- Match dotnet-watch's supported runtime floor while keeping Release
+         builds and explicitly-disabled projects byte-for-byte unchanged. -->
+    <_GsharpHotReloadSupported Condition=" '$(TargetFrameworkIdentifier)' == '.NETCoreApp' and
+                                            $([MSBuild]::VersionGreaterThanOrEquals('$(TargetFrameworkVersion)', '10.0')) ">true</_GsharpHotReloadSupported>
+    <GsharpEnableHotReload Condition=" '$(GsharpEnableHotReload)' == '' and
+                                      '$(Configuration)' == 'Debug' and
+                                      '$(_GsharpHotReloadSupported)' == 'true' ">true</GsharpEnableHotReload>
+    <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(TargetName).manifest</GsharpHotReloadManifestPath>
+    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
+    <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
   </PropertyGroup>
+
+  <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Reference Include="Gsharp.HotReload.Runtime">
+      <HintPath>$(GsharpHotReloadRuntimeAssemblyFullPath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="$(GsharpHotReloadManifestPath)"
+          Link="$([System.IO.Path]::GetFileName('$(GsharpHotReloadManifestPath)'))"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="Never"
+          Pack="false"
+          Visible="false" />
+    <ProjectCapability Include="SupportsHotReload" />
+  </ItemGroup>
+
+  <Target Name="_CheckCompileDesignTimePrerequisite">
+    <Error Condition="'$(SkipCompilerExecution)|$(ProvideCommandLineArgs)' != 'true|true'"
+           Text="SkipCompilerExecution and ProvideCommandLineArgs should be set before calling the CompileDesignTime target" />
+  </Target>
+
+  <Target Name="_GsharpValidateHotReload"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' != 'true' ">
+    <Error Text="G# hot reload requires a .NETCoreApp target framework version 10.0 or newer." />
+  </Target>
+
+  <Target Name="_GsharpPrepareHotReload"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Error Condition="!Exists('$(GsharpHotReloadRuntimeAssemblyFullPath)')"
+           Text="G# hot reload runtime not found at '$(GsharpHotReloadRuntimeAssemblyFullPath)'." />
+    <ItemGroup>
+      <_GsharpHotReloadWatch Include="@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+    <WriteGsharpHotReloadArtifactsTask
+        ProjectPath="$(MSBuildProjectFullPath)"
+        TargetFramework="$(TargetFramework)"
+        Configuration="$(Configuration)"
+        AssemblyName="$(TargetName)"
+        ManifestPath="$(GsharpHotReloadManifestPath)"
+        BootstrapPath="$(GsharpHotReloadBootstrapPath)"
+        UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        IntermediateDirectory="$(IntermediateOutputPath)"
+        OutputDirectory="$(OutputPath)"
+        WatchFiles="@(_GsharpHotReloadWatch)" />
+    <ItemGroup>
+      <Compile Remove="$(GsharpHotReloadBootstrapPath)" />
+      <Compile Include="$(GsharpHotReloadBootstrapPath)" />
+      <FileWrites Include="$(GsharpHotReloadBootstrapPath);$(GsharpHotReloadManifestPath)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_GsharpWriteHotReloadManifest"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' "
+          DependsOnTargets="_GsharpPrepareHotReload;_GsharpIncludeGeneratedCompile">
+    <ItemGroup>
+      <_GsharpHotReloadWatch Remove="@(_GsharpHotReloadWatch)" />
+      <_GsharpHotReloadWatch Include="@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+    <WriteGsharpHotReloadArtifactsTask
+        ProjectPath="$(MSBuildProjectFullPath)"
+        TargetFramework="$(TargetFramework)"
+        Configuration="$(Configuration)"
+        AssemblyName="$(TargetName)"
+        ManifestPath="$(GsharpHotReloadManifestPath)"
+        BootstrapPath="$(GsharpHotReloadBootstrapPath)"
+        UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        IntermediateDirectory="$(IntermediateOutputPath)"
+        OutputDirectory="$(OutputPath)"
+        WatchFiles="@(_GsharpHotReloadWatch)" />
+  </Target>
 
   <!-- Phase 7.7b / Issue #855: set DocumentationFile here (in targets) where
        IntermediateOutputPath and TargetName are already resolved by the .NET SDK.
@@ -221,7 +303,8 @@
        Compile item is routed through the same gsgen translation pipeline that
        already back-translates generator output, not just this one known
        generator's file. -->
-  <Target Name="_GsharpPartitionForeignCompile">
+  <Target Name="_GsharpPartitionForeignCompile"
+          DependsOnTargets="_GsharpPrepareHotReload">
     <ItemGroup>
       <_GsharpForeignCompile Include="@(Compile)" Condition=" '%(Extension)' == '.cs' " />
       <Compile Remove="@(_GsharpForeignCompile)" />
@@ -421,6 +504,49 @@
           Condition="'$(IsCrossTargetingBuild)' != 'true'">
     <ItemGroup>
       <_CompilerCommandLineArgs Include="@(GsharpCommandLineArgs)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Runtime agent invokes this target after a source change. It reuses the
+       normal generator/reference pipeline, then writes a full candidate image
+       outside bin/ so the running process can derive and apply an EnC delta. -->
+  <Target Name="_GsharpHotReloadCompile"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' "
+          DependsOnTargets="_GsharpWriteHotReloadManifest;ResolveReferences;PrepareResources">
+    <MakeDir Directories="$(GsharpHotReloadOutputDirectory)" />
+    <ItemGroup>
+      <_GsharpHotReloadResource Include="@(_CoreCompileResourceInputs)"
+                                Condition="'%(_CoreCompileResourceInputs.WithCulture)' != 'true'" />
+      <_GsharpHotReloadResource Include="@(CompiledLicenseFile)" />
+    </ItemGroup>
+    <BuildTask
+        GsharpCompilerFullPath="$(GsharpCompilerFullPath)"
+        OutputPath="$(GsharpHotReloadOutputDirectory)"
+        OutputName="$(TargetName)"
+        TempOutputPath="$(GsharpHotReloadOutputDirectory)"
+        TargetFramework="$(TargetFramework)"
+        BasePath="$(MSBuildProjectDirectory)"
+        Optimization="$(Optimize)"
+        DebugType="portable"
+        PdbFile="$(GsharpHotReloadOutputDirectory)$(TargetName).pdb"
+        SourceLink="$(SourceLink)"
+        EmbedAllSources="$(EmbedAllSources)"
+        Deterministic="$(Deterministic)"
+        Version="$(Version)"
+        OutputType="$(OutputType)"
+        NoWarn="$(NoWarn)"
+        TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+        WarningsAsErrors="$(WarningsAsErrors)"
+        Compile="@(Compile)"
+        References="@(ReferencePathWithRefAssemblies)"
+        Resources="@(_GsharpHotReloadResource)"
+        ResponseFilePath="$(GsharpHotReloadOutputDirectory)$(TargetName).rsp" />
+    <ItemGroup>
+      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).dll" />
+      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).pdb" />
+      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).rsp" />
+      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).runtimeconfig.json"
+                  Condition=" '$(OutputType)' == 'Exe' " />
     </ItemGroup>
   </Target>
 
