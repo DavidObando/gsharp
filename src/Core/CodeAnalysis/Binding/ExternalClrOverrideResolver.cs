@@ -895,22 +895,6 @@ internal static class ExternalClrOverrideResolver
         return false;
     }
 
-    internal readonly record struct UnimplementedAbstractMember(
-        string DeclaringTypeName,
-        string MemberName,
-        bool ReportedBySourceAbstractMethod);
-
-    internal readonly record struct MatchResult<T>(
-        T? Member,
-        TypeSymbol? ContainingType,
-        bool SawName,
-        bool IsSealed)
-        where T : MemberInfo;
-
-    private readonly record struct TypeArgumentSubstitution(
-        Type? OpenDefinition,
-        ImmutableArray<TypeSymbol> TypeArguments);
-
     private enum SourceSlotStatus
     {
         Missing,
@@ -927,4 +911,20 @@ internal static class ExternalClrOverrideResolver
         Remove,
         Raise,
     }
+
+    internal readonly record struct UnimplementedAbstractMember(
+        string DeclaringTypeName,
+        string MemberName,
+        bool ReportedBySourceAbstractMethod);
+
+    internal readonly record struct MatchResult<T>(
+        T? Member,
+        TypeSymbol? ContainingType,
+        bool SawName,
+        bool IsSealed)
+        where T : MemberInfo;
+
+    private readonly record struct TypeArgumentSubstitution(
+        Type? OpenDefinition,
+        ImmutableArray<TypeSymbol> TypeArguments);
 }
