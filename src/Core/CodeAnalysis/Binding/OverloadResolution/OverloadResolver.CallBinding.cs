@@ -1915,16 +1915,16 @@ internal sealed partial class OverloadResolver
                 returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask);
             }
 
-            return CreatePossiblyElidedCall(function, finalBoundArguments, returnType, methodTypeArguments);
+            return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType, methodTypeArguments);
         }
 
         if (function.IsAsync && !isAsyncIteratorReturnType(function.Type))
         {
             var asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask);
-            return CreatePossiblyElidedCall(function, finalBoundArguments, asyncReturn, methodTypeArguments);
+            return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, asyncReturn, methodTypeArguments);
         }
 
-        return CreatePossiblyElidedCall(function, finalBoundArguments, returnType: null, methodTypeArguments);
+        return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: null, methodTypeArguments);
     }
 
     /// <summary>
@@ -1967,14 +1967,14 @@ internal sealed partial class OverloadResolver
     /// Argument binding still ran above so wrong-type diagnostics on the
     /// elided arguments are reported normally.
     /// </summary>
-    private BoundExpression CreatePossiblyElidedCall(FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnType, ImmutableArray<TypeSymbol> methodTypeArguments = default)
+    private BoundExpression CreatePossiblyElidedCall(CallExpressionSyntax syntax, FunctionSymbol function, ImmutableArray<BoundExpression> arguments, TypeSymbol? returnType, ImmutableArray<TypeSymbol> methodTypeArguments = default)
     {
         if (KnownAttributes.IsConditionallyElided(function.Attributes, Scope.PreprocessorSymbols))
         {
             return new BoundCallExpression(null, function, ImmutableArray<BoundExpression>.Empty, returnType, isConditionalElided: true) { MethodTypeArguments = methodTypeArguments };
         }
 
-        return new BoundCallExpression(null, function, arguments, returnType) { MethodTypeArguments = methodTypeArguments };
+        return new BoundCallExpression(syntax, function, arguments, returnType) { MethodTypeArguments = methodTypeArguments };
     }
 
     /// <summary>

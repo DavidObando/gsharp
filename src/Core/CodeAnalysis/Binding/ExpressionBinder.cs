@@ -507,7 +507,7 @@ internal sealed partial class ExpressionBinder
             // over that function. We only synthesize the group here; the
             // conversion classifier decides whether the surrounding context
             // actually accepts it (otherwise a cannot-convert is reported).
-            if (TryBindMethodGroup(name, out var methodGroup))
+            if (TryBindMethodGroup(syntax, out var methodGroup))
             {
                 return methodGroup;
             }
@@ -1304,9 +1304,10 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private bool TryBindMethodGroup(string name, [NotNullWhen(true)] out BoundExpression? methodGroup)
+    private bool TryBindMethodGroup(NameExpressionSyntax syntax, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
+        var name = syntax.IdentifierToken.Text;
 
         // ADR-0063 §9: a name may resolve to multiple user-function overloads.
         // Gather every candidate so BindConversion can pick the one matching the
@@ -1329,12 +1330,12 @@ internal sealed partial class ExpressionBinder
 
             if (usable.Count == 1)
             {
-                return TryBindSingleMethodGroup(usable[0], out methodGroup);
+                return TryBindSingleMethodGroup(syntax, usable[0], out methodGroup);
             }
 
             if (usable.Count > 1)
             {
-                methodGroup = new BoundMethodGroupExpression(null, usable.ToImmutable());
+                methodGroup = new BoundMethodGroupExpression(syntax, usable.ToImmutable());
                 return true;
             }
         }
@@ -1379,7 +1380,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return TryBindSingleMethodGroup(function, out methodGroup);
+        return TryBindSingleMethodGroup(syntax, function, out methodGroup);
     }
 
     private static bool IsMethodGroupCandidateUsable(FunctionSymbol function)
@@ -1404,7 +1405,7 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private bool TryBindSingleMethodGroup(FunctionSymbol function, [NotNullWhen(true)] out BoundExpression? methodGroup)
+    private bool TryBindSingleMethodGroup(NameExpressionSyntax syntax, FunctionSymbol function, [NotNullWhen(true)] out BoundExpression? methodGroup)
     {
         methodGroup = null;
 
@@ -1415,7 +1416,7 @@ internal sealed partial class ExpressionBinder
 
         if (function.IsGeneric)
         {
-            methodGroup = new BoundMethodGroupExpression(null, ImmutableArray.Create(function));
+            methodGroup = new BoundMethodGroupExpression(syntax, ImmutableArray.Create(function));
             return true;
         }
 
@@ -1426,7 +1427,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), this.MethodGroupObservableReturnType(function));
-        methodGroup = new BoundMethodGroupExpression(null, function, fnType);
+        methodGroup = new BoundMethodGroupExpression(syntax, function, fnType);
         return true;
     }
 
