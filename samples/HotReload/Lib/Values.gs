@@ -1,9 +1,11 @@
 package HotReloadLib
 
+import HotReloadBase
+
 class Values {
     shared {
         func Current() int32 {
-            return 2
+            return BaseValues.Current()
         }
     }
 }

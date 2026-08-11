@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Issue #3339: validates dotnet-watch project loading plus G# runtime deltas.
-# Covers a local body edit, a referenced G# project, and a foreign C# source
-# that must pass through gsgen before gsc.
+# Covers a local body edit, a transitive G# project, and an Avalonia-style
+# generated C# source that must pass through gsgen before gsc.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,8 +21,8 @@ cleanup() {
     git checkout -- \
         "$SAMPLE/global.json" \
         "$SAMPLE/App/App.gs" \
-        "$SAMPLE/App/GeneratedLike.cs" \
-        "$SAMPLE/Lib/Values.gs" 2>/dev/null || true
+        "$SAMPLE/App/GeneratedValue.axaml" \
+        "$SAMPLE/Base/Values.gs" 2>/dev/null || true
     rm -f "$LOG"
 }
 trap cleanup EXIT
@@ -87,7 +87,8 @@ EOF
 
 rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" \
        "$SAMPLE/App/bin" "$SAMPLE/App/obj" \
-       "$SAMPLE/Lib/bin" "$SAMPLE/Lib/obj"
+       "$SAMPLE/Lib/bin" "$SAMPLE/Lib/obj" \
+       "$SAMPLE/Base/bin" "$SAMPLE/Base/obj"
 
 echo "==> Restoring hot-reload sample"
 dotnet restore "$APP" --nologo
@@ -98,18 +99,29 @@ dotnet watch --project "$APP" --no-restore --non-interactive >"$LOG" 2>&1 &
 WATCH_PID=$!
 
 wait_for "values=1,2,3" "initial application output"
+wait_for "modifiable=debug" "modifiable debug process"
+wait_for "watching '.*samples/HotReload/App/App.gsproj'" "App hot-reload agent"
+wait_for "watching '.*samples/HotReload/Lib/Lib.gsproj'" "Lib hot-reload agent"
+wait_for "watching '.*samples/HotReload/Base/Base.gsproj'" "transitive Base hot-reload agent"
+
+GENERATED_CS="$SAMPLE/App/obj/Debug/net10.0/hotreload-generated/GeneratedLike.g.cs"
+if [[ ! -f "$GENERATED_CS" ]] || ! grep -q "Current() => 3;" "$GENERATED_CS"; then
+    echo "FAIL: Avalonia-style target did not materialize expected generated C#: $GENERATED_CS"
+    cat "$LOG"
+    exit 1
+fi
 
 echo "==> Applying local G# method-body edit"
 replace_once "$SAMPLE/App/App.gs" "return 1" "return 11"
 wait_for "values=11,2,3" "local G# delta"
 
-echo "==> Applying referenced-project method-body edit"
-replace_once "$SAMPLE/Lib/Values.gs" "return 2" "return 22"
-wait_for "values=11,22,3" "referenced-project delta"
+echo "==> Applying transitive project-reference method-body edit"
+replace_once "$SAMPLE/Base/Values.gs" "return 2" "return 22"
+wait_for "values=11,22,3" "transitive project-reference delta"
 
-echo "==> Applying gsgen-translated foreign C# edit"
-replace_once "$SAMPLE/App/GeneratedLike.cs" "=> 3;" "=> 33;"
-wait_for "values=11,22,33" "gsgen delta"
+echo "==> Applying Avalonia-style generated-input edit"
+replace_once "$SAMPLE/App/GeneratedValue.axaml" 'Value="3"' 'Value="33"'
+wait_for "values=11,22,33" "generated gsgen delta"
 
 if grep -q "MSB4057" "$LOG"; then
     echo "FAIL: design-time project load still reports MSB4057"
@@ -124,6 +136,18 @@ if [[ "$PID_COUNT" != "1" ]]; then
     exit 1
 fi
 
+if grep -Eq "dotnet watch .*File updated: .*\\.(gs|cs|axaml)" "$LOG"; then
+    echo "FAIL: dotnet watch raced the G# agent on an agent-owned source:"
+    grep -E "dotnet watch .*File updated:" "$LOG"
+    exit 1
+fi
+
+if grep -q "Waiting for a file to change before restarting" "$LOG"; then
+    echo "FAIL: dotnet watch restarted or queued a restart instead of leaving edits to the G# agent"
+    cat "$LOG"
+    exit 1
+fi
+
 APPLY_COUNT=$(grep -c "G# hot reload: applied" "$LOG" || true)
 if [[ "$APPLY_COUNT" -lt 3 ]]; then
     echo "FAIL: expected at least three applied G# deltas, saw $APPLY_COUNT"
@@ -132,4 +156,4 @@ if [[ "$APPLY_COUNT" -lt 3 ]]; then
 fi
 
 tail -200 "$LOG"
-echo "PASS: dotnet watch loaded .gsproj and applied local, project-reference, and gsgen G# deltas without restart."
+echo "PASS: dotnet watch launched one modifiable process while G# applied local, transitive-project, and generated gsgen deltas without restart."

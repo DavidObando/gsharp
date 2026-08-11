@@ -30,6 +30,8 @@
   </PropertyGroup>
 
   <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Compile Update="@(Compile)" Watch="false" />
+    <EmbeddedResource Update="@(EmbeddedResource)" Watch="false" />
     <Reference Include="Gsharp.HotReload.Runtime">
       <HintPath>$(GsharpHotReloadRuntimeAssemblyFullPath)</HintPath>
       <Private>true</Private>

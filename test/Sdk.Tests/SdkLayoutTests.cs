@@ -219,6 +219,113 @@ public class SdkLayoutTests
     }
 
     [Fact]
+    public void Core_Targets_Pin_HotReload_Watch_Inputs_And_Isolated_Baseline_Build()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+        var baselineTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
+        var baselineBuild = Assert.Single(baselineTarget.Elements(MsbuildNs + "MSBuild"));
+        var baselineProperties = ((string)baselineBuild.Attribute("Properties") ?? string.Empty)
+            .Split(
+                ';',
+                System.StringSplitOptions.RemoveEmptyEntries |
+                System.StringSplitOptions.TrimEntries);
+
+        Assert.Equal("Build", (string)baselineBuild.Attribute("Targets"));
+        Assert.Equal("false", (string)baselineBuild.Attribute("BuildInParallel"));
+        Assert.Contains("DotNetWatchBuild=false", baselineProperties);
+        Assert.Contains("GsharpEnableHotReload=true", baselineProperties);
+        Assert.Contains("BuildProjectReferences=false", baselineProperties);
+
+        var removedProperties = ((string)baselineBuild.Attribute("RemoveProperties") ?? string.Empty)
+            .Split(
+                ';',
+                System.StringSplitOptions.RemoveEmptyEntries |
+                System.StringSplitOptions.TrimEntries);
+        Assert.Contains("DesignTimeBuild", removedProperties);
+        Assert.Contains("SkipCompilerExecution", removedProperties);
+        Assert.Contains("ProvideCommandLineArgs", removedProperties);
+        Assert.Contains("BuildingInsideVisualStudio", removedProperties);
+
+        var gatedItems = doc.Descendants(MsbuildNs + "ItemGroup")
+            .Single(group =>
+                group.Elements(MsbuildNs + "Reference")
+                    .Any(item => (string)item.Attribute("Include") == "Gsharp.HotReload.Runtime") &&
+                group.Elements(MsbuildNs + "None")
+                    .Any(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)") &&
+                group.Elements(MsbuildNs + "ProjectCapability")
+                    .Any(item => (string)item.Attribute("Include") == "SupportsHotReload"));
+        var gatedItemsCondition = (string)gatedItems.Attribute("Condition");
+        Assert.Equal(
+            "false",
+            (string)gatedItems.Elements(MsbuildNs + "Compile")
+                .Single(item => (string)item.Attribute("Update") == "@(Compile)")
+                .Attribute("Watch"));
+        Assert.Equal(
+            "false",
+            (string)gatedItems.Elements(MsbuildNs + "EmbeddedResource")
+                .Single(item => (string)item.Attribute("Update") == "@(EmbeddedResource)")
+                .Attribute("Watch"));
+        Assert.Contains(
+            "'$(GsharpEnableHotReload)' == 'true'",
+            gatedItemsCondition,
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "'$(_GsharpHotReloadSupported)' == 'true'",
+            gatedItemsCondition,
+            System.StringComparison.Ordinal);
+
+        var prepareTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpPrepareHotReload");
+        var manifestTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpWriteHotReloadManifest");
+        Assert.Equal(
+            (string)prepareTarget.Attribute("Condition"),
+            (string)manifestTarget.Attribute("Condition"));
+        Assert.All(
+            new[] { prepareTarget, manifestTarget },
+            target =>
+            {
+                var condition = (string)target.Attribute("Condition");
+                Assert.Contains(
+                    "'$(GsharpEnableHotReload)' == 'true'",
+                    condition,
+                    System.StringComparison.Ordinal);
+                Assert.Contains(
+                    "'$(_GsharpHotReloadSupported)' == 'true'",
+                    condition,
+                    System.StringComparison.Ordinal);
+                Assert.Equal(
+                    "@(_GsharpHotReloadWatch)",
+                    (string)Assert.Single(
+                        target.Elements(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"))
+                        .Attribute("WatchFiles"));
+            });
+
+        Assert.Equal(
+            "@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)",
+            (string)prepareTarget.Descendants(MsbuildNs + "_GsharpHotReloadWatch")
+                .Single(item => item.Attribute("Include") != null)
+                .Attribute("Include"));
+        Assert.Equal(
+            "@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);$(MSBuildProjectFullPath)",
+            (string)manifestTarget.Descendants(MsbuildNs + "_GsharpHotReloadWatch")
+                .Single(item => item.Attribute("Include") != null)
+                .Attribute("Include"));
+
+        var agentPath = Path.GetFullPath(Path.Combine(
+            RepoRoot.SdkSourceDir,
+            "..",
+            "Gsharp.HotReload.Runtime",
+            "HotReloadAgent.cs"));
+        var agentText = File.ReadAllText(agentPath);
+        Assert.Contains("-p:IntermediateOutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.Contains("-p:OutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:DotNetWatchBuild=true", agentText, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Sdk_Props_Excludes_LanguageServer_Cache_From_Default_Items()
     {
         var path = Path.Combine(RepoRoot.SdkSourceDir, "Sdk", "Sdk.props");
@@ -250,6 +357,32 @@ public class SdkLayoutTests
         Assert.Contains("Microsoft.Build.Utilities.Core", text, System.StringComparison.Ordinal);
         Assert.Contains("tools\\hotreload\\", text, System.StringComparison.Ordinal);
         Assert.Contains("Gsharp.HotReload.Runtime.dll", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sdk_Csproj_Uses_BuildOnly_HotReload_Runtime_Reference_And_Packs_Runtime()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var doc = XDocument.Load(path);
+        var runtimeReference = doc.Descendants("ProjectReference")
+            .Single(reference =>
+                ((string)reference.Attribute("Include") ?? string.Empty).EndsWith(
+                    @"Gsharp.HotReload.Runtime\Gsharp.HotReload.Runtime.csproj",
+                    System.StringComparison.Ordinal));
+
+        Assert.Equal("false", (string)runtimeReference.Attribute("Private"));
+        Assert.Equal("false", (string)runtimeReference.Attribute("ReferenceOutputAssembly"));
+        Assert.Equal("true", (string)runtimeReference.Attribute("SkipGetTargetFrameworkProperties"));
+
+        var runtimeTarget = doc.Descendants("Target")
+            .Single(target => (string)target.Attribute("Name") == "PackGsharpHotReloadRuntime");
+
+        Assert.Equal("_GetPackageFiles", (string)runtimeTarget.Attribute("BeforeTargets"));
+        Assert.Equal("Build", (string)runtimeTarget.Attribute("DependsOnTargets"));
+        var runtimePayload = runtimeTarget.Descendants("None")
+            .Single(item => (string)item.Attribute("Include") == "@(_GsharpHotReloadRuntimePayload)");
+        Assert.Equal("true", (string)runtimePayload.Attribute("Pack"));
+        Assert.Equal("tools\\hotreload\\", (string)runtimePayload.Attribute("PackagePath"));
     }
 
     [Fact]

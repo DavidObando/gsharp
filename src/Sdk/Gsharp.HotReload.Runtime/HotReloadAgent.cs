@@ -296,6 +296,10 @@ public static class HotReloadAgent
         private async Task CompileAndApplyAsync()
         {
             Directory.CreateDirectory(this.updateDirectory);
+            var intermediateDirectory = EnsureTrailingDirectorySeparator(
+                Path.Combine(this.updateDirectory, "obj"));
+            var outputDirectory = EnsureTrailingDirectorySeparator(
+                Path.Combine(this.updateDirectory, "bin"));
 
             var startInfo = new ProcessStartInfo("dotnet")
             {
@@ -313,9 +317,10 @@ public static class HotReloadAgent
             startInfo.ArgumentList.Add("-t:_GsharpHotReloadCompile");
             startInfo.ArgumentList.Add($"-p:TargetFramework={this.manifest.TargetFramework}");
             startInfo.ArgumentList.Add($"-p:Configuration={this.manifest.Configuration}");
-            startInfo.ArgumentList.Add("-p:DotNetWatchBuild=true");
             startInfo.ArgumentList.Add("-p:GsharpEnableHotReload=true");
             startInfo.ArgumentList.Add("-p:BuildProjectReferences=false");
+            startInfo.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDirectory}");
+            startInfo.ArgumentList.Add($"-p:OutputPath={outputDirectory}");
             startInfo.ArgumentList.Add($"-p:GsharpHotReloadOutputDirectory={this.updateDirectory}");
 
             using var process = Process.Start(startInfo);
@@ -361,7 +366,7 @@ public static class HotReloadAgent
                             this.assembly,
                             update.MetadataDelta,
                             update.IlDelta,
-                            Array.Empty<byte>());
+                            update.PdbDelta);
                         update.Commit();
                         WriteDiagnostic(
                             $"applied {update.UpdatedMethods.Length} method update(s) to '{this.assembly.GetName().Name}': {string.Join(", ", update.UpdatedMethods)}");
@@ -375,6 +380,9 @@ public static class HotReloadAgent
                     return;
             }
         }
+
+        private static string EnsureTrailingDirectorySeparator(string path) =>
+            Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
 
         private static void WriteCompilerOutput(string output, string error)
         {

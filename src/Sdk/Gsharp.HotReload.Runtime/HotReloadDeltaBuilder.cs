@@ -28,6 +28,14 @@ internal enum HotReloadDeltaStatus
     Unsupported,
 }
 
+/// <summary>Builds stable-row Edit-and-Continue deltas from two G# PE images.</summary>
+/// <remarks>
+/// <see cref="MetadataUpdater"/> applies deltas but does not create them, while
+/// Roslyn's EmitDifference pipeline requires a Roslyn compilation and cannot
+/// consume G# bound programs. Keep this encoder limited to existing managed
+/// method bodies; structural metadata edits return an explicit restart
+/// diagnostic instead of synthesizing partial Roslyn behavior.
+/// </remarks>
 internal sealed class HotReloadDeltaBuilder
 {
     private static readonly IReadOnlyDictionary<ushort, OperandType> OperandTypes = CreateOperandTypeMap();
@@ -326,36 +334,37 @@ internal sealed class HotReloadDeltaBuilder
             }
         }
 
-        if (!EquivalentModule(previous, current) ||
-            !EquivalentAssembly(previous, current) ||
-            !EquivalentTypeReferences(previous, current) ||
-            !EquivalentTypeDefinitions(previous, current) ||
-            !EquivalentFields(previous, current) ||
-            !EquivalentMethods(previous, current) ||
-            !EquivalentParameters(previous, current) ||
-            !EquivalentInterfaceImplementations(previous, current) ||
-            !EquivalentMemberReferences(previous, current) ||
-            !EquivalentConstants(previous, current) ||
-            !EquivalentCustomAttributes(previous, current) ||
-            !EquivalentDeclarativeSecurity(previous, current) ||
-            !EquivalentEvents(previous, current) ||
-            !EquivalentProperties(previous, current) ||
-            !EquivalentMethodImplementations(previous, current) ||
-            !EquivalentModuleReferences(previous, current) ||
-            !EquivalentTypeSpecifications(previous, current) ||
-            !EquivalentAssemblyReferences(previous, current) ||
-            !EquivalentAssemblyFiles(previous, current) ||
-            !EquivalentExportedTypes(previous, current) ||
-            !EquivalentManifestResources(previous, current) ||
-            !EquivalentGenericParameters(previous, current) ||
-            !EquivalentMethodSpecifications(previous, current) ||
-            !EquivalentGenericConstraints(previous, current))
-        {
-            return "GSHR1001: metadata shape changed. This edit requires restart; only managed method-body changes are currently applicable in place.";
-        }
+        string? Changed(bool equivalent, string table) =>
+            equivalent ? null : RestartRequired(table + " metadata changed");
 
-        return null;
+        return Changed(EquivalentModule(previous, current), "module") ??
+            Changed(EquivalentAssembly(previous, current), "assembly") ??
+            Changed(EquivalentTypeReferences(previous, current), "TypeRef") ??
+            Changed(EquivalentTypeDefinitions(previous, current), "TypeDef") ??
+            Changed(EquivalentFields(previous, current), "Field") ??
+            Changed(EquivalentMethods(previous, current), "MethodDef") ??
+            Changed(EquivalentParameters(previous, current), "Param") ??
+            Changed(EquivalentInterfaceImplementations(previous, current), "InterfaceImpl") ??
+            Changed(EquivalentMemberReferences(previous, current), "MemberRef") ??
+            Changed(EquivalentConstants(previous, current), "Constant") ??
+            Changed(EquivalentCustomAttributes(previous, current), "CustomAttribute") ??
+            Changed(EquivalentDeclarativeSecurity(previous, current), "DeclSecurity") ??
+            Changed(EquivalentEvents(previous, current), "Event") ??
+            Changed(EquivalentProperties(previous, current), "Property") ??
+            Changed(EquivalentMethodImplementations(previous, current), "MethodImpl") ??
+            Changed(EquivalentModuleReferences(previous, current), "ModuleRef") ??
+            Changed(EquivalentTypeSpecifications(previous, current), "TypeSpec") ??
+            Changed(EquivalentAssemblyReferences(previous, current), "AssemblyRef") ??
+            Changed(EquivalentAssemblyFiles(previous, current), "File") ??
+            Changed(EquivalentExportedTypes(previous, current), "ExportedType") ??
+            Changed(EquivalentManifestResources(previous, current), "ManifestResource") ??
+            Changed(EquivalentGenericParameters(previous, current), "GenericParam") ??
+            Changed(EquivalentMethodSpecifications(previous, current), "MethodSpec") ??
+            Changed(EquivalentGenericConstraints(previous, current), "GenericParamConstraint");
     }
+
+    private static string RestartRequired(string reason) =>
+        $"GSHR1001: {reason}. Restart required; in-place updates currently support existing managed method bodies only.";
 
     private static bool EquivalentModule(MetadataReader left, MetadataReader right)
     {
@@ -1198,6 +1207,7 @@ internal sealed class HotReloadDelta
         HotReloadDeltaStatus status,
         byte[] metadataDelta,
         byte[] ilDelta,
+        byte[] pdbDelta,
         ImmutableArray<string> updatedMethods,
         string? diagnostic,
         Action? commit)
@@ -1205,6 +1215,7 @@ internal sealed class HotReloadDelta
         this.Status = status;
         this.MetadataDelta = metadataDelta;
         this.IlDelta = ilDelta;
+        this.PdbDelta = pdbDelta;
         this.UpdatedMethods = updatedMethods;
         this.Diagnostic = diagnostic;
         this.commit = commit;
@@ -1216,6 +1227,8 @@ internal sealed class HotReloadDelta
 
     public byte[] IlDelta { get; }
 
+    public byte[] PdbDelta { get; }
+
     public ImmutableArray<string> UpdatedMethods { get; }
 
     public string? Diagnostic { get; }
@@ -1224,14 +1237,36 @@ internal sealed class HotReloadDelta
         byte[] metadataDelta,
         byte[] ilDelta,
         ImmutableArray<string> updatedMethods,
-        Action commit) =>
-        new(HotReloadDeltaStatus.Ready, metadataDelta, ilDelta, updatedMethods, diagnostic: null, commit);
+        Action commit,
+        byte[]? pdbDelta = null) =>
+        new(
+            HotReloadDeltaStatus.Ready,
+            metadataDelta,
+            ilDelta,
+            pdbDelta ?? Array.Empty<byte>(),
+            updatedMethods,
+            diagnostic: null,
+            commit);
 
     public static HotReloadDelta NoChanges() =>
-        new(HotReloadDeltaStatus.NoChanges, Array.Empty<byte>(), Array.Empty<byte>(), ImmutableArray<string>.Empty, diagnostic: null, commit: null);
+        new(
+            HotReloadDeltaStatus.NoChanges,
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            ImmutableArray<string>.Empty,
+            diagnostic: null,
+            commit: null);
 
     public static HotReloadDelta Unsupported(string diagnostic) =>
-        new(HotReloadDeltaStatus.Unsupported, Array.Empty<byte>(), Array.Empty<byte>(), ImmutableArray<string>.Empty, diagnostic, commit: null);
+        new(
+            HotReloadDeltaStatus.Unsupported,
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            ImmutableArray<string>.Empty,
+            diagnostic,
+            commit: null);
 
     public void Commit() => this.commit?.Invoke();
 }
