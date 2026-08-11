@@ -16,15 +16,15 @@
          under lib/<tfm>/ is handled by the standard Microsoft.NET.Sdk pack. -->
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
 
-    <!-- Match dotnet-watch's supported runtime floor while keeping Release
-         builds and explicitly-disabled projects byte-for-byte unchanged. -->
+    <!-- Debug builds carry a dormant bootstrap; the runtime agent activates
+         only when dotnet watch sets DOTNET_WATCH for the launched process. -->
     <_GsharpHotReloadSupported Condition=" '$(TargetFrameworkIdentifier)' == '.NETCoreApp' and
                                             $([MSBuild]::VersionGreaterThanOrEquals('$(TargetFrameworkVersion)', '10.0')) ">true</_GsharpHotReloadSupported>
     <GsharpEnableHotReload Condition=" '$(GsharpEnableHotReload)' == '' and
-                                      '$(DotNetWatchBuild)' == 'true' and
+                                      '$(Configuration)' == 'Debug' and
                                       '$(_GsharpHotReloadSupported)' == 'true' ">true</GsharpEnableHotReload>
     <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(TargetName).manifest</GsharpHotReloadManifestPath>
-    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
+    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.gsharphot</GsharpHotReloadBootstrapPath>
     <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
   </PropertyGroup>
 
@@ -51,6 +51,26 @@
           BeforeTargets="CoreCompile"
           Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' != 'true' ">
     <Error Text="G# hot reload requires a .NETCoreApp target framework version 10.0 or newer." />
+  </Target>
+
+  <!-- dotnet-watch's first ordinary `dotnet build` does not carry its
+       DotNetWatchBuild marker. The following design-time build does. Rebuild
+       this TFM once with the runtime bootstrap before watch launches it. -->
+  <Target Name="_GsharpBuildHotReloadBaseline"
+          BeforeTargets="CompileDesignTime"
+          Condition=" '$(DotNetWatchBuild)' == 'true' and
+                      '$(DesignTimeBuild)' == 'true' and
+                      '$(SkipCompilerExecution)' == 'true' and
+                      '$(_GsharpHotReloadSupported)' == 'true' ">
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="Build"
+             BuildInParallel="false"
+             RemoveProperties="DesignTimeBuild;SkipCompilerExecution;ProvideCommandLineArgs;BuildingInsideVisualStudio"
+             Properties="TargetFramework=$(TargetFramework);
+                         Configuration=$(Configuration);
+                         DotNetWatchBuild=false;
+                         GsharpEnableHotReload=true;
+                         BuildProjectReferences=false" />
   </Target>
 
   <Target Name="_GsharpPrepareHotReload"

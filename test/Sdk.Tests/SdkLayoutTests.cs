@@ -172,6 +172,17 @@ public class SdkLayoutTests
             hotReloadCompile.Elements(MsbuildNs + "Copy"),
             copy => (string)copy.Attribute("SourceFiles") == "@(IntermediateAssembly)");
 
+        var hotReloadBaseline = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
+        Assert.Equal("CompileDesignTime", (string)hotReloadBaseline.Attribute("BeforeTargets"));
+        Assert.Contains(
+            hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
+            task => (string)task.Attribute("Targets") == "Build");
+
+        var hotReloadBootstrapPath = doc.Descendants(MsbuildNs + "GsharpHotReloadBootstrapPath")
+            .Single().Value;
+        Assert.False(hotReloadBootstrapPath.EndsWith(".gs", System.StringComparison.OrdinalIgnoreCase));
+
         Assert.Contains(
             doc.Descendants(MsbuildNs + "ProjectCapability"),
             capability => (string)capability.Attribute("Include") == "SupportsHotReload");
