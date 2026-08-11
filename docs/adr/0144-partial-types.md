@@ -186,13 +186,18 @@ through the body binder's existing duplicate detection (`GS0102`), since all
 parts' members now live in one node.
 
 This merge-the-syntax design was chosen over binding each part into a shared
-symbol with accumulating installers (the higher-blast-radius alternative) because
-two invariants make it sound: G# **imports are compilation-global** (`BindGlobalScope`
-binds every tree's `ImportSyntax` into one shared scope), so a member body merged
-from another file still resolves its type names; and G# **syntax nodes carry no
-`Parent` reference**, so composing child nodes drawn from different parts/files
-under one synthetic parent is safe — each child keeps its own `SyntaxTree`, so
-diagnostics still point at the correct file and span.
+symbol with accumulating installers (the higher-blast-radius alternative).
+G# imports are file-scoped, so binding uses each composed child node's retained
+`SyntaxTree` for type clauses, annotations, declaration expressions, and shared
+initializer blocks. Matching generic-parameter lists are retained from every
+part and bind independently in their own files, without unioning imports. One
+successful binding supplies the contract when other parts lack the needed
+import; multiple successful bindings must resolve to equivalent signatures or
+report `GS0480`. If none resolve, each part keeps its own constraint diagnostics.
+Syntax nodes carry no `Parent` reference, so composing children drawn from
+different parts/files under one synthetic parent remains safe: diagnostics and
+import lookup both use the declaring file, while the synthetic parent's tree
+remains only the aggregate anchor described above.
 
 **Nested partial types** are handled by the same merger recursively: when it
 builds (or passes through) a type node, it merges the partial nested types in
@@ -272,6 +277,6 @@ single `.cctor`.
   installer in the ~2 000-line body binder to accumulate, seeding cross-part
   duplicate detection, and making base-class / primary-constructor / type-param
   binding "set once" across parts — a large, error-prone surface. The syntax
-  merge confines all partial logic to one pre-pass and leaves the binder,
-  installers, symbols, and emitter untouched. It is sound only because imports
-  are compilation-global and syntax nodes have no `Parent` (see §E).
+  merge confines partial composition to one pre-pass and reuses child-node
+  `SyntaxTree` provenance during binding; installers, symbols, and emitter stay
+  unchanged (see §E).

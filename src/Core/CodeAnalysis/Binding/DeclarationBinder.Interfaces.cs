@@ -87,7 +87,12 @@ internal sealed partial class DeclarationBinder
 
         try
         {
-            ResolveTypeParameterConstraints(syntax.TypeParameterList, interfaceSymbol.TypeParameters);
+            ResolvePartialTypeParameterConstraints(
+                syntax.TypeParameterList,
+                syntax.PartialTypeParameterLists,
+                interfaceSymbol.TypeParameters,
+                interfaceSymbol.Name,
+                syntax.PartialPartLocations);
             BindInterfaceMembersCore(syntax, interfaceSymbol, package);
         }
         finally

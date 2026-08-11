@@ -74,7 +74,12 @@ internal sealed partial class DeclarationBinder
             // same-compilation constraint target can be published first.
             // Resolve constraints now, with the declaring shell and all sibling
             // source type shells visible, before binding signatures and members.
-            ResolveTypeParameterConstraints(syntax.TypeParameterList, structSymbol.TypeParameters);
+            ResolvePartialTypeParameterConstraints(
+                syntax.TypeParameterList,
+                syntax.PartialTypeParameterLists,
+                structSymbol.TypeParameters,
+                structSymbol.Name,
+                syntax.PartialPartLocations);
             BindStructDeclarationBodyCore(syntax, package, structSymbol);
         }
         finally
@@ -648,14 +653,14 @@ internal sealed partial class DeclarationBinder
                 // identifier tokens in the base/interface clause.
                 if (allBaseTypes.Count == 0 && syntax.BaseTypeIdentifier != null)
                 {
-                    allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, syntax.BaseTypeIdentifier));
+                    allBaseTypes.Add(new TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier));
                     if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
                     {
                         foreach (var token in syntax.AdditionalBaseTypeIdentifiers)
                         {
                             if (token != null)
                             {
-                                allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, token));
+                                allBaseTypes.Add(new TypeClauseSyntax(token.SyntaxTree, token));
                             }
                         }
                     }

@@ -279,4 +279,11 @@ public sealed class InterfaceDeclarationSyntax : MemberSyntax
             InvalidateCachedSpan();
         }
     }
+
+    /// <summary>
+    /// Gets or sets matching type-parameter lists retained from merged partial
+    /// declarations so constraint binding can use each list's syntax-tree provenance.
+    /// Empty for ordinary declarations and GS0480-mismatched partial groups.
+    /// </summary>
+    internal ImmutableArray<TypeParameterListSyntax> PartialTypeParameterLists { get; set; } = ImmutableArray<TypeParameterListSyntax>.Empty;
 }

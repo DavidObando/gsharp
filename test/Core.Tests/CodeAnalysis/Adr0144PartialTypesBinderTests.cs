@@ -97,12 +97,12 @@ Console.WriteLine(Foo().Sum())
     }
 
     [Fact]
-    public void CrossFile_PartsMergeAndGlobalImportsResolve()
+    public void CrossFile_PartsMergeAndMemberBodyUsesDeclaringFileImports()
     {
         // Part A declares a field; part B (a separate tree, with its OWN
         // `import System`) declares a method that references a System type.
-        // Compiling both trees together must merge the parts AND let part B's
-        // body resolve `System.Math` — proving imports are compilation-global.
+        // Compiling both trees together must merge the parts while preserving
+        // part B's syntax-tree provenance for its method body.
         var treeA = SyntaxTree.Parse(SourceText.From(
             @"package App
 
@@ -129,6 +129,438 @@ Console.WriteLine(c.Abs())
 
         var output = CompileLoadInvokeCaptureStdout(new[] { treeA, treeB }, "Adr0144-CrossFile");
         Assert.Contains("11", output);
+    }
+
+    [Fact]
+    public void CrossFile_FieldTypeUsesDeclaringPartImports_AndRuns()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            import System.Text
+
+            public partial class Holder {
+                var sb StringBuilder?
+
+                public func Fill() {
+                    let local = StringBuilder()
+                    local.Append("ok")
+                    sb = local
+                }
+
+                public func Text() string {
+                    return sb?.ToString() ?? ""
+                }
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            import System
+
+            public partial class Holder {
+                public func Touch() {
+                }
+            }
+
+            let holder = Holder()
+            holder.Fill()
+            Console.WriteLine(holder.Text())
+            """,
+            "Holder.Feature.gs"));
+
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { declaringPart, featurePart },
+            "Issue3336-PartialFieldImport");
+
+        Assert.Contains("ok", output);
+    }
+
+    [Fact]
+    public void CrossFile_PrimaryPartImportDoesNotLeakToDeclaringPart()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            public partial class Holder {
+                var sb StringBuilder?
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            import System.Text
+
+            public partial class Holder {
+            }
+            """,
+            "Holder.Feature.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { declaringPart, featurePart }).Emit(peStream);
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0113"
+                && diagnostic.Location.FileName == "Holder.gs");
+    }
+
+    [Fact]
+    public void CrossFile_GenericConstraintsUseImportingPartProvenance()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+
+            public partial interface IHolder[T IEnumerable[T]] {
+            }
+
+            public partial class Outer {
+                partial class Nested[T IEnumerable[T]] {
+                }
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+
+            public partial interface IHolder[T IEnumerable[T]] {
+            }
+
+            public partial class Outer {
+                partial class Nested[T IEnumerable[T]] {
+                }
+            }
+            """,
+            "Holder.Feature.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { declaringPart, featurePart })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CrossFile_SameConstraintTextResolvingToDifferentTypesReportsGS0480(bool leftPartFirst)
+    {
+        var contract = SyntaxTree.Parse(SourceText.From(
+            """
+            package Contracts
+
+            public interface IConstraint[U any] {
+            }
+            """,
+            "Contract.gs"));
+        var leftMarker = SyntaxTree.Parse(SourceText.From(
+            """
+            package Left
+
+            public class Marker[U any] {
+            }
+            """,
+            "Left.Marker.gs"));
+        var rightMarker = SyntaxTree.Parse(SourceText.From(
+            """
+            package Right
+
+            public class Marker[U any] {
+            }
+            """,
+            "Right.Marker.gs"));
+        var leftPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import Contracts
+            import Left
+
+            public partial class Holder[T IConstraint[Marker[T]] class init()] {
+            }
+            """,
+            "Holder.Left.gs"));
+        var rightPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import Contracts
+            import Right
+
+            public partial class Holder[T IConstraint[Marker[T]] class init()] {
+            }
+            """,
+            "Holder.Right.gs"));
+        var parts = leftPartFirst
+            ? new[] { leftPart, rightPart }
+            : new[] { rightPart, leftPart };
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(
+            new[] { contract, leftMarker, rightMarker }.Concat(parts).ToArray())
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        var mismatch = Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.Id == "GS0480"));
+        Assert.Equal("Holder.Right.gs", mismatch.Location.FileName);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0496");
+    }
+
+    [Fact]
+    public void CrossFile_AllPartialConstraintBindingsFailReportsEachDeclaringFile()
+    {
+        var firstPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            public partial class Holder[T MissingConstraint] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var secondPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            public partial class Holder[T MissingConstraint] {
+            }
+            """,
+            "Holder.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(firstPart, secondPart)
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        var unresolved = result.Diagnostics
+            .Where(diagnostic => diagnostic.Id == "GS0113")
+            .OrderBy(diagnostic => diagnostic.Location.FileName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, unresolved.Length);
+        Assert.Equal(
+            new[] { "Holder.Feature.gs", "Holder.gs" },
+            unresolved.Select(diagnostic => diagnostic.Location.FileName));
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    [Fact]
+    public void CrossFile_PartialStructMatchingResolvedGenericConstraintsCompile()
+    {
+        var importingPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import System.Collections.Generic
+
+            public partial struct Holder[T IEnumerable[T] struct] {
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import System.Collections.Generic
+
+            public partial struct Holder[T IEnumerable[T] struct] {
+            }
+            """,
+            "Holder.Feature.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(featurePart, importingPart)
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void CrossFile_GenericConstraintImportDoesNotLeakFromUnrelatedFile()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var unrelated = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public class Marker {
+            }
+            """,
+            "Unrelated.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { unrelated, declaringPart, featurePart })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0113"
+                && diagnostic.Location.FileName == "Holder.Feature.gs");
+    }
+
+    [Fact]
+    public void CrossFile_GenericConstraintMismatchStillReportsGS0480()
+    {
+        var anyConstraint = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T any] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var importedConstraint = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { importedConstraint, anyConstraint })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    [Fact]
+    public void CrossFile_MergedMemberDeclarationsKeepDeclaringTreeProvenance()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            import System.ComponentModel
+            import System.IO
+            import System.Text
+
+            public partial interface IBuilderSource {
+                func Build() StringBuilder;
+            }
+
+            @Description("holder")
+            public partial class Holder : MemoryStream, IBuilderSource {
+                var builder StringBuilder = StringBuilder()
+
+                public prop Value StringBuilder -> builder
+
+                shared {
+                    var Initialized string = ""
+
+                    init {
+                        let local = StringBuilder()
+                        local.Append("shared")
+                        Initialized = local.ToString()
+                    }
+                }
+
+                public class Token {
+                    var text StringBuilder = StringBuilder()
+
+                    public func Text() string {
+                        text.Append("nested")
+                        return text.ToString()
+                    }
+                }
+
+                private func Echo(value StringBuilder) StringBuilder {
+                    return value
+                }
+
+                private func Mode(value FileMode = FileMode.Open) FileMode {
+                    return value
+                }
+
+                public func Build() StringBuilder {
+                    builder.Append("ok")
+                    return Echo(Value)
+                }
+
+                public func ModeText() string {
+                    return Mode().ToString()
+                }
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialImportBinding
+
+            import System
+
+            public partial interface IBuilderSource {
+            }
+
+            public partial class Holder {
+                public func Touch() {
+                }
+            }
+
+            let holder = Holder()
+            Console.WriteLine(holder.Build().ToString())
+            Console.WriteLine(holder.ModeText())
+            Console.WriteLine(Holder.Token().Text())
+            Console.WriteLine(Holder.Initialized)
+            """,
+            "Holder.Feature.gs"));
+
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { featurePart, declaringPart },
+            "Issue3336-PartialMemberProvenance");
+
+        Assert.Contains("ok", output);
+        Assert.Contains("Open", output);
+        Assert.Contains("nested", output);
+        Assert.Contains("shared", output);
     }
 
     [Fact]
@@ -300,17 +732,18 @@ import System
 
 partial class Box {
     partial class Slot {
-        var value int32 = 7
+        func Read() string {
+            return value.ToString()
+        }
     }
 }", "A.gs"));
         var fileB = SyntaxTree.Parse(SourceText.From(@"package App
 import System
+import System.Text
 
 partial class Box {
     partial class Slot {
-        func Read() int32 {
-            return value
-        }
+        var value StringBuilder = StringBuilder(""nested"")
     }
 }
 
@@ -318,7 +751,7 @@ let s = Box.Slot()
 Console.WriteLine(s.Read())", "B.gs"));
 
         var output = CompileLoadInvokeCaptureStdout(new[] { fileA, fileB }, "Adr0144-NestedSplit");
-        Assert.Contains("7", output);
+        Assert.Contains("nested", output);
     }
 
     [Fact]

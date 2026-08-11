@@ -55,7 +55,10 @@ internal sealed partial class DeclarationBinder
             // ambient lookup preference (see field-initializer closure above
             // for the full rationale) for the duration of this deferred bind.
             var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
-            var savedTree = scope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
+            var savedTree = scope.SetCurrentReferencingSyntaxTree(
+                Invariant.Required(
+                    syntax.BaseConstructorOpenParenthesisToken,
+                    "a base-constructor argument list has an opening parenthesis").SyntaxTree);
             try
             {
                 BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);

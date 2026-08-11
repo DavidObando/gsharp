@@ -1302,6 +1302,121 @@ internal sealed partial class DeclarationBinder
         }
     }
 
+    private void ResolvePartialTypeParameterConstraints(
+        TypeParameterListSyntax? primarySyntax,
+        ImmutableArray<TypeParameterListSyntax> matchingPartialLists,
+        ImmutableArray<TypeParameterSymbol> symbols,
+        string typeName,
+        ImmutableArray<TextLocation> partialPartLocations)
+    {
+        if (matchingPartialLists.Length <= 1)
+        {
+            ResolveTypeParameterConstraints(primarySyntax, symbols);
+            return;
+        }
+
+        // Issue #3336: bind every matching header through its own file imports.
+        var successfulBindings =
+            new List<(int PartIndex, TypeParameterListSyntax Syntax, ImmutableArray<TypeParameterSymbol> Symbols)>();
+        var diagnosticsByPart = new List<ImmutableArray<Diagnostic>>(matchingPartialLists.Length);
+        for (var partIndex = 0; partIndex < matchingPartialLists.Length; partIndex++)
+        {
+            var candidate = matchingPartialLists[partIndex];
+            var diagnosticCount = Diagnostics.Count;
+            var candidateSymbols = CreateTypeParameterSymbols(candidate);
+            ImmutableArray<Diagnostic> candidateDiagnostics;
+            try
+            {
+                ResolveTypeParameterConstraints(candidate, candidateSymbols);
+                candidateDiagnostics = Diagnostics.Skip(diagnosticCount).ToImmutableArray();
+            }
+            finally
+            {
+                Diagnostics.TruncateTo(diagnosticCount);
+            }
+
+            diagnosticsByPart.Add(candidateDiagnostics);
+            if (!candidateDiagnostics.Any(diagnostic => diagnostic.IsError))
+            {
+                successfulBindings.Add((partIndex, candidate, candidateSymbols));
+            }
+        }
+
+        if (successfulBindings.Count == 0)
+        {
+            // Preserve primary-part recovery state, but surface each part's own
+            // constraint diagnostics exactly once.
+            var diagnosticCount = Diagnostics.Count;
+            try
+            {
+                ResolveTypeParameterConstraints(primarySyntax, symbols);
+            }
+            finally
+            {
+                Diagnostics.TruncateTo(diagnosticCount);
+            }
+
+            foreach (var candidateDiagnostics in diagnosticsByPart)
+            {
+                Diagnostics.AddRange(candidateDiagnostics);
+            }
+
+            return;
+        }
+
+        var baseline = successfulBindings[0];
+        foreach (var candidate in successfulBindings.Skip(1))
+        {
+            if (!TypeParameterConstraintSignaturesEquivalent(baseline.Symbols, candidate.Symbols))
+            {
+                var location = candidate.PartIndex < partialPartLocations.Length
+                    ? partialPartLocations[candidate.PartIndex]
+                    : candidate.Syntax.Location;
+                Diagnostics.ReportPartialTypeParameterMismatch(location, typeName);
+            }
+        }
+
+        ResolveTypeParameterConstraints(baseline.Syntax, symbols);
+    }
+
+    private static bool TypeParameterConstraintSignaturesEquivalent(
+        ImmutableArray<TypeParameterSymbol> left,
+        ImmutableArray<TypeParameterSymbol> right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        var typeParameterMap = new Dictionary<TypeParameterSymbol, TypeSymbol>(left.Length);
+        for (var i = 0; i < left.Length; i++)
+        {
+            typeParameterMap[left[i]] = right[i];
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            var x = left[i];
+            var y = right[i];
+            if (!string.Equals(x.Name, y.Name, StringComparison.Ordinal)
+                || x.Ordinal != y.Ordinal
+                || x.Variance != y.Variance
+                || x.Constraint != y.Constraint
+                || x.HasReferenceTypeConstraint != y.HasReferenceTypeConstraint
+                || x.HasValueTypeConstraint != y.HasValueTypeConstraint
+                || x.HasDefaultConstructorConstraint != y.HasDefaultConstructorConstraint
+                || x.HasUnmanagedConstraint != y.HasUnmanagedConstraint
+                || !TypeSignaturesEquivalent(x.InterfaceConstraint, y.InterfaceConstraint, typeParameterMap)
+                || !TypeSignaturesEquivalent(x.ClrInterfaceConstraint, y.ClrInterfaceConstraint, typeParameterMap)
+                || !TypeSignaturesEquivalent(x.ClassConstraint, y.ClassConstraint, typeParameterMap))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// Resolves a non-keyword type-parameter constraint (anything other than
     /// <c>any</c> / <c>comparable</c>) as an interface bound and records it on

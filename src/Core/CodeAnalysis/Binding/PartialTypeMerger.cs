@@ -204,8 +204,10 @@ internal static class PartialTypeMerger
 
         // GS0480: identical type-parameter lists (names + arity + constraints).
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
+        var typeParametersMatch = true;
         foreach (var part in parts.Skip(1).Where(p => NormalizeNodeText(p.TypeParameterList) != primaryTypeParams))
         {
+            typeParametersMatch = false;
             diagnostics.ReportPartialTypeParameterMismatch(part.Identifier?.Location ?? default, name);
         }
 
@@ -286,6 +288,9 @@ internal static class PartialTypeMerger
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             SealedKeyword = sealedKeyword,
             PartialPartLocations = parts.Select(p => p.Identifier?.Location ?? default).ToImmutableArray(),
+            PartialTypeParameterLists = typeParametersMatch
+                ? parts.Select(p => p.TypeParameterList).OfType<TypeParameterListSyntax>().ToImmutableArray()
+                : ImmutableArray<TypeParameterListSyntax>.Empty,
         };
 
         merged.WithAnnotations(UnionAnnotations(parts));
@@ -432,8 +437,10 @@ internal static class PartialTypeMerger
 
         // GS0480: identical type-parameter lists.
         var primaryTypeParams = NormalizeNodeText(primary.TypeParameterList);
+        var typeParametersMatch = true;
         foreach (var part in parts.Skip(1).Where(p => NormalizeNodeText(p.TypeParameterList) != primaryTypeParams))
         {
+            typeParametersMatch = false;
             diagnostics.ReportPartialTypeParameterMismatch(part.Identifier?.Location ?? default, name);
         }
 
@@ -485,6 +492,9 @@ internal static class PartialTypeMerger
             StaticFields = Concat(parts, p => p.StaticFields),
             PartialModifier = parts.Select(p => p.PartialModifier).FirstOrDefault(t => t != null),
             PartialPartLocations = parts.Select(p => p.Identifier?.Location ?? default).ToImmutableArray(),
+            PartialTypeParameterLists = typeParametersMatch
+                ? parts.Select(p => p.TypeParameterList).OfType<TypeParameterListSyntax>().ToImmutableArray()
+                : ImmutableArray<TypeParameterListSyntax>.Empty,
         };
 
         merged.WithAnnotations(UnionAnnotations(parts));
