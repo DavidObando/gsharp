@@ -112,7 +112,7 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
                 class __GsharpHotReloadBootstrap {
                     shared {
                         @ModuleInitializer
-                        private func Initialize() {
+                        internal func Initialize() {
                             HotReloadAgent.Start(Assembly.GetExecutingAssembly(), {{WriteGsharpAssemblyInfoTask.QuoteGsharpString(Path.GetFileName(manifestPath))}})
                         }
                     }

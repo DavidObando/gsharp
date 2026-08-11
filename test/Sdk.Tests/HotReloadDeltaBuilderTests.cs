@@ -31,7 +31,7 @@ public class HotReloadDeltaBuilderTests
             class Bootstrap {
                 shared {
                     @ModuleInitializer
-                    private func Initialize() {}
+                    internal func Initialize() {}
                 }
             }
             """);

@@ -3965,6 +3965,7 @@ internal sealed class ReflectionMetadataEmitter
         !function.IsGeneric &&
         function.Parameters.IsDefaultOrEmpty &&
         function.Type == TypeSymbol.Void &&
+        function.Accessibility is Accessibility.Public or Accessibility.Internal &&
         function.Attributes.Any(attribute =>
             string.Equals(
                 attribute.AttributeType?.FullName,
