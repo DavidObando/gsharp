@@ -321,6 +321,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public SyntaxToken? AsyncModifier { get; }
 
     /// <summary>Gets or sets the optional <c>static</c> contextual keyword (ADR-0089 / issue #755). Non-null when the function was declared inside <c>interface { … }</c> as a static-virtual member; the binder rejects this token on non-interface members.</summary>
+    [SyntaxChildIgnore]
     public SyntaxToken? StaticModifier
     {
         get => staticModifier;

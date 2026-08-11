@@ -81,6 +81,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <c>shared { … }</c> block (ADR-0089 / issue #1019), or
     /// <see langword="null"/> for an ordinary instance property.
     /// </summary>
+    [SyntaxChildIgnore]
     public SyntaxToken? StaticModifier
     {
         get => staticModifier;
