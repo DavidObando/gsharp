@@ -153,8 +153,8 @@ internal sealed class HotReloadDeltaBuilder
             metadata.AddMethodDefinition(
                 baseline.Attributes,
                 baseline.ImplAttributes,
-                baseline.Name,
-                baseline.Signature,
+                metadata.GetOrAddString(baseline.Name),
+                metadata.GetOrAddBlob(baseline.Signature),
                 bodyOffset,
                 parameterList: default);
             updatedMethodNames.Add(baseline.DisplayName);
@@ -230,8 +230,8 @@ internal sealed class HotReloadDeltaBuilder
             methods.Add(new BaselineMethod(
                 method.Attributes,
                 method.ImplAttributes,
-                method.Name,
-                method.Signature,
+                reader.GetString(method.Name),
+                reader.GetBlobBytes(method.Signature),
                 GetMethodDisplayName(reader, methodHandle)));
         }
 
@@ -1185,8 +1185,8 @@ internal sealed class HotReloadDeltaBuilder
     private readonly record struct BaselineMethod(
         MethodAttributes Attributes,
         MethodImplAttributes ImplAttributes,
-        StringHandle Name,
-        BlobHandle Signature,
+        string Name,
+        byte[] Signature,
         string DisplayName);
 }
 
