@@ -316,17 +316,19 @@ public class SdkLayoutTests
 
         var filterTarget = doc.Descendants(MsbuildNs + "Target")
             .Single(target => (string)target.Attribute("Name") == "_GsharpFilterHotReloadWatchItems");
-        Assert.Equal("_CoreCollectWatchItems", (string)filterTarget.Attribute("BeforeTargets"));
+        Assert.Contains(
+            "_GsharpFilterHotReloadWatchItems",
+            doc.Descendants(MsbuildNs + "CustomCollectWatchItems").Single().Value,
+            System.StringComparison.Ordinal);
         Assert.Equal(
-            "false",
-            (string)filterTarget.Descendants(MsbuildNs + "Compile")
-                .Single(item => (string)item.Attribute("Update") == "@(Compile)")
-                .Attribute("Watch"));
+            "@(Compile)",
+            (string)filterTarget.Descendants(MsbuildNs + "Compile").Single().Attribute("Remove"));
         Assert.Equal(
-            "false",
-            (string)filterTarget.Descendants(MsbuildNs + "EmbeddedResource")
-                .Single(item => (string)item.Attribute("Update") == "@(EmbeddedResource)")
-                .Attribute("Watch"));
+            "@(AdditionalFiles)",
+            (string)filterTarget.Descendants(MsbuildNs + "AdditionalFiles").Single().Attribute("Remove"));
+        Assert.Equal(
+            "@(_GsharpAgentOwnedWatch)",
+            (string)filterTarget.Descendants(MsbuildNs + "Watch").Single().Attribute("Remove"));
 
         var agentPath = Path.GetFullPath(Path.Combine(
             RepoRoot.SdkSourceDir,

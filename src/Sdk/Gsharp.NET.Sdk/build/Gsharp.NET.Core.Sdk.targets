@@ -27,6 +27,7 @@
     <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(MSBuildProjectName).manifest</GsharpHotReloadManifestPath>
     <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
     <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
+    <CustomCollectWatchItems Condition=" '$(GsharpEnableHotReload)' == 'true' ">$(CustomCollectWatchItems);_GsharpFilterHotReloadWatchItems</CustomCollectWatchItems>
   </PropertyGroup>
 
   <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
@@ -44,11 +45,14 @@
   </ItemGroup>
 
   <Target Name="_GsharpFilterHotReloadWatchItems"
-          BeforeTargets="_CoreCollectWatchItems"
           Condition=" '$(GsharpEnableHotReload)' == 'true' ">
     <ItemGroup>
-      <Compile Update="@(Compile)" Watch="false" />
-      <EmbeddedResource Update="@(EmbeddedResource)" Watch="false" />
+      <_GsharpAgentOwnedWatch Include="@(Compile->'%(FullPath)');
+                                      @(AdditionalFiles->'%(FullPath)');
+                                      @(EmbeddedResource->'%(FullPath)')" />
+      <Compile Remove="@(Compile)" />
+      <AdditionalFiles Remove="@(AdditionalFiles)" />
+      <Watch Remove="@(_GsharpAgentOwnedWatch)" />
     </ItemGroup>
   </Target>
 
