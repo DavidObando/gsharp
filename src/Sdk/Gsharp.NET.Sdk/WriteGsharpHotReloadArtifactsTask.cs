@@ -59,6 +59,16 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
     /// <summary>Gets or sets source and generator-input files watched for changes.</summary>
     public ITaskItem[] WatchFiles { get; set; } = Array.Empty<ITaskItem>();
 
+    private static StringComparer PathComparer =>
+        Environment.OSVersion.Platform == PlatformID.Win32NT
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    private static StringComparison PathComparison =>
+        Environment.OSVersion.Platform == PlatformID.Win32NT
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
     /// <inheritdoc/>
     public override bool Execute()
     {
@@ -130,11 +140,6 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
         }
     }
 
-    private static StringComparer PathComparer =>
-        Environment.OSVersion.Platform == PlatformID.Win32NT
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
-
     private static string Require(string? value, string propertyName)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -142,7 +147,7 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
             throw new ArgumentException($"WriteGsharpHotReloadArtifactsTask requires {propertyName}.");
         }
 
-        return value;
+        return value!;
     }
 
     private static string GetFullPath(string path, string projectDirectory) =>
@@ -158,11 +163,6 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
 
         return Path.GetFullPath(path).StartsWith(normalizedDirectory, PathComparison);
     }
-
-    private static StringComparison PathComparison =>
-        Environment.OSVersion.Platform == PlatformID.Win32NT
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
 
     private static void AppendValue(StringBuilder builder, string key, string value) =>
         builder.Append(key).Append('\t').AppendLine(Encode(value));
