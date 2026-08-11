@@ -151,6 +151,39 @@ public sealed class Issue3288ImpossibleExplicitConversionTests
     }
 
     [Fact]
+    public void NullableToUnderlying_Gs0156CastGuidance_IsProvablyActionable()
+    {
+        const string invalidSource = """
+            let nullableValue int32? = 42
+            let value int32 = nullableValue
+            """;
+        var diagnostic = Assert.Single(GetErrors(invalidSource));
+
+        Assert.Equal("GS0156", diagnostic.Id);
+        Assert.Equal(
+            "Cannot convert type 'int32?' to 'int32'. An explicit conversion exists (are you missing a cast?)",
+            diagnostic.Message);
+        Assert.Equal(1, diagnostic.Location.StartLine);
+        Assert.Equal(18, diagnostic.Location.StartCharacter);
+        Assert.Equal(1, diagnostic.Location.EndLine);
+        Assert.Equal(31, diagnostic.Location.EndCharacter);
+        Assert.Equal("nullableValue", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+
+        var remedy = CompileAndRun("""
+            package Issue3288NullableGuidance
+            import System
+
+            let nullableValue int32? = 42
+            Console.WriteLine(int32(nullableValue))
+            """);
+
+        Assert.Equal(0, remedy.CompileExitCode);
+        Assert.Equal(0, remedy.RunExitCode);
+        Assert.Equal($"42{Environment.NewLine}", remedy.Stdout);
+        Assert.Equal(string.Empty, remedy.Stderr);
+    }
+
+    [Fact]
     public void LegalConversionLattice_CompilesAndRuns()
     {
         var result = CompileAndRun("""
