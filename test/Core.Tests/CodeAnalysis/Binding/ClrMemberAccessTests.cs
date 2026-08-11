@@ -245,7 +245,7 @@ var x = Int32.NotAReal
         // Stream B: writing a settable CLR instance property routes through
         // BoundClrPropertyAssignmentExpression and updates the underlying
         // receiver. Reading it back via the existing read path verifies the
-        // round-trip on the interpreter.
+        // round-trip through emitted execution.
         var source = @"
 import System.Text
 

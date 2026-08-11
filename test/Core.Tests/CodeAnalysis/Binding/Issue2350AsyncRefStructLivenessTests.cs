@@ -481,10 +481,8 @@ func gen(arr []int32) sequence[int32] {
         return EmittedOracle.Evaluate(source);
     }
 
-    // Binds declarations and function bodies and returns the resulting
-    // diagnostics without evaluating. Used for constructs (e.g. iterators)
-    // that the interpreter cannot execute but whose binder diagnostics still
-    // apply.
+    // Binds declarations and function bodies without executing them. Used when
+    // binder diagnostics, rather than runtime behavior, are the test subject.
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

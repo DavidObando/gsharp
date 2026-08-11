@@ -140,9 +140,9 @@ func (self T?) MyOrElse[T](fb T) T {
 var v int32? = nil
 v.MyOrElse(99)
 ";
-        // #3226: the T? extension receiver on Nullable<int32> emits via the
-        // unconstrained-nullable lift (MethodSpec at Nullable<int32>), so the
-        // emitted oracle now matches the evaluator.
+        // #3226: the emitted oracle handles the T? extension receiver on
+        // Nullable<int32> through the unconstrained-nullable lift (MethodSpec
+        // at Nullable<int32>).
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(99, result.Value);

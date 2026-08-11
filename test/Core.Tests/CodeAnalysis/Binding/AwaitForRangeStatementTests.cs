@@ -45,7 +45,7 @@ total
         // `ConfiguredCancelableAsyncEnumerable[T]`, a fully duck-typed
         // (pattern-based) async enumerable that implements no interfaces at
         // all. Confirms the binder recognizes the pattern shape (element-type
-        // inference) and the interpreter can drain it end-to-end.
+        // inference) and the emitted oracle can drain it end-to-end.
         var source = @"
 import System.Linq
 import System.Threading.Tasks

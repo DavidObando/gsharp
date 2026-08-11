@@ -11,8 +11,8 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #2941: interpreter parity for name-complete enum switches across
-/// flags annotations, symbol origins, and switch forms.
+/// Issue #2941 emitted-execution coverage for name-complete enum switches
+/// across flags annotations, symbol origins, and switch forms.
 /// </summary>
 public class Issue2941FlagsEnumExhaustivenessTests
 {

@@ -84,9 +84,9 @@ public class Issue3145ConstructorRefStructLivenessTests
 
     public enum Driver
     {
-        CompilerEvaluation,
+        BareCompiler,
         CompilerEmission,
-        Interpreter,
+        GsiScript,
     }
 
     private static DriverResult Run(string source, Driver driver)
@@ -109,13 +109,13 @@ public class Issue3145ConstructorRefStructLivenessTests
             File.WriteAllText(sourcePath, source);
             var result = driver switch
             {
-                Driver.CompilerEvaluation => Capture(() => GSharp.Compiler.Program.Main(new[] { sourcePath })),
+                Driver.BareCompiler => Capture(() => GSharp.Compiler.Program.Main(new[] { sourcePath })),
                 Driver.CompilerEmission => Capture(() => GSharp.Compiler.Program.Main(new[]
                 {
                     "/out:" + Path.Combine(outputDirectory, "Probe.dll"),
                     sourcePath,
                 })),
-                Driver.Interpreter => Capture(() => GSharp.Repl.Program.Main(new[] { sourcePath })),
+                Driver.GsiScript => Capture(() => GSharp.Repl.Program.Main(new[] { sourcePath })),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };
 

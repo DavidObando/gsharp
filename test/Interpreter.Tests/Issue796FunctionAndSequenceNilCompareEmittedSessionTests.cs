@@ -107,12 +107,9 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
     [Fact]
     public void NamedDelegateType_EqualsNil_BindsAndEvaluates()
     {
-        // ADR-0059 named delegate. The interpreter does not currently
-        // evaluate named-delegate constructions (`var x T = func(...)`
-        // for `T` a named delegate type bombs with `GS9999: Unexpected
-        // type` — a separate gap), so this test focuses strictly on
-        // the binder shape via a nil-typed local: the named-delegate
-        // value never has to materialise.
+        // ADR-0059 named delegate. This test focuses on the nil-comparison
+        // shape through a nil-typed local; no named-delegate instance needs to
+        // materialize.
         var source = """
             type Reducer = delegate func(a int32, b int32) int32
 
@@ -135,9 +132,9 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
     public void LegacyFuncForm_EqualsNil_BindsAndEvaluates()
     {
         // ADR-0075 deprecates the legacy `func(T) U` type-clause form
-        // (GS0303 warning). The interpreter still binds and runs the
-        // shape — assert the program output is correct and the
-        // warning is the only extra noise.
+        // (GS0303 warning). The emitted session still binds and runs the
+        // shape; assert the program output is correct and the warning is the
+        // only extra noise.
         var source = """
             func Guard(f func(int32) int32) string {
                 if f == nil {

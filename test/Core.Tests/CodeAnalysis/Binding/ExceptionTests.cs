@@ -217,8 +217,8 @@ caught
     [Fact]
     public void Uncaught_TypedException_StillReportsNodeContext()
     {
-        // Nothing catches this — it must still surface as a diagnosed runtime
-        // error (GS9999) via the EvaluatorException node-context wrapping.
+        // Nothing catches this — the emitted oracle must surface it as a
+        // diagnosed runtime error (GS9999) carrying the exception context.
         var source = @"
 import System
 var n = Int32.Parse(""still-bad"")

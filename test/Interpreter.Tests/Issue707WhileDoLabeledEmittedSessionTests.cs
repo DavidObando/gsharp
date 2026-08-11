@@ -25,8 +25,8 @@ public class Issue707WhileDoLabeledEmittedSessionTests
             }
             """;
         var output = RunSubmission(source);
-        // The interpreter prints `0\n1\n2\n` from the WriteLine calls; the
-        // REPL also prints the final value of i (3) on its own line.
+        // The emitted session prints 0, 1, and 2 from the WriteLine calls,
+        // then echoes the final value of i (3) on its own line.
         Assert.Contains("0", output);
         Assert.Contains("1", output);
         Assert.Contains("2", output);

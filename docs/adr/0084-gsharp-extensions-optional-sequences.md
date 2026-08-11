@@ -491,8 +491,8 @@ of that migration, not left behind as dead code.
   for the IL-verified end-to-end path (eight tests closing
   `T = int32` and `T = string` on both `sequence` and `IEnumerable`
   return shapes), and
-  `test/Interpreter.Tests/Issue813TupleSequenceReturnInterpreterTests.cs`
-  for tree-walking parity at the closed instantiation.
+  `test/Interpreter.Tests/Issue813TupleSequenceReturnEmittedSessionTests.cs`
+  for emitted-session coverage at the closed instantiation.
 
   Issue #814 closes the third remaining §L5 bullet: same-name
   overload pairs that are distinguished *only* by `[T class]` vs

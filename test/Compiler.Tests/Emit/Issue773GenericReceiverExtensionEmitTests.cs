@@ -84,8 +84,8 @@ public class Issue773GenericReceiverExtensionEmitTests
         // The dispatch path (binder + emit) works for `(self T?)` over
         // a reference-typed nullable. The body intentionally avoids
         // comparing an open `T` against `nil` — that pattern stays in
-        // the interpreter-side binder tests; the emit gap for it is
-        // tracked as a follow-up to this issue.
+        // the binding-focused Core.Tests coverage; the end-to-end emit gap
+        // for it is tracked as a follow-up to this issue.
         var source = """
             package P
             import System

@@ -177,7 +177,7 @@ let q = make().copy(x: 10)
 hits
 ");
         // GS0286 (TLS must be contiguous, ADR-0066 D5) fires as a warning on
-        // this helper-between-TLS layout; the test exercises evaluator
+        // this helper-between-TLS layout; the test exercises emitted-oracle
         // correctness, not the layout warning, so filter it.
         Assert.DoesNotContain(result.Diagnostics, d => d.Id != "GS0286");
         Assert.Equal(1, result.Value);

@@ -106,8 +106,8 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
     public void SharedStatic_AsyncSequenceInt_Iterator_Runs()
     {
         // ADR-0041: `async func ... sequence[T]` resolves to
-        // AsyncSequenceTypeSymbol. Verify the interpreter accepts
-        // and executes this shape on a shared-static method.
+        // AsyncSequenceTypeSymbol. Verify the emitted session accepts and
+        // executes this shape on a shared-static method.
         var source = """
             import System.Threading.Tasks
 
@@ -135,10 +135,9 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
     [Fact]
     public void SharedStatic_Empty_Iterator_Runs()
     {
-        // The literal `Sequences.Empty` repro from the issue at a
-        // concrete instantiation — confirms the binder accepts the
-        // body and the CFG no longer crashes through the interpreter
-        // path.
+        // The literal `Sequences.Empty` repro from the issue at a concrete
+        // instantiation confirms the binder accepts the body and emitted
+        // execution completes without a CFG crash.
         var source = """
             import System.Collections.Generic
 

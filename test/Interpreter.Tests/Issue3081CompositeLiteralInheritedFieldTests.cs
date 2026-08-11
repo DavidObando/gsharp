@@ -18,11 +18,11 @@ public class Issue3081CompositeLiteralInheritedFieldTests
     [Fact]
     public void CompositeLiteralFieldMatrix_Gsi()
     {
-        AssertInterpreter(
+        AssertGsi(
             "TopLevel",
             Issue3081CompositeLiteralCases.BuildMatrixSource(inFunction: false),
             Issue3081CompositeLiteralCases.BuildMatrixOutput(100));
-        AssertInterpreter(
+        AssertGsi(
             "InFunction",
             Issue3081CompositeLiteralCases.BuildMatrixSource(inFunction: true),
             Issue3081CompositeLiteralCases.BuildMatrixOutput(200));
@@ -30,33 +30,33 @@ public class Issue3081CompositeLiteralInheritedFieldTests
 
     [Fact]
     public void CompositeLiteralFalsePositiveCorpus_Gsi()
-        => AssertInterpreter(
+        => AssertGsi(
             "Controls",
             Issue3081CompositeLiteralCases.Controls,
             Issue3081CompositeLiteralCases.ControlsOutput);
 
     [Fact]
     public void ObjectInitializerInheritedGenericBaseField_Gsi()
-        => AssertInterpreter(
+        => AssertGsi(
             "ObjectInitializer",
             Issue3081CompositeLiteralCases.ObjectInitializer,
             Issue3081CompositeLiteralCases.ObjectInitializerOutput);
 
     [Fact]
     public void CompositeLiteralLowering_Gsi()
-        => AssertInterpreter(
+        => AssertGsi(
             "Lowering",
             Issue3081CompositeLiteralCases.Lowering,
             Issue3081CompositeLiteralCases.LoweringOutput);
 
     [Fact]
     public void CompositeLiteralAsyncSpill_Gsi()
-        => AssertInterpreter(
+        => AssertGsi(
             "AsyncSpill",
             Issue3081CompositeLiteralCases.AsyncSpill,
             Issue3081CompositeLiteralCases.AsyncSpillOutput);
 
-    private static void AssertInterpreter(string name, string source, string expected)
+    private static void AssertGsi(string name, string source, string expected)
     {
         var result = InEmptyDirectory(name, directory =>
         {

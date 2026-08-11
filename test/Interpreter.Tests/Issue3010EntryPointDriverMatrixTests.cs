@@ -17,9 +17,9 @@ public class Issue3010EntryPointDriverMatrixTests
 {
     public enum Driver
     {
-        CompilerEvaluation,
+        BareCompiler,
         CompilerEmission,
-        Interpreter,
+        GsiScript,
     }
 
     public static IEnumerable<object[]> DriverCases()
@@ -127,8 +127,8 @@ public class Issue3010EntryPointDriverMatrixTests
         {
             foreach (var driver in Enum.GetValues<Driver>())
             {
-                var exitCode = driver == Driver.CompilerEvaluation ? 0 : processExitCode;
-                var standardOutput = driver == Driver.CompilerEvaluation
+                var exitCode = driver == Driver.BareCompiler ? 0 : processExitCode;
+                var standardOutput = driver == Driver.BareCompiler
                     ? output + "Success.\n"
                     : output;
                 yield return new object[] { name, source, driver, exitCode, standardOutput };
@@ -166,10 +166,10 @@ public class Issue3010EntryPointDriverMatrixTests
         {
             return driver switch
             {
-                Driver.CompilerEvaluation => CaptureConsole(
+                Driver.BareCompiler => CaptureConsole(
                     () => GSharp.Compiler.Program.Main(new[] { sourcePath })),
                 Driver.CompilerEmission => CompileAndRun(root, name, sourcePath),
-                Driver.Interpreter => CaptureConsole(
+                Driver.GsiScript => CaptureConsole(
                     () => GSharp.Repl.Program.Main(new[] { sourcePath })),
                 _ => throw new InvalidOperationException($"Unexpected driver {driver}."),
             };

@@ -16,13 +16,9 @@ public class Issue836IteratorTryFinallyEmittedSessionTests
     [Fact]
     public void Iterator_TryFinally_FinallyRuns_AllYieldsObserved()
     {
-        // The tree-walking interpreter realizes iterators eagerly
-        // (collects all yields into a backing list, then exposes them
-        // to the consumer). Order between the finally and the
-        // consumer loop is therefore inverted relative to the
-        // state-machine emit semantics — but the contract that holds
-        // across both is: every yielded value is observed, and the
-        // finally body runs exactly once.
+        // Emitted iterator state-machine semantics: each value reaches the
+        // consumer in order, then the finally body runs exactly once when
+        // enumeration completes.
         var source = """
             import System
             import System.Collections.Generic
@@ -42,8 +38,10 @@ public class Issue836IteratorTryFinallyEmittedSessionTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("1", output);
-        Assert.Contains("2", output);
+        Assert.Equal(
+            "1" + Environment.NewLine + "2" + Environment.NewLine + "dispose" + Environment.NewLine,
+            output);
+        Assert.Contains("2" + Environment.NewLine, output, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(output, "dispose"));
     }
 
@@ -77,8 +75,13 @@ public class Issue836IteratorTryFinallyEmittedSessionTests
         var idxOuter = output.IndexOf("outer", StringComparison.Ordinal);
         Assert.True(idxInner >= 0, "inner finally must run");
         Assert.True(idxOuter > idxInner, "outer finally runs after inner finally");
-        Assert.Contains("1", output);
-        Assert.Contains("2", output);
+        Assert.Equal(
+            "1" + Environment.NewLine +
+            "2" + Environment.NewLine +
+            "inner" + Environment.NewLine +
+            "outer" + Environment.NewLine,
+            output);
+        Assert.Contains("2" + Environment.NewLine, output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -104,8 +107,13 @@ public class Issue836IteratorTryFinallyEmittedSessionTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("100", output);
-        Assert.Contains("200", output);
+        Assert.Equal(
+            "100" + Environment.NewLine +
+            "mid" + Environment.NewLine +
+            "200" + Environment.NewLine +
+            "fin" + Environment.NewLine,
+            output);
+        Assert.Contains("200" + Environment.NewLine, output, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(output, "mid"));
         Assert.Equal(1, CountOccurrences(output, "fin"));
     }

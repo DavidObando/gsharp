@@ -191,7 +191,7 @@ public class DiagnosticIdUniquenessTests
             // Emitted directly for unexpected emit failures.
             ["GS9998"] = "Error",
 
-            // Emitted directly for unexpected evaluator failures.
+            // Synthesized by the test emitted oracle for unexpected runtime failures.
             ["GS9999"] = "Error",
         };
 

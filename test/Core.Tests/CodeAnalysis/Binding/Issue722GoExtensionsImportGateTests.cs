@@ -268,9 +268,9 @@ go work()
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // End-to-end interpreter coverage: with the import present, the full
-    // Go-flavored channel program binds, lowers, and evaluates cleanly —
-    // proving the gate's recovery path matches the un-gated bound shape.
+    // End-to-end emitted-oracle coverage: with the import present, the full
+    // Go-flavored channel program binds, lowers, and executes cleanly, proving
+    // the gate's recovery path matches the un-gated bound shape.
     // ─────────────────────────────────────────────────────────────────────
 
     [Fact]

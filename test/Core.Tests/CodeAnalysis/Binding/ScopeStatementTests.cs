@@ -90,10 +90,9 @@ scope {
     public void Scope_BodyWithNestedIf_LowersAndEvaluates()
     {
         // Regression: the Lowerer must recurse into the scope body when
-        // flattening so the evaluator sees a flat statement list (gotos
-        // for `if`) rather than a residual BoundIfStatement / nested
-        // BoundBlockStatement. Pre-fix this surfaced as
-        // `Unexpected node BlockStatement` from the evaluator.
+        // flattening so emitted execution receives a flat statement list
+        // (gotos for `if`) rather than a residual BoundIfStatement / nested
+        // BoundBlockStatement.
         var source = @"
 let n = 3
 scope {

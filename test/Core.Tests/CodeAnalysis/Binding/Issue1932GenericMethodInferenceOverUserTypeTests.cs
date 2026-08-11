@@ -84,9 +84,9 @@ func Describe[T](h IHolder[T]) T {
 
 Describe(StringBox{Value: ""hi""})
 ";
-        // #3222: the implementing-struct argument now materializes its
+        // #3222: the emitted oracle now materializes the implementing struct's
         // `box StringBox → IHolder<string>` conversion at the plain-call
-        // argument site, so the emitted oracle matches the evaluator.
+        // argument site.
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal("hi", result.Value);

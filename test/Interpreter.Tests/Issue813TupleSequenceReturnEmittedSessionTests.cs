@@ -18,8 +18,7 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
     public void SharedStatic_SequenceTupleIntInt_Iterator_Runs()
     {
         // Closed instantiation of the `Indexed` shape from the issue.
-        // `yield (a, b)` lands as a yield-statement and executes
-        // through the interpreter's iterator path.
+        // `yield (a, b)` lowers into the emitted iterator state machine.
         var source = """
             import System.Collections.Generic
 
@@ -146,9 +145,8 @@ public class Issue813TupleSequenceReturnEmittedSessionTests
     [Fact]
     public void SharedStatic_NestedTuple_Iterator_Runs()
     {
-        // Nested tuple `(int32, (int32, int32))` — verifies the
-        // interpreter walks both the outer tuple and the inner
-        // tuple element types.
+        // Nested tuple `(int32, (int32, int32))` verifies emitted iterator
+        // handling of both outer and inner tuple element types.
         var source = """
             import System.Collections.Generic
 

@@ -13,7 +13,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// full ADR-0044 numeric lattice and the ADR-0045 object boxing/unboxing
 /// rules. Each test pair pins one cell in the conversion matrix so a
 /// future refactor of the table can be caught here rather than via a
-/// downstream emitter or interpreter failure.
+/// downstream emission or execution failure.
 /// </summary>
 public class PrimitiveConversionTests
 {

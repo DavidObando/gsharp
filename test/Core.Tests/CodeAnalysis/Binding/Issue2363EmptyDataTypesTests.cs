@@ -145,9 +145,9 @@ a.Equals(b)
     [Fact]
     public void DataClass_ZeroFields_Copy_ReturnsEqualInstance()
     {
-        // Interpreter-level: verifies structural (value) equality of the
-        // copy. True reference-distinctness for the emitted/compiled case
-        // is verified in Compiler.Tests (Issue2363EmptyDataTypesEmitTests).
+        // Emitted-oracle pin for structural (value) equality of the copy.
+        // Reference-distinctness is verified separately in Compiler.Tests
+        // (Issue2363EmptyDataTypesEmitTests).
         var result = Evaluate(@"
 data class Empty() {
 }

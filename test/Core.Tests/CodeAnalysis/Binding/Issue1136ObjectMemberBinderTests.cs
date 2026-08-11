@@ -122,7 +122,7 @@ class C {
     public void UserToStringOverride_TakesPrecedenceOverInheritedMember()
     {
         // A user-declared `func ToString() string` must win over the inherited
-        // System.Object.ToString(); the interpreter executes the user method.
+        // System.Object.ToString(); the emitted oracle executes the user method.
         var source = @"
 class C {
     func ToString() string { return ""custom"" }

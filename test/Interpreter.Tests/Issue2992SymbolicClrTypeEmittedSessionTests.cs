@@ -1,4 +1,4 @@
-// <copyright file="Issue2992SymbolicClrTypeInterpreterTests.cs" company="GSharp">
+// <copyright file="Issue2992SymbolicClrTypeEmittedSessionTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -9,9 +9,10 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter coverage for reifying imported generic types over function type parameters.
+/// Emitted-session coverage for reifying imported generic types over function
+/// type parameters.
 /// </summary>
-public class Issue2992SymbolicClrTypeInterpreterTests
+public class Issue2992SymbolicClrTypeEmittedSessionTests
 {
     [Fact]
     public void StaticClrCallUsesClosedContainer()
