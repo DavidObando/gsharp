@@ -57,6 +57,7 @@ ForInStatement
 ForStatement
 ForTupleInStatement
 GotoStatement
+IfLetStatement
 IfStatement
 IncrementDecrementStatement
 LabeledStatement

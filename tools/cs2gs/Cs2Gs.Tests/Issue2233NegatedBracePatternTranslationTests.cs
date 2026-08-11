@@ -136,6 +136,12 @@ namespace Demo
     /// Standalone positive bare pattern (<c>if (x is { } v) { ... }</c>, no
     /// trailing <c>&amp;&amp;</c>) is unaffected by this fix: it already
     /// compiles via the existing smart-cast/null-forgive lowering.
+    /// <para>
+    /// Issue #3359 does NOT apply here: the scrutinee <c>s</c> is a NON-nullable
+    /// <c>string</c>, and ADR-0071's <c>if let</c> requires a nullable
+    /// initializer (GS0296). C# still treats <c>s is { }</c> as a runtime null
+    /// test, so the smart-cast form is retained — and is already spill-free.
+    /// </para>
     /// </summary>
     [Fact]
     public void PositiveBracePattern_Standalone_StaysCorrect()
@@ -158,14 +164,20 @@ namespace Demo
 }");
 
         Assert.Contains("s != nil", printed);
+        Assert.DoesNotContain("if let", printed);
 
         CompileAndRun(printed, "C().G(\"hi\")");
     }
 
     /// <summary>
     /// Case B (issue #2233 fix-direction item 3): a positive bare pattern
-    /// AND-combined with a further condition keeps its existing smart-cast
-    /// form (<c>x != nil &amp;&amp; ...x!!...</c>) — confirmed unchanged.
+    /// AND-combined with a further condition.
+    /// <para>
+    /// Issue #3359 replaced the smart-cast form (<c>x != nil &amp;&amp; …x!!…</c>)
+    /// with an <c>if let</c> whose guard is nested in the then-branch. Besides
+    /// keeping the binder name and dropping the <c>!!</c>, this reads the
+    /// nullable FIELD once instead of twice.
+    /// </para>
     /// </summary>
     [Fact]
     public void PositiveBracePattern_AndCombinedWithCondition_StaysSmartCastForm()
@@ -191,8 +203,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("promptShownAt != nil", printed);
-        Assert.Contains("promptShownAt!!", printed);
+        Assert.Contains("if let at = promptShownAt", printed);
+        Assert.DoesNotContain("promptShownAt!!", printed);
 
         CompileAndRun(printed, "C().ToastActive(DateTimeOffset.UtcNow)");
     }

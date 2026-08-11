@@ -138,6 +138,168 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
+        /// <summary>
+        /// Issue #3359: rewrites the STATEMENT form
+        /// <c>if (receiver is { } name [&amp;&amp; predicate]) { … } [else { … }]</c>
+        /// into the canonical G# <c>if let</c> statement (ADR-0071):
+        /// <code>
+        /// if let name = receiver [&amp;&amp; predicate] { … } [else { … }]
+        /// </code>
+        /// The statement-position counterpart of ADR-0151's
+        /// <see cref="TryTranslateIfLetConditional"/>, sharing its eligibility
+        /// rules. Without it the general lowering spills <c>receiver</c> into a
+        /// <c>let __spillN</c> (the pattern reads the scrutinee more than once,
+        /// issue #1731), which destroys the author's chosen binder name, forces a
+        /// <c>!!</c> at every read, and wraps the statement in an extra brace
+        /// level to scope the temp. Measured at ~44 occurrences per 100k lines in
+        /// dotnet/roslyn and ~186 per 100k in this repository (issue #3347).
+        /// </summary>
+        /// <param name="ifStatement">The C# <c>if</c> statement.</param>
+        /// <param name="result">The translated statements when the rewrite applies.</param>
+        /// <returns><see langword="true"/> when the rewrite applied.</returns>
+        private bool TryBuildIfLetGuard(
+            IfStatementSyntax ifStatement,
+            out IReadOnlyList<GStatement> result)
+        {
+            result = null;
+
+            // Eligibility is decided BEFORE anything is translated: a mid-way
+            // bail-out would leave a half-emitted spill prologue behind.
+            DecomposeConjunction(ifStatement.Condition, out ExpressionSyntax leftmost, out List<ExpressionSyntax> guards);
+
+            if (leftmost is not IsPatternExpressionSyntax isPattern
+                || !IsBareNonNullDeclarationPattern(isPattern.Pattern, out SingleVariableDesignationSyntax designation))
+            {
+                return false;
+            }
+
+            if (this.context.GetDeclaredSymbol(designation) is not ILocalSymbol binder)
+            {
+                return false;
+            }
+
+            // ADR-0071 requires a NULLABLE initializer — the binding exists to
+            // strip the nullability. C# allows `s is { } text` on a non-nullable
+            // reference too (it is still a runtime null test), but there the
+            // translated receiver is `string`, not `string?`, and `if let` is
+            // rejected with GS0296. Those keep the existing lowering, which is
+            // already spill-free for this shape.
+            GTypeReference receiverType = this.ResolveExpressionType(isPattern.Expression);
+            if (receiverType is not { IsNullable: true })
+            {
+                return false;
+            }
+
+            // A guard that itself hoists a spill would need a statement seam
+            // ahead of the `if`, but the spill may read the binding — which is
+            // only in scope inside the `if let`. Leave those to the general path.
+            if (guards.Any(ContainsSpillHoistingConstruct))
+            {
+                return false;
+            }
+
+            // The ADR-0071 STATEMENT grammar has no `&& guard` clause — gsc
+            // swallows a trailing `&& …` into the binding's initializer (only
+            // ADR-0151's value-position form takes a guard). A guard is therefore
+            // nested inside the then-branch, which is equivalent ONLY when there
+            // is no else: with one, `if let t = x { if g { THEN } } else { ELSE }`
+            // would skip ELSE when the binding succeeds but the guard fails,
+            // whereas C# runs it. Decline that combination.
+            if (guards.Count > 0 && ifStatement.Else != null)
+            {
+                return false;
+            }
+
+            // `if let` binds only for the then-branch, matching C#'s definite
+            // assignment. A binder READ in the else-branch (legal in C# when the
+            // then-branch exits) has no `if let` spelling; the negated-guard
+            // hoist handles that shape instead.
+            if (ifStatement.Else != null && ReadsSymbol(ifStatement.Else, binder))
+            {
+                return false;
+            }
+
+            // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
+            // designation has no canonical G# type. Report here so the gap
+            // surfaces exactly once on this path too.
+            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
+
+            GExpression receiver = this.TranslateExpression(isPattern.Expression);
+            string name = SanitizeIdentifier(designation.Identifier.Text);
+
+            // Inside the guard and the then-branch every reference to the C#
+            // pattern local reads as the bare G# binding — no `!!`, no `as`
+            // narrowing cast, no spill temp.
+            bool hadPrevious = this.state.PatternBindings.TryGetValue(binder, out GExpression previous);
+            this.state.PatternBindings[binder] = new IdentifierExpression(name);
+
+            GExpression guard = null;
+            BlockStatement then;
+            try
+            {
+                foreach (ExpressionSyntax conjunct in guards)
+                {
+                    GExpression translated = this.TranslateExpression(conjunct);
+                    guard = guard == null ? translated : new BinaryExpression(guard, "&&", translated);
+                }
+
+                then = this.TranslateStatementAsBlock(ifStatement.Statement);
+
+                // Nest the guard inside the binding's scope — the only place it
+                // can read the bound name.
+                if (guard != null)
+                {
+                    then = new BlockStatement(new GStatement[] { new IfStatement(guard, then) });
+                }
+            }
+            finally
+            {
+                if (hadPrevious)
+                {
+                    this.state.PatternBindings[binder] = previous;
+                }
+                else
+                {
+                    this.state.PatternBindings.Remove(binder);
+                }
+            }
+
+            // The else branch is translated with the binding OUT of scope.
+            GStatement elseBranch = null;
+            if (ifStatement.Else != null)
+            {
+                elseBranch = ifStatement.Else.Statement is IfStatementSyntax elseIf
+                    ? this.TranslateIf(elseIf)
+                    : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
+            }
+
+            result = new GStatement[]
+            {
+                new IfLetStatement(
+                    new List<IfLetBinding> { new IfLetBinding(name, receiver) },
+                    then,
+                    elseBranch),
+            };
+            return true;
+        }
+
+        // True when `node` reads `symbol` anywhere. Used to keep an `if let` from
+        // swallowing a shape whose ELSE branch reads the pattern binder — legal in
+        // C# when the then-branch exits, but out of scope for a G# `if let`.
+        private bool ReadsSymbol(SyntaxNode node, ILocalSymbol symbol)
+        {
+            foreach (IdentifierNameSyntax identifier in node.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                        this.context.GetSymbolInfo(identifier).Symbol, symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool ContainsAssignmentNeedingBranchSeam(ExpressionSyntax branch)
         {
             return branch.DescendantNodesAndSelf(
