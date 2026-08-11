@@ -385,6 +385,11 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 AppendIdentityKey(builder, aseq.ElementType);
                 builder.Append(')');
                 break;
+            case ChannelTypeSymbol channel:
+                builder.Append("!chan(");
+                AppendIdentityKey(builder, channel.ElementType);
+                builder.Append(')');
+                break;
             case MapTypeSymbol m:
                 builder.Append("!map(");
                 AppendIdentityKey(builder, m.KeyType);
@@ -411,8 +416,23 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 AppendIdentityKey(builder, br.PointeeType);
                 builder.Append(')');
                 break;
-            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
+            case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:
                 builder.Append("!struct:").Append(st.Definition?.Name ?? st.Name).Append('(');
+                if (!st.EnclosingTypeArguments.IsDefaultOrEmpty)
+                {
+                    for (var i = 0; i < st.EnclosingTypeArguments.Length; i++)
+                    {
+                        if (i > 0)
+                        {
+                            builder.Append(',');
+                        }
+
+                        AppendIdentityKey(builder, st.EnclosingTypeArguments[i]);
+                    }
+
+                    builder.Append('|');
+                }
+
                 for (var i = 0; i < st.TypeArguments.Length; i++)
                 {
                     if (i > 0)

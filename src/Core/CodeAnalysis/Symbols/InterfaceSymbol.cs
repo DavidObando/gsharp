@@ -863,20 +863,10 @@ public sealed class InterfaceSymbol : TypeSymbol
         // own recursive handling of nested constructed generics.
         if (type is StructSymbol structType && !structType.TypeArguments.IsDefaultOrEmpty)
         {
-            var substitutedArgs = ImmutableArray.CreateBuilder<TypeSymbol>(structType.TypeArguments.Length);
-            var changed = false;
-            for (var i = 0; i < structType.TypeArguments.Length; i++)
-            {
-                var substituted = SubstituteType(structType.TypeArguments[i], subst, mapClrType);
-                substitutedArgs.Add(substituted);
-                changed |= !ReferenceEquals(substituted, structType.TypeArguments[i]);
-            }
-
-            return changed
-                ? mapClrType is null
-                    ? StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable())
-                    : StructSymbol.Construct(structType.Definition, substitutedArgs.MoveToImmutable(), mapClrType)
-                : structType;
+            return StructSymbol.SubstituteConstructionArguments(
+                structType,
+                argument => SubstituteType(argument, subst, mapClrType),
+                mapClrType);
         }
 
         // Issue #2340 follow-up (sibling to the #1503 branch already present
@@ -972,6 +962,12 @@ public sealed class InterfaceSymbol : TypeSymbol
         {
             var sub = SubstituteType(a.ElementType, subst, mapClrType);
             return sub == a.ElementType ? a : ArrayTypeSymbol.Get(sub, a.Length);
+        }
+
+        if (type is ChannelTypeSymbol channel)
+        {
+            var sub = SubstituteType(channel.ElementType, subst, mapClrType);
+            return sub == channel.ElementType ? channel : ChannelTypeSymbol.Get(sub);
         }
 
         if (type is NullableTypeSymbol n)

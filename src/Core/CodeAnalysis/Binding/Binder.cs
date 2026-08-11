@@ -5331,6 +5331,12 @@ public sealed class Binder
             return ReferenceEquals(inner, aseq.ElementType) ? type : AsyncSequenceTypeSymbol.Get(inner);
         }
 
+        if (type is ChannelTypeSymbol channel)
+        {
+            var inner = SubstituteType(channel.ElementType, substitution, mapClrType);
+            return ReferenceEquals(inner, channel.ElementType) ? type : ChannelTypeSymbol.Get(inner);
+        }
+
         if (type is MapTypeSymbol map)
         {
             // Issue #1481: substitute through `map[K, V]` so a call like
@@ -5410,18 +5416,10 @@ public sealed class Binder
             && !ReferenceEquals(ss.Definition, ss)
             && !ss.TypeArguments.IsDefaultOrEmpty)
         {
-            var newStructArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ss.TypeArguments.Length);
-            var structChanged = false;
-            foreach (var arg in ss.TypeArguments)
-            {
-                var substituted = SubstituteType(arg, substitution, mapClrType);
-                structChanged |= !ReferenceEquals(substituted, arg);
-                newStructArgs.Add(substituted);
-            }
-
-            return structChanged
-                ? StructSymbol.Construct(ss.Definition, newStructArgs.MoveToImmutable(), mapClrType)
-                : type;
+            return StructSymbol.SubstituteConstructionArguments(
+                ss,
+                arg => SubstituteType(arg, substitution, mapClrType),
+                mapClrType);
         }
 
         // Issue #1521: a member-signature type that is a reference to a type

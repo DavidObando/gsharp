@@ -819,18 +819,16 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        // Issue #1481: a `map[K, V]` is a CLR reference type
-        // (`System.Collections.Generic.Dictionary<,>`) and a function type is a
-        // reference-typed delegate. When the key/value/signature structurally
-        // references an in-scope type parameter (e.g. `map[string, T]`,
-        // `func(T) -> int32`), the symbol carries no ClrType during emit, so
-        // the CLR-backed `object`-widening rule above cannot fire. Widening
-        // such a reference to `object` is still a no-op (the slot already holds
-        // the reference). This unblocks a generic iterator whose element type
-        // is a `map[…]` / function: the synthesized non-generic
+        // Issue #1481 / #3255: maps, channels, and function types are CLR
+        // reference types. When their symbolic shape references an in-scope
+        // type parameter, the symbol carries no ClrType during emit, so the
+        // CLR-backed `object`-widening rule above cannot fire. Widening such a
+        // reference to `object` is still a no-op (the slot already holds the
+        // reference). This unblocks a generic iterator whose element type is a
+        // map, channel, or function: the synthesized non-generic
         // `IEnumerator.Current` getter converts the strongly-typed reified
         // `<>2__current` field to `object`.
-        if ((a is MapTypeSymbol || a is FunctionTypeSymbol)
+        if ((a is MapTypeSymbol || a is FunctionTypeSymbol || a is ChannelTypeSymbol)
             && (b?.ClrType.IsSameAs(typeof(object)) == true || b == TypeSymbol.Object))
         {
             return true;

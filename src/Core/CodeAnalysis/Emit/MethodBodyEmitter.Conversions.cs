@@ -618,8 +618,10 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
-        throw new NotSupportedException(
-            $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter.");
+        EmitDiagnosticException.Wrap(
+            conv.Syntax,
+            new NotSupportedException(
+                $"Conversion from '{from.Name}' to '{to.Name}' is not yet supported by the emitter."));
     }
 
     /// <summary>

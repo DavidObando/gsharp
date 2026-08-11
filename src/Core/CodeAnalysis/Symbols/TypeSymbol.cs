@@ -367,6 +367,8 @@ public class TypeSymbol : Symbol
                 return AnyTypeParameter(seq.ElementType, match);
             case AsyncSequenceTypeSymbol aseq:
                 return AnyTypeParameter(aseq.ElementType, match);
+            case ChannelTypeSymbol channel:
+                return AnyTypeParameter(channel.ElementType, match);
             case MapTypeSymbol m:
                 return AnyTypeParameter(m.KeyType, match) || AnyTypeParameter(m.ValueType, match);
             case FunctionTypeSymbol fn:
@@ -407,7 +409,15 @@ public class TypeSymbol : Symbol
                 }
 
                 return false;
-            case StructSymbol st when !st.TypeArguments.IsDefaultOrEmpty:
+            case StructSymbol st when !st.EnclosingTypeArguments.IsDefaultOrEmpty || !st.TypeArguments.IsDefaultOrEmpty:
+                foreach (var arg in st.EnclosingTypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
+                    {
+                        return true;
+                    }
+                }
+
                 foreach (var arg in st.TypeArguments)
                 {
                     if (AnyTypeParameter(arg, match))
@@ -526,6 +536,9 @@ public class TypeSymbol : Symbol
                 return;
             case AsyncSequenceTypeSymbol asq:
                 CollectReferencedTypeParameters(asq.ElementType, sink);
+                return;
+            case ChannelTypeSymbol channel:
+                CollectReferencedTypeParameters(channel.ElementType, sink);
                 return;
             case MapTypeSymbol m:
                 CollectReferencedTypeParameters(m.KeyType, sink);
