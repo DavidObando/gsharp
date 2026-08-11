@@ -515,7 +515,7 @@ public class Compilation
 
             if (docStream is not null)
             {
-                DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program.Structs, program.Functions.Keys);
+                DocumentationFileEmitter.Emit(docStream, assemblyName ?? program.PackageName, program);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)

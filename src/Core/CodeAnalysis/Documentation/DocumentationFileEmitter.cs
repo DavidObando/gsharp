@@ -8,17 +8,19 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Xml;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Documentation;
 
 internal static class DocumentationFileEmitter
 {
-    public static void Emit(Stream xmlStream, string? assemblyName, IEnumerable<StructSymbol> types, IEnumerable<FunctionSymbol> topLevelFunctions)
+    public static void Emit(Stream xmlStream, string? assemblyName, BoundProgram program)
     {
         ArgumentNullException.ThrowIfNull(xmlStream);
+        ArgumentNullException.ThrowIfNull(program);
 
-        var members = CollectMembers(types ?? Enumerable.Empty<StructSymbol>(), topLevelFunctions ?? Enumerable.Empty<FunctionSymbol>())
+        var members = CollectMembers(program)
             .OrderBy(entry => entry.DocId, StringComparer.Ordinal)
             .ToArray();
 
@@ -66,11 +68,11 @@ internal static class DocumentationFileEmitter
         streamWriter.Flush();
     }
 
-    private static IEnumerable<MemberDocumentation> CollectMembers(IEnumerable<StructSymbol> types, IEnumerable<FunctionSymbol> topLevelFunctions)
+    private static IEnumerable<MemberDocumentation> CollectMembers(BoundProgram program)
     {
         var members = new List<MemberDocumentation>();
 
-        foreach (var type in types)
+        foreach (var type in program.Structs)
         {
             AddIfDocumented(members, type);
 
@@ -99,6 +101,11 @@ internal static class DocumentationFileEmitter
                 AddIfDocumented(members, field, type);
             }
 
+            foreach (var field in type.ConstFields)
+            {
+                AddIfDocumented(members, field, type);
+            }
+
             foreach (var property in type.StaticProperties)
             {
                 AddIfDocumented(members, property, type);
@@ -120,7 +127,56 @@ internal static class DocumentationFileEmitter
             }
         }
 
-        foreach (var function in topLevelFunctions)
+        foreach (var type in program.Interfaces)
+        {
+            AddIfDocumented(members, type);
+
+            foreach (var method in type.Methods)
+            {
+                AddIfDocumented(members, method);
+            }
+
+            foreach (var method in type.StaticMethods)
+            {
+                AddIfDocumented(members, method);
+            }
+
+            foreach (var property in type.Properties)
+            {
+                AddIfDocumented(members, property, type);
+            }
+
+            foreach (var @event in type.Events)
+            {
+                AddIfDocumented(members, @event, type);
+            }
+
+            foreach (var field in type.StaticFields)
+            {
+                AddIfDocumented(members, field, type);
+            }
+
+            foreach (var field in type.ConstFields)
+            {
+                AddIfDocumented(members, field, type);
+            }
+        }
+
+        foreach (var type in program.Enums)
+        {
+            AddIfDocumented(members, type);
+            foreach (var member in type.Members)
+            {
+                AddIfDocumented(members, member);
+            }
+        }
+
+        foreach (var type in program.Delegates)
+        {
+            AddIfDocumented(members, type);
+        }
+
+        foreach (var function in program.Functions.Keys)
         {
             if (function.ReceiverType is null && function.StaticOwnerType is null)
             {
@@ -148,7 +204,7 @@ internal static class DocumentationFileEmitter
         members.Add(new MemberDocumentation(docId, DocumentationXmlWriter.WriteXmlFragment(documentation)));
     }
 
-    private static void AddIfDocumented(List<MemberDocumentation> members, Symbol symbol, StructSymbol ownerType)
+    private static void AddIfDocumented(List<MemberDocumentation> members, Symbol symbol, TypeSymbol ownerType)
     {
         var documentation = symbol.GetDocumentation();
         if (documentation is null)
