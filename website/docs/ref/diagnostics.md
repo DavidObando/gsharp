@@ -739,33 +739,28 @@ Cause/fix:
   `<NoWarn>GS0314</NoWarn>` if migration must be deferred — but note
   this is a one-release grace period; a future release may escalate to error.
 
-## Named-argument `=` separator deprecation (GS0315)
+## Named-argument `=` separator retired (GS0524)
 
-The legacy `name = value` named-argument
-spelling is deprecated. The canonical spelling is `name: value`. The `=`
-form remains accepted for `.copy(field = value)` sugar and attribute
-named arguments
-this release; a warning fires so existing source can be migrated before
-the `=` branch is removed in a later release.
+See [ADR-0161](adr/0161-retire-equals-named-argument-separator.md), which supersedes
+[ADR-0080](adr/0080-deprecate-equals-named-arguments.md). Named arguments are written
+`name: value` (issue #343). The legacy `name = value` spelling — deprecated by ADR-0080 with the
+one-release `GS0315` warning — is **retired**: `=` after an identifier in argument position is no
+longer a separator and parses as an ordinary assignment expression, exactly as `=` does in every
+other expression position. `GS0315` no longer exists.
 
-| ID | Severity | Message | Example trigger |
-|----|----------|--------------------------|-----------------|
-| GS0315 | Warning | `Named argument '<name>' uses the deprecated '=' separator; use '<name>: value' instead (ADR-0080).` | `Foo(timeout = 30)` — rewrite as `Foo(timeout: 30)`. Same migration for `.copy(x = 10)` → `.copy(x: 10)` and `@AttributeUsage(All, AllowMultiple = true)` → `@AttributeUsage(All, AllowMultiple: true)`. |
+| ID | Severity | Description | Example trigger |
+|----|----------|-------------|-----------------|
+| GS0524 | Warning | `Argument '<name> = …' is an assignment to '<name>', not a named argument — the '=' named-argument separator was retired (ADR-0161). Write '<name>: value' for a named argument, or '(<name> = value)' to assign deliberately.` | `Foo(timeout = 30)` — write `Foo(timeout: 30)` for a named argument, or `Foo((timeout = 30))` to assign. |
 
-Cause/fix:
+The warning exists because the two readings can differ **silently**: where `name` is both an
+assignable variable in scope and a parameter of the callee, the old spelling now assigns and passes
+the value positionally instead of binding by name. Where `name` is not in scope, the change is a
+loud binder error (`GS0125`) instead.
 
-- **GS0315** — `Foo(timeout = 30)` — rewrite the named-argument separator
-  as `:` (`Foo(timeout: 30)`). Migrate `.copy(...)` and attribute
-  argument lists alongside ordinary call sites:
-  `p.copy(x = 10)` → `p.copy(x: 10)`,
-  `@AttributeUsage(All, AllowMultiple = true)` → `@AttributeUsage(All, AllowMultiple: true)`.
-  Plain assignment expressions (`x = 1`), optional parameter defaults
-  (`func f(x int32 = 0)`), and `with`-expression field initializers
-  (`p with { x = 10 }`) parse on separate paths and are unaffected.
-  Suppress per-project via `<NoWarn>GS0315</NoWarn>` if migration must
-  be deferred — but note this is a one-release grace period; the `=`
-  branch is removed in a later release.
-
+Only a **bare** assignment argument warns. Parenthesising (`Foo((timeout = 30))`) states the
+assignment intent unambiguously and is warning-free — it is the spelling cs2gs emits for a
+value-position assignment. Parameter default values (`func f(x int32 = 0)`) and `with`-expression
+field initializers (`p with { x = 10 }`) parse on separate paths and are unaffected.
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 
 The contract for the C# spelling `null` used

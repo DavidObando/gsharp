@@ -464,16 +464,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.OpenAndSealedCannotCombine);
 
     /// <summary>
-    /// ADR-0080 / issue #720: GS0315 (warning) — a call-site or attribute named
-    /// argument used the legacy <c>name = value</c> spelling. The canonical
-    /// spelling is <c>name: value</c> (issue #343). Both forms parse during a
-    /// one-release grace period; the <c>=</c> form is removed in a later
-    /// release.
+    /// ADR-0161: GS0524 (warning) — a top-level call argument is a bare
+    /// <c>name = value</c> assignment. Until ADR-0161 that spelling was a named
+    /// argument (ADR-0080's deprecated separator, formerly GS0315); it is now an
+    /// assignment to <c>name</c> whose value is passed positionally. The two
+    /// readings differ silently whenever <c>name</c> is both an assignable
+    /// variable in scope and a parameter of the callee, so the transitional
+    /// shape is flagged. Parenthesising (<c>(name = value)</c>) states the
+    /// assignment intent unambiguously and silences this.
     /// </summary>
-    /// <param name="location">The source location of the offending <c>=</c> token.</param>
-    /// <param name="argumentName">The argument name on the left of the separator.</param>
-    public void ReportNamedArgumentEqualsSeparatorDeprecated(TextLocation location, string argumentName)
-    => Report(location, DiagnosticDescriptors.NamedArgumentEqualsSeparatorDeprecated, argumentName, argumentName);
+    /// <param name="location">The source location of the assignment argument.</param>
+    /// <param name="targetName">The assignment target's name.</param>
+    public void ReportAssignmentArgumentWasNamedArgumentSpelling(TextLocation location, string targetName)
+    => Report(location, DiagnosticDescriptors.AssignmentArgumentWasNamedArgumentSpelling, targetName);
 
     /// <summary>
     /// ADR-0082 / issue #722: GS0316 — a Go-flavored concurrency syntactic

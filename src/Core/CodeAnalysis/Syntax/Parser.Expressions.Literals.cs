@@ -475,26 +475,21 @@ public partial class Parser
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
             ExpressionSyntax expression;
+
+            // Issue #343: a call-site named argument is `name: value`.
+            // ADR-0161: the legacy `name = value` spelling — deprecated by
+            // ADR-0080 with the one-release GS0315 warning — is retired here, so
+            // `=` after an identifier in argument position is no longer a
+            // separator. It falls through to ordinary expression parsing and is
+            // an assignment, exactly as `=` is in every other expression
+            // position. That is what makes `f(x = v)` legal; the ambiguous case
+            // (the target also naming a parameter of the callee) is diagnosed at
+            // bind time rather than silently reinterpreted.
             if (Current.Kind == SyntaxKind.IdentifierToken
-                && (Peek(1).Kind == SyntaxKind.EqualsToken || Peek(1).Kind == SyntaxKind.ColonToken))
+                && Peek(1).Kind == SyntaxKind.ColonToken)
             {
                 var name = MatchToken(SyntaxKind.IdentifierToken);
-
-                // Issue #343: a call-site named argument uses `name: value`.
-                // The pre-existing `name = value` form remains accepted for
-                // back-compat (used by `.copy(...)` sugar and attribute args).
-                // ADR-0080 / issue #720: the `=` form is deprecated and emits
-                // a one-release warning (GS0315) before removal.
-                SyntaxToken separator;
-                if (Current.Kind == SyntaxKind.ColonToken)
-                {
-                    separator = MatchToken(SyntaxKind.ColonToken);
-                }
-                else
-                {
-                    separator = MatchToken(SyntaxKind.EqualsToken);
-                    Diagnostics.ReportNamedArgumentEqualsSeparatorDeprecated(separator.Location, name.Text);
-                }
+                SyntaxToken separator = MatchToken(SyntaxKind.ColonToken);
 
                 // ADR-0060: a named argument may carry a ref-kind modifier in
                 // its value position (e.g. `name = ref x`). V1 rejects this
@@ -520,6 +515,20 @@ public partial class Parser
             else
             {
                 expression = ParseExpression();
+
+                // ADR-0161: `name = value` in argument position was a named
+                // argument until this release; it is now an assignment whose
+                // value is passed positionally. The two readings differ SILENTLY
+                // when `name` is both assignable here and a parameter of the
+                // callee, so the transitional shape warns. Only a bare
+                // identifier target is flagged — `(name = value)` arrives as a
+                // ParenthesizedExpression and states the intent unambiguously,
+                // which is the spelling cs2gs emits.
+                if (expression is AssignmentExpressionSyntax { IdentifierToken: { } target })
+                {
+                    Diagnostics.ReportAssignmentArgumentWasNamedArgumentSpelling(
+                        expression.Location, target.Text);
+                }
             }
 
             nodesAndSeparators.Add(expression);

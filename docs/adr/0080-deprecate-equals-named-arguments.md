@@ -1,6 +1,6 @@
 # ADR-0080: Deprecate `name = value` named-argument spelling (warning)
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0161](0161-retire-equals-named-argument-separator.md) (2026-08-11) — the `=` separator is now retired; `=` in argument position is an assignment
 - **Date**: 2026-06-12
 - **Phase**: Phase 6 (cleanup)
 - **Related**: Issue #343 (call-site named arguments), ADR-0032
