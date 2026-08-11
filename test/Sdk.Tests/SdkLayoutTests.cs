@@ -299,9 +299,17 @@ public class SdkLayoutTests
             (string)prepareTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
                 .Attribute("CopyRuntime"));
         Assert.Equal(
+            "$(GsharpEnableHotReload)",
+            (string)prepareTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("WriteBootstrap"));
+        Assert.Equal(
             "true",
             (string)manifestTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
                 .Attribute("CopyRuntime"));
+        Assert.Equal(
+            "true",
+            (string)manifestTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("WriteBootstrap"));
 
         Assert.Equal(
             "@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)",

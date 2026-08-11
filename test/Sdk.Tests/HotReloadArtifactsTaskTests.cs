@@ -139,9 +139,13 @@ public class HotReloadArtifactsTaskTests
 
             var copiedRuntime = Path.Combine(directory, "bin", "Gsharp.HotReload.Runtime.dll");
             File.Delete(copiedRuntime);
+            File.Delete(bootstrap);
             task.CopyRuntime = false;
+            task.WriteBootstrap = false;
             Assert.True(task.Execute());
             Assert.False(File.Exists(copiedRuntime));
+            Assert.False(File.Exists(bootstrap));
+            Assert.True(File.Exists(manifest));
         }
         finally
         {

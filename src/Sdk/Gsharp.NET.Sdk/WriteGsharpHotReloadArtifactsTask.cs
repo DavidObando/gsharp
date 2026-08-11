@@ -55,6 +55,9 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
     /// <summary>Gets or sets a value indicating whether the runtime assembly is copied to the output directory.</summary>
     public bool CopyRuntime { get; set; } = true;
 
+    /// <summary>Gets or sets a value indicating whether the module-initializer source is written.</summary>
+    public bool WriteBootstrap { get; set; } = true;
+
     /// <summary>Gets or sets the project's intermediate directory.</summary>
     [Required]
     public string? IntermediateDirectory { get; set; }
@@ -140,7 +143,11 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
                 """;
 
             WriteIfChanged(manifestPath, manifest.ToString());
-            WriteIfChanged(bootstrapPath, bootstrap);
+            if (this.WriteBootstrap)
+            {
+                WriteIfChanged(bootstrapPath, bootstrap);
+            }
+
             if (this.CopyRuntime)
             {
                 CopyRuntimeAssembly(runtimeAssemblyPath, outputDirectory);

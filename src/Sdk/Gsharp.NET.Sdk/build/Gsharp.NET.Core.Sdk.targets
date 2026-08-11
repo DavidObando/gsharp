@@ -107,6 +107,7 @@
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
         RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
         CopyRuntime="$(GsharpEnableHotReload)"
+        WriteBootstrap="$(GsharpEnableHotReload)"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
@@ -136,6 +137,7 @@
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
         RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
         CopyRuntime="true"
+        WriteBootstrap="true"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
