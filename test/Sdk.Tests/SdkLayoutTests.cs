@@ -273,6 +273,12 @@ public class SdkLayoutTests
                 .Single(item => (string)item.Attribute("Update") == "@(EmbeddedResource)")
                 .Attribute("Watch"));
         Assert.Contains(
+            "IntermediateOutputPath;OutputPath;GsharpHotReloadOutputDirectory",
+            (string)gatedItems.Elements(MsbuildNs + "ProjectReference")
+                .Single(item => (string)item.Attribute("Update") == "@(ProjectReference)")
+                .Attribute("GlobalPropertiesToRemove"),
+            System.StringComparison.Ordinal);
+        Assert.Contains(
             "'$(GsharpEnableHotReload)' == 'true'",
             gatedItemsCondition,
             System.StringComparison.Ordinal);
@@ -323,6 +329,12 @@ public class SdkLayoutTests
             (string)manifestTarget.Descendants(MsbuildNs + "_GsharpHotReloadWatch")
                 .Single(item => item.Attribute("Include") != null)
                 .Attribute("Include"));
+
+        var filterTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpFilterHotReloadWatchItems");
+        Assert.Contains(
+            filterTarget.Descendants(MsbuildNs + "Watch"),
+            item => (string)item.Attribute("Remove") == "@(Compile->'%(FullPath)')");
 
         var agentPath = Path.GetFullPath(Path.Combine(
             RepoRoot.SdkSourceDir,
