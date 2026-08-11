@@ -741,8 +741,8 @@ Cause/fix:
 
 ## Named-argument `=` separator retired (GS0524)
 
-See [ADR-0161](adr/0161-retire-equals-named-argument-separator.md), which supersedes
-[ADR-0080](adr/0080-deprecate-equals-named-arguments.md). Named arguments are written
+See [ADR-0161](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0161-retire-equals-named-argument-separator.md), which supersedes
+[ADR-0080](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0080-deprecate-equals-named-arguments.md). Named arguments are written
 `name: value` (issue #343). The legacy `name = value` spelling — deprecated by ADR-0080 with the
 one-release `GS0315` warning — is **retired**: `=` after an identifier in argument position is no
 longer a separator and parses as an ordinary assignment expression, exactly as `=` does in every
