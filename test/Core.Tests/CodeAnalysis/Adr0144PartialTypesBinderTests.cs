@@ -260,6 +260,145 @@ Console.WriteLine(c.Abs())
             "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CrossFile_SameConstraintTextResolvingToDifferentTypesReportsGS0480(bool leftPartFirst)
+    {
+        var contract = SyntaxTree.Parse(SourceText.From(
+            """
+            package Contracts
+
+            public interface IConstraint[U any] {
+            }
+            """,
+            "Contract.gs"));
+        var leftMarker = SyntaxTree.Parse(SourceText.From(
+            """
+            package Left
+
+            public class Marker[U any] {
+            }
+            """,
+            "Left.Marker.gs"));
+        var rightMarker = SyntaxTree.Parse(SourceText.From(
+            """
+            package Right
+
+            public class Marker[U any] {
+            }
+            """,
+            "Right.Marker.gs"));
+        var leftPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import Contracts
+            import Left
+
+            public partial class Holder[T IConstraint[Marker[T]] class init()] {
+            }
+            """,
+            "Holder.Left.gs"));
+        var rightPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import Contracts
+            import Right
+
+            public partial class Holder[T IConstraint[Marker[T]] class init()] {
+            }
+            """,
+            "Holder.Right.gs"));
+        var parts = leftPartFirst
+            ? new[] { leftPart, rightPart }
+            : new[] { rightPart, leftPart };
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(
+            new[] { contract, leftMarker, rightMarker }.Concat(parts).ToArray())
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        var mismatch = Assert.Single(result.Diagnostics.Where(diagnostic => diagnostic.Id == "GS0480"));
+        Assert.Equal("Holder.Right.gs", mismatch.Location.FileName);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0496");
+    }
+
+    [Fact]
+    public void CrossFile_AllPartialConstraintBindingsFailReportsEachDeclaringFile()
+    {
+        var firstPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            public partial class Holder[T MissingConstraint] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var secondPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            public partial class Holder[T MissingConstraint] {
+            }
+            """,
+            "Holder.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(firstPart, secondPart)
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        var unresolved = result.Diagnostics
+            .Where(diagnostic => diagnostic.Id == "GS0113")
+            .OrderBy(diagnostic => diagnostic.Location.FileName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, unresolved.Length);
+        Assert.Equal(
+            new[] { "Holder.Feature.gs", "Holder.gs" },
+            unresolved.Select(diagnostic => diagnostic.Location.FileName));
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    [Fact]
+    public void CrossFile_PartialStructMatchingResolvedGenericConstraintsCompile()
+    {
+        var importingPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import System.Collections.Generic
+
+            public partial struct Holder[T IEnumerable[T] struct] {
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package App
+
+            import System.Collections.Generic
+
+            public partial struct Holder[T IEnumerable[T] struct] {
+            }
+            """,
+            "Holder.Feature.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(featurePart, importingPart)
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+    }
+
     [Fact]
     public void CrossFile_GenericConstraintImportDoesNotLeakFromUnrelatedFile()
     {

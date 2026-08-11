@@ -90,7 +90,9 @@ internal sealed partial class DeclarationBinder
             ResolvePartialTypeParameterConstraints(
                 syntax.TypeParameterList,
                 syntax.PartialTypeParameterLists,
-                interfaceSymbol.TypeParameters);
+                interfaceSymbol.TypeParameters,
+                interfaceSymbol.Name,
+                syntax.PartialPartLocations);
             BindInterfaceMembersCore(syntax, interfaceSymbol, package);
         }
         finally

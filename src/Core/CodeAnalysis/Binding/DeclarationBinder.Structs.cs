@@ -77,7 +77,9 @@ internal sealed partial class DeclarationBinder
             ResolvePartialTypeParameterConstraints(
                 syntax.TypeParameterList,
                 syntax.PartialTypeParameterLists,
-                structSymbol.TypeParameters);
+                structSymbol.TypeParameters,
+                structSymbol.Name,
+                syntax.PartialPartLocations);
             BindStructDeclarationBodyCore(syntax, package, structSymbol);
         }
         finally
