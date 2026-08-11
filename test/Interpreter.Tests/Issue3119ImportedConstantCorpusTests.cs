@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using Xunit;
@@ -343,28 +342,17 @@ public class Issue3119ImportedConstantCorpusTests
             }
             """);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(runtimeConfigPath);
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start emitted assembly");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), "Emitted assembly timed out");
+        var result = DotnetProcess.Run(
+            directory,
+            "exec",
+            "--runtimeconfig",
+            runtimeConfigPath,
+            assemblyPath);
         Assert.True(
-            process.ExitCode == 0,
-            $"Emitted assembly exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        Assert.Equal(string.Empty, stderr);
-        return Normalize(stdout);
+            result.ExitCode == 0,
+            $"Emitted assembly exited {result.ExitCode}\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+        Assert.Equal(string.Empty, result.StandardError);
+        return Normalize(result.StandardOutput);
     }
 
     private static void CopyRuntimeDependency(string sourcePath, string directory)

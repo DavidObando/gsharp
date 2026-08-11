@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -940,8 +939,7 @@ public class Issue2896StructObjectOverrideTests
             $"gsc emit failed ({compile.ExitCode})\nstdout:\n{compile.StandardOutput}\nstderr:\n{compile.StandardError}");
         Assert.Equal(string.Empty, compile.StandardError);
 
-        var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
-        Assert.NotEmpty(assembly.GetTypes());
+        CollectibleAssembly.Inspect(outputPath, assembly => Assert.NotEmpty(assembly.GetTypes()));
 
         var runtimeConfigPath = Path.ChangeExtension(outputPath, ".runtimeconfig.json");
         File.WriteAllText(runtimeConfigPath, """
@@ -953,38 +951,12 @@ public class Issue2896StructObjectOverrideTests
             }
             """);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(runtimeConfigPath);
-        startInfo.ArgumentList.Add(outputPath);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start emitted assembly");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        catch (TimeoutException)
-        {
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
-            throw new Xunit.Sdk.XunitException("Emitted assembly timed out");
-        }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        Assert.Equal(0, process.ExitCode);
-        Assert.Equal(string.Empty, stderr);
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var result = await DotnetProcess.RunAsync(
+            directory,
+            ["exec", "--runtimeconfig", runtimeConfigPath, outputPath]);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardError);
+        return result.StandardOutput.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(Func<int> action)

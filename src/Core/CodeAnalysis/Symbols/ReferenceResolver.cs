@@ -56,6 +56,10 @@ public sealed class ReferenceResolver : IDisposable
         "mscorlib",
     };
 
+    private static readonly object DefaultTypeNameIndexGate = new();
+    private static ImmutableArray<Assembly> defaultTypeNameIndexAssemblies = ImmutableArray<Assembly>.Empty;
+    private static Lazy<Dictionary<string, Type>>? defaultTypeNameIndex;
+
     private readonly ImmutableArray<Assembly> assemblies;
     private readonly MetadataLoadContext? metadataContext;
     private readonly AssemblyLoadContext? runtimeContext;
@@ -172,15 +176,14 @@ public sealed class ReferenceResolver : IDisposable
         ImmutableArray<Assembly> assemblies,
         MetadataLoadContext? metadataContext,
         ImmutableArray<string> missingTransitiveReferences,
-        AssemblyLoadContext? runtimeContext = null)
+        AssemblyLoadContext? runtimeContext = null,
+        Lazy<Dictionary<string, Type>>? typeNameIndex = null)
     {
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
         this.runtimeContext = runtimeContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
-        this.typeNameIndex = new Lazy<Dictionary<string, Type>>(
-            this.BuildTypeNameIndex,
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
     }
 
     private sealed class NotFoundSentinel
@@ -231,11 +234,6 @@ public sealed class ReferenceResolver : IDisposable
     /// </remarks>
     public void Dispose()
     {
-        if (metadataContext is null && runtimeContext is null)
-        {
-            return;
-        }
-
         metadataContext?.Dispose();
         runtimeContext?.Unload();
 
@@ -388,7 +386,12 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        return new ReferenceResolver(BuildHostAssemblies(), metadataContext: null);
+        var assemblies = BuildHostAssemblies();
+        return new ReferenceResolver(
+            assemblies,
+            metadataContext: null,
+            missingTransitiveReferences: ImmutableArray<string>.Empty,
+            typeNameIndex: GetDefaultTypeNameIndex(assemblies));
     }
 
     /// <summary>
@@ -550,7 +553,7 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        var resolver = new FallbackMetadataAssemblyResolver(resolverPaths);
+        var resolver = new FallbackMetadataAssemblyResolver(resolverPaths, fallbackHostPaths);
         var mlc = new MetadataLoadContext(resolver, coreAssemblyName: ChooseCoreAssemblyName(resolverPaths.ToArray()));
 
         var builder = ImmutableArray.CreateBuilder<Assembly>();
@@ -1223,7 +1226,26 @@ public sealed class ReferenceResolver : IDisposable
         return false;
     }
 
-    private Dictionary<string, Type> BuildTypeNameIndex()
+    private static Lazy<Dictionary<string, Type>> CreateTypeNameIndex(ImmutableArray<Assembly> assemblies)
+        => new(
+            () => BuildTypeNameIndex(assemblies),
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static Lazy<Dictionary<string, Type>> GetDefaultTypeNameIndex(ImmutableArray<Assembly> assemblies)
+    {
+        lock (DefaultTypeNameIndexGate)
+        {
+            if (defaultTypeNameIndex is null || !defaultTypeNameIndexAssemblies.SequenceEqual(assemblies))
+            {
+                defaultTypeNameIndexAssemblies = assemblies;
+                defaultTypeNameIndex = CreateTypeNameIndex(assemblies);
+            }
+
+            return defaultTypeNameIndex;
+        }
+    }
+
+    private static Dictionary<string, Type> BuildTypeNameIndex(ImmutableArray<Assembly> assemblies)
     {
         var index = new Dictionary<string, Type>(StringComparer.Ordinal);
 
@@ -1313,6 +1335,25 @@ public sealed class ReferenceResolver : IDisposable
 
     private static ImmutableArray<Assembly> BuildHostAssemblies()
     {
+        // Load resolver dependencies before taking the snapshot so the first
+        // and subsequent snapshots retain AppDomain's native assembly order.
+        foreach (var name in WellKnownBclAssemblyNames.Append("System.Reflection.MetadataLoadContext"))
+        {
+            try
+            {
+                _ = Assembly.Load(new AssemblyName(name));
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (FileLoadException)
+            {
+            }
+            catch (BadImageFormatException)
+            {
+            }
+        }
+
         var builder = ImmutableArray.CreateBuilder<Assembly>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1336,27 +1377,6 @@ public sealed class ReferenceResolver : IDisposable
             if (seen.Add(name))
             {
                 builder.Add(asm);
-            }
-        }
-
-        foreach (var name in WellKnownBclAssemblyNames)
-        {
-            try
-            {
-                var asm = Assembly.Load(new AssemblyName(name));
-                if (seen.Add(asm.GetName().FullName))
-                {
-                    builder.Add(asm);
-                }
-            }
-            catch (FileNotFoundException)
-            {
-            }
-            catch (FileLoadException)
-            {
-            }
-            catch (BadImageFormatException)
-            {
             }
         }
 
@@ -1605,27 +1625,35 @@ public sealed class ReferenceResolver : IDisposable
     /// </summary>
     private sealed class FallbackMetadataAssemblyResolver : MetadataAssemblyResolver
     {
+        private static readonly ConcurrentDictionary<string, byte[]> SharedHostAssemblyBytes =
+            new(StringComparer.OrdinalIgnoreCase);
+
         private readonly Dictionary<string, byte[]> assemblyBytes = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> assemblyPaths = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> unresolved = new(StringComparer.OrdinalIgnoreCase);
         private readonly object gate = new();
 
-        public FallbackMetadataAssemblyResolver(IEnumerable<string> paths)
+        public FallbackMetadataAssemblyResolver(IEnumerable<string> paths, IEnumerable<string> sharedPaths)
         {
+            var shared = sharedPaths
+                .Select(Path.GetFullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             // Read each assembly into memory so no file handles are held open.
             // This prevents MSBuild CopyRefAssembly from being blocked (#853).
             foreach (var path in paths)
             {
-                var fileName = Path.GetFileNameWithoutExtension(path);
+                var fullPath = Path.GetFullPath(path);
+                var fileName = Path.GetFileNameWithoutExtension(fullPath);
                 if (!assemblyBytes.ContainsKey(fileName))
                 {
                     try
                     {
-                        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                        var bytes = new byte[fs.Length];
-                        fs.ReadExactly(bytes);
+                        var bytes = shared.Contains(fullPath)
+                            ? SharedHostAssemblyBytes.GetOrAdd(fullPath, ReadAssemblyBytes)
+                            : ReadAssemblyBytes(fullPath);
                         assemblyBytes[fileName] = bytes;
-                        assemblyPaths[fileName] = path;
+                        assemblyPaths[fileName] = fullPath;
                     }
                     catch (Exception ex) when (
                         ex is IOException or UnauthorizedAccessException or BadImageFormatException)
@@ -1720,6 +1748,14 @@ public sealed class ReferenceResolver : IDisposable
             // tolerance in ClrOverloadResolution then skips that member rather than
             // aborting the whole lookup.
             return null;
+        }
+
+        private static byte[] ReadAssemblyBytes(string path)
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var bytes = new byte[stream.Length];
+            stream.ReadExactly(bytes);
+            return bytes;
         }
     }
 }

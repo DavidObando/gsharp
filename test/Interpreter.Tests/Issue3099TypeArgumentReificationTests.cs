@@ -312,18 +312,22 @@ public class Issue3099TypeArgumentReificationTests
                 sourcePath,
             }));
 
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-            Assert.Contains(assembly.GetTypes(), type => type.FullName?.EndsWith(".Box`1", StringComparison.Ordinal) == true);
-            Assert.Contains(assembly.GetTypes(), type => type.FullName?.EndsWith(".Pair`2", StringComparison.Ordinal) == true);
-            var entryPoint = assembly.EntryPoint
-                ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
-            var explicitEmit = CaptureDriver(() =>
-            {
-                entryPoint.Invoke(
-                    null,
-                    entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
-                return 0;
-            });
+            var explicitEmit = CollectibleAssembly.Inspect(
+                assemblyPath,
+                assembly =>
+                {
+                    Assert.Contains(assembly.GetTypes(), type => type.FullName?.EndsWith(".Box`1", StringComparison.Ordinal) == true);
+                    Assert.Contains(assembly.GetTypes(), type => type.FullName?.EndsWith(".Pair`2", StringComparison.Ordinal) == true);
+                    var entryPoint = assembly.EntryPoint
+                        ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
+                    return CaptureDriver(() =>
+                    {
+                        entryPoint.Invoke(
+                            null,
+                            entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
+                        return 0;
+                    });
+                });
 
             var expected = NormalizeGenericTypeNames(explicitEmit);
             var interactiveOutput = NormalizeGenericTypeNames(interactiveEmit);

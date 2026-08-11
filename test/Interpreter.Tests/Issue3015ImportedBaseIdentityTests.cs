@@ -225,11 +225,12 @@ public class Issue3015ImportedBaseIdentityTests
             });
 
             Assert.Equal(0, exit);
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-            var emittedType = Assert.Single(
-                assembly.GetTypes(),
-                static type => type.FullName == "Issue3015.CompilerDriver.Sentinel");
-            Assert.Equal(emittedType.FullName, oracleTypeName);
+            var emittedTypeName = CollectibleAssembly.Inspect(
+                assemblyPath,
+                assembly => Assert.Single(
+                    assembly.GetTypes(),
+                    static type => type.FullName == "Issue3015.CompilerDriver.Sentinel").FullName);
+            Assert.Equal(emittedTypeName, oracleTypeName);
         }
         finally
         {
@@ -310,17 +311,21 @@ public class Issue3015ImportedBaseIdentityTests
                 "/targetframework:net10.0",
                 emitSourcePath,
             }));
-            var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-            Assert.NotEmpty(assembly.GetTypes());
-            var entryPoint = assembly.EntryPoint
-                ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
-            var explicitEmit = CaptureDriver(() =>
-            {
-                entryPoint.Invoke(
-                    null,
-                    entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
-                return 0;
-            });
+            var explicitEmit = CollectibleAssembly.Inspect(
+                assemblyPath,
+                assembly =>
+                {
+                    Assert.NotEmpty(assembly.GetTypes());
+                    var entryPoint = assembly.EntryPoint
+                        ?? throw new InvalidOperationException("Emitted assembly has no entry point.");
+                    return CaptureDriver(() =>
+                    {
+                        entryPoint.Invoke(
+                            null,
+                            entryPoint.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
+                        return 0;
+                    });
+                });
 
             Assert.Equal(Expected, NormalizeGenericTypeNames(gscScript));
             Assert.Equal(Expected, NormalizeGenericTypeNames(explicitEmit));

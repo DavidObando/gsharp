@@ -98,6 +98,7 @@ jobs:
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: discover-tests
     strategy:
       fail-fast: false
@@ -138,6 +139,9 @@ jobs:
           if [[ -n "$TEST_FILTER" ]]; then
             args+=(--filter "$TEST_FILTER")
           fi
+          if [[ "${{ matrix.name }}" == "interpreter" ]]; then
+            args+=(--blame-hang --blame-hang-timeout 2m --blame-hang-dump-type mini)
+          fi
           dotnet test "${args[@]}"
 
       - name: Upload test results
@@ -145,7 +149,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: test-results-${{ matrix.name }}
-          path: TestResults/**/*.trx
+          path: TestResults/**/*
 
   e2e:
     runs-on: ubuntu-latest

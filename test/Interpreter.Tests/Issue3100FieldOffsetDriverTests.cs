@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -235,21 +234,11 @@ public class Issue3100FieldOffsetDriverTests
 
         verifyAssembly?.Invoke(outputPath);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(outputPath);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var runOut = process.StandardOutput.ReadToEnd();
-        var runErr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, $"emitted program failed ({process.ExitCode})\nstdout:\n{runOut}\nstderr:\n{runErr}");
-        return NormalizeValues(runOut);
+        var result = DotnetProcess.Run(directory, outputPath);
+        Assert.True(
+            result.ExitCode == 0,
+            $"emitted program failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+        return NormalizeValues(result.StandardOutput);
     }
 
     private static (string SourcePath, string Output) RunDiagnostic(
@@ -321,26 +310,30 @@ public class Issue3100FieldOffsetDriverTests
 
     private static void VerifyMetadata(string assemblyPath, string layoutCase)
     {
-        var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
-        var types = assembly.GetTypes();
-        var cell = types.Single(t => t.Name == "Cell");
-        var wrapper = types.Single(t => t.Name == "Wrapper");
-
-        var expectedLayout = layoutCase is "FullOverlap" or "PartialOverlap" or "ExplicitNoOverlap"
-            ? LayoutKind.Explicit
-            : LayoutKind.Sequential;
-        Assert.Equal(expectedLayout, cell.StructLayoutAttribute?.Value);
-        Assert.Equal(LayoutKind.Sequential, wrapper.StructLayoutAttribute?.Value);
-        Assert.Equal(0, Marshal.OffsetOf(wrapper, "Value").ToInt32());
-        Assert.Equal(0, Marshal.OffsetOf(cell, "Nested").ToInt32());
-        Assert.Equal(
-            layoutCase switch
+        CollectibleAssembly.Inspect(
+            assemblyPath,
+            assembly =>
             {
-                "FullOverlap" => 0,
-                "PartialOverlap" => 1,
-                _ => 4,
-            },
-            Marshal.OffsetOf(cell, "Alias").ToInt32());
+                var types = assembly.GetTypes();
+                var cell = types.Single(t => t.Name == "Cell");
+                var wrapper = types.Single(t => t.Name == "Wrapper");
+
+                var expectedLayout = layoutCase is "FullOverlap" or "PartialOverlap" or "ExplicitNoOverlap"
+                    ? LayoutKind.Explicit
+                    : LayoutKind.Sequential;
+                Assert.Equal(expectedLayout, cell.StructLayoutAttribute?.Value);
+                Assert.Equal(LayoutKind.Sequential, wrapper.StructLayoutAttribute?.Value);
+                Assert.Equal(0, Marshal.OffsetOf(wrapper, "Value").ToInt32());
+                Assert.Equal(0, Marshal.OffsetOf(cell, "Nested").ToInt32());
+                Assert.Equal(
+                    layoutCase switch
+                    {
+                        "FullOverlap" => 0,
+                        "PartialOverlap" => 1,
+                        _ => 4,
+                    },
+                    Marshal.OffsetOf(cell, "Alias").ToInt32());
+            });
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
