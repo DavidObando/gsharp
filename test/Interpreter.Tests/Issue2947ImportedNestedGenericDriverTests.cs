@@ -78,8 +78,8 @@ public class Issue2947ImportedNestedGenericDriverTests
 
     private static readonly string[] ExpectedDiagnostics =
     {
-        "Cannot convert type 'glib.Outer[T].Color?' to 'glib.Outer[T].Color'. Provide a value of type 'glib.Outer[T].Color' instead.",
-        "Cannot convert type 'glib.Outer[T].Color' to 'int32'. Provide a value of type 'int32' instead.",
+        "Cannot convert type 'glib.Outer[T].Color?' to 'glib.Outer[T].Color'. An explicit conversion exists (are you missing a cast?)",
+        "Cannot convert type 'glib.Outer[T].Color' to 'int32'. An explicit conversion exists (are you missing a cast?)",
     };
 
     [Fact]

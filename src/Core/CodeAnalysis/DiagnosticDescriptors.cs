@@ -72,7 +72,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor ConstraintNotInterface = new("GS0153", DiagnosticSeverity.Error, "Type '{0}' cannot be used as a type-parameter constraint because it is neither an interface nor a class.");
     internal static readonly DiagnosticDescriptor WrongArgumentType = new("GS0154", DiagnosticSeverity.Error, "Parameter '{0}' requires a value of type '{1}' but was given a value of type '{2}'.");
     internal static readonly DiagnosticDescriptor CannotConvert = new("GS0155", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'.");
-    internal static readonly DiagnosticDescriptor CannotConvertImplicitly = new("GS0156", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'. Provide a value of type '{1}' instead.");
+    internal static readonly DiagnosticDescriptor CannotConvertImplicitly = new("GS0156", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'. An explicit conversion exists (are you missing a cast?)");
     internal static readonly DiagnosticDescriptor UnableToFindType = new("GS0157", DiagnosticSeverity.Error, "Cannot find type {0}. Are you missing an import?");
     internal static readonly DiagnosticDescriptor UnableToFindMember = new("GS0158", DiagnosticSeverity.Error, "Cannot find member {0}.");
     internal static readonly DiagnosticDescriptor UnableToFindFunction = new("GS0159", DiagnosticSeverity.Error, "{0}");

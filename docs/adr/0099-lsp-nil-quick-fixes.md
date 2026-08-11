@@ -19,7 +19,7 @@ operators through correctly:
 | ---- | ----------- | ------- |
 | `GS0154` | `DiagnosticBag.ReportWrongArgumentType` | An argument of type `T?` was passed to a parameter declared `T`. |
 | `GS0155` | `DiagnosticBag.ReportCannotConvert` | An expression of type `T?` was used where `T` was required (assignment, return value, conditional arm, …). |
-| `GS0156` | `DiagnosticBag.ReportCannotConvertImplicitly` | Same as GS0155 but reported from an implicit-conversion context (typically nullable→non-nullable). |
+| `GS0156` | `DiagnosticBag.ReportCannotConvertImplicitly` | Same as GS0155, but the classifier proved an explicit conversion exists. |
 | `GS0158` | `DiagnosticBag.ReportUnableToFindMember` | A member access `a.b` did not find `b`; when the receiver is `T?` the binder reports this rather than a dedicated "deref of nullable" message — the `Nullable<T>` projection for value types and the NRT receiver path both flow here. |
 | `GS0274` | `DiagnosticBag.ReportNilNotAssignableToNonNullableParameter` | A literal `nil` was passed to a non-nullable parameter. |
 

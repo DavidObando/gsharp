@@ -811,13 +811,8 @@ public sealed class Conversion
             return Conversion.Explicit;
         }
 
-        if (from == TypeSymbol.String)
-        {
-            if (to == TypeSymbol.Bool || to == TypeSymbol.Int32)
-            {
-                return Conversion.Explicit;
-            }
-        }
+        // Issue #3288: parsing text is not an explicit CLR conversion.
+        // String-to-primitive code must use Parse/TryParse instead.
 
         // Issues #3245/#3246: the legacy builtin `string(T)` conversion
         // ("any value backed by a CLR type converts to string via
