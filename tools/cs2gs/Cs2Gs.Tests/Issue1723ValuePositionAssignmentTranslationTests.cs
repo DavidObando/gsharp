@@ -703,12 +703,13 @@ namespace Demo
     /// An assignment hidden inside the short-circuited operand of <c>&amp;&amp;</c>
     /// (<c>a() &amp;&amp; (x = f()) > 0</c>): hoisting it unconditionally would evaluate
     /// <c>f()</c> even when <c>a()</c> is <c>false</c>, changing C#'s evaluation
-    /// COUNT. This is the one form the fix cannot lower faithfully, so it must be
-    /// surfaced as an <see cref="TranslationSeverity.Unsupported"/> diagnostic
-    /// instead of silently dropping the write.
+    /// COUNT — so it cannot be hoisted. ADR-0161 / issue #3350: it does not need
+    /// to be. G# assignment is a value-yielding expression, so the write is
+    /// emitted in place and runs exactly when C# runs it. This previously
+    /// reported <see cref="TranslationSeverity.Unsupported"/> and dropped it.
     /// </summary>
     [Fact]
-    public void AssignmentInsideShortCircuitedAnd_ReportsUnsupportedInsteadOfSilentlyDropping()
+    public void AssignmentInsideShortCircuitedAnd_IsEmittedInPlace()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -738,7 +739,10 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        // ADR-0161 / issue #3350: G# assignment is a value-yielding expression, so
+        // the write is now emitted IN PLACE, running exactly when C# runs it,
+        // rather than being reported Unsupported and then silently dropped.
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("short-circuited"));
     }
@@ -971,11 +975,12 @@ namespace Demo
     /// An assignment hidden in the RHS of <c>??</c> (<c>a ?? (x = f())</c>): the
     /// RHS only runs when <c>a</c> is null, so hoisting the assignment
     /// unconditionally would run it even when <c>a</c> is non-null, changing C#'s
-    /// evaluation count. Must be surfaced as <see cref="TranslationSeverity.Unsupported"/>,
+    /// evaluation count, so it cannot be hoisted — ADR-0161 / issue #3350 emits it
+    /// in place instead (previously <see cref="TranslationSeverity.Unsupported"/>),
     /// not silently hoisted (issue #1723 follow-up).
     /// </summary>
     [Fact]
-    public void AssignmentInsideCoalesceRight_ReportsUnsupportedInsteadOfSilentlyDropping()
+    public void AssignmentInsideCoalesceRight_IsEmittedInPlace()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -999,7 +1004,10 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        // ADR-0161 / issue #3350: G# assignment is a value-yielding expression, so
+        // the write is now emitted IN PLACE, running exactly when C# runs it,
+        // rather than being reported Unsupported and then silently dropped.
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported);
     }
@@ -1008,10 +1016,11 @@ namespace Demo
     /// An assignment inside the "when not null" side of a <c>?.</c> chain
     /// (<c>obj?.M(x = 5)</c>): the call/argument only evaluates when <c>obj</c>
     /// is non-null, so hoisting unconditionally would run it even when <c>obj</c>
-    /// is null. Must be surfaced as <see cref="TranslationSeverity.Unsupported"/>.
+    /// is null, so it cannot be hoisted — ADR-0161 / issue #3350 emits it in place
+    /// instead (previously <see cref="TranslationSeverity.Unsupported"/>).
     /// </summary>
     [Fact]
-    public void AssignmentInsideConditionalAccessWhenNotNull_ReportsUnsupportedInsteadOfSilentlyDropping()
+    public void AssignmentInsideConditionalAccessWhenNotNull_IsEmittedInPlace()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
         {
@@ -1040,7 +1049,10 @@ namespace Demo
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
-        Assert.Contains(
+        // ADR-0161 / issue #3350: G# assignment is a value-yielding expression, so
+        // the write is now emitted IN PLACE, running exactly when C# runs it,
+        // rather than being reported Unsupported and then silently dropped.
+        Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported);
     }

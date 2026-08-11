@@ -753,6 +753,49 @@ public sealed class StackAllocExpression : GExpression
 }
 
 /// <summary>
+/// An assignment used in VALUE position — <c>target = value</c> yielding the
+/// assigned value (ADR-0161 / issue #3350).
+/// </summary>
+/// <remarks>
+/// G# has had assignment as a full expression for some time; the belief that it
+/// was statement-only (repeated in several cs2gs comments and in issue #3347)
+/// was wrong. Emitting this node instead of hoisting the write into a preceding
+/// <see cref="AssignmentStatement"/> removes the synthetic <c>__spillN</c> temps
+/// that carried the assigned value, and fixes the issue #1723 case where an
+/// assignment inside a short-circuited operand was DROPPED because no statement
+/// seam could legally host it.
+/// <para>
+/// The printer parenthesizes the whole form. That is required in an argument
+/// list — where a bare <c>name = value</c> warns as the retired named-argument
+/// spelling (GS0524, ADR-0161) — and is harmless everywhere else.
+/// </para>
+/// </remarks>
+public sealed class AssignmentExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="AssignmentExpression"/> class.
+    /// </summary>
+    /// <param name="target">The assignment target.</param>
+    /// <param name="value">The assigned value.</param>
+    /// <param name="op">The assignment operator (defaults to <c>=</c>).</param>
+    public AssignmentExpression(GExpression target, GExpression value, string op = "=")
+    {
+        Target = target;
+        Value = value;
+        Operator = op;
+    }
+
+    /// <summary>Gets the assignment target.</summary>
+    public GExpression Target { get; }
+
+    /// <summary>Gets the assigned value.</summary>
+    public GExpression Value { get; }
+
+    /// <summary>Gets the assignment operator.</summary>
+    public string Operator { get; }
+}
+
+/// <summary>
 /// A parenthesized expression <c>(inner)</c>.
 /// </summary>
 public sealed class ParenthesizedExpression : GExpression

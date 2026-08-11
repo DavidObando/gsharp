@@ -590,7 +590,22 @@ public static class GSharpPrinter
                 }
 
             case ParenthesizedExpression parenthesized:
-                return $"({RenderExpression(parenthesized.Inner, indent)})";
+                // An `AssignmentExpression` renders its own parentheses
+                // (ADR-0161), so a C# source-level `(x = 5)` would otherwise
+                // print as `((x = 5))`.
+                return parenthesized.Inner is AssignmentExpression
+                    ? RenderExpression(parenthesized.Inner, indent)
+                    : $"({RenderExpression(parenthesized.Inner, indent)})";
+
+            case AssignmentExpression assignmentExpression:
+                // ADR-0161 / issue #3350: always parenthesized. Required in an
+                // argument list, where a bare `name = value` warns as the retired
+                // named-argument spelling (GS0524); harmless elsewhere, and it
+                // keeps the assignment's precedence unambiguous inside a larger
+                // expression (`a && (x = 5) > 0`).
+                return "(" + RenderExpression(assignmentExpression.Target, indent)
+                    + " " + assignmentExpression.Operator + " "
+                    + RenderExpression(assignmentExpression.Value, indent) + ")";
 
             case CheckedExpression checkedExpr:
                 return $"{(checkedExpr.IsChecked ? "checked" : "unchecked")}({RenderExpression(checkedExpr.Inner, indent)})";

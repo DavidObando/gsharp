@@ -392,10 +392,17 @@ public sealed partial class CSharpToGSharpTranslator
                         return hoistedTarget;
                     }
 
-                    // No enclosing seam claimed this node (e.g. it lives inside a
-                    // short-circuited operand already flagged unsupported): fall
-                    // back to the RHS value so translation still completes.
-                    return this.TranslateExpression(nestedAssignment.Right);
+                    // ADR-0161 / issue #3350: no enclosing seam claimed this node —
+                    // it lives somewhere no statement can legally be hoisted to,
+                    // the canonical case being a short-circuited `&&`/`||`/`??`
+                    // operand, whose write must run only when that operand is
+                    // evaluated. This used to fall back to the RHS alone, which
+                    // SILENTLY DROPPED the write (issue #1723).
+                    //
+                    // G# assignment is a value-yielding expression, so the faithful
+                    // translation is simply the assignment itself, emitted exactly
+                    // where C# put it.
+                    return this.TranslateAssignmentAsExpression(nestedAssignment);
 
                 case ThrowExpressionSyntax throwExpression:
                     // `a ?? throw e`, `cond ? a : throw e`, a `switch` arm value.
@@ -1724,6 +1731,28 @@ public sealed partial class CSharpToGSharpTranslator
             return new ArrayLiteralExpression(
                 elementType,
                 initializer.Expressions.Select(this.TranslateExpression).ToList());
+        }
+
+        // ADR-0161 / issue #3350: translates a C# assignment used in VALUE position
+        // into G#'s assignment expression, preserving the write where C# put it.
+        //
+        // A deconstruction assignment (`(a, b) = …`) has no single target and is
+        // left to the existing tuple lowering; a `??=` likewise keeps its
+        // hoisting path, since its write is conditional on the target being nil
+        // and G# has no coalescing-assignment EXPRESSION to express that.
+        private GExpression TranslateAssignmentAsExpression(AssignmentExpressionSyntax assignment)
+        {
+            if (assignment.Left is TupleExpressionSyntax
+                || assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression))
+            {
+                // Unchanged fallback: still better than nothing, and these shapes
+                // are handled by their own lowerings when a seam is available.
+                return this.TranslateExpression(assignment.Right);
+            }
+
+            GExpression target = this.TranslateExpression(assignment.Left);
+            GExpression value = this.TranslateExpression(assignment.Right);
+            return new AssignmentExpression(target, value, assignment.OperatorToken.Text);
         }
 
         private GExpression TranslateSizeOf(SizeOfExpressionSyntax sizeOf)

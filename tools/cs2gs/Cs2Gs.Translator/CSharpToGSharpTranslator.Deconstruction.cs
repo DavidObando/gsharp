@@ -246,9 +246,16 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (IsInShortCircuitedSubexpression(candidate, expression))
                 {
-                    this.context.ReportUnsupported(
-                        candidate,
-                        "assignment inside a short-circuited '&&'/'||'/'??' operand or a conditional-access branch has no side-effect-preserving G# lowering yet (issue #1723).");
+                    // ADR-0161 / issue #3350: a short-circuited operand's write must
+                    // run only when that operand is evaluated, so it cannot be
+                    // hoisted into a preceding statement — but it does not need to
+                    // be. G# assignment is a value-yielding expression, so
+                    // `TranslateAssignmentAsExpression` emits it in place, exactly
+                    // where C# put it. Skipping it here leaves it to that path.
+                    //
+                    // This previously reported Unsupported and then DROPPED the
+                    // write entirely (issue #1723), on the mistaken premise that G#
+                    // assignment was statement-only.
                     continue;
                 }
 
