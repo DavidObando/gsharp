@@ -334,22 +334,20 @@ internal static class ExternalClrOverrideResolver
             _ => type,
         };
 
-        if (type is TypeParameterSymbol typeParameter)
+        if (clrType?.IsGenericParameter == true)
         {
-            if (clrType == null || !clrType.IsGenericParameter)
-            {
-                return false;
-            }
-
             if (clrType.DeclaringMethod != null)
             {
-                return typeParameter.Ordinal < methodTypeParameters.Length
+                return type is TypeParameterSymbol typeParameter
+                    && typeParameter.Ordinal < methodTypeParameters.Length
                     && ReferenceEquals(typeParameter, methodTypeParameters[typeParameter.Ordinal])
                     && clrType.GenericParameterPosition == typeParameter.Ordinal;
             }
 
             return clrType.GenericParameterPosition < containingTypeArguments.Length
-                && TypeSymbolsMatch(containingTypeArguments[clrType.GenericParameterPosition], typeParameter);
+                && DeclarationBinder.TypeSignaturesEquivalent(
+                    containingTypeArguments[clrType.GenericParameterPosition],
+                    type);
         }
 
         var effectiveClrType = NullableLifting.GetEffectiveClrType(type);
@@ -359,18 +357,6 @@ internal static class ExternalClrOverrideResolver
         }
 
         return false;
-    }
-
-    private static bool TypeSymbolsMatch(TypeSymbol left, TypeSymbol right)
-    {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        var leftClr = NullableLifting.GetEffectiveClrType(left);
-        var rightClr = NullableLifting.GetEffectiveClrType(right);
-        return leftClr != null && rightClr != null && ClrTypeUtilities.AreSame(leftClr, rightClr);
     }
 
     private static bool IsCovariantReturn(Type? baseReturnType, TypeSymbol derivedReturnType)
