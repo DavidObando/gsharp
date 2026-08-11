@@ -44,6 +44,9 @@ public class ReferenceResolverTests
             BindingFlags.Instance | BindingFlags.NonPublic);
 
         Assert.NotNull(indexField);
+        Assert.Equal(
+            first.Assemblies.Select(assembly => assembly.GetName().FullName),
+            second.Assemblies.Select(assembly => assembly.GetName().FullName));
         Assert.Same(indexField.GetValue(first), indexField.GetValue(second));
     }
 

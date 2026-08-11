@@ -1335,8 +1335,11 @@ public sealed class ReferenceResolver : IDisposable
 
     private static ImmutableArray<Assembly> BuildHostAssemblies()
     {
+        // Constructing the first resolver loads this dependency after the host
+        // snapshot unless it is forced here, making two unchanged snapshots differ.
+        _ = typeof(MetadataLoadContext).Assembly;
+
         var builder = ImmutableArray.CreateBuilder<Assembly>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -1354,11 +1357,7 @@ public sealed class ReferenceResolver : IDisposable
                 continue;
             }
 
-            var name = asm.GetName().FullName;
-            if (seen.Add(name))
-            {
-                builder.Add(asm);
-            }
+            builder.Add(asm);
         }
 
         foreach (var name in WellKnownBclAssemblyNames)
@@ -1366,10 +1365,7 @@ public sealed class ReferenceResolver : IDisposable
             try
             {
                 var asm = Assembly.Load(new AssemblyName(name));
-                if (seen.Add(asm.GetName().FullName))
-                {
-                    builder.Add(asm);
-                }
+                builder.Add(asm);
             }
             catch (FileNotFoundException)
             {
@@ -1382,7 +1378,14 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        return builder.ToImmutable();
+        return builder
+            .OrderBy(static assembly => assembly.GetName().FullName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static assembly => AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default ? 0 : 1)
+            .ThenBy(static assembly => AssemblyLoadContext.GetLoadContext(assembly)?.Name, StringComparer.Ordinal)
+            .ThenBy(static assembly => assembly.Location, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static assembly => assembly.ManifestModule.ModuleVersionId)
+            .DistinctBy(static assembly => assembly.GetName().FullName, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
     }
 
     private static string? ChooseCoreAssemblyName(string[] paths)
