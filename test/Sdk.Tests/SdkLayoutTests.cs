@@ -175,9 +175,14 @@ public class SdkLayoutTests
         var hotReloadBaseline = doc.Descendants(MsbuildNs + "Target")
             .Single(t => (string)t.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
         Assert.Equal("CompileDesignTime", (string)hotReloadBaseline.Attribute("BeforeTargets"));
-        Assert.Equal(
-            "$(ProjectDepsFilePath)",
-            (string)hotReloadBaseline.Element(MsbuildNs + "Delete").Attribute("Files"));
+        var hotReloadBaselineDeletes =
+            (string)hotReloadBaseline.Element(MsbuildNs + "Delete").Attribute("Files");
+        Assert.Contains("@(IntermediateAssembly)", hotReloadBaselineDeletes, System.StringComparison.Ordinal);
+        Assert.Contains(
+            "$(IntermediateOutputPath)$(AssemblyName)$(TargetExt)",
+            hotReloadBaselineDeletes,
+            System.StringComparison.Ordinal);
+        Assert.Contains("$(ProjectDepsFilePath)", hotReloadBaselineDeletes, System.StringComparison.Ordinal);
         Assert.Contains(
             hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
             task => (string)task.Attribute("Targets") == "Build");
