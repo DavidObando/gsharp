@@ -2214,7 +2214,20 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(syntax);
         }
 
-        return new BoundAsExpression(syntax, expression, targetType);
+        // Issue #3349: `as` is a TESTING conversion — it yields nil when the test
+        // fails, which is the entire reason the check above rejects a non-nullable
+        // value-type target. Its result type must therefore be nullable too:
+        // `x as T` is `T?`, not `T`. Typing it `T` let `let s string = o as string`
+        // bind, silently handing a possibly-nil value to a non-nullable local, and
+        // it forced `if let`/`guard let` to reject the idiomatic
+        // `if let s = x as T` with GS0296 (the RHS looked non-nullable, so the
+        // binding had "nothing to strip"). An explicitly nullable target (`as T?`)
+        // is already nullable and is left alone rather than double-wrapped.
+        TypeSymbol resultType = targetType is NullableTypeSymbol
+            ? targetType
+            : NullableTypeSymbol.Get(targetType);
+
+        return new BoundAsExpression(syntax, expression, resultType);
     }
 
     private static bool IsNonNullableValueType(TypeSymbol type)
