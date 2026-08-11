@@ -63,9 +63,11 @@ namespace Corpus.Issue1895
 
         Assert.Contains("var x = 1", rendered, StringComparison.Ordinal);
         Assert.Contains("var y = 2", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (__decon0, __decon1) = (y, x)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("y = __decon1", rendered, StringComparison.Ordinal);
+        // Issue #3358: G#'s native multi-target assignment (ADR-0015) evaluates
+        // every right-hand expression before any write, so the aliasing swap is
+        // correct without the tool synthesising its own temps.
+        Assert.Contains("x, y = y, x", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let x", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let y", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
@@ -92,8 +94,9 @@ namespace Corpus.Issue1895
 
         Assert.Contains("var x = 1", rendered, StringComparison.Ordinal);
         Assert.Contains("var z = 2", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("z = __decon1", rendered, StringComparison.Ordinal);
+        // Issue #3358: native multi-target assignment, no temps.
+        Assert.Contains("x, z = 5, 6", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -138,8 +141,10 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("let (__decon0, _) = (2, 3)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
+        // Issue #3358: `_` is a native multi-assignment target, so the discarded
+        // element needs no temp either.
+        Assert.Contains("x, _ = 2, 3", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
