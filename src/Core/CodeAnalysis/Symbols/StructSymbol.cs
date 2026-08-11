@@ -1758,8 +1758,8 @@ public sealed class StructSymbol : TypeSymbol
         var substitutedEnclosing = enclosingArguments.MoveToImmutable();
         var substitutedOwn = ownArguments.MoveToImmutable();
         return !substitutedEnclosing.IsDefaultOrEmpty
-            ? ConstructNestedGeneric(definition, substitutedEnclosing, substitutedOwn, mapClrType)!
-            : Construct(definition, substitutedOwn, mapClrType)!;
+            ? ConstructNestedGeneric(definition, substitutedEnclosing, substitutedOwn, mapClrType)
+            : Construct(definition, substitutedOwn, mapClrType);
     }
 
     /// <summary>
