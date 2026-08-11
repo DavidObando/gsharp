@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -533,35 +532,18 @@ public class Issue3114ReadOnlySpanDriverTests
 
         Assert.Equal(0, compile.ExitCode);
         Assert.True(File.Exists(assemblyPath), compile.StandardOutput + compile.StandardError);
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        CollectibleAssembly.Inspect(assemblyPath, assembly => Assert.NotEmpty(assembly.GetTypes()));
         if (referencePath != null)
         {
             File.Copy(referencePath, Path.Combine(outputDirectory, Path.GetFileName(referencePath)));
         }
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = outputDirectory,
-        };
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("Emitted program timed out.");
-        }
+        var result = DotnetProcess.Run(outputDirectory, assemblyPath);
 
         return (
-            process.ExitCode,
-            standardOutput.GetAwaiter().GetResult().Replace("\r\n", "\n"),
-            standardError.GetAwaiter().GetResult().Replace("\r\n", "\n"));
+            result.ExitCode,
+            result.StandardOutput.Replace("\r\n", "\n"),
+            result.StandardError.Replace("\r\n", "\n"));
     }
 
     private static void EmitOverloadedToStringRefStructAssembly(string outputPath)

@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
@@ -248,7 +247,6 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         try
         {
             Assert.NotEmpty(typeof(Issue3149Greeter).Assembly.GetTypes());
-            Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
 
             var loadContext = new AssemblyLoadContext(
                 "Issue3149_" + Guid.NewGuid().ToString("N"),
@@ -419,39 +417,15 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
             }
             """);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(runtimeConfigPath);
-        startInfo.ArgumentList.Add(assemblyPath);
-
         try
         {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start emitted assembly.");
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            try
-            {
-                await process.WaitForExitAsync(timeout.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                process.Kill(entireProcessTree: true);
-                return new DriverResult(-1, await stdout, "timed out\n" + await stderr);
-            }
-
+            var result = await DotnetProcess.RunAsync(
+                directory,
+                ["exec", "--runtimeconfig", runtimeConfigPath, assemblyPath]);
             return new DriverResult(
-                process.ExitCode,
-                await stdout,
-                await stderr);
+                result.ExitCode,
+                result.StandardOutput,
+                result.StandardError);
         }
         catch (Exception ex)
         {

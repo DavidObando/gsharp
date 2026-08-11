@@ -63,6 +63,7 @@ namespace GSharp.Tests;
 /// </remarks>
 public static class EmittedOracle
 {
+    private static readonly object EvaluationGate = new();
     private static readonly object ConsoleGate = new();
     private static int submissionCounter;
 
@@ -109,6 +110,18 @@ public static class EmittedOracle
     /// <returns>The oracle result.</returns>
     public static EmittedOracleResult Evaluate(IReadOnlyList<string> sources, EmittedOracleOptions options = null)
     {
+        // ponytail: process-wide compiler symbol caches make independent
+        // one-shot compilations share a lifetime; serialize this test oracle
+        // so each run can release its resolver and caches without racing one
+        // still binding.
+        lock (EvaluationGate)
+        {
+            return EvaluateCore(sources, options);
+        }
+    }
+
+    private static EmittedOracleResult EvaluateCore(IReadOnlyList<string> sources, EmittedOracleOptions options)
+    {
         if (sources is null)
         {
             throw new ArgumentNullException(nameof(sources));
@@ -131,7 +144,7 @@ public static class EmittedOracle
         // excludes collectible-ALC assemblies from its host scan, so earlier
         // oracle runs' still-loaded emitted assemblies can never shadow this
         // compilation's source packages (issue #3235).
-        var resolver = referencePaths.Length > 0
+        using var resolver = referencePaths.Length > 0
             ? ReferenceResolver.WithReferences(referencePaths)
             : ReferenceResolver.Default();
 

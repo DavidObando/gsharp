@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -380,42 +379,21 @@ public class Issue3140OutParameterWriteBackDriverTests
             compile.ExitCode == 0,
             $"emit failed ({compile.ExitCode})\nstdout:\n{compile.Stdout}\nstderr:\n{compile.Stderr}");
         Assert.Equal(string.Empty, compile.Stderr);
-        Assert.NotEmpty(Assembly.Load(File.ReadAllBytes(assemblyPath)).GetTypes());
+        CollectibleAssembly.Inspect(assemblyPath, assembly => Assert.NotEmpty(assembly.GetTypes()));
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = directory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"));
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("emitted program timed out");
-        }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var result = await DotnetProcess.RunAsync(
+            directory,
+            [
+                "exec",
+                "--runtimeconfig",
+                Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
+                assemblyPath,
+            ]);
         Assert.True(
-            process.ExitCode == 0,
-            $"emitted program failed ({process.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        Assert.Equal(string.Empty, stderr);
-        return Normalize(stdout, stripCompilerSuccess: false);
+            result.ExitCode == 0,
+            $"emitted program failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+        Assert.Equal(string.Empty, result.StandardError);
+        return Normalize(result.StandardOutput, stripCompilerSuccess: false);
     }
 
     private static DriverResult CaptureConsole(Func<int> action)

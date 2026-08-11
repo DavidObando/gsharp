@@ -326,6 +326,33 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Equal(9, read.Value);
     }
 
+    [Fact]
+    public void DisposedSessionsDoNotRetainCompilerState()
+    {
+        using (var warmup = new EmittedSessionEngine())
+        {
+            Assert.False(warmup.Evaluate("var value = 40").HasError);
+            Assert.False(warmup.Evaluate("value + 2").HasError);
+        }
+
+        CollectGarbage();
+        var baseline = GC.GetTotalMemory(forceFullCollection: true);
+
+        for (var i = 0; i < 8; i++)
+        {
+            using var session = new EmittedSessionEngine();
+            Assert.False(session.Evaluate("var value = 40").HasError);
+            Assert.False(session.Evaluate("func add(n int) int {\n    return value + n\n}").HasError);
+            Assert.False(session.Evaluate("add(2)").HasError);
+        }
+
+        CollectGarbage();
+        var retained = GC.GetTotalMemory(forceFullCollection: true) - baseline;
+        Assert.True(
+            retained < 64 * 1024 * 1024,
+            $"Disposed sessions retained {retained / (1024 * 1024)} MiB of managed memory.");
+    }
+
     /// <summary>
     /// ADR-0156 Phase 2 deliberate semantic change: interactive submissions
     /// run real emitted code, so a class deinitializer executes as a genuine
@@ -385,6 +412,15 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.Single(engine.Cells);
         Assert.False(cell.HasError);
         Assert.Equal(2, cell.Value);
+    }
+
+    private static void CollectGarbage()
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
     }
 
     /// <summary>

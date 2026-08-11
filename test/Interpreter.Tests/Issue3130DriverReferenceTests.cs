@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -53,8 +52,7 @@ public sealed class Issue3130DriverReferenceTests
                     sourcePath);
                 AssertSucceeded(emit, sample + " emit");
 
-                var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
-                Assert.NotEmpty(assembly.GetTypes());
+                CollectibleAssembly.Inspect(outputPath, assembly => Assert.NotEmpty(assembly.GetTypes()));
 
                 File.Copy(extensionsPath, Path.Combine(directory, "Gsharp.Extensions.dll"), overwrite: true);
                 var emitted = await RunAsync(
@@ -445,46 +443,15 @@ public sealed class Issue3130DriverReferenceTests
         builder.Save(outputPath);
     }
 
-    private static async Task<ProcessResult> RunAsync(string workingDirectory, params string[] arguments)
-    {
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDirectory,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+    private static Task<DotnetProcessResult> RunAsync(string workingDirectory, params string[] arguments)
+        => DotnetProcess.RunAsync(workingDirectory, arguments);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start dotnet");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        try
-        {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        catch (TimeoutException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException("dotnet process timed out");
-        }
-
-        return new ProcessResult(
-            process.ExitCode,
-            await standardOutput,
-            await standardError);
-    }
-
-    private static void AssertSucceeded(ProcessResult result, string operation)
+    private static void AssertSucceeded(DotnetProcessResult result, string operation)
         => Assert.True(
             result.ExitCode == 0,
             $"{operation} exited {result.ExitCode}\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
 
-    private static void AssertRejectedReference(ProcessResult result, string referencePath, string operation)
+    private static void AssertRejectedReference(DotnetProcessResult result, string referencePath, string operation)
     {
         Assert.True(result.ExitCode != 0, $"{operation} unexpectedly succeeded");
         Assert.Contains("Unable to load reference", result.Combined);
@@ -528,9 +495,4 @@ public sealed class Issue3130DriverReferenceTests
     }
 
     private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
-
-    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError)
-    {
-        public string Combined => StandardOutput + StandardError;
-    }
 }

@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -299,27 +298,16 @@ public class Issue2947ImportedNestedGenericDriverTests
             }
             """);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(runtimeConfigPath);
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start emitted assembly");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), "Emitted assembly timed out");
+        var result = DotnetProcess.Run(
+            directory,
+            "exec",
+            "--runtimeconfig",
+            runtimeConfigPath,
+            assemblyPath);
         Assert.True(
-            process.ExitCode == 0,
-            $"Emitted assembly exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return Normalize(stdout);
+            result.ExitCode == 0,
+            $"Emitted assembly exited {result.ExitCode}\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+        return Normalize(result.StandardOutput);
     }
 
     private static string[] ExtractDiagnosticMessages(string output)

@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -547,24 +546,11 @@ public class Issue3006FallthroughGuardDriverTests
             return (compile, new DriverResult(-1, string.Empty, string.Empty));
         }
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add(assemblyPath);
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start emitted program.");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(timeout.Token);
+        var result = await DotnetProcess.RunAsync(directory, [assemblyPath]);
         return (compile, new DriverResult(
-            process.ExitCode,
-            await stdout,
-            await stderr));
+            result.ExitCode,
+            result.StandardOutput,
+            result.StandardError));
     }
 
     private static DriverResult CaptureDriver(Func<int> driver)

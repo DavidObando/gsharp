@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using Xunit;
 
@@ -195,24 +194,12 @@ public class Issue3010EntryPointDriverMatrixTests
         Assert.Equal(0, compile.ExitCode);
         Assert.True(File.Exists(assemblyPath), compile.StandardOutput + compile.StandardError);
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var standardOutput = process.StandardOutput.ReadToEnd();
-        var standardError = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var result = DotnetProcess.Run(outputDirectory, assemblyPath);
 
         return (
-            process.ExitCode,
-            standardOutput.Replace("\r\n", "\n"),
-            standardError.Replace("\r\n", "\n"));
+            result.ExitCode,
+            result.StandardOutput.Replace("\r\n", "\n"),
+            result.StandardError.Replace("\r\n", "\n"));
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(

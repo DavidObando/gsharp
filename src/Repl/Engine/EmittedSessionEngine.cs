@@ -39,6 +39,7 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
 {
     private readonly List<Cell> cells = new();
     private readonly List<SubmissionState> submissions = new(); // newest first
+    private readonly List<ReferenceResolver> discardedResolvers = new();
     private readonly List<ImportSymbol> sessionImports = new();
     private readonly IReadOnlyList<string> userReferences;
     private readonly InteractiveSessionHost host;
@@ -198,17 +199,16 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
     public void Reset()
     {
         host.Reset();
-        submissions.Clear();
+        ReleaseCompilations();
         sessionImports.Clear();
         cells.Clear();
-        TryDeleteSubmissionFiles();
     }
 
     /// <inheritdoc/>
     public void Dispose()
     {
         host.Dispose();
-        TryDeleteSubmissionFiles();
+        ReleaseCompilations();
         try
         {
             Directory.Delete(submissionsDirectory, recursive: true);
@@ -305,86 +305,115 @@ public sealed class EmittedSessionEngine : ISessionEngine, IDisposable
             ? ReferenceResolver.WithReferences(referencePaths)
             : ReferenceResolver.Default();
 
-        var compilation = new Compilation(resolver, tree)
+        string? dllPath = null;
+        var ownershipTransferred = false;
+        try
         {
-            Submission = new SubmissionBindingOptions
+            var compilation = new Compilation(resolver, tree)
             {
-                Imports = SubmissionImports.Create(
-                    submissions.Select(s => new SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)).ToImmutableArray()),
-                DefaultPackageName = packageName,
-                ReplayImports = sessionImports.ToImmutableArray(),
-            },
-        };
+                Submission = new SubmissionBindingOptions
+                {
+                    Imports = SubmissionImports.Create(
+                        submissions.Select(s => new SubmissionReference(s.AssemblyName, s.PackageName, s.GlobalScope)).ToImmutableArray()),
+                    DefaultPackageName = packageName,
+                    ReplayImports = sessionImports.ToImmutableArray(),
+                },
+            };
 
-        using var peStream = new MemoryStream();
-        var emitResult = compilation.Emit(peStream, pdbStream: null, refStream: null, assemblyName: assemblyName);
-        var hasError = emitResult.Diagnostics.Any(d => d.IsError) || !emitResult.Success;
-        if (hasError)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return new Cell(index, text, null, emitResult.Diagnostics, true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
-        }
-
-        // Flush the PE to the session directory before running: future
-        // submissions' reference resolvers read it from disk.
-        var peImage = peStream.ToArray();
-        var dllPath = Path.Combine(submissionsDirectory, assemblyName + ".dll");
-        File.WriteAllBytes(dllPath, peImage);
-
-        // A cell that declares its own `package X` emits its members (and the
-        // synthesized `<Program>` holding `<Result>$` and the globals) under
-        // that namespace, not under the session default. Track the package the
-        // members were actually emitted under so the echo read below and the
-        // chain's SubmissionReference stay truthful (Phase 3d follow-up to the
-        // 3c note "a package-declaring cell succeeds silently with no echo").
-        var emittedPackageName = compilation.GlobalScope.Package?.Name ?? packageName;
-
-        // assemblyName is assigned for every submission before emit.
-        var runResult = host.RunSubmission(peImage, assemblyName!);
-        if (runResult.UnhandledException is not null)
-        {
-            // Runtime failure: the submission's declarations are discarded
-            // (the chain stays at the last good submission), but side effects
-            // it already applied to earlier submissions' state persist —
-            // matching the evaluator engine's partial-state behavior.
-            TryDeleteFile(dllPath);
-            var ex = runResult.UnhandledException;
-            var diag = new Diagnostic(default, "GSI002", DiagnosticSeverity.Error, $"Unhandled exception. {ex.GetType().Name}: {ex.Message}");
-            cancellationToken.ThrowIfCancellationRequested();
-            return new Cell(index, text, null, emitResult.Diagnostics.Add(diag), true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
-        }
-
-        var value = host.ReadStaticField(
-            runResult.Assembly,
-            emittedPackageName + "." + SubmissionImports.ProgramTypeName,
-            SubmissionImports.ResultFieldName)
-            ?? runResult.ReturnValue;
-
-        // The only cancellation checkpoint: if the caller interrupted before
-        // this (possibly long-running) submission finished, discard the result
-        // instead of committing it to the transcript or the chain.
-        cancellationToken.ThrowIfCancellationRequested();
-
-        submissions.Insert(0, new SubmissionState(compilation, compilation.GlobalScope, assemblyName, emittedPackageName, dllPath, runResult.Assembly));
-        foreach (var import in compilation.GlobalScope.Imports)
-        {
-            if (!sessionImports.Any(i =>
-                string.Equals(i.Name, import.Name, StringComparison.Ordinal)
-                && string.Equals(i.Target, import.Target, StringComparison.Ordinal)))
+            using var peStream = new MemoryStream();
+            var emitResult = compilation.Emit(peStream, pdbStream: null, refStream: null, assemblyName: assemblyName);
+            var hasError = emitResult.Diagnostics.Any(d => d.IsError) || !emitResult.Success;
+            if (hasError)
             {
-                sessionImports.Add(new ImportSymbol(import.Name, import.Target, declaration: null));
+                cancellationToken.ThrowIfCancellationRequested();
+                return new Cell(index, text, null, emitResult.Diagnostics, true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+            }
+
+            // Flush the PE to the session directory before running: future
+            // submissions' reference resolvers read it from disk.
+            var peImage = peStream.ToArray();
+            dllPath = Path.Combine(submissionsDirectory, assemblyName + ".dll");
+            File.WriteAllBytes(dllPath, peImage);
+
+            // A cell that declares its own `package X` emits its members (and the
+            // synthesized `<Program>` holding `<Result>$` and the globals) under
+            // that namespace, not under the session default. Track the package the
+            // members were actually emitted under so the echo read below and the
+            // chain's SubmissionReference stay truthful (Phase 3d follow-up to the
+            // 3c note "a package-declaring cell succeeds silently with no echo").
+            var emittedPackageName = compilation.GlobalScope.Package?.Name ?? packageName;
+
+            // assemblyName is assigned for every submission before emit.
+            var runResult = host.RunSubmission(peImage, assemblyName!);
+            if (runResult.UnhandledException is not null)
+            {
+                // Runtime failure: the submission's declarations are discarded
+                // (the chain stays at the last good submission), but side effects
+                // it already applied to earlier submissions' state persist —
+                // matching the evaluator engine's partial-state behavior.
+                var ex = runResult.UnhandledException;
+                var diag = new Diagnostic(default, "GSI002", DiagnosticSeverity.Error, $"Unhandled exception. {ex.GetType().Name}: {ex.Message}");
+                cancellationToken.ThrowIfCancellationRequested();
+                return new Cell(index, text, null, emitResult.Diagnostics.Add(diag), true, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+            }
+
+            var value = host.ReadStaticField(
+                runResult.Assembly,
+                emittedPackageName + "." + SubmissionImports.ProgramTypeName,
+                SubmissionImports.ResultFieldName)
+                ?? runResult.ReturnValue;
+
+            // The only cancellation checkpoint: if the caller interrupted before
+            // this (possibly long-running) submission finished, discard the result
+            // instead of committing it to the transcript or the chain.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            submissions.Insert(0, new SubmissionState(compilation, compilation.GlobalScope, assemblyName, emittedPackageName, dllPath, runResult.Assembly));
+            ownershipTransferred = true;
+            foreach (var import in compilation.GlobalScope.Imports)
+            {
+                if (!sessionImports.Any(i =>
+                    string.Equals(i.Name, import.Name, StringComparison.Ordinal)
+                    && string.Equals(i.Target, import.Target, StringComparison.Ordinal)))
+                {
+                    sessionImports.Add(new ImportSymbol(import.Name, import.Target, declaration: null));
+                }
+            }
+
+            return new Cell(index, text, value, emitResult.Diagnostics, false, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+            {
+                if (dllPath is not null)
+                {
+                    TryDeleteFile(dllPath);
+                }
+
+                // Disposing a resolver clears process-wide symbol caches. Keep
+                // failed/cancelled resolvers until this session ends so a live
+                // prior submission never observes a mid-chain cache reset.
+                discardedResolvers.Add(resolver);
             }
         }
-
-        return new Cell(index, text, value, emitResult.Diagnostics, false, stdout?.ToString() ?? string.Empty, stderr?.ToString() ?? string.Empty);
     }
 
-    private void TryDeleteSubmissionFiles()
+    private void ReleaseCompilations()
     {
         foreach (var submission in submissions)
         {
             TryDeleteFile(submission.DllPath);
+            submission.Compilation.References?.Dispose();
         }
+
+        submissions.Clear();
+        foreach (var resolver in discardedResolvers)
+        {
+            resolver.Dispose();
+        }
+
+        discardedResolvers.Clear();
     }
 
     private static void TryDeleteFile(string path)

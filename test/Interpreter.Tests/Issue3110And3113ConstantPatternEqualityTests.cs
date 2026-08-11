@@ -3,7 +3,6 @@
 // </copyright>
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -137,47 +136,13 @@ public class Issue3110And3113ConstantPatternEqualityTests
                 ["/out:" + outputPath, "/target:exe", "/targetframework:net10.0", sourcePath]));
         Assert.True(compileExit == 0, $"emit failed ({compileExit})\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        var assembly = Assembly.Load(File.ReadAllBytes(outputPath));
-        _ = assembly.GetTypes();
+        CollectibleAssembly.Inspect(outputPath, assembly => Assert.NotEmpty(assembly.GetTypes()));
 
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add(outputPath);
-
-        using var process = Process.Start(startInfo);
-        Assert.NotNull(process);
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(30_000);
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            using var killTimeout = new CancellationTokenSource(5_000);
-            try
-            {
-                await process.WaitForExitAsync(killTimeout.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                Assert.Fail("emitted program did not exit after kill");
-            }
-
-            Assert.Fail("emitted program timed out after 30000 ms");
-        }
-
-        var runOut = await stdoutTask;
-        var runErr = await stderrTask;
-        Assert.True(process.ExitCode == 0, $"emitted program failed ({process.ExitCode})\nstdout:\n{runOut}\nstderr:\n{runErr}");
-        return NormalizeValues(runOut);
+        var result = await DotnetProcess.RunAsync(directory, [outputPath]);
+        Assert.True(
+            result.ExitCode == 0,
+            $"emitted program failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
+        return NormalizeValues(result.StandardOutput);
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)

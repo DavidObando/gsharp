@@ -4,6 +4,7 @@
 
 using System;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -31,6 +32,19 @@ public class ReferenceResolverTests
         var resolver = ReferenceResolver.Default();
         Assert.False(resolver.TryResolveType("System.ThisTypeDoesNotExist", out var type));
         Assert.Null(type);
+    }
+
+    [Fact]
+    public void Default_Reuses_TypeNameIndex_WhileHostAssembliesAreUnchanged()
+    {
+        var first = ReferenceResolver.Default();
+        var second = ReferenceResolver.Default();
+        var indexField = typeof(ReferenceResolver).GetField(
+            "typeNameIndex",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(indexField);
+        Assert.Same(indexField.GetValue(first), indexField.GetValue(second));
     }
 
     [Fact]
