@@ -25,6 +25,9 @@ public static class HotReloadAgent
 {
     private static readonly ConcurrentDictionary<string, Lazy<ProjectAgent>> Agents = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> ManifestPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static int assemblyLoadHookInitialized;
 
     /// <summary>
     /// Registers an assembly and its build manifest when launched under
@@ -92,6 +95,8 @@ public static class HotReloadAgent
                 {
                     processGuard.Dispose();
                 }
+
+                DiscoverSiblingManifests(Path.GetDirectoryName(manifestPath) ?? AppContext.BaseDirectory);
             }
             catch
             {
@@ -102,6 +107,49 @@ public static class HotReloadAgent
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             WriteDiagnostic($"GSHR1000: failed to start hot reload: {ex.Message}");
+        }
+    }
+
+    private static void DiscoverSiblingManifests(string directory)
+    {
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(directory, "*.manifest", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    var manifest = HotReloadManifest.Load(path);
+                    ManifestPaths.TryAdd(manifest.AssemblyName, path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+                {
+                    WriteDiagnostic($"GSHR1000: ignored invalid hot-reload manifest '{path}': {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            WriteDiagnostic($"GSHR1000: failed to discover project manifests under '{directory}': {ex.Message}");
+            return;
+        }
+
+        if (Interlocked.Exchange(ref assemblyLoadHookInitialized, 1) == 0)
+        {
+            AppDomain.CurrentDomain.AssemblyLoad += (_, args) => TryStartDiscoveredAssembly(args.LoadedAssembly);
+        }
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            TryStartDiscoveredAssembly(assembly);
+        }
+    }
+
+    private static void TryStartDiscoveredAssembly(Assembly assembly)
+    {
+        var assemblyName = assembly.GetName().Name;
+        if (assemblyName != null && ManifestPaths.TryGetValue(assemblyName, out var manifestPath))
+        {
+            Start(assembly, manifestPath);
         }
     }
 
