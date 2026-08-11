@@ -307,7 +307,7 @@ public sealed partial class CSharpToGSharpTranslator
         private void HoistLoopConditionClause(ExpressionSyntax clause, List<GStatement> into)
         {
             // Any spill hoisted while translating `clause` (issue #1731 — e.g. a
-            // non-trivial pattern scrutinee or range-slice start nested inside the
+            // non-trivial pattern scrutinee nested inside the
             // condition) must land in `into`, which runs at the START of each loop
             // iteration — NOT in the enclosing loop STATEMENT's own prologue (that
             // would evaluate the operand once, before the loop, instead of once
@@ -651,13 +651,33 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType,
             GExpression receiver)
         {
-            string spillName = $"__spill{this.state.SpillCounter++}";
-            var spill = new IdentifierExpression(spillName);
-            var hoist = new LocalDeclarationStatement(
-                BindingKind.Let,
-                spillName,
-                type: null,
-                initializer: receiver);
+            // Issue #3360: only a non-trivial receiver needs spilling. The
+            // scrutinee is read twice below — once by the `is` guard and once by
+            // the narrowing conversion — but a bare local/parameter/`this`/literal
+            // is safe to duplicate, so spilling it only adds a `__spillN` nobody
+            // needs. This mirrors `SpillOperand`'s own `IsTrivialOperand` check,
+            // which this site bypassed by emitting the temp directly.
+            //
+            // The temp is NOT named after the C# binder (as
+            // `HoistLoopConditionClauseCore` does): that name is already taken by
+            // the typed binder local below. Collapsing the two into one smart-cast
+            // local would free the name, but the separate typed local is
+            // deliberate — see this method's summary — so that binder reads do not
+            // depend on flow narrowing surviving an enclosing try/block.
+            GExpression scrutinee = receiver;
+            LocalDeclarationStatement hoist = null;
+            if (!IsTrivialOperand(receiver))
+            {
+                string spillName = $"__spill{this.state.SpillCounter++}";
+                scrutinee = new IdentifierExpression(spillName);
+                hoist = new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    spillName,
+                    type: null,
+                    initializer: receiver);
+            }
+
+            GExpression spill = scrutinee;
             var binder = new LocalDeclarationStatement(BindingKind.Var, localName, targetType);
             var guard = new BinaryExpression(spill, "is", new TypeExpression(targetType));
 
@@ -679,12 +699,15 @@ public sealed partial class CSharpToGSharpTranslator
                     ? this.TranslateIf(elseIf)
                     : this.TranslateStatementAsBlock(ifStatement.Else.Statement);
 
-            return new GStatement[]
+            var statements = new List<GStatement>();
+            if (hoist != null)
             {
-                hoist,
-                binder,
-                new IfStatement(guard, new BlockStatement(thenStatements), elseBranch),
-            };
+                statements.Add(hoist);
+            }
+
+            statements.Add(binder);
+            statements.Add(new IfStatement(guard, new BlockStatement(thenStatements), elseBranch));
+            return statements;
         }
 
         /// <summary>
