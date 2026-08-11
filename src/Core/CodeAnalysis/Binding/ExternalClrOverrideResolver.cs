@@ -17,6 +17,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 internal static class ExternalClrOverrideResolver
 {
+    private enum SourceSlotStatus
+    {
+        Missing,
+        Implemented,
+        AbstractMethod,
+        AbstractAccessor,
+    }
+
+    private enum AccessorKind
+    {
+        Getter,
+        Setter,
+        Add,
+        Remove,
+        Raise,
+    }
+
     internal static MatchResult<MethodInfo> FindMethod(
         StructSymbol derivedType,
         string name,
@@ -893,23 +910,6 @@ internal static class ExternalClrOverrideResolver
         }
 
         return false;
-    }
-
-    private enum SourceSlotStatus
-    {
-        Missing,
-        Implemented,
-        AbstractMethod,
-        AbstractAccessor,
-    }
-
-    private enum AccessorKind
-    {
-        Getter,
-        Setter,
-        Add,
-        Remove,
-        Raise,
     }
 
     internal readonly record struct UnimplementedAbstractMember(
