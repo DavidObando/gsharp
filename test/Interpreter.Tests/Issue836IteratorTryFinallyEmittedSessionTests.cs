@@ -151,6 +151,6 @@ public class Issue836IteratorTryFinallyEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString();
     }
 }
