@@ -285,7 +285,7 @@ public class Issue2375ExpressionTreeMethodTypeArgumentEmitTests
                     }
 
                     func GetLastNav[TRelated]() Expression[Func[TEntity, TRelated]] {
-                        return lastNav as Expression[Func[TEntity, TRelated]]
+                        return (lastNav as Expression[Func[TEntity, TRelated]])!!
                     }
                 }
 

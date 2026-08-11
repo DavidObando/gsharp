@@ -45,7 +45,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             func Main() int32 {
                 let descriptor = Make[int32, IntBox](11)
                 guard let factory = descriptor.Factory else { return 1 }
-                let value = factory() as IntBox
+                let value = (factory() as IntBox)!!
                 Console.WriteLine(value.Value)
                 return value.Value == 11 ? 0 : 2
             }
@@ -77,7 +77,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             func Main() int32 {
                 let descriptor = Maker[int32, IntBox]().Make(22)
                 guard let factory = descriptor.Factory else { return 1 }
-                let value = factory() as IntBox
+                let value = (factory() as IntBox)!!
                 Console.WriteLine(value.Value)
                 return value.Value == 22 ? 0 : 2
             }
@@ -110,7 +110,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             func Main() int32 {
                 let descriptor = Make[int32, IntBox](33)
                 guard let factory = descriptor.Factory else { return 1 }
-                let value = factory() as IntBox
+                let value = (factory() as IntBox)!!
                 Console.WriteLine(value.Value)
                 return value.Value == 33 ? 0 : 2
             }
@@ -139,7 +139,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             }
             let descriptor = Make[int32, IntBox](44)
             let factory = descriptor.Factory!!
-            let value = factory() as IntBox
+            let value = (factory() as IntBox)!!
             Console.WriteLine(value.Value)
             """);
 
@@ -167,7 +167,7 @@ public class Issue2894LambdaBodyGenericClosureTests
                 }
                 let descriptor = Make[int32, IntBox](55)
                 guard let factory = descriptor.Factory else { return 1 }
-                let value = factory() as IntBox
+                let value = (factory() as IntBox)!!
                 Console.WriteLine(value.Value)
                 return value.Value == 55 ? 0 : 2
             }
@@ -229,7 +229,7 @@ public class Issue2894LambdaBodyGenericClosureTests
             func Main() int32 {
                 let descriptor = Make[int32, IntBox](77).GetAwaiter().GetResult()
                 guard let factory = descriptor.Factory else { return 1 }
-                let value = factory() as IntBox
+                let value = (factory() as IntBox)!!
                 Console.WriteLine(value.Value)
                 return value.Value == 77 ? 0 : 2
             }
