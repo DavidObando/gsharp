@@ -23,6 +23,8 @@ public class Issue1260BaseBclCallBinderTests
     [Fact]
     public void BaseCall_IntoBclStream_BindsClean()
     {
+        // Stream has unrelated abstract members; keep this fixture open so
+        // the test isolates base-call binding.
         var source = @"
 import System.IO
 open class MyStream : Stream {

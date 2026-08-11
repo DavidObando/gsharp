@@ -934,12 +934,8 @@ internal static class ExternalClrOverrideResolver
                 && references.CanAccessInternalMembers(method.DeclaringType?.Assembly);
         }
 
-        if (method.IsFamilyAndAssembly)
-        {
-            return accessibility == Accessibility.Protected
-                && references.CanAccessInternalMembers(method.DeclaringType?.Assembly);
-        }
-
+        // FamANDAssem requires private-protected visibility. G# cannot emit
+        // that combined accessibility, and Family would widen the override.
         return false;
     }
 

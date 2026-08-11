@@ -64,9 +64,9 @@ public sealed class Issue3338ImportedAbstractMemberTests
 
             Assert.False(result.Success);
             var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0387");
-            Assert.Contains("Prepare", diagnostic.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("Optional", diagnostic.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("Renderer.Render", diagnostic.Message, StringComparison.Ordinal);
+            Assert.Equal(
+                "'BasicRenderer' does not implement inherited abstract member 'Renderer.Prepare' (issue #987).",
+                diagnostic.Message);
         }
         finally
         {
@@ -101,6 +101,82 @@ public sealed class Issue3338ImportedAbstractMemberTests
 
             Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Message)));
             Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0183" or "GS0387");
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void PrivateProtectedAbstractMethodCannotUseGSharpProtectedOverride()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(
+                directory,
+                "Issue3338.PrivateProtectedLibrary",
+                """
+                using System.Runtime.CompilerServices;
+
+                [assembly: InternalsVisibleTo("Issue3338.PrivateProtectedFriend")]
+
+                namespace Issue3338.PrivateProtectedLibrary;
+
+                public abstract class RestrictedRenderer
+                {
+                    private protected abstract void Prepare();
+
+                    public abstract void Render();
+                }
+                """);
+            AssertMethodAttributes(
+                libraryPath,
+                "RestrictedRenderer",
+                "Prepare",
+                MethodAttributes.FamANDAssem
+                    | MethodAttributes.Abstract
+                    | MethodAttributes.Virtual
+                    | MethodAttributes.NewSlot,
+                MethodAttributes.Final);
+            var external = CompileGSharp(
+                """
+                package Issue3338.PrivateProtectedConsumer
+                import Issue3338.PrivateProtectedLibrary
+
+                public class ExternalRenderer : RestrictedRenderer {
+                  public override func Render() {
+                  }
+                }
+                """,
+                "Issue3338.PrivateProtectedConsumer",
+                libraryPath);
+
+            Assert.False(external.Success);
+            var missing = Assert.Single(external.Diagnostics, d => d.Id == "GS0387");
+            Assert.Equal(
+                "'ExternalRenderer' does not implement inherited abstract member 'RestrictedRenderer.Prepare' (issue #987).",
+                missing.Message);
+
+            var friend = CompileGSharp(
+                """
+                package Issue3338.PrivateProtectedFriend
+                import Issue3338.PrivateProtectedLibrary
+
+                public open class FriendlyRenderer : RestrictedRenderer {
+                  protected override func Prepare() {
+                  }
+
+                  public override func Render() {
+                  }
+                }
+                """,
+                "Issue3338.PrivateProtectedFriend",
+                libraryPath);
+
+            Assert.False(friend.Success);
+            Assert.Contains(friend.Diagnostics, d => d.Id == "GS0183");
         }
         finally
         {
@@ -208,6 +284,18 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 }
                 """,
                 libraryPath);
+            AssertMethodAttributes(
+                libraryPath,
+                "Root`1",
+                "Transform",
+                MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.NewSlot,
+                MethodAttributes.Final);
+            AssertMethodAttributes(
+                shadowLibraryPath,
+                "ShadowMid`1",
+                "Transform",
+                MethodAttributes.Virtual | MethodAttributes.NewSlot,
+                MethodAttributes.Abstract | MethodAttributes.Final);
 
             var complete = CompileGSharp(
                 """
@@ -414,6 +502,47 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 Assert.True((type.Attributes & TypeAttributes.Abstract) != 0);
                 return;
             }
+        }
+
+        Assert.Fail($"Type '{typeName}' was not emitted.");
+    }
+
+    private static void AssertMethodAttributes(
+        string assemblyPath,
+        string typeName,
+        string methodName,
+        MethodAttributes required,
+        MethodAttributes forbidden)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            var type = metadata.GetTypeDefinition(typeHandle);
+            if (metadata.GetString(type.Name) != typeName)
+            {
+                continue;
+            }
+
+            foreach (var methodHandle in type.GetMethods())
+            {
+                var method = metadata.GetMethodDefinition(methodHandle);
+                if (metadata.GetString(method.Name) != methodName)
+                {
+                    continue;
+                }
+
+                Assert.True(
+                    (method.Attributes & required) == required,
+                    $"{typeName}.{methodName} attributes {method.Attributes} do not include {required}.");
+                Assert.True(
+                    (method.Attributes & forbidden) == 0,
+                    $"{typeName}.{methodName} attributes {method.Attributes} include forbidden {forbidden}.");
+                return;
+            }
+
+            Assert.Fail($"Method '{typeName}.{methodName}' was not emitted.");
         }
 
         Assert.Fail($"Type '{typeName}' was not emitted.");
