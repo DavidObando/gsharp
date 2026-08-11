@@ -88,6 +88,9 @@ public sealed class EventSymbol : Symbol
     /// <summary>Gets or sets the imported CLR raise slot overridden by this event.</summary>
     public MethodInfo? ExternalOverriddenRaiseMethod { get; set; }
 
+    /// <summary>Gets or sets the source-declared base event overridden by this event.</summary>
+    public EventSymbol? OverriddenEvent { get; set; }
+
     /// <summary>Gets or sets the imported interface add slot explicitly implemented by this event.</summary>
     public MethodInfo? ExplicitInterfaceAddSlot { get; set; }
 

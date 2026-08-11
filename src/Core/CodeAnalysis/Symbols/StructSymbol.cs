@@ -359,7 +359,8 @@ public sealed class StructSymbol : TypeSymbol
 
             return (!IsData && GetDataCloneAncestor()?.IsAbstract == true)
                 || !GetUnimplementedAbstractMethods().IsDefaultOrEmpty
-                || HasUnimplementedAbstractProperties();
+                || HasUnimplementedAbstractProperties()
+                || ExternalClrOverrideResolver.HasUnimplementedAbstractMembers(this);
         }
     }
 
@@ -2277,6 +2278,10 @@ public sealed class StructSymbol : TypeSymbol
                 BackingField = p.BackingField,
                 GetterSymbol = p.GetterSymbol,
                 SetterSymbol = p.SetterSymbol,
+                OverriddenProperty = p.OverriddenProperty,
+                ExternalOverriddenGetter = p.ExternalOverriddenGetter,
+                ExternalOverriddenSetter = p.ExternalOverriddenSetter,
+                ExternalOverrideContainingType = p.ExternalOverrideContainingType,
                 GetterBodySyntax = p.GetterBodySyntax,
                 SetterBodySyntax = p.SetterBodySyntax,
             };

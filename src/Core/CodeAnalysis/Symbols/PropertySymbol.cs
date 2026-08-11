@@ -155,6 +155,9 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the imported CLR setter slot overridden by this property.</summary>
     public MethodInfo? ExternalOverriddenSetter { get; set; }
 
+    /// <summary>Gets or sets the source-declared base property overridden by this property.</summary>
+    public PropertySymbol? OverriddenProperty { get; set; }
+
     /// <summary>Gets or sets the imported interface getter slot explicitly implemented by this property.</summary>
     public MethodInfo? ExplicitInterfaceGetterSlot { get; set; }
 

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 
@@ -16,6 +17,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 internal static class ExternalClrOverrideResolver
 {
+    private enum SourceSlotStatus
+    {
+        Missing,
+        Implemented,
+        AbstractMethod,
+        AbstractAccessor,
+    }
+
+    private enum AccessorKind
+    {
+        Getter,
+        Setter,
+        Add,
+        Remove,
+        Raise,
+    }
+
     internal static MatchResult<MethodInfo> FindMethod(
         StructSymbol derivedType,
         string name,
@@ -23,7 +41,8 @@ internal static class ExternalClrOverrideResolver
         TypeSymbol returnType,
         RefKind returnRefKind,
         ImmutableArray<TypeParameterSymbol> typeParameters,
-        Accessibility accessibility)
+        Accessibility accessibility,
+        ReferenceResolver references)
     {
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
@@ -32,7 +51,7 @@ internal static class ExternalClrOverrideResolver
         var methodTypeArguments = BuildMethodTypeArguments(typeParameters);
         foreach (var method in EnumerateMethods(reflectionBaseType, name))
         {
-            if (!IsAccessibleOverrideTarget(method, accessibility))
+            if (!IsAccessibleOverrideTarget(method, accessibility, references))
             {
                 continue;
             }
@@ -63,7 +82,9 @@ internal static class ExternalClrOverrideResolver
         TypeSymbol propertyType,
         bool hasGetter,
         bool hasSetter,
-        Accessibility accessibility)
+        Accessibility getterAccessibility,
+        Accessibility setterAccessibility,
+        ReferenceResolver references)
     {
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
@@ -73,18 +94,23 @@ internal static class ExternalClrOverrideResolver
         {
             var getter = property.GetGetMethod(nonPublic: true);
             var setter = property.GetSetMethod(nonPublic: true);
-            var representative = getter ?? setter;
-            if (representative == null || !IsAccessibleOverrideTarget(representative, accessibility))
+            if (getter == null && setter == null)
+            {
+                continue;
+            }
+
+            if ((hasGetter && getter == null)
+                || (hasSetter && setter == null)
+                || (!hasGetter && getter != null)
+                || (!hasSetter && setter != null)
+                || (getter != null && !IsAccessibleOverrideTarget(getter, getterAccessibility, references))
+                || (setter != null && !IsAccessibleOverrideTarget(setter, setterAccessibility, references)))
             {
                 continue;
             }
 
             sawName = true;
-            if ((hasGetter && getter == null)
-                || (hasSetter && setter == null)
-                || (!hasGetter && getter != null)
-                || (!hasSetter && setter != null)
-                || !ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions)
+            if (!ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions)
                 || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter, typeSubstitutions))
             {
                 continue;
@@ -106,7 +132,8 @@ internal static class ExternalClrOverrideResolver
         StructSymbol derivedType,
         string name,
         TypeSymbol handlerType,
-        Accessibility accessibility)
+        Accessibility accessibility,
+        ReferenceResolver references)
     {
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
@@ -116,8 +143,11 @@ internal static class ExternalClrOverrideResolver
         {
             var add = eventInfo.GetAddMethod(nonPublic: true);
             var remove = eventInfo.GetRemoveMethod(nonPublic: true);
-            var representative = add ?? remove;
-            if (representative == null || !IsAccessibleOverrideTarget(representative, accessibility))
+            var raise = eventInfo.GetRaiseMethod(nonPublic: true);
+            if ((add == null && remove == null)
+                || (add != null && !IsAccessibleOverrideTarget(add, accessibility, references))
+                || (remove != null && !IsAccessibleOverrideTarget(remove, accessibility, references))
+                || (raise != null && !IsAccessibleOverrideTarget(raise, accessibility, references)))
             {
                 continue;
             }
@@ -140,7 +170,40 @@ internal static class ExternalClrOverrideResolver
         return new MatchResult<EventInfo>(null, externalBase, sawName, IsSealed: false);
     }
 
-    private static TypeSymbol? FindExternalBaseType(StructSymbol type)
+    internal static ImmutableArray<UnimplementedAbstractMember> GetUnimplementedAbstractMembers(
+        StructSymbol derivedType)
+    {
+        var externalBase = FindDeclaredExternalBaseType(derivedType);
+        var reflectionBaseType = GetReflectionBaseType(externalBase);
+        if (reflectionBaseType == null || !reflectionBaseType.IsAbstract)
+        {
+            return ImmutableArray<UnimplementedAbstractMember>.Empty;
+        }
+
+        var typeSubstitutions = BuildTypeArgumentSubstitutions(externalBase);
+        ImmutableArray<UnimplementedAbstractMember>.Builder? builder = null;
+        foreach (var slot in GetEffectiveAbstractSlots(reflectionBaseType, typeSubstitutions))
+        {
+            var sourceStatus = GetSourceSlotStatus(derivedType, slot);
+            if (sourceStatus == SourceSlotStatus.Implemented)
+            {
+                continue;
+            }
+
+            builder ??= ImmutableArray.CreateBuilder<UnimplementedAbstractMember>();
+            builder.Add(new UnimplementedAbstractMember(
+                GetDeclaringTypeDisplayName(slot.DeclaringType),
+                GetMemberDisplayName(slot),
+                sourceStatus == SourceSlotStatus.AbstractMethod));
+        }
+
+        return builder?.ToImmutable() ?? ImmutableArray<UnimplementedAbstractMember>.Empty;
+    }
+
+    internal static bool HasUnimplementedAbstractMembers(StructSymbol derivedType)
+        => !GetUnimplementedAbstractMembers(derivedType).IsDefaultOrEmpty;
+
+    private static TypeSymbol? FindDeclaredExternalBaseType(StructSymbol type)
     {
         for (var current = type; current != null; current = current.BaseClass)
         {
@@ -148,7 +211,21 @@ internal static class ExternalClrOverrideResolver
             {
                 return current.ImportedBaseType;
             }
+        }
 
+        return null;
+    }
+
+    private static TypeSymbol? FindExternalBaseType(StructSymbol type)
+    {
+        var declaredBase = FindDeclaredExternalBaseType(type);
+        if (declaredBase != null)
+        {
+            return declaredBase;
+        }
+
+        for (var current = type; current != null; current = current.BaseClass)
+        {
             if (current.IsAttributeClass)
             {
                 // Attribute sugar emits System.Attribute rather than the CLR
@@ -158,6 +235,384 @@ internal static class ExternalClrOverrideResolver
         }
 
         return type != null ? TypeSymbol.Object : null;
+    }
+
+    private static ImmutableArray<MethodInfo> GetEffectiveAbstractSlots(
+        Type reflectionBaseType,
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
+    {
+        var hierarchy = new List<Type>();
+        for (var current = reflectionBaseType; current != null; current = current.BaseType)
+        {
+            hierarchy.Add(current);
+        }
+
+        hierarchy.Reverse();
+
+        // Reconstruct effective CLR virtual slots base-first. A newslot method
+        // must not satisfy a same-signature abstract slot hidden beneath it.
+        var slots = new List<MethodInfo>();
+        foreach (var current in hierarchy)
+        {
+            var declaredMethods = ClrTypeUtilities.SafeGetMethods(
+                current,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            foreach (var method in declaredMethods)
+            {
+                if (method.IsStatic || !method.IsVirtual)
+                {
+                    continue;
+                }
+
+                if (ClrTypeUtilities.SafeIsOverride(method))
+                {
+                    var overriddenSlot = -1;
+                    for (var i = slots.Count - 1; i >= 0; i--)
+                    {
+                        if (SlotSignaturesMatch(method, slots[i], typeSubstitutions))
+                        {
+                            overriddenSlot = i;
+                            break;
+                        }
+                    }
+
+                    if (overriddenSlot >= 0)
+                    {
+                        slots[overriddenSlot] = method;
+                        continue;
+                    }
+                }
+
+                slots.Add(method);
+            }
+        }
+
+        return slots.Where(method => method.IsAbstract).ToImmutableArray();
+    }
+
+    private static bool SlotSignaturesMatch(
+        MethodInfo derived,
+        MethodInfo baseMethod,
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
+    {
+        derived = GetOpenDeclaringMethod(derived);
+        baseMethod = GetOpenDeclaringMethod(baseMethod);
+
+        if (!string.Equals(derived.Name, baseMethod.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var derivedMethodArguments = derived.GetGenericArguments();
+        var baseMethodArguments = baseMethod.GetGenericArguments();
+        if (derivedMethodArguments.Length != baseMethodArguments.Length)
+        {
+            return false;
+        }
+
+        var derivedParameters = derived.GetParameters();
+        var baseParameters = baseMethod.GetParameters();
+        if (derivedParameters.Length != baseParameters.Length)
+        {
+            return false;
+        }
+
+        var canonicalMethodArguments = BuildCanonicalMethodTypeArguments(derivedMethodArguments.Length);
+        var derivedSubstitution = FindTypeArgumentSubstitution(derived.DeclaringType, typeSubstitutions);
+        var baseSubstitution = FindTypeArgumentSubstitution(baseMethod.DeclaringType, typeSubstitutions);
+        for (var i = 0; i < derivedParameters.Length; i++)
+        {
+            var derivedType = MemberLookup.MapOpenClrTypeToSymbolic(
+                derivedParameters[i].ParameterType,
+                derivedSubstitution.OpenDefinition,
+                derivedSubstitution.TypeArguments,
+                derived,
+                canonicalMethodArguments);
+            var baseType = MemberLookup.MapOpenClrTypeToSymbolic(
+                baseParameters[i].ParameterType,
+                baseSubstitution.OpenDefinition,
+                baseSubstitution.TypeArguments,
+                baseMethod,
+                canonicalMethodArguments);
+            if (!DeclarationBinder.TypeSignaturesEquivalent(derivedType, baseType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static MethodInfo GetOpenDeclaringMethod(MethodInfo method)
+    {
+        var declaringType = method.DeclaringType;
+        if (declaringType is not { IsGenericType: true, IsGenericTypeDefinition: false })
+        {
+            return method;
+        }
+
+        try
+        {
+            var openDefinition = declaringType.GetGenericTypeDefinition();
+            foreach (var candidate in ClrTypeUtilities.SafeGetMethods(
+                openDefinition,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            {
+                if (candidate.MetadataToken == method.MetadataToken && candidate.Module == method.Module)
+                {
+                    return candidate;
+                }
+            }
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+        }
+
+        return method;
+    }
+
+    private static ImmutableArray<TypeSymbol?> BuildCanonicalMethodTypeArguments(int arity)
+    {
+        if (arity == 0)
+        {
+            return default;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol?>(arity);
+        for (var i = 0; i < arity; i++)
+        {
+            builder.Add(new TypeParameterSymbol(
+                $"T{i}",
+                i,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None)
+            {
+                IsMethodTypeParameter = true,
+            });
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    private static TypeArgumentSubstitution FindTypeArgumentSubstitution(
+        Type? declaringType,
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
+    {
+        var declaringDefinition = GetGenericDefinition(declaringType);
+        if (declaringDefinition == null)
+        {
+            return default;
+        }
+
+        foreach (var substitution in typeSubstitutions)
+        {
+            if (ClrTypeUtilities.AreSame(
+                GetGenericDefinition(substitution.OpenDefinition),
+                declaringDefinition))
+            {
+                return substitution;
+            }
+        }
+
+        return default;
+    }
+
+    private static Type? GetGenericDefinition(Type? type)
+        => type?.IsGenericType == true
+            ? type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition()
+            : type;
+
+    private static SourceSlotStatus GetSourceSlotStatus(StructSymbol derivedType, MethodInfo slot)
+    {
+        for (var current = derivedType; current != null; current = current.BaseClass)
+        {
+            foreach (var method in current.Methods)
+            {
+                if (TargetsExternalSlot(method, slot))
+                {
+                    return method.IsAbstract
+                        ? SourceSlotStatus.AbstractMethod
+                        : SourceSlotStatus.Implemented;
+                }
+            }
+
+            foreach (var property in current.Properties)
+            {
+                if (TryGetPropertyAccessorKind(property, slot, out var accessorKind))
+                {
+                    return IsPropertyAccessorImplemented(property, accessorKind)
+                        ? SourceSlotStatus.Implemented
+                        : SourceSlotStatus.AbstractAccessor;
+                }
+            }
+
+            foreach (var eventSymbol in current.Events)
+            {
+                if (TryGetEventAccessorKind(eventSymbol, slot, out var accessorKind))
+                {
+                    return IsEventAccessorImplemented(eventSymbol, accessorKind)
+                        ? SourceSlotStatus.Implemented
+                        : SourceSlotStatus.AbstractAccessor;
+                }
+            }
+        }
+
+        return SourceSlotStatus.Missing;
+    }
+
+    private static bool TargetsExternalSlot(FunctionSymbol method, MethodInfo slot)
+    {
+        for (var current = method; current != null; current = current.OverriddenMethod)
+        {
+            if (SameMethod(current.ExternalOverriddenMethod, slot))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPropertyAccessorKind(
+        PropertySymbol property,
+        MethodInfo slot,
+        out AccessorKind accessorKind)
+    {
+        for (var current = property; current != null; current = current.OverriddenProperty)
+        {
+            if (SameMethod(current.ExternalOverriddenGetter, slot))
+            {
+                accessorKind = AccessorKind.Getter;
+                return true;
+            }
+
+            if (SameMethod(current.ExternalOverriddenSetter, slot))
+            {
+                accessorKind = AccessorKind.Setter;
+                return true;
+            }
+        }
+
+        accessorKind = default;
+        return false;
+    }
+
+    private static bool IsPropertyAccessorImplemented(
+        PropertySymbol property,
+        AccessorKind accessorKind)
+        => accessorKind switch
+        {
+            AccessorKind.Getter => property.HasGetter
+                && (property.IsAutoProperty
+                    || property.GetterBodySyntax != null
+                    || property.GetterSymbol is { IsAbstract: false }),
+            AccessorKind.Setter => property.HasSetter
+                && (property.IsAutoProperty
+                    || property.SetterBodySyntax != null
+                    || property.SetterSymbol is { IsAbstract: false }),
+            _ => false,
+        };
+
+    private static bool TryGetEventAccessorKind(
+        EventSymbol eventSymbol,
+        MethodInfo slot,
+        out AccessorKind accessorKind)
+    {
+        for (var current = eventSymbol; current != null; current = current.OverriddenEvent)
+        {
+            if (SameMethod(current.ExternalOverriddenAddMethod, slot))
+            {
+                accessorKind = AccessorKind.Add;
+                return true;
+            }
+
+            if (SameMethod(current.ExternalOverriddenRemoveMethod, slot))
+            {
+                accessorKind = AccessorKind.Remove;
+                return true;
+            }
+
+            if (SameMethod(current.ExternalOverriddenRaiseMethod, slot))
+            {
+                accessorKind = AccessorKind.Raise;
+                return true;
+            }
+        }
+
+        accessorKind = default;
+        return false;
+    }
+
+    private static bool IsEventAccessorImplemented(
+        EventSymbol eventSymbol,
+        AccessorKind accessorKind)
+        => accessorKind switch
+        {
+            AccessorKind.Add => eventSymbol.IsFieldLike || eventSymbol.AddBodySyntax != null,
+            AccessorKind.Remove => eventSymbol.IsFieldLike || eventSymbol.RemoveBodySyntax != null,
+            AccessorKind.Raise => eventSymbol.RaiseBodySyntax != null,
+            _ => false,
+        };
+
+    private static bool SameMethod(MethodInfo? left, MethodInfo right)
+    {
+        if (left == null)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        try
+        {
+            return left.MetadataToken == right.MetadataToken
+                && ClrTypeUtilities.AreSame(left.DeclaringType, right.DeclaringType);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string GetDeclaringTypeDisplayName(Type? declaringType)
+    {
+        var name = declaringType?.Name ?? "?";
+        var arityMarker = name.IndexOf('`');
+        return arityMarker >= 0 ? name[..arityMarker] : name;
+    }
+
+    private static string GetMemberDisplayName(MethodInfo slot)
+    {
+        var name = slot.Name;
+        if (name.StartsWith("get_", StringComparison.Ordinal))
+        {
+            return name[4..] + ".get";
+        }
+
+        if (name.StartsWith("set_", StringComparison.Ordinal))
+        {
+            return name[4..] + ".set";
+        }
+
+        if (name.StartsWith("add_", StringComparison.Ordinal))
+        {
+            return name[4..] + ".add";
+        }
+
+        if (name.StartsWith("remove_", StringComparison.Ordinal))
+        {
+            return name[7..] + ".remove";
+        }
+
+        if (name.StartsWith("raise_", StringComparison.Ordinal))
+        {
+            return name[6..] + ".raise";
+        }
+
+        return name;
     }
 
     private static Type? GetReflectionBaseType(TypeSymbol? importedBase)
@@ -458,7 +913,10 @@ internal static class ExternalClrOverrideResolver
         return false;
     }
 
-    private static bool IsAccessibleOverrideTarget(MethodInfo method, Accessibility accessibility)
+    private static bool IsAccessibleOverrideTarget(
+        MethodInfo method,
+        Accessibility accessibility,
+        ReferenceResolver references)
     {
         if (method.IsPublic)
         {
@@ -470,8 +928,21 @@ internal static class ExternalClrOverrideResolver
             return accessibility == Accessibility.Protected;
         }
 
+        if (method.IsAssembly)
+        {
+            return accessibility == Accessibility.Internal
+                && references.CanAccessInternalMembers(method.DeclaringType?.Assembly);
+        }
+
+        // FamANDAssem requires private-protected visibility. G# cannot emit
+        // that combined accessibility, and Family would widen the override.
         return false;
     }
+
+    internal readonly record struct UnimplementedAbstractMember(
+        string DeclaringTypeName,
+        string MemberName,
+        bool ReportedBySourceAbstractMethod);
 
     internal readonly record struct MatchResult<T>(
         T? Member,
