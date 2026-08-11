@@ -48,6 +48,10 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
     [Required]
     public string? UpdateDirectory { get; set; }
 
+    /// <summary>Gets or sets the runtime-side hot-reload agent assembly path.</summary>
+    [Required]
+    public string? RuntimeAssemblyPath { get; set; }
+
     /// <summary>Gets or sets the project's intermediate directory.</summary>
     [Required]
     public string? IntermediateDirectory { get; set; }
@@ -82,6 +86,9 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
             var manifestPath = GetFullPath(Require(this.ManifestPath, nameof(this.ManifestPath)), projectDirectory);
             var bootstrapPath = GetFullPath(Require(this.BootstrapPath, nameof(this.BootstrapPath)), projectDirectory);
             var updateDirectory = GetFullPath(Require(this.UpdateDirectory, nameof(this.UpdateDirectory)), projectDirectory);
+            var runtimeAssemblyPath = GetFullPath(
+                Require(this.RuntimeAssemblyPath, nameof(this.RuntimeAssemblyPath)),
+                projectDirectory);
             var intermediateDirectory = GetFullPath(Require(this.IntermediateDirectory, nameof(this.IntermediateDirectory)), projectDirectory);
             var outputDirectory = GetFullPath(Require(this.OutputDirectory, nameof(this.OutputDirectory)), projectDirectory);
 
@@ -131,6 +138,7 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
 
             WriteIfChanged(manifestPath, manifest.ToString());
             WriteIfChanged(bootstrapPath, bootstrap);
+            CopyRuntime(runtimeAssemblyPath, outputDirectory);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -218,5 +226,18 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
         }
 
         File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    private static void CopyRuntime(string sourcePath, string outputDirectory)
+    {
+        Directory.CreateDirectory(outputDirectory);
+        var destinationPath = Path.Combine(outputDirectory, Path.GetFileName(sourcePath));
+        if (File.Exists(destinationPath) &&
+            string.Equals(ComputeHash(sourcePath), ComputeHash(destinationPath), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        File.Copy(sourcePath, destinationPath, overwrite: true);
     }
 }

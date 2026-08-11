@@ -27,8 +27,11 @@ public class HotReloadArtifactsTaskTests
             var source = Path.Combine(directory, "Program.gs");
             var manifest = Path.Combine(directory, "obj", "App$Debug.manifest");
             var bootstrap = Path.Combine(directory, "obj", "Bootstrap.g.gs");
+            var runtime = Path.Combine(directory, "tools", "Gsharp.HotReload.Runtime.dll");
             File.WriteAllText(project, "<Project />");
             File.WriteAllText(source, "package App");
+            Directory.CreateDirectory(Path.Combine(directory, "tools"));
+            File.WriteAllText(runtime, "runtime");
 
             var task = new WriteGsharpHotReloadArtifactsTask
             {
@@ -39,6 +42,7 @@ public class HotReloadArtifactsTaskTests
                 ManifestPath = manifest,
                 BootstrapPath = bootstrap,
                 UpdateDirectory = Path.Combine(directory, "obj", "updates"),
+                RuntimeAssemblyPath = runtime,
                 IntermediateDirectory = Path.Combine(directory, "obj"),
                 OutputDirectory = Path.Combine(directory, "bin"),
                 WatchFiles = new[] { new TaskItem(source) },
@@ -56,6 +60,9 @@ public class HotReloadArtifactsTaskTests
             Assert.Contains(manifestLines, line => line.StartsWith("project\t", StringComparison.Ordinal));
             Assert.Contains(manifestLines, line => line.StartsWith("watch\t", StringComparison.Ordinal));
             Assert.DoesNotContain(manifestLines, line => line.EndsWith("\tmissing", StringComparison.Ordinal));
+            Assert.Equal(
+                "runtime",
+                File.ReadAllText(Path.Combine(directory, "bin", "Gsharp.HotReload.Runtime.dll")));
         }
         finally
         {

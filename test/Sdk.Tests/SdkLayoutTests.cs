@@ -185,13 +185,9 @@ public class SdkLayoutTests
             hotReloadBaseline.Elements(MsbuildNs + "Copy"),
             copy => (string)copy.Attribute("DestinationFiles") == "$(TargetDir)Gsharp.HotReload.Runtime.dll");
 
-        var copyHotReloadRuntime = doc.Descendants(MsbuildNs + "Target")
-            .Single(t => (string)t.Attribute("Name") == "_GsharpCopyHotReloadRuntime");
-        var copyHotReloadRuntimeTask = copyHotReloadRuntime.Element(MsbuildNs + "Copy");
-        Assert.NotNull(copyHotReloadRuntimeTask);
-        Assert.Equal(
-            "$(TargetDir)Gsharp.HotReload.Runtime.dll",
-            (string)copyHotReloadRuntimeTask.Attribute("DestinationFiles"));
+        Assert.Contains(
+            doc.Descendants(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"),
+            task => (string)task.Attribute("RuntimeAssemblyPath") == "$(GsharpHotReloadRuntimeAssemblyFullPath)");
 
         var hotReloadEnabled = doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single();
         Assert.Contains(

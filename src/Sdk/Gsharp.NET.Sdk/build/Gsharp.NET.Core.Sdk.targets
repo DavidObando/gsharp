@@ -73,9 +73,6 @@
                          DotNetWatchBuild=false;
                          GsharpEnableHotReload=true;
                          BuildProjectReferences=false" />
-    <Copy SourceFiles="$(GsharpHotReloadRuntimeAssemblyFullPath)"
-          DestinationFiles="$(TargetDir)Gsharp.HotReload.Runtime.dll"
-          SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="_GsharpPrepareHotReload"
@@ -93,6 +90,7 @@
         ManifestPath="$(GsharpHotReloadManifestPath)"
         BootstrapPath="$(GsharpHotReloadBootstrapPath)"
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
@@ -118,20 +116,10 @@
         ManifestPath="$(GsharpHotReloadManifestPath)"
         BootstrapPath="$(GsharpHotReloadBootstrapPath)"
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
+        RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
-  </Target>
-
-  <Target Name="_GsharpCopyHotReloadRuntime"
-          AfterTargets="CopyFilesToOutputDirectory"
-          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
-    <Copy SourceFiles="$(GsharpHotReloadRuntimeAssemblyFullPath)"
-          DestinationFiles="$(TargetDir)Gsharp.HotReload.Runtime.dll"
-          SkipUnchangedFiles="true" />
-    <ItemGroup>
-      <FileWrites Include="$(TargetDir)Gsharp.HotReload.Runtime.dll" />
-    </ItemGroup>
   </Target>
 
   <!-- Phase 7.7b / Issue #855: set DocumentationFile here (in targets) where
