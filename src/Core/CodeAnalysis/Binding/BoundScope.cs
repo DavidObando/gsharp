@@ -719,15 +719,12 @@ public sealed class BoundScope
     }
 
     /// <summary>
-    /// ADR-0134 (extended): enumerates the referenced-assembly CLR types brought
-    /// into unqualified static scope by a <em>type</em> import — the imported-CLR
-    /// analogue of <see cref="BinderContext.GetStaticImportTypes"/> (which only
-    /// covers same-compilation source classes). A C# <c>using static System.Math</c>
-    /// translates to <c>import System.Math</c>; when the dotted import target
-    /// itself resolves to a CLR type (rather than a namespace), that type's
-    /// <c>public static</c> members become available unqualified, mirroring
-    /// C#'s <c>using static</c>. Implicit (compiler-synthesized) and alias
-    /// imports never hoist, matching the source-class rule.
+    /// Issue #3334 / ADR-0134: enumerates referenced-assembly CLR types brought
+    /// into unqualified static scope by an import. A type import resolves the
+    /// target itself; a package import resolves the package's synthetic
+    /// <c>&lt;Program&gt;</c> type, which hosts public package-level functions
+    /// and globals. Implicit (compiler-synthesized) and alias imports never
+    /// hoist.
     /// </summary>
     /// <returns>The distinct imported static-import CLR types, in import order.</returns>
     public IEnumerable<System.Type> EnumerateStaticImportClrTypes()
@@ -745,7 +742,14 @@ public sealed class BoundScope
                 continue;
             }
 
-            if (References.TryResolveType(import.Target, out var type) && type != null)
+            if (!References.TryResolveType(import.Target, out var type))
+            {
+                References.TryResolveType(
+                    import.Target + "." + SubmissionImports.ProgramTypeName,
+                    out type);
+            }
+
+            if (type != null)
             {
                 seen ??= new System.Collections.Generic.HashSet<System.Type>();
                 if (seen.Add(type))
