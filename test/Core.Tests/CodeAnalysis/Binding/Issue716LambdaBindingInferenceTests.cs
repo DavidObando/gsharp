@@ -189,8 +189,7 @@ let f = (n int32) -> if n == 0 { 0 } else { f(n - 1) }
     public void AsyncLambda_Inference_WrapsReturnInTask()
     {
         // The binding's function-type wraps the body's int32 in Task<int32>.
-        // We don't await it (interpreter has well-known limitations on
-        // task delegate marshalling) — we verify the assignment binds
+        // We do not await it: this test verifies that the assignment binds
         // without errors and the binding is invocable.
         var diags = GetDiagnostics(@"
 let asyncDouble = async (n int32) -> n * 2
@@ -204,10 +203,9 @@ let _ = asyncDouble(5)
     public void BlockBody_MultipleReturns_InferCommonType()
     {
         // Two explicit return statements with int32 expressions yield an
-        // int32 common type. We use straight-line returns so the
-        // interpreter does not need control-flow lowering of nested
-        // statements (the function-literal pipeline supports straight-
-        // line bodies). Only the first return is reached at runtime.
+        // int32 common type. Straight-line returns keep this test focused on
+        // inference rather than nested control flow. Only the first return is
+        // reached at runtime.
         var result = Evaluate(@"
 let pick = (n int32) -> {
     return n

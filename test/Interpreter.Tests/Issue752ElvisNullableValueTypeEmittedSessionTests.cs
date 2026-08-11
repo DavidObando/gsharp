@@ -94,7 +94,7 @@ public class Issue752ElvisNullableValueTypeEmittedSessionTests
     }
 
     [Fact]
-    public void Elvis_NullableInt_ReceiverOfInstanceCall_Interpreted()
+    public void Elvis_NullableInt_ReceiverOfInstanceCall_RunsInEmittedSession()
     {
         var source = """
             let v int32? = 42

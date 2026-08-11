@@ -121,9 +121,8 @@ public class Issue737NilGuardElseBranchEmittedSessionTests
     [Fact]
     public void IfElse_BothBranchesReturn_Interface_ElseReadsNarrowed()
     {
-        // A G#-declared interface (not a CLR import) so this also runs
-        // under the interpreter, whose CLR-interface implementation
-        // surface differs from the emitter's.
+        // A G#-declared interface (not a CLR import) keeps this case focused
+        // on emitted flow narrowing over source-defined interface members.
         var source = """
             interface IGreeter {
                 func Greet() string;

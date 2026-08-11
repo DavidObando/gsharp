@@ -33,7 +33,7 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
             Console.WriteLine(c.Tag())
             """;
         var output = RunSubmission(source);
-        Assert.Contains("AB", output);
+        Assert.Equal("AB" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -62,7 +62,9 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
         var output = RunSubmission(source);
         // 1 + 2 * 10 == 21 — same answer all three ways (virtual dispatch
         // routes back to C.Value through the v-table).
-        Assert.Contains("21", output);
+        Assert.Equal(
+            "21" + Environment.NewLine + "21" + Environment.NewLine + "21" + Environment.NewLine,
+            output);
     }
 
     [Fact]
@@ -81,7 +83,7 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
             Console.WriteLine(l.Hello())
             """;
         var output = RunSubmission(source);
-        Assert.Contains("hi!", output);
+        Assert.Equal("hi!" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -89,8 +91,8 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
     {
         // ADR-0091: if `base[IGreeter].Hello()` re-dispatched through the
         // v-table it would re-enter `Loud.Hello` and recurse forever.
-        // This test pins that the non-virtual semantics hold on the
-        // interpreter path.
+        // This test pins that the non-virtual semantics hold in the emitted
+        // session.
         var source = """
             interface IGreeter {
                 func Hello() string { return "default" }
@@ -102,7 +104,7 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
             Console.WriteLine(l.Hello())
             """;
         var output = RunSubmission(source);
-        Assert.Contains("default", output);
+        Assert.Equal("default" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -120,7 +122,7 @@ public class Issue757BaseInterfaceCallEmittedSessionTests
             Console.WriteLine(c.Greet())
             """;
         var output = RunSubmission(source);
-        Assert.Contains("hi!", output);
+        Assert.Equal("hi!" + Environment.NewLine, output);
     }
 
     private static string RunSubmission(string text)

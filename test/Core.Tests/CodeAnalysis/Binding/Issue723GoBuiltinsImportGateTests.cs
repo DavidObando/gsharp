@@ -274,8 +274,8 @@ let n = len(xs)
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // End-to-end emit / interpreter coverage: each built-in evaluates
-    // cleanly under the import.
+    // End-to-end emitted-oracle coverage: each built-in executes cleanly
+    // under the import.
     // ─────────────────────────────────────────────────────────────────────
 
     [Fact]

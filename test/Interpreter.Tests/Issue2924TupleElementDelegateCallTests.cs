@@ -9,8 +9,8 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Interpreter parity for issue #2924's shared numeric tuple-selector syntax
-/// and binding behavior.
+/// Issue #2924 emitted-session coverage for shared numeric tuple-selector
+/// syntax, binding, and delegate invocation behavior.
 /// </summary>
 public class Issue2924TupleElementDelegateCallTests
 {

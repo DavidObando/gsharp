@@ -29,9 +29,9 @@ public class Issue2988DeinitInterpreterTests
     /// </summary>
     /// <param name="driver">The driver under test.</param>
     [Theory]
-    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation)]
+    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.BareCompiler)]
     [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.CompilerEmission)]
-    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.Interpreter)]
+    [InlineData(Issue3010EntryPointDriverMatrixTests.Driver.GsiScript)]
     public void InheritedDeinitializersRunOnEveryDriver(
         Issue3010EntryPointDriverMatrixTests.Driver driver)
     {
@@ -72,7 +72,7 @@ public class Issue2988DeinitInterpreterTests
             driver);
         Assert.Equal(0, result.ExitCode);
 
-        var expectedOutput = driver == Issue3010EntryPointDriverMatrixTests.Driver.CompilerEvaluation
+        var expectedOutput = driver == Issue3010EntryPointDriverMatrixTests.Driver.BareCompiler
             ? EmittedOutput + "Success.\n"
             : EmittedOutput;
         Assert.Equal(expectedOutput, result.StandardOutput);

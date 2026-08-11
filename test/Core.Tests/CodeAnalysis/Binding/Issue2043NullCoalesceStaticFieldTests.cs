@@ -75,11 +75,9 @@ C.Field
     [Fact]
     public void StaticField_NullCoalesceAssign_DoesNotFireWhenAlreadySet()
     {
-        // The static field is set via a plain assignment first (rather than
-        // relying on its declaration initializer, which the tree-walking
-        // Evaluator does not eagerly run — a separate, pre-existing
-        // limitation unrelated to this issue) so the ??= is exercised against
-        // a genuinely non-nil static field.
+        // Set the static field through a plain assignment first so this test
+        // isolates ??= behavior from declaration-initializer behavior and
+        // exercises a genuinely non-nil field.
         var source = @"
 class C {
   shared {

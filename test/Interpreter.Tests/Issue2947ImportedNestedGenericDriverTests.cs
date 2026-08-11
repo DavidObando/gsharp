@@ -98,7 +98,7 @@ public class Issue2947ImportedNestedGenericDriverTests
 
             var reportedPath = WriteSource(directory, "reported.gs", ReportedSource);
             var bare = RunCompiler("/nowarn:GS9100", "/r:" + libraryPath, reportedPath);
-            AssertSucceeded(bare, "reported bare evaluation");
+            AssertSucceeded(bare, "reported bare gsc");
             Assert.Equal("Success.\n", Normalize(bare.StandardOutput));
             Assert.Equal(string.Empty, bare.StandardError);
 
@@ -114,10 +114,10 @@ public class Issue2947ImportedNestedGenericDriverTests
             Assert.Equal("5\n", RunAssembly(directory, reportedAssemblyPath));
 
             _ = Assembly.LoadFrom(libraryPath);
-            var interpreted = RunInterpreter(executedReportedPath);
-            AssertSucceeded(interpreted, "reported interpreter");
-            Assert.Equal("5\n", Normalize(interpreted.StandardOutput));
-            Assert.Equal(string.Empty, interpreted.StandardError);
+            var gsi = RunGsi(executedReportedPath);
+            AssertSucceeded(gsi, "reported gsi");
+            Assert.Equal("5\n", Normalize(gsi.StandardOutput));
+            Assert.Equal(string.Empty, gsi.StandardError);
 
             var diagnosticPath = WriteSource(directory, "diagnostic.gs", DiagnosticSource);
             var bareDiagnostics = RunCompiler("/nowarn:GS9100", "/r:" + libraryPath, diagnosticPath);
@@ -127,17 +127,17 @@ public class Issue2947ImportedNestedGenericDriverTests
                 "/out:" + Path.Combine(directory, "diagnostic.dll"),
                 "/r:" + libraryPath,
                 diagnosticPath);
-            var interpreterDiagnostics = RunInterpreter(diagnosticPath);
+            var gsiDiagnostics = RunGsi(diagnosticPath);
 
             Assert.Equal(1, bareDiagnostics.ExitCode);
             Assert.Equal(1, emitDiagnostics.ExitCode);
-            Assert.Equal(1, interpreterDiagnostics.ExitCode);
+            Assert.Equal(1, gsiDiagnostics.ExitCode);
             Assert.Equal(ExpectedDiagnostics, ExtractDiagnosticMessages(bareDiagnostics.Combined));
             Assert.Equal(ExpectedDiagnostics, ExtractDiagnosticMessages(emitDiagnostics.Combined));
-            Assert.Equal(ExpectedDiagnostics, ExtractDiagnosticMessages(interpreterDiagnostics.Combined));
+            Assert.Equal(ExpectedDiagnostics, ExtractDiagnosticMessages(gsiDiagnostics.Combined));
             Assert.DoesNotContain("object", bareDiagnostics.Combined, StringComparison.Ordinal);
             Assert.DoesNotContain("object", emitDiagnostics.Combined, StringComparison.Ordinal);
-            Assert.DoesNotContain("object", interpreterDiagnostics.Combined, StringComparison.Ordinal);
+            Assert.DoesNotContain("object", gsiDiagnostics.Combined, StringComparison.Ordinal);
 
             var fullMatrix = CreateMatrixSource(includeReportedCells: true);
             Assert.Equal(36, fullMatrix.SiteCount);
@@ -262,7 +262,7 @@ public class Issue2947ImportedNestedGenericDriverTests
     private static DriverResult RunCompiler(params string[] arguments)
         => Capture(() => GSharp.Compiler.Program.Main(arguments));
 
-    private static DriverResult RunInterpreter(string sourcePath)
+    private static DriverResult RunGsi(string sourcePath)
         => Capture(() => GSharp.Repl.Program.Main(new[] { sourcePath }));
 
     private static DriverResult Capture(Func<int> action)

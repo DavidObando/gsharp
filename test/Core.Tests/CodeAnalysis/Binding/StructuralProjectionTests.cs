@@ -440,9 +440,9 @@ let box Box[int32] = source
     [Fact]
     public void ConstructedGenericTargetsPreserveDeclaredFieldInitializers()
     {
-        // #3219: the struct target's private declared initializer now runs
-        // through the synthesized parameterless ctor (in-type) instead of a
-        // call-site stfld, so the emitted oracle matches the evaluator.
+        // #3219: the emitted oracle now runs the struct target's private
+        // declared initializer through the synthesized parameterless ctor
+        // (in-type) instead of a call-site stfld.
         var classResult = Evaluate(@"
 class Source { var Value int32 }
 class Box[T] {

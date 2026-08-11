@@ -91,11 +91,11 @@ public class Issue3110And3113ConstantPatternEqualityTests
         {
             var bare = RunBareGsc(source, CreateEmptyDirectory(root, "bare"));
             var emitted = await RunEmittedAsync(source, CreateEmptyDirectory(root, "emit"));
-            var interpreted = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
+            var gsi = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
 
             Assert.True(
-                expected == bare && expected == emitted && expected == interpreted,
-                $"driver mismatch\nexpected:\n{expected}\nbare gsc:\n{bare}\nemitted:\n{emitted}\ngsi:\n{interpreted}");
+                expected == bare && expected == emitted && expected == gsi,
+                $"driver mismatch\nexpected:\n{expected}\nbare gsc:\n{bare}\nemitted:\n{emitted}\ngsi:\n{gsi}");
         }
         finally
         {

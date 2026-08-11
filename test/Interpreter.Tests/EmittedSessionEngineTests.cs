@@ -218,8 +218,8 @@ public sealed class EmittedSessionEngineTests : IDisposable
         Assert.False(engine.Evaluate("var state = \"initial\"").HasError);
 
         // The submission mutates earlier state, then throws: the mutation
-        // persists (it already executed) but the submission's own
-        // declarations are discarded — matching the evaluator engine.
+        // persists because it already executed, while the failed submission's
+        // own declarations are discarded.
         var throwing = engine.Evaluate("""
             state = "mutated"
             var localOnly = 3

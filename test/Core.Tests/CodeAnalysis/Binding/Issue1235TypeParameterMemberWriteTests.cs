@@ -74,11 +74,8 @@ WriteF[Base](Base())
         // Mirrors Issue1068InterfacePropertyAccessTests.GetSetProperty_WriteThroughInterfaceReference_Binds:
         // writing through a non-generic interface reference (whether a plain
         // interface-typed variable or, as here, an interface-constrained type
-        // parameter) is binder-verified but not evaluated end-to-end by the
-        // tree-walking interpreter — the interpreter's property-assignment
-        // evaluator only executes a concrete setter body, not a virtual
-        // dispatch through an abstract interface accessor. The real setter
-        // runs through the compiled backend at runtime.
+        // parameter) is binder-verified here. The real setter dispatch is
+        // covered through the compiled backend at runtime.
         var source = @"
 interface IHasName { prop Name int32 { get; set; } }
 open class Named : IHasName { prop Name int32 { get; set; } }

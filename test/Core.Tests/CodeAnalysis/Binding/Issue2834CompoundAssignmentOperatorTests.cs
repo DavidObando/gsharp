@@ -222,9 +222,8 @@ h!!.Inner = Bag()
 h!!.Inner += 3
 0
 ";
-        // Binding-level assertion only: the interpreter has no in-place
-        // instance-field mutation path for this shape. Runtime behaviour is
-        // covered end-to-end over real IL in Compiler.Tests
+        // Binding-level assertion only. Runtime behaviour is covered
+        // end-to-end over real IL in Compiler.Tests
         // (Issue2834CompoundAssignmentOperatorEmitTests).
         var result = Evaluate(source);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0129");

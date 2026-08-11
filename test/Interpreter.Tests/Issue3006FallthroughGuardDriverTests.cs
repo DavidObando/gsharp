@@ -243,21 +243,21 @@ public class Issue3006FallthroughGuardDriverTests
         var root = CreateEmptyProbeRoot(name);
         try
         {
-            var compilerEvaluation = RunSourceDriver(
-                CreateEmptyDirectory(root, "gsc-eval"),
+            var bareCompiler = RunSourceDriver(
+                CreateEmptyDirectory(root, "bare-gsc"),
                 source,
                 Program.Main);
-            Assert.Equal(ExpectedUnhandledExceptionExitCode, compilerEvaluation.ExitCode);
-            Assert.Equal(string.Empty, compilerEvaluation.StandardOutput);
-            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", compilerEvaluation.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, bareCompiler.ExitCode);
+            Assert.Equal(string.Empty, bareCompiler.StandardOutput);
+            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", bareCompiler.StandardError);
 
-            var interpreter = RunSourceDriver(
+            var gsi = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(ExpectedUnhandledExceptionExitCode, interpreter.ExitCode);
-            Assert.Equal(string.Empty, interpreter.StandardOutput);
-            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", interpreter.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, gsi.ExitCode);
+            Assert.Equal(string.Empty, gsi.StandardOutput);
+            Assert.Contains($"Unhandled exception. System.InvalidOperationException: {GuardMessage}", gsi.StandardError);
 
             var emitted = await CompileAndRunAsync(
                 CreateEmptyDirectory(root, "gsc-emit"),
@@ -346,21 +346,21 @@ public class Issue3006FallthroughGuardDriverTests
 
         try
         {
-            var compilerEvaluation = RunSourceDriver(
-                CreateEmptyDirectory(root, "gsc-eval"),
+            var bareCompiler = RunSourceDriver(
+                CreateEmptyDirectory(root, "bare-gsc"),
                 Source,
                 Program.Main);
-            Assert.Equal(0, compilerEvaluation.ExitCode);
-            Assert.Equal(expected + $"Success.{Environment.NewLine}", compilerEvaluation.StandardOutput);
-            Assert.Equal(string.Empty, compilerEvaluation.StandardError);
+            Assert.Equal(0, bareCompiler.ExitCode);
+            Assert.Equal(expected + $"Success.{Environment.NewLine}", bareCompiler.StandardOutput);
+            Assert.Equal(string.Empty, bareCompiler.StandardError);
 
-            var interpreter = RunSourceDriver(
+            var gsi = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 Source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(0, interpreter.ExitCode);
-            Assert.Equal(expected, interpreter.StandardOutput);
-            Assert.Equal(string.Empty, interpreter.StandardError);
+            Assert.Equal(0, gsi.ExitCode);
+            Assert.Equal(expected, gsi.StandardOutput);
+            Assert.Equal(string.Empty, gsi.StandardError);
 
             var emitted = await CompileAndRunAsync(
                 CreateEmptyDirectory(root, "gsc-emit"),
@@ -402,21 +402,21 @@ public class Issue3006FallthroughGuardDriverTests
 
         try
         {
-            var compilerEvaluation = RunSourceDriver(
-                CreateEmptyDirectory(root, "gsc-eval"),
+            var bareCompiler = RunSourceDriver(
+                CreateEmptyDirectory(root, "bare-gsc"),
                 Source,
                 Program.Main);
-            Assert.Equal(0, compilerEvaluation.ExitCode);
-            Assert.Equal(expected + $"Success.{Environment.NewLine}", compilerEvaluation.StandardOutput);
-            Assert.Equal(string.Empty, compilerEvaluation.StandardError);
+            Assert.Equal(0, bareCompiler.ExitCode);
+            Assert.Equal(expected + $"Success.{Environment.NewLine}", bareCompiler.StandardOutput);
+            Assert.Equal(string.Empty, bareCompiler.StandardError);
 
-            var interpreter = RunSourceDriver(
+            var gsi = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 Source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(0, interpreter.ExitCode);
-            Assert.Equal(expected, interpreter.StandardOutput);
-            Assert.Equal(string.Empty, interpreter.StandardError);
+            Assert.Equal(0, gsi.ExitCode);
+            Assert.Equal(expected, gsi.StandardOutput);
+            Assert.Equal(string.Empty, gsi.StandardError);
 
             var emitted = await CompileAndRunAsync(
                 CreateEmptyDirectory(root, "gsc-emit"),
@@ -460,19 +460,19 @@ public class Issue3006FallthroughGuardDriverTests
 
         try
         {
-            var compilerEvaluation = RunSourceDriver(
-                CreateEmptyDirectory(root, "gsc-eval"),
+            var bareCompiler = RunSourceDriver(
+                CreateEmptyDirectory(root, "bare-gsc"),
                 source,
                 Program.Main);
-            Assert.Equal(ExpectedUnhandledExceptionExitCode, compilerEvaluation.ExitCode);
-            AssertCrashProtocol(compilerEvaluation.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, bareCompiler.ExitCode);
+            AssertCrashProtocol(bareCompiler.StandardError);
 
-            var interpreter = RunSourceDriver(
+            var gsi = RunSourceDriver(
                 CreateEmptyDirectory(root, "gsi"),
                 source,
                 GSharp.Repl.Program.Main);
-            Assert.Equal(ExpectedUnhandledExceptionExitCode, interpreter.ExitCode);
-            AssertCrashProtocol(interpreter.StandardError);
+            Assert.Equal(ExpectedUnhandledExceptionExitCode, gsi.ExitCode);
+            AssertCrashProtocol(gsi.StandardError);
         }
         finally
         {

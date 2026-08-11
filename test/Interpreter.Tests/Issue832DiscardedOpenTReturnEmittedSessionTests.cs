@@ -18,9 +18,9 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
     public void DiscardedDequeue_ClosedQueueOfString_ExecutesSideEffect()
     {
         // `Queue[string]::Dequeue()` is called in expression-statement
-        // position. The interpreter must dispatch the call, remove
-        // the front element, and discard the returned value without
-        // surfacing a binding error or runtime exception.
+        // position. The emitted session must dispatch the call, remove the
+        // front element, and discard the returned value without surfacing a
+        // binding error or runtime exception.
         var source = """
             import System
             import System.Collections.Generic
@@ -40,10 +40,9 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
     [Fact]
     public void DiscardedDequeue_ClosedQueueOfInt32_ExecutesSideEffect()
     {
-        // Same shape but with a value-type element. The emit path
-        // routes through the same `unbox.any` guard; the interpreter
-        // simply dispatches the BCL call. The discard must compose
-        // with subsequent state checks.
+        // Same shape but with a value-type element. Emission routes through
+        // the `unbox.any` guard, and the discard must compose with subsequent
+        // state checks.
         var source = """
             import System
             import System.Collections.Generic

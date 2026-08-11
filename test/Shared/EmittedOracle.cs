@@ -44,9 +44,9 @@ namespace GSharp.Tests;
 /// <c>GS9999</c> error diagnostic carrying the exception's
 /// <see cref="Exception.Message"/> — the historical evaluator's
 /// uncaught-exception protocol, minus the interpreter-only source-node
-/// location (the synthesized diagnostic carries a default location; tests
-/// asserting runtime-error <em>locations</em> are evaluator-specific and stay
-/// on the old oracle until Phase 3c retires them).</para>
+/// location. The synthesized diagnostic carries a default location; the
+/// evaluator-specific runtime-location assertions retired with that engine in
+/// ADR-0156 Phase 3c.</para>
 /// <para><b>ALC lifetime.</b> Each call gets its own collectible context and
 /// unload is initiated before the result is returned. Collectible unload is
 /// cooperative: the context, its assembly, and any returned

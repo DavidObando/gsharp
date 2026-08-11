@@ -121,7 +121,7 @@ declaration positions reject these names.
 3. `test/Compiler.Tests/Emit/Issue729FriendlyNumericAliasEmitTests.cs`:
    compile-verify-and-run programs written in aliases _and_ in canonical
    names for each alias, and assert byte-identical method-body IL.
-4. `test/Interpreter.Tests/Issue729FriendlyNumericAliasInterpreterTests.cs`:
+4. `test/Interpreter.Tests/Issue729FriendlyNumericAliasEmittedSessionTests.cs`:
    REPL-execution parity between aliases and canonical names.
 5. `samples/FriendlyNumericAliases.gs` + `.golden`: a small mixed-alias /
    canonical-name sample so the alias table appears in the conformance

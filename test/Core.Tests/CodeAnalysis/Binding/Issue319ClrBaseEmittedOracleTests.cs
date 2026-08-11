@@ -81,8 +81,8 @@ e.Message
     public void PrimaryConstructor_ChainingToClrException_BaseArgIsAComputedExpression()
     {
         // Base-init argument is a non-trivial expression that references this
-        // class's primary-ctor parameter. The interpreter must evaluate it in a
-        // scope where the parameter is bound before invoking the CLR ctor.
+        // class's primary-ctor parameter. Emitted execution must evaluate it
+        // after binding the parameter and before invoking the CLR ctor.
         var source = @"
 import System
 class LabeledErr(Label string) : Exception(Label + ""!"") {

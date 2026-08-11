@@ -300,10 +300,9 @@ len(t.Values)
 
     // ADR-0102 / issue #812 — variadic on a named delegate type. Both the
     // direct-call form `d(args)` and the explicit `d.Invoke(args)` member
-    // form must pack / pass-through trailing arguments. The interpreter
-    // does not provide a runtime for named delegates (ADR-0059), so the
-    // binder-only check asserts the declaration + call site bind without
-    // diagnostics; the runtime semantics are covered by the emit tests
+    // form must pack / pass-through trailing arguments. These binder-only
+    // checks assert that the declaration and call site bind without
+    // diagnostics; runtime semantics are covered by the emit tests
     // (VariadicEmitTests.Variadic_OnNamedDelegate_*).
 
     [Fact]
@@ -452,9 +451,8 @@ bad()
 
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
-        // Bind-only helper for sites the interpreter does not run (e.g.
-        // named delegates, which have no runtime in the AST evaluator).
-        // Mirrors NamedDelegateBindingTests.Bind.
+        // Bind-only helper for sites whose declaration and call-site binding
+        // are the test subject. Mirrors NamedDelegateBindingTests.Bind.
         var tree = SyntaxTree.Parse(SourceText.From(source));
         if (tree.Diagnostics.Any())
         {

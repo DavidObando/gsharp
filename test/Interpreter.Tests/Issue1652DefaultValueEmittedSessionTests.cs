@@ -1,4 +1,4 @@
-// <copyright file="Issue1652DefaultValueInterpreterTests.cs" company="GSharp">
+// <copyright file="Issue1652DefaultValueEmittedSessionTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -9,19 +9,19 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// Issue #1652: <c>Evaluator.DefaultValue</c> only special-cased
+/// Issue #1652 emitted-session regression coverage. The retired
+/// <c>Evaluator.DefaultValue</c> only special-cased
 /// <c>bool</c>/<c>int32</c>/<c>string</c>/enum/struct and fell back to
 /// <c>null</c> for every other primitive (int64, the unsigned/sized integer
 /// family, float32/float64, decimal, char, nint/nuint) — diverging from the
-/// emitted IL, which always produces the CLR-correct zero for a value type
-/// (e.g. <c>0L</c> for int64, <c>0.0</c> for float64). These tests cover
+/// emitted IL. These tests pin the CLR-correct zero for each value type
+/// (e.g. <c>0L</c> for int64, <c>0.0</c> for float64) across
 /// map-miss defaults, struct/class field defaults, auto-property defaults,
-/// and enum defaults for every affected primitive, proving interpreter/
-/// compiled parity (a `nil` default would either throw or misbehave in the
-/// arithmetic/comparison below, so a correct numeric result demonstrates the
-/// fix).
+/// and enum defaults for every affected primitive. A <c>nil</c> default would
+/// either throw or misbehave in the arithmetic/comparison below, so the exact
+/// emitted-session result demonstrates the fix.
 /// </summary>
-public class Issue1652DefaultValueInterpreterTests
+public class Issue1652DefaultValueEmittedSessionTests
 {
     [Theory]
     [InlineData("int64", "5")]
@@ -45,7 +45,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains(expected, output);
+        Assert.Equal(expected + Environment.NewLine, output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("1.5", output);
+        Assert.Equal("1.5" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("1.5", output);
+        Assert.Equal("1.5" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("True", output);
+        Assert.Equal("True" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("False", output);
+        Assert.Equal("False" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("7", output);
+        Assert.Equal("7" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("2.25", output);
+        Assert.Equal("2.25" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("9", output);
+        Assert.Equal("9" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("True", output);
+        Assert.Equal("True" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("True", output);
+        Assert.Equal("True" + Environment.NewLine, output);
     }
 
     [Fact]
@@ -201,8 +201,10 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("Sunday", output);
-        Assert.Contains("Monday", output);
+        Assert.Equal(
+            "Sunday" + Environment.NewLine + "Monday" + Environment.NewLine,
+            output);
+        Assert.EndsWith("Monday" + Environment.NewLine, output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -220,7 +222,7 @@ public class Issue1652DefaultValueInterpreterTests
             """;
         var output = RunSubmission(source);
         Assert.DoesNotContain("error GS", output);
-        Assert.Contains("True", output);
+        Assert.Equal("True" + Environment.NewLine, output);
     }
 
     private static string RunSubmission(string text)

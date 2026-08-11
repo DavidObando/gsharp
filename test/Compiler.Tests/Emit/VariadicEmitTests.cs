@@ -118,8 +118,8 @@ public class VariadicEmitTests
     {
         // The pass-through path returns the same array the caller supplied —
         // a subsequent mutation to the original array is visible through the
-        // returned slice. The interpreter and the emitter share this
-        // identity guarantee, so the test ensures the emitter matches.
+        // returned slice. This test pins that identity guarantee in emitted
+        // execution.
         var source = """
             package P
             import System

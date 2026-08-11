@@ -1,4 +1,4 @@
-// <copyright file="Adr0151IfLetExpressionInterpreterTests.cs" company="GSharp">
+// <copyright file="Adr0151IfLetExpressionEmittedSessionTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -8,13 +8,12 @@ using Xunit;
 namespace GSharp.Interpreter.Tests;
 
 /// <summary>
-/// ADR-0151 — interpreter parity for the value-producing <c>if let</c>
-/// expression. The binder is shared with the emit pipeline, so this file pins
-/// down the evaluator's execution semantics: which branch runs, that each
-/// initializer is evaluated exactly once, and that a failed binding
-/// short-circuits every later initializer and the guard.
+/// ADR-0151 emitted-session coverage for the value-producing <c>if let</c>
+/// expression. Pins which branch runs, that each initializer executes exactly
+/// once, and that a failed binding short-circuits every later initializer and
+/// the guard.
 /// </summary>
-public class Adr0151IfLetExpressionInterpreterTests
+public class Adr0151IfLetExpressionEmittedSessionTests
 {
     [Fact]
     public void IfLetExpression_Match_YieldsThenValue()

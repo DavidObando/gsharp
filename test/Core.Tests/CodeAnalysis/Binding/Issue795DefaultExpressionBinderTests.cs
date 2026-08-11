@@ -84,11 +84,9 @@ var x = default(string?)
     public void DefaultOfUnconstrainedTypeParameter_BindsCleanly()
     {
         // Issue #795 repro — `func MakeZero[T]() T { return default(T) }`.
-        // The binder must accept the shape; the closed-substitution
-        // semantics (zero for value types, nil for reference types) are
-        // verified by the compiled emit path (CompileAndRun) because the
-        // tree-walking interpreter does not propagate generic
-        // type-argument substitution into the body of a user function.
+        // The binder must accept the shape; the closed-substitution semantics
+        // (zero for value types, nil for reference types) are verified by the
+        // compiled emit path (CompileAndRun).
         var compilation = CompileSnippet(@"
 func MakeZero[T]() T {
     return default(T)

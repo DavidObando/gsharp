@@ -48,24 +48,24 @@ public class Issue3119ImportedConstantCorpusTests
 
     public static TheoryData<string, string> NullableNarrowingCases => new()
     {
-        { "gsc-evaluate", "EnabledText" },
+        { "bare-gsc", "EnabledText" },
         { "gsc-emit", "EnabledText" },
-        { "gsc-evaluate", "DisabledText" },
+        { "bare-gsc", "DisabledText" },
         { "gsc-emit", "DisabledText" },
-        { "gsc-evaluate", "NullableConst" },
+        { "bare-gsc", "NullableConst" },
         { "gsc-emit", "NullableConst" },
     };
 
     public static TheoryData<string> NoReferenceDrivers => new()
     {
-        "gsc-evaluate",
+        "bare-gsc",
         "gsc-emit",
         "gsi",
     };
 
     public static TheoryData<string> RuntimeDrivers => new()
     {
-        "gsc-evaluate",
+        "bare-gsc",
         "gsc-emit",
         "gsi",
     };
@@ -188,13 +188,13 @@ public class Issue3119ImportedConstantCorpusTests
                     "Constants.PositiveControl"));
             var result = driver switch
             {
-                "gsc-evaluate" => RunCompiler(root, sourcePath),
+                "bare-gsc" => RunCompiler(root, sourcePath),
                 "gsc-emit" => RunCompiler(
                     root,
                     "/target:exe",
                     "/out:" + Path.Combine(root, "no-reference.dll"),
                     sourcePath),
-                "gsi" => RunInterpreter(root, sourcePath),
+                "gsi" => RunGsi(root, sourcePath),
                 _ => throw new InvalidOperationException(driver),
             };
 
@@ -232,8 +232,8 @@ public class Issue3119ImportedConstantCorpusTests
 
             result = driver switch
             {
-                "gsc-evaluate" => RunCompiler(root, "/nowarn:GS9100", sourcePath),
-                "gsi" => RunInterpreter(root, sourcePath),
+                "bare-gsc" => RunCompiler(root, "/nowarn:GS9100", sourcePath),
+                "gsi" => RunGsi(root, sourcePath),
                 _ => throw new InvalidOperationException(driver),
             };
             AssertSucceeded(result, driver);
@@ -295,7 +295,7 @@ public class Issue3119ImportedConstantCorpusTests
     private static DriverResult RunCompiler(string workingDirectory, params string[] arguments)
         => Capture(workingDirectory, () => GSharp.Compiler.Program.Main(arguments));
 
-    private static DriverResult RunInterpreter(string workingDirectory, string sourcePath)
+    private static DriverResult RunGsi(string workingDirectory, string sourcePath)
         => Capture(workingDirectory, () => GSharp.Repl.Program.Main(new[] { sourcePath }));
 
     private static DriverResult Capture(string workingDirectory, Func<int> action)

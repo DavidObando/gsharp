@@ -92,9 +92,9 @@ public class LambdaEmitTests
     [Fact]
     public void ClosureCaptures_MakeAdder()
     {
-        // Phase 4 emit parity E2 (closures): captured outer variable lowered
-        // to a synthesized closure class field via snapshot-by-value at
-        // literal evaluation time. Matches interpreter semantics.
+        // Phase 4 E2 (closures): captured outer variable lowered to a
+        // synthesized closure class field via snapshot-by-value at literal
+        // evaluation time. This test pins that emitted behavior.
         var source = """
             package P
             import System

@@ -24,11 +24,8 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
     [Fact]
     public void IEnumerableT_Receiver_ForIn_Returns_First_Element_As_T()
     {
-        // Note: the tree-walking interpreter shares the receiver-substitution
-        // limitation from #773 that surfaces when the inferred T closes to
-        // a value type. We use a reference-typed element here to keep the
-        // interpreter path on the supported branch; value-type element
-        // coverage lives in the IL-verified emit suite.
+        // This emitted-session case uses a reference-typed element; value-type
+        // receiver substitution is covered in the IL-verified emit suite.
         var source = """
             import System.Collections.Generic
 
@@ -70,8 +67,8 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
     [Fact]
     public void SequenceT_Receiver_ForIn_Forwards_Element_As_T()
     {
-        // See note above: reference-typed element keeps the interpreter
-        // path on the supported branch.
+        // See note above: this emitted-session case uses a reference-typed
+        // element.
         var source = """
             func passthrough[T](x T) T {
                 return x

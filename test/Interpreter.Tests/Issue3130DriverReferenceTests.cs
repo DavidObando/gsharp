@@ -64,13 +64,13 @@ public sealed class Issue3130DriverReferenceTests
                 AssertSucceeded(emitted, sample + " emitted execution");
                 Assert.Equal(expected, Normalize(emitted.StandardOutput));
 
-                var evaluated = await RunAsync(directory, gscPath, "/nowarn:GS9100", sourcePath);
-                AssertSucceeded(evaluated, sample + " bare gsc");
-                Assert.Equal(expected + "Success.\n", Normalize(evaluated.StandardOutput));
+                var bareGsc = await RunAsync(directory, gscPath, "/nowarn:GS9100", sourcePath);
+                AssertSucceeded(bareGsc, sample + " bare gsc");
+                Assert.Equal(expected + "Success.\n", Normalize(bareGsc.StandardOutput));
 
-                var interpreted = await RunAsync(directory, gsiPath, sourcePath);
-                AssertSucceeded(interpreted, sample + " gsi");
-                Assert.Equal(expected, Normalize(interpreted.StandardOutput));
+                var gsi = await RunAsync(directory, gsiPath, sourcePath);
+                AssertSucceeded(gsi, sample + " gsi");
+                Assert.Equal(expected, Normalize(gsi.StandardOutput));
             }
             finally
             {
@@ -119,13 +119,13 @@ public sealed class Issue3130DriverReferenceTests
             AssertSucceeded(emitted, "fully-qualified emitted execution");
             Assert.Equal("11\n", Normalize(emitted.StandardOutput));
 
-            var evaluated = await RunAsync(directory, gscPath, sourcePath);
-            AssertSucceeded(evaluated, "fully-qualified bare gsc");
-            Assert.Equal("11\nSuccess.\n", Normalize(evaluated.StandardOutput));
+            var bareGsc = await RunAsync(directory, gscPath, sourcePath);
+            AssertSucceeded(bareGsc, "fully-qualified bare gsc");
+            Assert.Equal("11\nSuccess.\n", Normalize(bareGsc.StandardOutput));
 
-            var interpreted = await RunAsync(directory, gsiPath, sourcePath);
-            AssertSucceeded(interpreted, "fully-qualified gsi");
-            Assert.Equal("11\n", Normalize(interpreted.StandardOutput));
+            var gsi = await RunAsync(directory, gsiPath, sourcePath);
+            AssertSucceeded(gsi, "fully-qualified gsi");
+            Assert.Equal("11\n", Normalize(gsi.StandardOutput));
         }
         finally
         {
@@ -182,13 +182,13 @@ public sealed class Issue3130DriverReferenceTests
             AssertSucceeded(emitted, "explicit-reference emitted execution");
             Assert.Equal("42\n", Normalize(emitted.StandardOutput));
 
-            var evaluated = await RunAsync(directory, gscPath, "/nowarn:GS9100", "/r:" + referencePath, sourcePath);
-            AssertSucceeded(evaluated, "explicit-reference bare gsc");
-            Assert.Equal("42\nSuccess.\n", Normalize(evaluated.StandardOutput));
+            var bareGsc = await RunAsync(directory, gscPath, "/nowarn:GS9100", "/r:" + referencePath, sourcePath);
+            AssertSucceeded(bareGsc, "explicit-reference bare gsc");
+            Assert.Equal("42\nSuccess.\n", Normalize(bareGsc.StandardOutput));
 
-            var interpreted = await RunAsync(directory, gsiPath, "/r:" + referencePath, sourcePath);
-            AssertSucceeded(interpreted, "explicit-reference gsi");
-            Assert.Equal("42\n", Normalize(interpreted.StandardOutput));
+            var gsi = await RunAsync(directory, gsiPath, "/r:" + referencePath, sourcePath);
+            AssertSucceeded(gsi, "explicit-reference gsi");
+            Assert.Equal("42\n", Normalize(gsi.StandardOutput));
 
             var help = await RunAsync(directory, gsiPath, "--help");
             AssertSucceeded(help, "gsi help");

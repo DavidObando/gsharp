@@ -193,11 +193,10 @@ var m = a.Magic
     [Fact]
     public void NullableValue_AccessOnNil_ThrowsInvalidOperation()
     {
-        // End-to-end through the interpreter: `.Value` on a nil-valued
-        // nullable must surface the BCL's `InvalidOperationException`,
-        // matching the IL emit path (#504 / #517). The evaluator wraps
-        // unhandled BCL throws into a GS9999 diagnostic that carries the
-        // original message text.
+        // End-to-end through the emitted oracle: `.Value` on a nil-valued
+        // nullable must surface the BCL's `InvalidOperationException`
+        // (#504 / #517). The oracle wraps unhandled runtime exceptions in a
+        // GS9999 diagnostic carrying the original message text.
         var source = @"
 var a int32? = nil
 var v = a.Value
