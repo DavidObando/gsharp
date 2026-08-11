@@ -148,7 +148,9 @@ public class Issue3010EntryPointDriverMatrixTests
         var result = Run(name, source, driver);
 
         Assert.Equal(expectedExitCode, result.ExitCode);
-        Assert.Equal(expectedOutput, result.StandardOutput);
+        Assert.Equal(
+            expectedOutput.Replace("\n", Environment.NewLine, StringComparison.Ordinal),
+            result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
     }
 
