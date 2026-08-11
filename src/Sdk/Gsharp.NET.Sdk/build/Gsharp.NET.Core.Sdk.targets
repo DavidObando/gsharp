@@ -16,15 +16,15 @@
          under lib/<tfm>/ is handled by the standard Microsoft.NET.Sdk pack. -->
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_GsharpGetRefAssemblyForPack</TargetsForTfmSpecificContentInPackage>
 
-    <!-- Debug builds carry a dormant bootstrap; the runtime agent activates
-         only when dotnet watch sets DOTNET_WATCH for the launched process. -->
+    <!-- Match dotnet-watch's supported runtime floor while keeping Release
+         builds and explicitly-disabled projects byte-for-byte unchanged. -->
     <_GsharpHotReloadSupported Condition=" '$(TargetFrameworkIdentifier)' == '.NETCoreApp' and
                                             $([MSBuild]::VersionGreaterThanOrEquals('$(TargetFrameworkVersion)', '10.0')) ">true</_GsharpHotReloadSupported>
     <GsharpEnableHotReload Condition=" '$(GsharpEnableHotReload)' == '' and
-                                      '$(Configuration)' == 'Debug' and
+                                      '$(DotNetWatchBuild)' == 'true' and
                                       '$(_GsharpHotReloadSupported)' == 'true' ">true</GsharpEnableHotReload>
-    <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(TargetName).manifest</GsharpHotReloadManifestPath>
-    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.gsharphot</GsharpHotReloadBootstrapPath>
+    <GsharpHotReloadManifestPath Condition=" '$(GsharpHotReloadManifestPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\$(MSBuildProjectName).manifest</GsharpHotReloadManifestPath>
+    <GsharpHotReloadBootstrapPath Condition=" '$(GsharpHotReloadBootstrapPath)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\Gsharp.HotReload.Bootstrap.g.gs</GsharpHotReloadBootstrapPath>
     <GsharpHotReloadOutputDirectory Condition=" '$(GsharpHotReloadOutputDirectory)' == '' ">$(IntermediateOutputPath)gsharp-hotreload\updates\</GsharpHotReloadOutputDirectory>
   </PropertyGroup>
 
@@ -535,13 +535,13 @@
           DependsOnTargets="Compile">
     <MakeDir Directories="$(GsharpHotReloadOutputDirectory)" />
     <Copy SourceFiles="@(IntermediateAssembly)"
-          DestinationFiles="$(GsharpHotReloadOutputDirectory)$(TargetName)$(TargetExt)" />
+          DestinationFiles="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName)$(TargetExt)'))" />
     <Copy SourceFiles="@(_DebugSymbolsIntermediatePath)"
-          DestinationFiles="$(GsharpHotReloadOutputDirectory)$(TargetName).pdb"
+          DestinationFiles="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).pdb'))"
           Condition=" '@(_DebugSymbolsIntermediatePath)' != '' and Exists('@(_DebugSymbolsIntermediatePath)') " />
     <ItemGroup>
-      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).dll" />
-      <FileWrites Include="$(GsharpHotReloadOutputDirectory)$(TargetName).pdb" />
+      <FileWrites Include="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).dll'))" />
+      <FileWrites Include="$([System.IO.Path]::Combine('$(GsharpHotReloadOutputDirectory)', '$(TargetName).pdb'))" />
     </ItemGroup>
   </Target>
 

@@ -179,9 +179,11 @@ public class SdkLayoutTests
             hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
             task => (string)task.Attribute("Targets") == "Build");
 
-        var hotReloadBootstrapPath = doc.Descendants(MsbuildNs + "GsharpHotReloadBootstrapPath")
-            .Single().Value;
-        Assert.False(hotReloadBootstrapPath.EndsWith(".gs", System.StringComparison.OrdinalIgnoreCase));
+        var hotReloadEnabled = doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single();
+        Assert.Contains(
+            "$(DotNetWatchBuild)",
+            (string)hotReloadEnabled.Attribute("Condition"),
+            System.StringComparison.Ordinal);
 
         Assert.Contains(
             doc.Descendants(MsbuildNs + "ProjectCapability"),
@@ -189,6 +191,10 @@ public class SdkLayoutTests
         var hotReloadManifest = doc.Descendants(MsbuildNs + "None")
             .Single(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)");
         Assert.Equal("PreserveNewest", (string)hotReloadManifest.Attribute("CopyToOutputDirectory"));
+        Assert.Contains(
+            "$(MSBuildProjectName).manifest",
+            doc.Descendants(MsbuildNs + "GsharpHotReloadManifestPath").Single().Value,
+            System.StringComparison.Ordinal);
     }
 
     [Fact]
