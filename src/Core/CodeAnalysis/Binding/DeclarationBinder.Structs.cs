@@ -74,7 +74,10 @@ internal sealed partial class DeclarationBinder
             // same-compilation constraint target can be published first.
             // Resolve constraints now, with the declaring shell and all sibling
             // source type shells visible, before binding signatures and members.
-            ResolveTypeParameterConstraints(syntax.TypeParameterList, structSymbol.TypeParameters);
+            ResolvePartialTypeParameterConstraints(
+                syntax.TypeParameterList,
+                syntax.PartialTypeParameterLists,
+                structSymbol.TypeParameters);
             BindStructDeclarationBodyCore(syntax, package, structSymbol);
         }
         finally

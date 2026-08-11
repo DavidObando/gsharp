@@ -212,6 +212,128 @@ Console.WriteLine(c.Abs())
     }
 
     [Fact]
+    public void CrossFile_GenericConstraintsUseImportingPartProvenance()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+
+            public partial interface IHolder[T IEnumerable[T]] {
+            }
+
+            public partial class Outer {
+                partial class Nested[T IEnumerable[T]] {
+                }
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+
+            public partial interface IHolder[T IEnumerable[T]] {
+            }
+
+            public partial class Outer {
+                partial class Nested[T IEnumerable[T]] {
+                }
+            }
+            """,
+            "Holder.Feature.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { declaringPart, featurePart })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+    }
+
+    [Fact]
+    public void CrossFile_GenericConstraintImportDoesNotLeakFromUnrelatedFile()
+    {
+        var declaringPart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.gs"));
+        var featurePart = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var unrelated = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public class Marker {
+            }
+            """,
+            "Unrelated.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { unrelated, declaringPart, featurePart })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0113"
+                && diagnostic.Location.FileName == "Holder.Feature.gs");
+    }
+
+    [Fact]
+    public void CrossFile_GenericConstraintMismatchStillReportsGS0480()
+    {
+        var anyConstraint = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            public partial class Holder[T any] {
+            }
+            """,
+            "Holder.Feature.gs"));
+        var importedConstraint = SyntaxTree.Parse(SourceText.From(
+            """
+            package FindingPartialConstraintImport
+
+            import System.Collections.Generic
+
+            public partial class Holder[T IEnumerable[T]] {
+            }
+            """,
+            "Holder.gs"));
+
+        using var peStream = new MemoryStream();
+        var result = new Compilation(new[] { importedConstraint, anyConstraint })
+        {
+            IsLibrary = true,
+        }.Emit(peStream);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    [Fact]
     public void CrossFile_MergedMemberDeclarationsKeepDeclaringTreeProvenance()
     {
         var declaringPart = SyntaxTree.Parse(SourceText.From(

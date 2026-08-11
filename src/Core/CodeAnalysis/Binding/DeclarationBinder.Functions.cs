@@ -1302,6 +1302,46 @@ internal sealed partial class DeclarationBinder
         }
     }
 
+    private void ResolvePartialTypeParameterConstraints(
+        TypeParameterListSyntax? primarySyntax,
+        ImmutableArray<TypeParameterListSyntax> matchingPartialLists,
+        ImmutableArray<TypeParameterSymbol> symbols)
+    {
+        if (matchingPartialLists.Length <= 1)
+        {
+            ResolveTypeParameterConstraints(primarySyntax, symbols);
+            return;
+        }
+
+        // Issue #3336: matching partial headers share one contract, but each
+        // candidate must resolve through its own file's imports.
+        foreach (var candidate in matchingPartialLists)
+        {
+            if (CanBindTypeParameterConstraints(candidate))
+            {
+                ResolveTypeParameterConstraints(candidate, symbols);
+                return;
+            }
+        }
+
+        ResolveTypeParameterConstraints(primarySyntax, symbols);
+    }
+
+    private bool CanBindTypeParameterConstraints(TypeParameterListSyntax syntax)
+    {
+        var diagnosticCount = Diagnostics.Count;
+        try
+        {
+            var symbols = CreateTypeParameterSymbols(syntax);
+            ResolveTypeParameterConstraints(syntax, symbols);
+            return !Diagnostics.Skip(diagnosticCount).Any(diagnostic => diagnostic.IsError);
+        }
+        finally
+        {
+            Diagnostics.TruncateTo(diagnosticCount);
+        }
+    }
+
     /// <summary>
     /// Resolves a non-keyword type-parameter constraint (anything other than
     /// <c>any</c> / <c>comparable</c>) as an interface bound and records it on

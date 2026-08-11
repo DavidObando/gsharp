@@ -189,10 +189,13 @@ This merge-the-syntax design was chosen over binding each part into a shared
 symbol with accumulating installers (the higher-blast-radius alternative).
 G# imports are file-scoped, so binding uses each composed child node's retained
 `SyntaxTree` for type clauses, annotations, declaration expressions, and shared
-initializer blocks. Syntax nodes carry no `Parent` reference, so composing
-children drawn from different parts/files under one synthetic parent remains
-safe: diagnostics and import lookup both use the declaring file, while the
-synthetic parent's tree remains only the aggregate anchor described above.
+initializer blocks. Matching generic-parameter lists are retained from every
+part; constraint binding selects the first list that resolves independently in
+its own file, without unioning imports. Syntax nodes carry no `Parent` reference,
+so composing children drawn from different parts/files under one synthetic
+parent remains safe: diagnostics and import lookup both use the declaring file,
+while the synthetic parent's tree remains only the aggregate anchor described
+above.
 
 **Nested partial types** are handled by the same merger recursively: when it
 builds (or passes through) a type node, it merges the partial nested types in
