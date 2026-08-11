@@ -25,8 +25,10 @@ public static class HotReloadAgent
 {
     private static readonly ConcurrentDictionary<string, Lazy<ProjectAgent>> Agents = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
     private static readonly ConcurrentDictionary<string, string> ManifestPaths =
         new(StringComparer.OrdinalIgnoreCase);
+
     private static int assemblyLoadHookInitialized;
 
     /// <summary>
