@@ -1021,6 +1021,12 @@ public static class GSharpPrinter
             case AssignmentStatement assignment:
                 return $"{pad}{RenderExpression(assignment.Target, indent)} {assignment.Operator} {RenderExpression(assignment.Value, indent)}";
 
+            case MultiAssignmentStatement multiAssignment:
+                return $"{pad}" +
+                    string.Join(", ", multiAssignment.Targets.Select(target => RenderExpression(target, indent))) +
+                    " = " +
+                    string.Join(", ", multiAssignment.Values.Select(value => RenderExpression(value, indent)));
+
             case ReturnStatement ret:
                 return ret.Expression == null
                     ? $"{pad}return"

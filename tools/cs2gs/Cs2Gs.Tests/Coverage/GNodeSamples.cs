@@ -136,6 +136,9 @@ public static class GNodeSamples
             [typeof(LocalDeclarationStatement)] = () => Stmts(new LocalDeclarationStatement(BindingKind.Var, "n", Type("int32"), Int("0"))),
             [typeof(ExpressionStatement)] = () => Stmts(new ExpressionStatement(new InvocationExpression(Id("f")))),
             [typeof(AssignmentStatement)] = () => Stmts(new AssignmentStatement(Id("x"), Int("1"))),
+            [typeof(MultiAssignmentStatement)] = () => Stmts(new MultiAssignmentStatement(
+                new GExpression[] { Id("a"), Id("b") },
+                new GExpression[] { Id("b"), Id("a") })),
             [typeof(IfLetStatement)] = () => Stmts(new IfLetStatement(
                 new[] { new IfLetBinding("v", Id("maybe")) },
                 new BlockStatement(new GStatement[] { new ExpressionStatement(Id("v")) }))),

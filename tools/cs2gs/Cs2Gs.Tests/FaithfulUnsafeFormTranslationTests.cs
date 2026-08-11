@@ -218,8 +218,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("a = __decon", printed);
-        Assert.Contains("b = __decon", printed);
+        // Issue #3358: renders as G#'s native multi-target assignment (ADR-0015)
+        // rather than a decon binding plus per-target writes. The parenthesised
+        // C# TARGET-TUPLE form is still absent, which is what this test guards.
+        Assert.Contains("a, b = x, y", printed);
+        Assert.DoesNotContain("__decon", printed);
         Assert.DoesNotContain("(a, b) =", printed);
     }
 

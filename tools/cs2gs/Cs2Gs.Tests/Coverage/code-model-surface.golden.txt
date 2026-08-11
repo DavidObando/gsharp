@@ -64,6 +64,7 @@ LabeledStatement
 LocalDeclarationStatement
 LocalFunctionStatement
 LockStatement
+MultiAssignmentStatement
 RawStatement
 ReturnStatement
 SwitchStatement

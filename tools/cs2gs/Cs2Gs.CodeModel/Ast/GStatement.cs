@@ -202,6 +202,43 @@ public sealed class IfLetStatement : GStatement
 }
 
 /// <summary>
+/// A Go-style multi-target assignment — <c>a, b = x, y</c> (ADR-0015).
+/// </summary>
+/// <remarks>
+/// The native G# rendering of a C# deconstruction assignment into existing
+/// variables (issue #3358). ADR-0015 evaluates every right-hand expression
+/// left-to-right into temporaries BEFORE any write, then assigns left-to-right —
+/// exactly C#'s evaluate-then-assign order, so an aliasing swap
+/// (<c>(a, b) = (b, a)</c>) is correct.
+/// <para>
+/// Only plain identifier targets and <c>_</c> discards are representable: `gsc`
+/// rejects a storage target (<c>arr[i], o.F = …</c>, GS0005) and a mixed
+/// declaration (<c>a, let y = …</c>, GS0005), and will not unify a single
+/// tuple-valued right-hand side across N targets (<c>a, b = Pair()</c>,
+/// GS0167). Those shapes keep the <c>let (__deconN, …)</c> lowering.
+/// </para>
+/// </remarks>
+public sealed class MultiAssignmentStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MultiAssignmentStatement"/> class.
+    /// </summary>
+    /// <param name="targets">The assignment targets, in source order.</param>
+    /// <param name="values">The assigned values, one per target, in source order.</param>
+    public MultiAssignmentStatement(IReadOnlyList<GExpression> targets, IReadOnlyList<GExpression> values)
+    {
+        Targets = targets;
+        Values = values;
+    }
+
+    /// <summary>Gets the assignment targets, in source order.</summary>
+    public IReadOnlyList<GExpression> Targets { get; }
+
+    /// <summary>Gets the assigned values, one per target, in source order.</summary>
+    public IReadOnlyList<GExpression> Values { get; }
+}
+
+/// <summary>
 /// An assignment statement <c>target op value</c> (e.g. <c>x = 1</c>, <c>x += 2</c>).
 /// </summary>
 public sealed class AssignmentStatement : GStatement
