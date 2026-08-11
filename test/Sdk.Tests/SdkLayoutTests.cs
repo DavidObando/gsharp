@@ -183,8 +183,9 @@ public class SdkLayoutTests
             task => (string)task.Attribute("Targets") == "Build");
 
         Assert.Contains(
-            doc.Descendants(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"),
-            task => (string)task.Attribute("RuntimeAssemblyPath") == "$(GsharpHotReloadRuntimeAssemblyFullPath)");
+            "RuntimeAssemblyPath=\"$(GsharpHotReloadRuntimeAssemblyFullPath)\"",
+            File.ReadAllText(path),
+            System.StringComparison.Ordinal);
 
         var hotReloadEnabled = doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single();
         Assert.Contains(
