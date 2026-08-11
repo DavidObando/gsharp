@@ -124,6 +124,88 @@ public sealed class CompileStage : IMigrationStage
     /// Maps a set of parsed error-severity diagnostics into triage artifacts,
     /// shared by both the gsc-direct and <c>--via-sdk</c> compile paths.
     /// </summary>
+    /// <summary>
+    /// Resolves the <c>.gs</c> file a gsc diagnostic points at, so the triage
+    /// artifact can quote the emitted line (see <c>TriageBuilder.CompileError</c>).
+    /// </summary>
+    /// <remarks>
+    /// Matching has to cope with two diagnostic shapes. Direct gsc invocation
+    /// reports an absolute path; the <c>--via-sdk</c> path routes through MSBuild,
+    /// which may report a path relative to the project directory and appends a
+    /// <c>[project.gsproj]</c> suffix that the parser leaves on the MESSAGE, not
+    /// the file.
+    /// <para>
+    /// Issue #3347: a basename collision across sibling projects — common in a
+    /// repository-layout run, where <c>EmittedFiles</c> also carries referenced
+    /// projects' files — used to make the ambiguous case return null, which
+    /// silently degraded every downstream field. The app's OWN files are now
+    /// preferred before falling back to siblings.
+    /// </para>
+    /// </remarks>
+    /// <param name="files">The emitted files for this app, plus referenced siblings.</param>
+    /// <param name="diagnosticFile">The file path as reported by gsc or MSBuild.</param>
+    /// <returns>The matching file, or <see langword="null"/> when it cannot be resolved.</returns>
+    internal static EmittedGsFile MatchEmittedFile(IReadOnlyList<EmittedGsFile> files, string diagnosticFile)
+    {
+        if (files is null || files.Count == 0)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(diagnosticFile))
+        {
+            string diagnosticFullPath = Path.GetFullPath(diagnosticFile);
+            EmittedGsFile exactMatch = files.FirstOrDefault(f =>
+                string.Equals(Path.GetFullPath(f.GsPath), diagnosticFullPath, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch is not null)
+            {
+                return exactMatch;
+            }
+
+            // A relative path from MSBuild resolves against cs2gs's working
+            // directory above, which is not the project directory — so compare
+            // path SUFFIXES too. `/a/b/Foo/Bar.gs` matches a reported `Foo/Bar.gs`.
+            string normalizedDiagnostic = NormalizeSeparators(diagnosticFile);
+            EmittedGsFile[] suffixMatches = files
+                .Where(f => NormalizeSeparators(f.GsPath)
+                    .EndsWith(normalizedDiagnostic, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            EmittedGsFile suffixMatch = PreferOwnProject(suffixMatches);
+            if (suffixMatch is not null)
+            {
+                return suffixMatch;
+            }
+
+            string name = Path.GetFileName(diagnosticFile);
+            EmittedGsFile[] matches = files.Where(f =>
+                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            EmittedGsFile nameMatch = PreferOwnProject(matches);
+            if (nameMatch is not null)
+            {
+                return nameMatch;
+            }
+        }
+
+        return files.Count == 1 ? files[0] : null;
+    }
+
+    // A basename can collide across sibling projects. The app's own files are the
+    // only ones charged against it (a sibling's error is measured in its own run),
+    // so prefer those; a remaining ambiguity is genuinely unresolvable.
+    private static EmittedGsFile PreferOwnProject(EmittedGsFile[] candidates)
+    {
+        if (candidates.Length == 1)
+        {
+            return candidates[0];
+        }
+
+        EmittedGsFile[] own = candidates.Where(f => !f.IsFromReferencedProject).ToArray();
+        return own.Length == 1 ? own[0] : null;
+    }
+
+    private static string NormalizeSeparators(string path) =>
+        path.Replace('\\', '/');
+
     private static StageOutcome BuildFailureOutcome(
         StageExecutionContext context, IReadOnlyList<GscDiagnostic> errors, string syntheticMessageOnNoDiagnostics)
     {
@@ -258,30 +340,6 @@ public sealed class CompileStage : IMigrationStage
         return Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
-    }
-
-    private static EmittedGsFile MatchEmittedFile(IReadOnlyList<EmittedGsFile> files, string diagnosticFile)
-    {
-        if (!string.IsNullOrEmpty(diagnosticFile))
-        {
-            string diagnosticFullPath = Path.GetFullPath(diagnosticFile);
-            EmittedGsFile exactMatch = files.FirstOrDefault(f =>
-                string.Equals(Path.GetFullPath(f.GsPath), diagnosticFullPath, StringComparison.OrdinalIgnoreCase));
-            if (exactMatch is not null)
-            {
-                return exactMatch;
-            }
-
-            string name = Path.GetFileName(diagnosticFile);
-            EmittedGsFile[] matches = files.Where(f =>
-                string.Equals(Path.GetFileName(f.GsPath), name, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (matches.Length == 1)
-            {
-                return matches[0];
-            }
-        }
-
-        return files.Count == 1 ? files[0] : null;
     }
 
     private static string Truncate(string value)

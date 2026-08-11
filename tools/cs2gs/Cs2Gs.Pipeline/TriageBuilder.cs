@@ -20,6 +20,15 @@ namespace Cs2Gs.Pipeline;
 /// </summary>
 public sealed class TriageBuilder
 {
+    /// <summary>
+    /// Stands in for the emitted G# line when the diagnostic's file cannot be
+    /// resolved back to an <c>EmittedGsFile</c>. Explicit rather than silently
+    /// substituting the diagnostic message, so a lookup failure is visible in the
+    /// report instead of masquerading as source (issue #3347).
+    /// </summary>
+    internal const string UnresolvedEmittedLine =
+        "<emitted G# line unavailable: diagnostic file did not resolve to an emitted .gs>";
+
     private const int SnippetMaxLength = 160;
 
     // The leading identifier/keyword token of a (trimmed) line — the position
@@ -255,8 +264,15 @@ public sealed class TriageBuilder
             throw new ArgumentNullException(nameof(diagnostic));
         }
 
+        // Issue #3347: when the emitted file cannot be resolved, say so. This used
+        // to fall back to `diagnostic.Message`, which put the DIAGNOSTIC TEXT in
+        // the "Offending line" field — indistinguishable from a real source line
+        // to anyone reading the report, and the reason a whole oahu triage cycle
+        // showed no usable source at all. An explicit marker keeps the failure
+        // visible instead of plausible.
         string snippet = file is null ? null : LineAt(file.GSharpSource, diagnostic.Line);
         string kind = ClassifyGsLine(snippet);
+        string offendingLine = snippet ?? UnresolvedEmittedLine;
 
         var artifact = this.NewArtifact(MigrationStageKind.Compile, TriageCategory.CompileError);
         artifact.Diagnostic = new TriageDiagnostic
@@ -277,8 +293,13 @@ public sealed class TriageBuilder
         artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
         {
             Kind = kind,
-            Snippet = Truncate(snippet ?? diagnostic.Message),
+            Snippet = Truncate(offendingLine),
         };
+
+        // The fingerprint deliberately keeps using the diagnostic message rather
+        // than the marker: the marker is a constant, so hashing it would make
+        // every unresolved artifact identical. (Message normalization still
+        // dedups genuinely-similar diagnostics — see issue #1750.)
         artifact.Fingerprint = Fingerprint.Compute(
             artifact.Category,
             artifact.Stage,
