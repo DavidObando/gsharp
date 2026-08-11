@@ -648,14 +648,14 @@ internal sealed partial class DeclarationBinder
                 // identifier tokens in the base/interface clause.
                 if (allBaseTypes.Count == 0 && syntax.BaseTypeIdentifier != null)
                 {
-                    allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, syntax.BaseTypeIdentifier));
+                    allBaseTypes.Add(new TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier));
                     if (!syntax.AdditionalBaseTypeIdentifiers.IsDefaultOrEmpty)
                     {
                         foreach (var token in syntax.AdditionalBaseTypeIdentifiers)
                         {
                             if (token != null)
                             {
-                                allBaseTypes.Add(new TypeClauseSyntax(syntax.SyntaxTree, token));
+                                allBaseTypes.Add(new TypeClauseSyntax(token.SyntaxTree, token));
                             }
                         }
                     }

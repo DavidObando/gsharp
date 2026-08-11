@@ -170,28 +170,38 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription, defaultSystemTarget);
-            if (bound != null)
+            // Issue #3336: merged partial annotations retain the declaring part's tree.
+            var bindingScope = scope;
+            var previousTree = bindingScope.SetCurrentReferencingSyntaxTree(annotation.SyntaxTree);
+            try
             {
-                var key = (bound.AttributeType, bound.Target);
-                if (applications.TryGetValue(key, out var count))
+                var bound = BindAttribute(annotation, defaultTarget, allowedTargets, positionDescription, defaultSystemTarget);
+                if (bound != null)
                 {
-                    KnownAttributes.GetAttributeUsage(bound.AttributeType, out _, out var allowMultiple);
-                    if (!allowMultiple)
+                    var key = (bound.AttributeType, bound.Target);
+                    if (applications.TryGetValue(key, out var count))
                     {
-                        Diagnostics.ReportAttributeUsageDuplicate(
-                            GetAnnotationNameLocation(annotation),
-                            annotation.GetNameText());
+                        KnownAttributes.GetAttributeUsage(bound.AttributeType, out _, out var allowMultiple);
+                        if (!allowMultiple)
+                        {
+                            Diagnostics.ReportAttributeUsageDuplicate(
+                                GetAnnotationNameLocation(annotation),
+                                annotation.GetNameText());
+                        }
+
+                        applications[key] = count + 1;
+                    }
+                    else
+                    {
+                        applications[key] = 1;
                     }
 
-                    applications[key] = count + 1;
+                    builder.Add(bound);
                 }
-                else
-                {
-                    applications[key] = 1;
-                }
-
-                builder.Add(bound);
+            }
+            finally
+            {
+                bindingScope.SetCurrentReferencingSyntaxTree(previousTree);
             }
         }
 

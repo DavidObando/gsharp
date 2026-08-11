@@ -151,7 +151,21 @@ internal sealed partial class DeclarationBinder
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
-        this.bindExpression = bindExpression ?? throw new ArgumentNullException(nameof(bindExpression));
+        ArgumentNullException.ThrowIfNull(bindExpression);
+        this.bindExpression = syntax =>
+        {
+            // Issue #3336: merged partial expressions retain the declaring part's tree.
+            var bindingScope = this.scope;
+            var previousTree = bindingScope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
+            try
+            {
+                return bindExpression(syntax);
+            }
+            finally
+            {
+                bindingScope.SetCurrentReferencingSyntaxTree(previousTree);
+            }
+        };
         this.bindTypeClause = bindTypeClause ?? throw new ArgumentNullException(nameof(bindTypeClause));
         this.bindReturnTypeClause = bindReturnTypeClause ?? throw new ArgumentNullException(nameof(bindReturnTypeClause));
         this.bindTypeOfExpression = bindTypeOfExpression ?? throw new ArgumentNullException(nameof(bindTypeOfExpression));

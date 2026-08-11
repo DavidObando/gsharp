@@ -1012,7 +1012,7 @@ public sealed class Binder
                 ? syntax.BaseTypeClauses[0]
                 : syntax.BaseTypeIdentifier == null
                     ? null
-                    : new TypeClauseSyntax(syntax.SyntaxTree, syntax.BaseTypeIdentifier);
+                    : new TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier);
             var baseName = baseType?.QualifierIdentifierTokens.LastOrDefault()?.Text
                 ?? baseType?.Identifier?.Text;
             if (symbol.IsClass && baseName != null && declarationsByName.TryGetValue(baseName, out var candidates))
@@ -2491,6 +2491,8 @@ public sealed class Binder
             var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var initBlock in initBlocks)
             {
+                // Issue #3336: merged partial blocks retain the declaring part's tree.
+                parentScope.SetCurrentReferencingSyntaxTree(initBlock.SyntaxTree);
                 boundBlocks.Add(binder.statements.BindBlockStatement(initBlock.Body));
             }
 
@@ -3671,40 +3673,51 @@ public sealed class Binder
 
     private TypeSymbol? BindTypeClause(TypeClauseSyntax? syntax)
     {
-        var bound = BindNonNullableTypeClause(syntax);
-        if (bound == null)
+        if (syntax == null)
         {
+            return null;
+        }
+
+        // Issue #3336: merged partial type clauses retain the declaring part's tree.
+        var bindingScope = scope;
+        var previousTree = bindingScope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
+        try
+        {
+            var bound = BindNonNullableTypeClause(syntax);
+            if (bound == null)
+            {
+                return null;
+            }
+
+            // Issue #1212: for an array/slice clause the trailing `?` is consumed
+            // by ApplyArraySuffix and applied to the element type (`[]T?`), so it
+            // must not also wrap the whole array. The *array* is made nullable only
+            // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
+            if (syntax.IsArray)
+            {
+                bound = syntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
+            }
+            else if (syntax.IsNullable)
+            {
+                bound = NullableTypeSymbol.Get(bound);
+            }
+
+            // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
+            // parenthesized type clause marks the WHOLE inner type nullable —
+            // `(chan int32)?` is a nullable channel, `([]T)?` equals `[]?T`. The
+            // already-nullable guard makes redundant spellings like `(int32?)?`
+            // collapse instead of double-wrapping.
+            if (syntax.IsParenthesizedNullable && bound is not NullableTypeSymbol)
+            {
+                bound = NullableTypeSymbol.Get(bound);
+            }
+
             return bound;
         }
-
-        // BindNonNullableTypeClause returns null immediately when its syntax
-        // argument is null, so a non-null bound here means syntax is non-null.
-        var nonNullSyntax = Invariant.Required(syntax, "BindNonNullableTypeClause returned non-null, so its syntax argument was non-null");
-
-        // Issue #1212: for an array/slice clause the trailing `?` is consumed
-        // by ApplyArraySuffix and applied to the element type (`[]T?`), so it
-        // must not also wrap the whole array. The *array* is made nullable only
-        // by an explicit `?` right after `]` (`[]?T` → `ArrayQuestionToken`).
-        if (nonNullSyntax.IsArray)
+        finally
         {
-            bound = nonNullSyntax.IsArrayNullable ? NullableTypeSymbol.Get(bound) : bound;
+            bindingScope.SetCurrentReferencingSyntaxTree(previousTree);
         }
-        else if (nonNullSyntax.IsNullable)
-        {
-            bound = NullableTypeSymbol.Get(bound);
-        }
-
-        // Issue #3315 / ADR-0159 addendum: the `?` after the closing `)` of a
-        // parenthesized type clause marks the WHOLE inner type nullable —
-        // `(chan int32)?` is a nullable channel, `([]T)?` equals `[]?T`. The
-        // already-nullable guard makes redundant spellings like `(int32?)?`
-        // collapse instead of double-wrapping.
-        if (nonNullSyntax.IsParenthesizedNullable && bound is not NullableTypeSymbol)
-        {
-            bound = NullableTypeSymbol.Get(bound);
-        }
-
-        return bound;
     }
 
     /// <summary>

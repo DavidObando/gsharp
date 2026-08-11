@@ -1996,7 +1996,19 @@ internal sealed class ConversionClassifier
             return;
         }
 
-        var bound = bindExpression(defaultValue);
+        // Issue #3336: this expression can belong to a non-primary partial part.
+        var bindingScope = binderCtx.RootScope;
+        var previousTree = bindingScope.SetCurrentReferencingSyntaxTree(defaultValue.SyntaxTree);
+        BoundExpression bound;
+        try
+        {
+            bound = bindExpression(defaultValue);
+        }
+        finally
+        {
+            bindingScope.SetCurrentReferencingSyntaxTree(previousTree);
+        }
+
         if (bound == null || bound is BoundErrorExpression || parameter.Type == TypeSymbol.Error)
         {
             return;
