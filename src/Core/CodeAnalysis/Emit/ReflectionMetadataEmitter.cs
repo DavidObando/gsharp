@@ -3968,7 +3968,7 @@ internal sealed class ReflectionMetadataEmitter
         function.Accessibility is Accessibility.Public or Accessibility.Internal &&
         function.Attributes.Any(attribute =>
             string.Equals(
-                attribute.AttributeType?.FullName,
+                attribute.AttributeType?.ClrType?.FullName,
                 ModuleInitializerAttributeName,
                 StringComparison.Ordinal));
 

@@ -114,18 +114,6 @@ public static class HotReloadAgent
                 {
                     this.AddWatcher(directory!, includeSubdirectories: false);
                 }
-
-                public void Dispose()
-                {
-                    foreach (var watcher in this.watchers)
-                    {
-                        watcher.Dispose();
-                    }
-
-                    this.debounceTimer.Dispose();
-                    this.updateGate.Dispose();
-                    GC.SuppressFinalize(this);
-                }
             }
 
             WriteDiagnostic($"watching '{this.manifest.ProjectPath}'");
@@ -133,6 +121,18 @@ public static class HotReloadAgent
             {
                 this.QueueUpdate();
             }
+        }
+
+        public void Dispose()
+        {
+            foreach (var watcher in this.watchers)
+            {
+                watcher.Dispose();
+            }
+
+            this.debounceTimer.Dispose();
+            this.updateGate.Dispose();
+            GC.SuppressFinalize(this);
         }
 
         private static StringComparer PathComparer =>
