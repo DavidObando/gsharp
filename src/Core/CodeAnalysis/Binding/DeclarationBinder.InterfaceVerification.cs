@@ -62,6 +62,20 @@ internal sealed partial class DeclarationBinder
                     abstractMethod.ReceiverType?.Name ?? structSymbol.Name,
                     abstractMethod.Name);
             }
+
+            foreach (var abstractMember in ExternalClrOverrideResolver.GetUnimplementedAbstractMembers(structSymbol))
+            {
+                if (abstractMember.ReportedBySourceAbstractMethod)
+                {
+                    continue;
+                }
+
+                Diagnostics.ReportAbstractMemberNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol.Name,
+                    abstractMember.DeclaringTypeName,
+                    abstractMember.MemberName);
+            }
         }
     }
 

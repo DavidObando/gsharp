@@ -1140,7 +1140,8 @@ internal sealed partial class DeclarationBinder
                                 returnType,
                                 methodReturnRefKind,
                                 methodTypeParameters,
-                                methodAccessibility);
+                                methodAccessibility,
+                                binderCtx.References);
                             if (externalMatch.Member != null)
                             {
                                 externalOverriddenMethod = externalMatch.Member;
@@ -1621,6 +1622,7 @@ internal sealed partial class DeclarationBinder
                 // Validate: override needs base property
                 PropertyInfo? externalOverriddenProperty = null;
                 TypeSymbol? externalPropertyContainingType = null;
+                PropertySymbol? overriddenProperty = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
@@ -1628,6 +1630,10 @@ internal sealed partial class DeclarationBinder
                         if (!baseProp.IsVirtual && !baseProp.IsOverride)
                         {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
+                        }
+                        else
+                        {
+                            overriddenProperty = baseProp;
                         }
                     }
                     else
@@ -1639,7 +1645,9 @@ internal sealed partial class DeclarationBinder
                             propType,
                             hasGetter,
                             hasSetter,
-                            propAccessibility);
+                            getterAccessibility,
+                            setterAccessibility,
+                            binderCtx.References);
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenProperty = externalMatch.Member;
@@ -1678,6 +1686,7 @@ internal sealed partial class DeclarationBinder
                     IsIndexer = isIndexer,
                     Parameters = indexerParameters,
                 };
+                propertySymbol.OverriddenProperty = overriddenProperty;
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
                 if (externalOverriddenProperty != null)
                 {
@@ -1854,6 +1863,7 @@ internal sealed partial class DeclarationBinder
 
                 EventInfo? externalOverriddenEvent = null;
                 TypeSymbol? externalEventContainingType = null;
+                EventSymbol? overriddenEvent = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TypeMemberModel.TryGetEvent(structSymbol.BaseClass, eventName, out var baseEvent))
@@ -1866,6 +1876,10 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportOverrideSignatureMismatch(eventSyntax.Identifier.Location, eventName);
                         }
+                        else
+                        {
+                            overriddenEvent = baseEvent;
+                        }
                     }
                     else
                     {
@@ -1873,7 +1887,8 @@ internal sealed partial class DeclarationBinder
                             structSymbol,
                             eventName,
                             handlerType,
-                            eventAccessibility);
+                            eventAccessibility,
+                            binderCtx.References);
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenEvent = externalMatch.Member;
@@ -1902,6 +1917,7 @@ internal sealed partial class DeclarationBinder
                     isVirtual,
                     isOverride,
                     declaration: eventSyntax);
+                eventSymbol.OverriddenEvent = overriddenEvent;
                 Binder.AttachDocumentation(eventSymbol, eventSyntax);
                 if (externalOverriddenEvent != null)
                 {
