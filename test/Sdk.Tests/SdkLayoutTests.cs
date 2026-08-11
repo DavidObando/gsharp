@@ -175,6 +175,9 @@ public class SdkLayoutTests
         var hotReloadBaseline = doc.Descendants(MsbuildNs + "Target")
             .Single(t => (string)t.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
         Assert.Equal("CompileDesignTime", (string)hotReloadBaseline.Attribute("BeforeTargets"));
+        Assert.Equal(
+            "$(ProjectDepsFilePath)",
+            (string)hotReloadBaseline.Element(MsbuildNs + "Delete").Attribute("Files"));
         Assert.Contains(
             hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
             task => (string)task.Attribute("Targets") == "Build");

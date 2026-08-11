@@ -63,6 +63,7 @@
                       '$(DesignTimeBuild)' == 'true' and
                       '$(SkipCompilerExecution)' == 'true' and
                       '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Delete Files="$(ProjectDepsFilePath)" />
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="Build"
              BuildInParallel="false"
