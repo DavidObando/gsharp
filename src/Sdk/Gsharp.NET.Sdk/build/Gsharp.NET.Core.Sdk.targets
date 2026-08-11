@@ -72,6 +72,9 @@
                          DotNetWatchBuild=false;
                          GsharpEnableHotReload=true;
                          BuildProjectReferences=false" />
+    <Copy SourceFiles="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+          DestinationFiles="$(TargetDir)Gsharp.HotReload.Runtime.dll"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="_GsharpPrepareHotReload"
