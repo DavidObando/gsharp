@@ -571,8 +571,53 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translated = new NonNullAssertionExpression(translated);
             }
+            else if (!this.IsWithinExpressionTreeLambda(recv) && this.IsLocalBoundFromAsExpression(recv))
+            {
+                // ADR-0160: a local bound from a C# `as` (`var p = o as object[];`)
+                // has G# type `T?`, because `as` yields `T?` in both languages. In
+                // OBLIVIOUS C# the value is then dereferenced with no null test
+                // (`p[0]`), and Roslyn — which never considers such a local
+                // maybe-null — reports nothing, so none of the predicates above
+                // fire. gsc rejects the dereference (GS0116 / GS0158).
+                //
+                // Asserting here is faithful: C# would raise a
+                // NullReferenceException at this same dereference, and `!!` raises
+                // at exactly the same point. Asserting at the `as` instead would
+                // move the throw earlier and break the guarded shape
+                // (`var p = o as T; if (p != null) …`), which Roslyn DOES flag and
+                // which the predicates above already handle correctly.
+                translated = new NonNullAssertionExpression(translated);
+            }
 
             return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        // ADR-0160: true when `recv` names a local whose declaration initializer is a
+        // C# `as` expression, so the local's G# type is `T?`. See the dereference
+        // assertion in <see cref="TranslateReceiverWithNullForgiveness"/>. A local
+        // the C# code itself null-tests is already reported maybe-null by Roslyn and
+        // handled by the ordinary forgiveness predicates; this covers the oblivious
+        // shape those cannot see.
+        private bool IsLocalBoundFromAsExpression(ExpressionSyntax recv)
+        {
+            if (recv is not IdentifierNameSyntax identifier
+                || this.context.GetSymbolInfo(identifier).Symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+            {
+                return false;
+            }
+
+            while (initializer is ParenthesizedExpressionSyntax parenthesized)
+            {
+                initializer = parenthesized.Expression;
+            }
+
+            return initializer.IsKind(SyntaxKind.AsExpression);
         }
 
         // ADR-0054: G#'s parser never chains postfix member/index/call access

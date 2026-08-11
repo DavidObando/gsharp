@@ -534,6 +534,18 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         Dictionary<VariableSymbol, LocalVariableSymbol> parameterMap)
     {
         var operand = UpcastToExpression(this.TranslateExpression(unary.Operand, parameterMap));
+
+        // Issue #3349: a reference-type null-assertion is pure static annotation
+        // — the CLR has no distinct `T?`, so there is nothing to emit. Erase it
+        // and hand the operand's own tree through unchanged.
+        // `ExpressionTreeRestrictionValidator` has already rejected the nullable
+        // VALUE-type case (GS0473), which is a real conversion, so anything
+        // reaching here is safe to drop.
+        if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
+        {
+            return operand;
+        }
+
         var method = unary.Op.Kind switch
         {
             BoundUnaryOperatorKind.Identity => GetRequiredMethod(typeof(System.Linq.Expressions.Expression), nameof(System.Linq.Expressions.Expression.UnaryPlus), typeof(System.Linq.Expressions.Expression)),

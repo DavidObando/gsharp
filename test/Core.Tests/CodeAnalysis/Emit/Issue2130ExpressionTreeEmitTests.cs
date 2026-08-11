@@ -279,7 +279,7 @@ import System
 import System.Linq.Expressions
 
 func main() int32 {
-    let expr Expression[Func[object, int32]] = (value object) -> (value is string) ? (value as string).Length : 0
+    let expr Expression[Func[object, int32]] = (value object) -> (value is string) ? (value as string)!!.Length : 0
     let compiled = expr.Compile()
     return compiled(""forty-two"") + compiled(0)
 }

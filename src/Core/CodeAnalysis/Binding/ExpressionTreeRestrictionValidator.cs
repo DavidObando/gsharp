@@ -4,6 +4,7 @@
 
 using System;
 using System.Reflection;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -159,9 +160,22 @@ internal static class ExpressionTreeRestrictionValidator
                 {
                     diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "an unsafe pointer operation");
                 }
-                else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion)
+                else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion
+                    && IsNullableValueTypeAssertion(unary))
                 {
-                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "a null-assertion operator");
+                    // Issue #3349: `!!` is only unrepresentable in an expression
+                    // tree when it strips a nullable VALUE type — `T?` to `T` is a
+                    // real CLR conversion (`Nullable<T>.Value`) with no
+                    // System.Linq.Expressions counterpart that preserves G#'s
+                    // throw-on-nil contract. Over a REFERENCE type it is pure
+                    // static annotation: the CLR has no distinct `T?`, and
+                    // `Expression.TypeAs(x, T)` already has type `T`, so the
+                    // assertion erases to nothing and the tree is unaffected.
+                    // Banning it there made a downcast unwritable inside an
+                    // expression-tree lambda once `as T` started yielding `T?`,
+                    // since narrowing the result requires `!!` and no other
+                    // spelling exists.
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "a null-assertion operator on a nullable value type");
                 }
 
                 ValidateExpression(unary.Operand, diagnostics);
@@ -470,6 +484,21 @@ internal static class ExpressionTreeRestrictionValidator
         initializer = declaration.Initializer;
         statements = block.Statements.RemoveAt(0);
         return true;
+    }
+
+    // Issue #3349: true when `unary`'s null-assertion strips a nullable VALUE
+    // type, which is a real CLR conversion an expression tree cannot represent.
+    // A reference-type assertion is annotation-only and erases cleanly, so it is
+    // permitted (see the GS0473 site above). An unconstrained type parameter is
+    // treated conservatively as a value type: it may be instantiated with one.
+    private static bool IsNullableValueTypeAssertion(BoundUnaryExpression unary)
+    {
+        TypeSymbol underlying = unary.Operand.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : unary.Operand.Type;
+
+        return underlying is TypeParameterSymbol { HasReferenceTypeConstraint: false }
+            || ReflectionMetadataEmitter.IsValueTypeSymbol(underlying);
     }
 
     private static bool ReferencesReceiver(BoundExpression? expression, VariableSymbol? receiver)

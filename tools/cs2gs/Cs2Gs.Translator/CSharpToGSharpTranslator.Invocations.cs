@@ -2523,16 +2523,37 @@ public sealed partial class CSharpToGSharpTranslator
             // conversion-call form in G# — gsc's `T(expr)` is the value/numeric/
             // string-conversion form and rejects a reference cast (GS0155/GS0130
             // "IEnumerable(o)" / "List[int32](o)"). The reference downcast form is
-            // `expr as T`, which yields `T?`; the surrounding null-forgiveness pass
-            // (receiver / foreach-iterable / return / argument) re-asserts `!!`
-            // wherever the context needs the non-null `T`, preserving the C# hard
-            // cast's throw-on-misuse. Boxing/unboxing and user-defined conversions
-            // are NOT reference conversions and keep the conversion-call form.
+            // `expr as T`, which yields `T?`. Boxing/unboxing and user-defined
+            // conversions are NOT reference conversions and keep the
+            // conversion-call form.
+            //
+            // ADR-0160: the `!!` is asserted HERE rather than left to the
+            // surrounding null-forgiveness pass. Those passes key off Roslyn's
+            // nullability analysis, which — correctly — reports a C# hard cast to a
+            // non-nullable target as non-null, since a failing cast throws. So they
+            // decline to assert precisely where the RENDERING needs it, and every
+            // consuming position (receiver, index target, return, argument,
+            // initializer, …) would need its own carve-out. Asserting at the cast
+            // is both faithful — `(T)expr` yields a non-null `T` or throws — and
+            // complete. A cast to a nullable-annotated target (`(T?)x`) genuinely
+            // may be nil and is left unasserted.
             if (targetSymbol is { IsReferenceType: true }
                 && sourceSymbol != null
                 && this.context.Compilation.ClassifyConversion(sourceSymbol, targetSymbol).IsReference)
             {
-                return new BinaryExpression(operand, "as", new TypeExpression(targetType));
+                GExpression converted = new BinaryExpression(operand, "as", new TypeExpression(targetType));
+
+                // A cast written `(T?)x` may legitimately yield nil, so it keeps the
+                // bare `T?` — asserting would throw where C# does not. The written
+                // syntax is checked as well as the symbol annotation: for a
+                // `NullableTypeSyntax` the symbol from `GetTypeInfo(cast.Type)` does
+                // not reliably carry `Annotated`.
+                bool nullableTarget = cast.Type is NullableTypeSyntax
+                    || targetSymbol.NullableAnnotation == NullableAnnotation.Annotated;
+
+                return nullableTarget
+                    ? converted
+                    : new NonNullAssertionExpression(new ParenthesizedExpression(converted));
             }
 
             return new ConversionExpression(targetType, operand);

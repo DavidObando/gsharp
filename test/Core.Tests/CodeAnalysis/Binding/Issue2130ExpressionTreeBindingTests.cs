@@ -185,6 +185,47 @@ let expr Expression[Func[List[int32]]] = () -> List[int32]{ 1, 2, 3 }
         Assert.Contains(diagnostics, d => d.Id == "GS0473");
     }
 
+    /// <summary>
+    /// ADR-0160 / issue #3349: a REFERENCE-type null-assertion is pure static
+    /// annotation — the CLR has no distinct <c>T?</c>, and
+    /// <c>Expression.TypeAs(x, T).Type</c> is already <c>T</c> — so it erases
+    /// cleanly and must be permitted. Banning it made a downcast unwritable
+    /// inside an expression-tree lambda once <c>as T</c> started yielding
+    /// <c>T?</c>: narrowing the result requires <c>!!</c> and no other spelling
+    /// exists.
+    /// </summary>
+    [Fact]
+    public void ReferenceTypeNullAssertion_IsAllowedInsideExpressionTree()
+    {
+        var diagnostics = GetDiagnostics(@"
+import System
+import System.Linq.Expressions
+
+let expr Expression[Func[object, int32]] = (value object) -> (value is string) ? (value as string)!!.Length : 0
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0473");
+    }
+
+    /// <summary>
+    /// ADR-0160 / issue #3349: stripping a nullable VALUE type stays rejected —
+    /// <c>T?</c> to <c>T</c> is a real CLR conversion (<c>Nullable&lt;T&gt;.Value</c>)
+    /// with no System.Linq.Expressions counterpart that preserves G#'s
+    /// throw-on-nil contract.
+    /// </summary>
+    [Fact]
+    public void NullableValueTypeNullAssertion_RemainsRejectedInsideExpressionTree()
+    {
+        var diagnostics = GetDiagnostics(@"
+import System
+import System.Linq.Expressions
+
+let expr Expression[Func[int32?, int32]] = (value int32?) -> value!!
+");
+
+        Assert.Contains(diagnostics, d => d.Id == "GS0473");
+    }
+
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

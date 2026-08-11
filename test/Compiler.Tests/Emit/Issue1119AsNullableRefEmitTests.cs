@@ -91,7 +91,7 @@ public class Issue1119AsNullableRefEmitTests
             class Derived : Base { func F() int32 { return 7 } }
 
             let b Base = Derived()
-            let d = b as Derived
+            let d = (b as Derived)!!
             Console.WriteLine(d.F())
             """;
 

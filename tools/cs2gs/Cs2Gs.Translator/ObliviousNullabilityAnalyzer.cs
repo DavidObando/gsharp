@@ -2838,6 +2838,19 @@ internal static class ObliviousNullabilityAnalyzer
             case ConditionalAccessExpressionSyntax:
                 return true;
 
+            // ADR-0160: `x as T` is a TESTING conversion — it yields null when the
+            // runtime type does not match — so its value is always maybe-null,
+            // whatever the compilation's nullable context says. In an oblivious
+            // compilation Roslyn reports `NullableAnnotation.None` for it, so the
+            // flow fallback below cannot see this; without the explicit case a
+            // declaration whose value is an `as` result is never promoted. That
+            // matters because gsc types `as` as `T?`: `string ToString() => … as
+            // string;` must promote its return type to `string?` rather than be
+            // asserted, since C# genuinely returns null there and `!!` would throw.
+            case BinaryExpressionSyntax asExpression
+                when asExpression.IsKind(SyntaxKind.AsExpression):
+                return true;
+
             // `a ?? b`: nullable iff the `b` fallback is nullable.
             case BinaryExpressionSyntax coalesce
                 when coalesce.IsKind(SyntaxKind.CoalesceExpression):

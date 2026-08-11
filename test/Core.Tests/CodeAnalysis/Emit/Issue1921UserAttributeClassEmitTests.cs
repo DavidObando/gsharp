@@ -54,7 +54,7 @@ func run() {
     var attrs = t.GetCustomAttributes(true)
     for var i int32 = 0; i < attrs.Length; i += 1 {
         if attrs[i].GetType().Name == ""NoteAttribute"" {
-            var a NoteAttribute = attrs[i] as NoteAttribute
+            var a NoteAttribute = (attrs[i] as NoteAttribute)!!
             Console.WriteLine(""Note:"" + a.Text)
         }
     }
@@ -165,7 +165,7 @@ func run() {
     var attrs = t.GetCustomAttributes(true)
     for var i int32 = 0; i < attrs.Length; i += 1 {
         if attrs[i].GetType().Name == ""TagAttribute"" {
-            var a TagAttribute = attrs[i] as TagAttribute
+            var a TagAttribute = (attrs[i] as TagAttribute)!!
             Console.WriteLine(""Which:"" + a.Which.ToString())
         }
     }
