@@ -150,6 +150,58 @@ public sealed class ExpressionStatement : GStatement
 }
 
 /// <summary>
+/// An <c>if let</c> statement — ADR-0071:
+/// <c>if let a = e [, let b = e2]* { … } [else { … }]</c>.
+/// </summary>
+/// <remarks>
+/// The canonical G# rendering of C#'s <c>if (receiver is { } name) { … }</c>
+/// (issue #3359). The general pattern lowering must spill <c>receiver</c> into a
+/// <c>let __spillN</c> — the pattern reads the scrutinee more than once (issue
+/// #1731) — which destroys the author's binder name, forces a <c>!!</c> at every
+/// read, and adds a brace level to scope the temp. <c>if let</c> evaluates the
+/// receiver once by construction and binds the name at its non-null type.
+/// <para>
+/// Mirrors <see cref="Cs2Gs.CodeModel.Ast.IfLetExpression"/>, the value-position
+/// form added by ADR-0151, and reuses its
+/// <see cref="Cs2Gs.CodeModel.Ast.IfLetBinding"/> clause type.
+/// </para>
+/// </remarks>
+public sealed class IfLetStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IfLetStatement"/> class.
+    /// </summary>
+    /// <param name="bindings">The <c>let</c> binding clauses.</param>
+    /// <param name="then">The then-branch block.</param>
+    /// <param name="elseBranch">The optional else branch.</param>
+    /// <remarks>
+    /// Unlike ADR-0151's value-position <see cref="IfLetExpression"/>, the
+    /// STATEMENT grammar has no <c>&amp;&amp; guard</c> clause — `gsc` swallows a
+    /// trailing <c>&amp;&amp; …</c> into the binding's initializer. A C# guard is
+    /// therefore nested inside the then-branch by the translator, and no guard is
+    /// representable here.
+    /// </remarks>
+    public IfLetStatement(
+        IReadOnlyList<IfLetBinding> bindings,
+        BlockStatement then,
+        GStatement elseBranch = null)
+    {
+        Bindings = bindings;
+        Then = then;
+        Else = elseBranch;
+    }
+
+    /// <summary>Gets the <c>let</c> binding clauses.</summary>
+    public IReadOnlyList<IfLetBinding> Bindings { get; }
+
+    /// <summary>Gets the then-branch block.</summary>
+    public BlockStatement Then { get; }
+
+    /// <summary>Gets the optional else branch.</summary>
+    public GStatement Else { get; }
+}
+
+/// <summary>
 /// An assignment statement <c>target op value</c> (e.g. <c>x = 1</c>, <c>x += 2</c>).
 /// </summary>
 public sealed class AssignmentStatement : GStatement

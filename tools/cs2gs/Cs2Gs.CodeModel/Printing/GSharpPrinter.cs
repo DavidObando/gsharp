@@ -1034,6 +1034,9 @@ public static class GSharpPrinter
             case IfStatement ifStatement:
                 return RenderIf(ifStatement, indent);
 
+            case IfLetStatement ifLetStatement:
+                return RenderIfLet(ifLetStatement, indent);
+
             case WhileStatement whileStatement:
                 return $"{pad}while {RenderExpression(whileStatement.Condition, indent)} {RenderBlock(whileStatement.Body, indent)}";
 
@@ -1161,6 +1164,42 @@ public static class GSharpPrinter
         // A "simple" statement (init/incr clause of a C-style for) is rendered
         // inline with no leading indentation.
         return RenderStatement(statement, indent).TrimStart();
+    }
+
+    private static string RenderIfLet(IfLetStatement ifLet, int indent)
+    {
+        var pad = Indent(indent);
+        var bindings = string.Join(
+            ", ",
+            ifLet.Bindings.Select(binding =>
+            {
+                var type = binding.DeclaredType == null
+                    ? string.Empty
+                    : $" {RenderType(binding.DeclaredType)}";
+                var initializer = RenderExpression(binding.Initializer, indent, IfLetInitializerPrecedence);
+                return $"let {binding.Name}{type} = {initializer}";
+            }));
+
+        // No guard clause: the statement grammar has none (see IfLetStatement).
+        var sb = new StringBuilder();
+        sb.Append($"{pad}if {bindings} {RenderBlock(ifLet.Then, indent)}");
+        if (ifLet.Else is IfStatement elseIf)
+        {
+            sb.Append(" else ");
+            sb.Append(RenderIf(elseIf, indent).TrimStart());
+        }
+        else if (ifLet.Else is IfLetStatement elseIfLet)
+        {
+            sb.Append(" else ");
+            sb.Append(RenderIfLet(elseIfLet, indent).TrimStart());
+        }
+        else if (ifLet.Else is BlockStatement elseBlock)
+        {
+            sb.Append(" else ");
+            sb.Append(RenderBlock(elseBlock, indent));
+        }
+
+        return sb.ToString();
     }
 
     private static string RenderIf(IfStatement ifStatement, int indent)

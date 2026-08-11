@@ -516,6 +516,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private IEnumerable<GStatement> TranslateIfStatements(IfStatementSyntax ifStatement)
         {
+            // Issue #3359: `if (recv is { } name) { … }` has a canonical G# form —
+            // the ADR-0071 `if let` statement — that binds the name at its
+            // non-null type and evaluates `recv` exactly once by construction.
+            // Tried FIRST because the general pattern lowering would otherwise
+            // spill `recv` into a `let __spillN`, destroying the author's binder
+            // name and adding a `!!` at every read. The helper is conservative
+            // and translates nothing when it declines.
+            if (this.TryBuildIfLetGuard(ifStatement, out IReadOnlyList<GStatement> ifLetHoisted))
+            {
+                return ifLetHoisted;
+            }
+
             if (this.TryBuildNegatedGuardHoist(ifStatement, out IReadOnlyList<GStatement> hoisted))
             {
                 return hoisted;
