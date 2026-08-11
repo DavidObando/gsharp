@@ -37,6 +37,9 @@ internal sealed class HotReloadManifest
 
     public string ProjectDirectory => Path.GetDirectoryName(this.ProjectPath) ?? Environment.CurrentDirectory;
 
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     public static HotReloadManifest Load(string path)
     {
         var lines = File.ReadAllLines(path);
@@ -109,9 +112,6 @@ internal sealed class HotReloadManifest
 
         return false;
     }
-
-    private static StringComparer PathComparer =>
-        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static string Decode(string value) =>
         Encoding.UTF8.GetString(Convert.FromBase64String(value));

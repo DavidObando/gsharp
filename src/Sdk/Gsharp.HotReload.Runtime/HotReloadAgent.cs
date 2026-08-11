@@ -90,6 +90,12 @@ public static class HotReloadAgent
         private int processedVersion;
         private bool disabled;
 
+        private static StringComparer PathComparer =>
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+        private static StringComparison PathComparison =>
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
         public ProjectAgent(Assembly assembly, HotReloadManifest manifest)
         {
             this.assembly = assembly;
@@ -134,12 +140,6 @@ public static class HotReloadAgent
             this.updateGate.Dispose();
             GC.SuppressFinalize(this);
         }
-
-        private static StringComparer PathComparer =>
-            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-
-        private static StringComparison PathComparison =>
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
         private void AddWatcher(string directory, bool includeSubdirectories)
         {

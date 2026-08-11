@@ -16,6 +16,18 @@ using System.Reflection.PortableExecutable;
 
 namespace Gsharp.HotReload.Runtime;
 
+internal enum HotReloadDeltaStatus
+{
+    /// <summary>Delta is valid and ready to apply.</summary>
+    Ready,
+
+    /// <summary>Compilation produced no runtime-significant method changes.</summary>
+    NoChanges,
+
+    /// <summary>Edit changes metadata shape and requires process restart.</summary>
+    Unsupported,
+}
+
 internal sealed class HotReloadDeltaBuilder
 {
     private static readonly IReadOnlyDictionary<ushort, OperandType> OperandTypes = CreateOperandTypeMap();
@@ -897,6 +909,7 @@ internal sealed class HotReloadDeltaBuilder
         List<EntityHandle> newStandaloneSignatures,
         ref int standaloneSignatureCount)
     {
+        var nextStandaloneSignatureCount = standaloneSignatureCount;
         var headerSize = GetMethodHeaderSize(body);
         if (headerSize > 1)
         {
@@ -909,7 +922,7 @@ internal sealed class HotReloadDeltaBuilder
                     metadata,
                     signatures,
                     newStandaloneSignatures,
-                    ref standaloneSignatureCount);
+                    ref nextStandaloneSignatureCount);
                 BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8, 4), mapped);
             }
         }
@@ -938,13 +951,14 @@ internal sealed class HotReloadDeltaBuilder
                         metadata,
                         signatures,
                         newStandaloneSignatures,
-                        ref standaloneSignatureCount);
+                        ref nextStandaloneSignatureCount);
                     BinaryPrimitives.WriteInt32LittleEndian(
                         body.AsSpan(headerSize + operandOffset, 4),
                         mappedSignature);
                     break;
             }
         });
+        standaloneSignatureCount = nextStandaloneSignatureCount;
     }
 
     private static int MapStandaloneSignature(
@@ -1220,11 +1234,4 @@ internal sealed class HotReloadDelta
         new(HotReloadDeltaStatus.Unsupported, Array.Empty<byte>(), Array.Empty<byte>(), ImmutableArray<string>.Empty, diagnostic, commit: null);
 
     public void Commit() => this.commit?.Invoke();
-}
-
-internal enum HotReloadDeltaStatus
-{
-    Ready,
-    NoChanges,
-    Unsupported,
 }
