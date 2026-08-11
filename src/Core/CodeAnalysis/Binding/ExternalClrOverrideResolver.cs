@@ -28,7 +28,8 @@ internal static class ExternalClrOverrideResolver
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
         var reflectionBaseType = GetReflectionBaseType(externalBase);
-        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        var typeSubstitutions = BuildTypeArgumentSubstitutions(externalBase);
+        var methodTypeArguments = BuildMethodTypeArguments(typeParameters);
         foreach (var method in EnumerateMethods(reflectionBaseType, name))
         {
             if (!IsAccessibleOverrideTarget(method, accessibility))
@@ -38,8 +39,8 @@ internal static class ExternalClrOverrideResolver
 
             sawName = true;
             if (method.GetGenericArguments().Length != typeParameters.Length
-                || !ParametersMatch(method.GetParameters(), parameters, typeParameters, typeArguments, reflectionBaseType)
-                || !ReturnMatches(method.ReturnType, returnType, returnRefKind, typeParameters, typeArguments, reflectionBaseType))
+                || !ParametersMatch(method.GetParameters(), parameters, typeSubstitutions, method, methodTypeArguments)
+                || !ReturnMatches(method.ReturnType, returnType, returnRefKind, typeSubstitutions, method, methodTypeArguments))
             {
                 continue;
             }
@@ -67,7 +68,7 @@ internal static class ExternalClrOverrideResolver
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
         var reflectionBaseType = GetReflectionBaseType(externalBase);
-        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        var typeSubstitutions = BuildTypeArgumentSubstitutions(externalBase);
         foreach (var property in EnumerateProperties(reflectionBaseType, name))
         {
             var getter = property.GetGetMethod(nonPublic: true);
@@ -83,8 +84,8 @@ internal static class ExternalClrOverrideResolver
                 || (hasSetter && setter == null)
                 || (!hasGetter && getter != null)
                 || (!hasSetter && setter != null)
-                || !ParametersMatch(property.GetIndexParameters(), indexParameters, ImmutableArray<TypeParameterSymbol>.Empty, typeArguments, reflectionBaseType)
-                || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter, typeArguments, reflectionBaseType))
+                || !ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions)
+                || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter, typeSubstitutions))
             {
                 continue;
             }
@@ -110,7 +111,7 @@ internal static class ExternalClrOverrideResolver
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
         var reflectionBaseType = GetReflectionBaseType(externalBase);
-        var typeArguments = GetSymbolicTypeArguments(externalBase);
+        var typeSubstitutions = BuildTypeArgumentSubstitutions(externalBase);
         foreach (var eventInfo in EnumerateEvents(reflectionBaseType, name))
         {
             var add = eventInfo.GetAddMethod(nonPublic: true);
@@ -122,7 +123,7 @@ internal static class ExternalClrOverrideResolver
             }
 
             sawName = true;
-            if (!TypeMatches(eventInfo.EventHandlerType, handlerType, ImmutableArray<TypeParameterSymbol>.Empty, typeArguments, reflectionBaseType))
+            if (!TypeMatches(eventInfo.EventHandlerType, handlerType, typeSubstitutions))
             {
                 continue;
             }
@@ -169,6 +170,61 @@ internal static class ExternalClrOverrideResolver
         => importedBase is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true } imported
             ? imported.TypeArguments
             : ImmutableArray<TypeSymbol>.Empty;
+
+    private static ImmutableArray<TypeArgumentSubstitution> BuildTypeArgumentSubstitutions(TypeSymbol? externalBase)
+    {
+        var root = new TypeArgumentSubstitution(
+            GetReflectionBaseType(externalBase),
+            GetSymbolicTypeArguments(externalBase));
+        if (externalBase is not ImportedTypeSymbol { OpenDefinition: not null } imported
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return ImmutableArray.Create(root);
+        }
+
+        var substitutions = ImmutableArray.CreateBuilder<TypeArgumentSubstitution>();
+        substitutions.Add(root);
+        for (var current = imported.OpenDefinition.BaseType; current != null; current = current.BaseType)
+        {
+            if (!current.IsGenericType)
+            {
+                continue;
+            }
+
+            var openDefinition = current.IsGenericTypeDefinition
+                ? current
+                : current.GetGenericTypeDefinition();
+            if (ClrTypeUtilities.AreSame(openDefinition, imported.OpenDefinition)
+                || !MemberLookup.TryMapConstructedTypeArgumentsThroughHierarchy(
+                    imported,
+                    openDefinition,
+                    out var mappedArguments))
+            {
+                continue;
+            }
+
+            substitutions.Add(new TypeArgumentSubstitution(openDefinition, mappedArguments));
+        }
+
+        return substitutions.ToImmutable();
+    }
+
+    private static ImmutableArray<TypeSymbol?> BuildMethodTypeArguments(
+        ImmutableArray<TypeParameterSymbol> typeParameters)
+    {
+        if (typeParameters.IsDefaultOrEmpty)
+        {
+            return default;
+        }
+
+        var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol?>(typeParameters.Length);
+        foreach (var typeParameter in typeParameters)
+        {
+            typeArguments.Add(typeParameter);
+        }
+
+        return typeArguments.MoveToImmutable();
+    }
 
     private static IEnumerable<MethodInfo> EnumerateMethods(Type? baseType, string name)
     {
@@ -245,9 +301,9 @@ internal static class ExternalClrOverrideResolver
     private static bool ParametersMatch(
         ParameterInfo[] clrParameters,
         ImmutableArray<ParameterSymbol> parameters,
-        ImmutableArray<TypeParameterSymbol> typeParameters,
-        ImmutableArray<TypeSymbol> containingTypeArguments,
-        Type? openDefinition)
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions,
+        MethodInfo? openMethodDefinition = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
     {
         if (clrParameters.Length != parameters.Length)
         {
@@ -270,7 +326,12 @@ internal static class ExternalClrOverrideResolver
             }
 
             if (clrRefKind != parameters[i].RefKind
-                || !TypeMatches(clrType, parameters[i].Type, typeParameters, containingTypeArguments, openDefinition))
+                || !TypeMatches(
+                    clrType,
+                    parameters[i].Type,
+                    typeSubstitutions,
+                    openMethodDefinition,
+                    methodTypeArguments))
             {
                 return false;
             }
@@ -283,9 +344,9 @@ internal static class ExternalClrOverrideResolver
         Type? clrReturnType,
         TypeSymbol returnType,
         RefKind returnRefKind,
-        ImmutableArray<TypeParameterSymbol> typeParameters,
-        ImmutableArray<TypeSymbol> containingTypeArguments,
-        Type? openDefinition)
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions,
+        MethodInfo? openMethodDefinition = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
     {
         if (clrReturnType == null)
         {
@@ -307,7 +368,12 @@ internal static class ExternalClrOverrideResolver
             }
         }
 
-        if (TypeMatches(clrReturnType, returnType, typeParameters, containingTypeArguments, openDefinition))
+        if (TypeMatches(
+            clrReturnType,
+            returnType,
+            typeSubstitutions,
+            openMethodDefinition,
+            methodTypeArguments))
         {
             return true;
         }
@@ -319,22 +385,19 @@ internal static class ExternalClrOverrideResolver
         Type? clrPropertyType,
         TypeSymbol propertyType,
         bool hasSetter,
-        ImmutableArray<TypeSymbol> containingTypeArguments,
-        Type? openDefinition)
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions)
         => TypeMatches(
             clrPropertyType,
             propertyType,
-            ImmutableArray<TypeParameterSymbol>.Empty,
-            containingTypeArguments,
-            openDefinition)
+            typeSubstitutions)
             || (!hasSetter && IsCovariantReturn(clrPropertyType, propertyType));
 
     private static bool TypeMatches(
         Type? clrType,
         TypeSymbol type,
-        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
-        ImmutableArray<TypeSymbol> containingTypeArguments,
-        Type? openDefinition)
+        ImmutableArray<TypeArgumentSubstitution> typeSubstitutions,
+        MethodInfo? openMethodDefinition = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
     {
         type = type switch
         {
@@ -342,18 +405,18 @@ internal static class ExternalClrOverrideResolver
             _ => type,
         };
 
-        if (clrType?.IsGenericParameter == true && clrType.DeclaringMethod != null)
+        foreach (var substitution in typeSubstitutions)
         {
-            return type is TypeParameterSymbol typeParameter
-                && typeParameter.Ordinal < methodTypeParameters.Length
-                && ReferenceEquals(typeParameter, methodTypeParameters[typeParameter.Ordinal])
-                && clrType.GenericParameterPosition == typeParameter.Ordinal;
-        }
-
-        var substituted = MemberLookup.MapOpenClrTypeToSymbolic(clrType, openDefinition, containingTypeArguments);
-        if (DeclarationBinder.TypeSignaturesEquivalent(substituted, type))
-        {
-            return true;
+            var substituted = MemberLookup.MapOpenClrTypeToSymbolic(
+                clrType,
+                substitution.OpenDefinition,
+                substitution.TypeArguments,
+                openMethodDefinition,
+                methodTypeArguments);
+            if (DeclarationBinder.TypeSignaturesEquivalent(substituted, type))
+            {
+                return true;
+            }
         }
 
         var effectiveClrType = NullableLifting.GetEffectiveClrType(type);
@@ -416,4 +479,8 @@ internal static class ExternalClrOverrideResolver
         bool SawName,
         bool IsSealed)
         where T : MemberInfo;
+
+    private readonly record struct TypeArgumentSubstitution(
+        Type? OpenDefinition,
+        ImmutableArray<TypeSymbol> TypeArguments);
 }

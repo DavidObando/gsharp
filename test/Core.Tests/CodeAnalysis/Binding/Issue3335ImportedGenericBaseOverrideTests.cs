@@ -4,6 +4,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -22,6 +23,21 @@ public sealed class Issue3335ImportedGenericBaseOverrideTests
           public open func Write(data []float64) T;
           public open func ReadAll(items []T, data []float64);
           public open func WriteAll(data []float64) []T;
+          public open func EchoAll[U](items []U) []U;
+        }
+
+        public class Box[T] {
+        }
+
+        public open class DeepRoot[T] {
+          public open func Transform(item T) T;
+          public open prop Current T { get; }
+        }
+
+        public open class DeepBase[T] : DeepRoot[T] {
+        }
+
+        public open class DeepMid[T] : DeepBase[Box[T]] {
         }
         """;
 
@@ -60,6 +76,22 @@ public sealed class Issue3335ImportedGenericBaseOverrideTests
                   public override func WriteAll(data []float64) []Payload {
                     return []Payload{ Payload{ Value: data[0] } }
                   }
+
+                  public override func EchoAll[U](items []U) []U {
+                    return items
+                  }
+                }
+
+                public class DeepPayloadConverter : DeepMid[Payload] {
+                  public override func Transform(item Box[Payload]) Box[Payload] {
+                    return item
+                  }
+
+                  public override prop Current Box[Payload] {
+                    get {
+                      return Box[Payload]()
+                    }
+                  }
                 }
 
                 func Main() int32 {
@@ -68,7 +100,16 @@ public sealed class Issue3335ImportedGenericBaseOverrideTests
                   converter.Read(payload, []float64{ 2.5 })
                   let payloads = converter.WriteAll([]float64{ 3.5 })
                   converter.ReadAll(payloads, []float64{ 4.5 })
-                  return payload.Value == 2.5 && payloads[0].Value == 4.5 ? 0 : 1
+                  let echoed = converter.EchoAll[Payload](payloads)
+
+                  let deep = DeepPayloadConverter()
+                  let wrapped = Box[Payload]()
+                  let transformed = deep.Transform(wrapped)
+                  let current = deep.Current
+
+                  return payload.Value == 2.5
+                    && echoed[0].Value == 4.5
+                    && transformed == wrapped ? 0 : 1
                 }
                 """,
                 new[] { libraryPath });
@@ -115,11 +156,47 @@ public sealed class Issue3335ImportedGenericBaseOverrideTests
                   public override func WriteAll(data []float64) []Payload {
                     return []Payload{}
                   }
+
+                  public override func EchoAll[U](items []U) []U {
+                    return items
+                  }
+                }
+
+                public open class BadMethodConverter : Converter[Payload] {
+                  public override func Read(item Payload, data []float64) {
+                  }
+
+                  public override func Write(data []float64) Payload {
+                    return Payload{}
+                  }
+
+                  public override func ReadAll(items []Payload, data []float64) {
+                  }
+
+                  public override func WriteAll(data []float64) []Payload {
+                    return []Payload{}
+                  }
+
+                  public override func EchoAll[U](items []U) []Payload {
+                    return []Payload{}
+                  }
+                }
+
+                public open class BadDeepConverter : DeepMid[Payload] {
+                  public override func Transform(item Box[float64]) Box[Payload] {
+                    return Box[Payload]()
+                  }
+
+                  public override prop Current Box[Payload] {
+                    get {
+                      return Box[Payload]()
+                    }
+                  }
                 }
                 """,
                 new[] { libraryPath });
 
-            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0185");
+            Assert.Equal(3, result.Diagnostics.Count(diagnostic => diagnostic.Id == "GS0185"));
         }
         finally
         {
