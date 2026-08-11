@@ -90,12 +90,6 @@ public static class HotReloadAgent
         private int processedVersion;
         private bool disabled;
 
-        private static StringComparer PathComparer =>
-            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-
-        private static StringComparison PathComparison =>
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
         public ProjectAgent(Assembly assembly, HotReloadManifest manifest)
         {
             this.assembly = assembly;
@@ -106,6 +100,12 @@ public static class HotReloadAgent
                 Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             this.debounceTimer = new Timer(_ => _ = Task.Run(this.ProcessChangesAsync), null, Timeout.Infinite, Timeout.Infinite);
         }
+
+        private static StringComparer PathComparer =>
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+        private static StringComparison PathComparison =>
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
         public void Start()
         {
