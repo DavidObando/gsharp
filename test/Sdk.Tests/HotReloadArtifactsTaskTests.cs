@@ -4,7 +4,6 @@
 
 using System;
 using System.Buffers.Binary;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
@@ -166,7 +165,7 @@ public class HotReloadArtifactsTaskTests
         return peStream.ToArray();
     }
 
-    private static int ReadInlineToken(ImmutableArray<byte> il, int offset)
+    private static int ReadInlineToken(byte[] il, int offset)
     {
         Assert.InRange(offset, 0, il.Length - sizeof(int));
         return BinaryPrimitives.ReadInt32LittleEndian(il.AsSpan(offset, sizeof(int)));
