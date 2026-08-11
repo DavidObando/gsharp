@@ -10,6 +10,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,7 +23,8 @@ namespace Gsharp.HotReload.Runtime;
 /// </summary>
 public static class HotReloadAgent
 {
-    private static readonly ConcurrentDictionary<Guid, ProjectAgent> Agents = new();
+    private static readonly ConcurrentDictionary<string, Lazy<ProjectAgent>> Agents = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     /// <summary>
     /// Registers an assembly and its build manifest when launched under
@@ -53,14 +56,48 @@ public static class HotReloadAgent
                     manifestPath);
             }
 
+            manifestPath = Path.GetFullPath(manifestPath);
             var manifest = HotReloadManifest.Load(manifestPath);
-            var moduleId = assembly.ManifestModule.ModuleVersionId;
-            Agents.GetOrAdd(moduleId, _ =>
+            if (!string.Equals(assembly.GetName().Name, manifest.AssemblyName, StringComparison.Ordinal))
             {
-                var agent = new ProjectAgent(assembly, manifest);
-                agent.Start();
-                return agent;
-            });
+                WriteDiagnostic(
+                    $"GSHR1000: manifest '{manifestPath}' targets '{manifest.AssemblyName}', not assembly '{assembly.GetName().Name}'.");
+                return;
+            }
+
+            var guardName = "GsharpHotReload_" +
+                Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
+                "_" +
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(manifest.ProjectPath)));
+            var processGuard = new Mutex(initiallyOwned: false, guardName, out var createdNew);
+            if (!createdNew)
+            {
+                processGuard.Dispose();
+                return;
+            }
+
+            try
+            {
+                var agent = Agents.GetOrAdd(
+                    manifestPath,
+                    _ => new Lazy<ProjectAgent>(
+                        () =>
+                        {
+                            var newAgent = new ProjectAgent(assembly, manifest, processGuard);
+                            newAgent.Start();
+                            return newAgent;
+                        },
+                        LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+                if (!ReferenceEquals(agent.ProcessGuard, processGuard))
+                {
+                    processGuard.Dispose();
+                }
+            }
+            catch
+            {
+                processGuard.Dispose();
+                throw;
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -82,6 +119,7 @@ public static class HotReloadAgent
         private readonly Assembly assembly;
         private readonly HotReloadManifest manifest;
         private readonly HotReloadDeltaBuilder deltaBuilder;
+        private readonly Mutex processGuard;
         private readonly string updateDirectory;
         private readonly List<FileSystemWatcher> watchers = new();
         private readonly SemaphoreSlim updateGate = new(1, 1);
@@ -90,10 +128,11 @@ public static class HotReloadAgent
         private int processedVersion;
         private bool disabled;
 
-        public ProjectAgent(Assembly assembly, HotReloadManifest manifest)
+        public ProjectAgent(Assembly assembly, HotReloadManifest manifest, Mutex processGuard)
         {
             this.assembly = assembly;
             this.manifest = manifest;
+            this.processGuard = processGuard;
             this.deltaBuilder = new HotReloadDeltaBuilder(File.ReadAllBytes(assembly.Location));
             this.updateDirectory = Path.Combine(
                 manifest.UpdateDirectory,
@@ -106,6 +145,8 @@ public static class HotReloadAgent
 
         private static StringComparison PathComparison =>
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+        public Mutex ProcessGuard => this.processGuard;
 
         public void Start()
         {
@@ -139,6 +180,7 @@ public static class HotReloadAgent
 
             this.debounceTimer.Dispose();
             this.updateGate.Dispose();
+            this.processGuard.Dispose();
             GC.SuppressFinalize(this);
         }
 
@@ -273,6 +315,7 @@ public static class HotReloadAgent
             startInfo.ArgumentList.Add($"-p:Configuration={this.manifest.Configuration}");
             startInfo.ArgumentList.Add("-p:DotNetWatchBuild=true");
             startInfo.ArgumentList.Add("-p:GsharpEnableHotReload=true");
+            startInfo.ArgumentList.Add("-p:BuildProjectReferences=false");
             startInfo.ArgumentList.Add($"-p:GsharpHotReloadOutputDirectory={this.updateDirectory}");
 
             using var process = Process.Start(startInfo);

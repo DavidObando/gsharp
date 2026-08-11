@@ -62,7 +62,7 @@ The SDK's MSBuild task DLL is published as `netstandard2.0` so it loads in any M
 
 ## `dotnet watch` and hot reload
 
-Debug `net10.0` projects enable G# hot reload by default:
+`net10.0` projects launched by `dotnet watch` enable G# hot reload:
 
 ```sh
 dotnet watch --project MyApp.gsproj
@@ -79,8 +79,8 @@ Edits that add/remove types or members, change signatures, or introduce new
 metadata references are rejected explicitly as `GSHR1001` with “Restart
 required”; the SDK never silently reports such an edit as applied. Press
 <kbd>Ctrl</kbd>+<kbd>R</kbd> to restart. Set
-`<GsharpEnableHotReload>false</GsharpEnableHotReload>` to omit the runtime
-bootstrap from a Debug build.
+`<GsharpEnableHotReload>false</GsharpEnableHotReload>` to disable it, or set
+the property explicitly to `true` for another supported host.
 
 ## Side-loading a locally built SDK
 

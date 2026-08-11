@@ -167,11 +167,10 @@ public class SdkLayoutTests
 
         var hotReloadCompile = doc.Descendants(MsbuildNs + "Target")
             .Single(t => (string)t.Attribute("Name") == "_GsharpHotReloadCompile");
+        Assert.Equal("Compile", (string)hotReloadCompile.Attribute("DependsOnTargets"));
         Assert.Contains(
-            "_GsharpWriteHotReloadManifest",
-            (string)hotReloadCompile.Attribute("DependsOnTargets"),
-            System.StringComparison.Ordinal);
-        Assert.NotNull(hotReloadCompile.Element(MsbuildNs + "BuildTask"));
+            hotReloadCompile.Elements(MsbuildNs + "Copy"),
+            copy => (string)copy.Attribute("SourceFiles") == "@(IntermediateAssembly)");
 
         Assert.Contains(
             doc.Descendants(MsbuildNs + "ProjectCapability"),
