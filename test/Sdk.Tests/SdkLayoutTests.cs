@@ -224,7 +224,7 @@ public class SdkLayoutTests
     }
 
     [Fact]
-    public void Core_Targets_Pin_HotReload_Watch_Inputs_And_Isolated_Baseline_Build()
+    public void Core_Targets_Pin_HotReload_Watch_Inputs_And_Serialized_Agent_Build()
     {
         var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
         var doc = XDocument.Load(path);
@@ -262,22 +262,6 @@ public class SdkLayoutTests
                 group.Elements(MsbuildNs + "ProjectCapability")
                     .Any(item => (string)item.Attribute("Include") == "SupportsHotReload"));
         var gatedItemsCondition = (string)gatedItems.Attribute("Condition");
-        Assert.Equal(
-            "false",
-            (string)gatedItems.Elements(MsbuildNs + "Compile")
-                .Single(item => (string)item.Attribute("Update") == "@(Compile)")
-                .Attribute("Watch"));
-        Assert.Equal(
-            "false",
-            (string)gatedItems.Elements(MsbuildNs + "EmbeddedResource")
-                .Single(item => (string)item.Attribute("Update") == "@(EmbeddedResource)")
-                .Attribute("Watch"));
-        Assert.Contains(
-            "IntermediateOutputPath;OutputPath;GsharpHotReloadOutputDirectory",
-            (string)gatedItems.Elements(MsbuildNs + "ProjectReference")
-                .Single(item => (string)item.Attribute("Update") == "@(ProjectReference)")
-                .Attribute("GlobalPropertiesToRemove"),
-            System.StringComparison.Ordinal);
         Assert.Contains(
             "'$(GsharpEnableHotReload)' == 'true'",
             gatedItemsCondition,
@@ -332,9 +316,17 @@ public class SdkLayoutTests
 
         var filterTarget = doc.Descendants(MsbuildNs + "Target")
             .Single(target => (string)target.Attribute("Name") == "_GsharpFilterHotReloadWatchItems");
-        Assert.Contains(
-            filterTarget.Descendants(MsbuildNs + "Watch"),
-            item => (string)item.Attribute("Remove") == "@(Compile->'%(FullPath)')");
+        Assert.Equal("_CoreCollectWatchItems", (string)filterTarget.Attribute("BeforeTargets"));
+        Assert.Equal(
+            "false",
+            (string)filterTarget.Descendants(MsbuildNs + "Compile")
+                .Single(item => (string)item.Attribute("Update") == "@(Compile)")
+                .Attribute("Watch"));
+        Assert.Equal(
+            "false",
+            (string)filterTarget.Descendants(MsbuildNs + "EmbeddedResource")
+                .Single(item => (string)item.Attribute("Update") == "@(EmbeddedResource)")
+                .Attribute("Watch"));
 
         var agentPath = Path.GetFullPath(Path.Combine(
             RepoRoot.SdkSourceDir,
@@ -342,8 +334,9 @@ public class SdkLayoutTests
             "Gsharp.HotReload.Runtime",
             "HotReloadAgent.cs"));
         var agentText = File.ReadAllText(agentPath);
-        Assert.Contains("-p:IntermediateOutputPath=", agentText, System.StringComparison.Ordinal);
-        Assert.Contains("-p:OutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.Contains("SemaphoreSlim updateGate", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:IntermediateOutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:OutputPath=", agentText, System.StringComparison.Ordinal);
         Assert.DoesNotContain("-p:DotNetWatchBuild=true", agentText, System.StringComparison.Ordinal);
     }
 

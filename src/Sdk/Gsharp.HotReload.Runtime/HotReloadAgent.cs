@@ -346,11 +346,9 @@ public static class HotReloadAgent
         private async Task CompileAndApplyAsync()
         {
             Directory.CreateDirectory(this.updateDirectory);
-            var intermediateDirectory = EnsureTrailingDirectorySeparator(
-                Path.Combine(this.updateDirectory, "obj"));
-            var outputDirectory = EnsureTrailingDirectorySeparator(
-                Path.Combine(this.updateDirectory, "bin"));
 
+            // dotnet-watch excludes agent-owned inputs, and updateGate permits
+            // one build per project, so reuse normal obj/ reference paths safely.
             var startInfo = new ProcessStartInfo("dotnet")
             {
                 WorkingDirectory = this.manifest.ProjectDirectory,
@@ -369,8 +367,6 @@ public static class HotReloadAgent
             startInfo.ArgumentList.Add($"-p:Configuration={this.manifest.Configuration}");
             startInfo.ArgumentList.Add("-p:GsharpEnableHotReload=true");
             startInfo.ArgumentList.Add("-p:BuildProjectReferences=false");
-            startInfo.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDirectory}");
-            startInfo.ArgumentList.Add($"-p:OutputPath={outputDirectory}");
             startInfo.ArgumentList.Add($"-p:GsharpHotReloadOutputDirectory={this.updateDirectory}");
 
             using var process = Process.Start(startInfo);
@@ -430,9 +426,6 @@ public static class HotReloadAgent
                     return;
             }
         }
-
-        private static string EnsureTrailingDirectorySeparator(string path) =>
-            Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
 
         private static void WriteCompilerOutput(string output, string error)
         {
