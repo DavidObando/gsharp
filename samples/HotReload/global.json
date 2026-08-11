@@ -1,0 +1,5 @@
+{
+  "msbuild-sdks": {
+    "Gsharp.NET.Sdk": "0.3.356"
+  }
+}

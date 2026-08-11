@@ -51,6 +51,15 @@ public class SdkLayoutTests
         Assert.Contains(imports, i =>
             (string)i.Attribute("Sdk") == "Microsoft.NET.Sdk"
             && (string)i.Attribute("Project") == "Sdk.targets");
+
+        var managedDesignTimeImport = imports.Single(i =>
+            ((string)i.Attribute("Project") ?? string.Empty).Contains(
+                "GsharpDesignTimeTargetsPath",
+                System.StringComparison.Ordinal));
+        Assert.Contains(
+            "$(DesignTimeBuild)",
+            (string)managedDesignTimeImport.Attribute("Condition"),
+            System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,6 +155,63 @@ public class SdkLayoutTests
         Assert.Contains(
             compileDesignTime.Descendants(MsbuildNs + "_CompilerCommandLineArgs"),
             item => (string)item.Attribute("Include") == "@(GsharpCommandLineArgs)");
+
+        var prerequisite = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_CheckCompileDesignTimePrerequisite");
+        var prerequisiteError = prerequisite.Element(MsbuildNs + "Error");
+        Assert.NotNull(prerequisiteError);
+        Assert.Contains(
+            "$(SkipCompilerExecution)|$(ProvideCommandLineArgs)",
+            (string)prerequisiteError!.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+
+        var hotReloadCompile = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_GsharpHotReloadCompile");
+        Assert.Equal("Compile", (string)hotReloadCompile.Attribute("DependsOnTargets"));
+        Assert.Contains(
+            hotReloadCompile.Elements(MsbuildNs + "Copy"),
+            copy => (string)copy.Attribute("SourceFiles") == "@(IntermediateAssembly)");
+
+        var hotReloadBaseline = doc.Descendants(MsbuildNs + "Target")
+            .Single(t => (string)t.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
+        Assert.Equal("CompileDesignTime", (string)hotReloadBaseline.Attribute("BeforeTargets"));
+        var hotReloadBaselineDeletes =
+            (string)hotReloadBaseline.Element(MsbuildNs + "Delete").Attribute("Files");
+        Assert.Contains("@(IntermediateAssembly)", hotReloadBaselineDeletes, System.StringComparison.Ordinal);
+        Assert.Contains(
+            "$(IntermediateOutputPath)$(AssemblyName)$(TargetExt)",
+            hotReloadBaselineDeletes,
+            System.StringComparison.Ordinal);
+        Assert.Contains("$(ProjectDepsFilePath)", hotReloadBaselineDeletes, System.StringComparison.Ordinal);
+        Assert.Contains(
+            hotReloadBaseline.Elements(MsbuildNs + "MSBuild"),
+            task => (string)task.Attribute("Targets") == "Build");
+
+        Assert.Contains(
+            "RuntimeAssemblyPath=\"$(GsharpHotReloadRuntimeAssemblyFullPath)\"",
+            File.ReadAllText(path),
+            System.StringComparison.Ordinal);
+
+        var hotReloadEnabled = doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single();
+        Assert.Contains(
+            "$(DotNetWatchBuild)",
+            (string)hotReloadEnabled.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+
+        Assert.Contains(
+            doc.Descendants(MsbuildNs + "ProjectCapability"),
+            capability => (string)capability.Attribute("Include") == "SupportsHotReload");
+        var hotReloadManifest = doc.Descendants(MsbuildNs + "None")
+            .Single(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)");
+        Assert.Equal("PreserveNewest", (string)hotReloadManifest.Attribute("CopyToOutputDirectory"));
+        Assert.Contains(
+            "$(DesignTimeBuild)",
+            (string)doc.Descendants(MsbuildNs + "GsharpEnableHotReload").Single().Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "$(MSBuildProjectName).manifest",
+            doc.Descendants(MsbuildNs + "GsharpHotReloadManifestPath").Single().Value,
+            System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -155,6 +221,133 @@ public class SdkLayoutTests
         var text = File.ReadAllText(path);
         Assert.Contains("<ProduceReferenceAssembly", text, System.StringComparison.Ordinal);
         Assert.Contains(">true</ProduceReferenceAssembly>", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Core_Targets_Pin_HotReload_Watch_Inputs_And_Serialized_Agent_Build()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "build", "Gsharp.NET.Core.Sdk.targets");
+        var doc = XDocument.Load(path);
+        var baselineTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpBuildHotReloadBaseline");
+        var baselineBuild = Assert.Single(baselineTarget.Elements(MsbuildNs + "MSBuild"));
+        var baselineProperties = ((string)baselineBuild.Attribute("Properties") ?? string.Empty)
+            .Split(
+                ';',
+                System.StringSplitOptions.RemoveEmptyEntries |
+                System.StringSplitOptions.TrimEntries);
+
+        Assert.Equal("Build", (string)baselineBuild.Attribute("Targets"));
+        Assert.Equal("false", (string)baselineBuild.Attribute("BuildInParallel"));
+        Assert.Contains("DotNetWatchBuild=false", baselineProperties);
+        Assert.Contains("GsharpEnableHotReload=true", baselineProperties);
+        Assert.Contains("BuildProjectReferences=false", baselineProperties);
+
+        var removedProperties = ((string)baselineBuild.Attribute("RemoveProperties") ?? string.Empty)
+            .Split(
+                ';',
+                System.StringSplitOptions.RemoveEmptyEntries |
+                System.StringSplitOptions.TrimEntries);
+        Assert.Contains("DesignTimeBuild", removedProperties);
+        Assert.Contains("SkipCompilerExecution", removedProperties);
+        Assert.Contains("ProvideCommandLineArgs", removedProperties);
+        Assert.Contains("BuildingInsideVisualStudio", removedProperties);
+
+        var gatedItems = doc.Descendants(MsbuildNs + "ItemGroup")
+            .Single(group =>
+                group.Elements(MsbuildNs + "Reference")
+                    .Any(item => (string)item.Attribute("Include") == "Gsharp.HotReload.Runtime") &&
+                group.Elements(MsbuildNs + "None")
+                    .Any(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)") &&
+                group.Elements(MsbuildNs + "ProjectCapability")
+                    .Any(item => (string)item.Attribute("Include") == "SupportsHotReload"));
+        var gatedItemsCondition = (string)gatedItems.Attribute("Condition");
+        Assert.Contains(
+            "'$(GsharpEnableHotReload)' == 'true'",
+            gatedItemsCondition,
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "'$(_GsharpHotReloadSupported)' == 'true'",
+            gatedItemsCondition,
+            System.StringComparison.Ordinal);
+
+        var prepareTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpPrepareHotReload");
+        var manifestTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpWriteHotReloadManifest");
+        Assert.Contains(
+            "'$(_GsharpHotReloadSupported)' == 'true'",
+            (string)prepareTarget.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$(GsharpEnableHotReload)",
+            (string)prepareTarget.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "'$(GsharpEnableHotReload)' == 'true'",
+            (string)manifestTarget.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.All(
+            new[] { prepareTarget, manifestTarget },
+            target => Assert.Equal(
+                "@(_GsharpHotReloadWatch)",
+                (string)Assert.Single(
+                    target.Elements(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"))
+                    .Attribute("WatchFiles")));
+        Assert.Equal(
+            "$(_GsharpHotReloadActive)",
+            (string)prepareTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("CopyRuntime"));
+        Assert.Equal(
+            "$(_GsharpHotReloadActive)",
+            (string)prepareTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("WriteBootstrap"));
+        Assert.Equal(
+            "true",
+            (string)manifestTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("CopyRuntime"));
+        Assert.Equal(
+            "true",
+            (string)manifestTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("WriteBootstrap"));
+
+        Assert.Equal(
+            "@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)",
+            (string)prepareTarget.Descendants(MsbuildNs + "_GsharpHotReloadWatch")
+                .Single(item => item.Attribute("Include") != null)
+                .Attribute("Include"));
+        Assert.Equal(
+            "@(Compile);@(_GsharpForeignCompile);@(AdditionalFiles);$(MSBuildProjectFullPath)",
+            (string)manifestTarget.Descendants(MsbuildNs + "_GsharpHotReloadWatch")
+                .Single(item => item.Attribute("Include") != null)
+                .Attribute("Include"));
+
+        var filterTarget = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "_GsharpFilterHotReloadWatchItems");
+        Assert.Contains(
+            "_GsharpFilterHotReloadWatchItems",
+            doc.Descendants(MsbuildNs + "CustomCollectWatchItems").Single().Value,
+            System.StringComparison.Ordinal);
+        Assert.Equal(
+            "@(Compile)",
+            (string)filterTarget.Descendants(MsbuildNs + "Compile").Single().Attribute("Remove"));
+        Assert.Equal(
+            "@(AdditionalFiles)",
+            (string)filterTarget.Descendants(MsbuildNs + "AdditionalFiles").Single().Attribute("Remove"));
+        Assert.Equal(
+            "@(_GsharpAgentOwnedWatch)",
+            (string)filterTarget.Descendants(MsbuildNs + "Watch").Single().Attribute("Remove"));
+
+        var agentPath = Path.GetFullPath(Path.Combine(
+            RepoRoot.SdkSourceDir,
+            "..",
+            "Gsharp.HotReload.Runtime",
+            "HotReloadAgent.cs"));
+        var agentText = File.ReadAllText(agentPath);
+        Assert.Contains("SemaphoreSlim updateGate", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:IntermediateOutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:OutputPath=", agentText, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("-p:DotNetWatchBuild=true", agentText, System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -187,6 +380,34 @@ public class SdkLayoutTests
         Assert.Contains("netstandard2.0", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.Build.Framework", text, System.StringComparison.Ordinal);
         Assert.Contains("Microsoft.Build.Utilities.Core", text, System.StringComparison.Ordinal);
+        Assert.Contains("tools\\hotreload\\", text, System.StringComparison.Ordinal);
+        Assert.Contains("Gsharp.HotReload.Runtime.dll", text, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sdk_Csproj_Uses_BuildOnly_HotReload_Runtime_Reference_And_Packs_Runtime()
+    {
+        var path = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var doc = XDocument.Load(path);
+        var runtimeReference = doc.Descendants("ProjectReference")
+            .Single(reference =>
+                ((string)reference.Attribute("Include") ?? string.Empty).EndsWith(
+                    @"Gsharp.HotReload.Runtime\Gsharp.HotReload.Runtime.csproj",
+                    System.StringComparison.Ordinal));
+
+        Assert.Equal("false", (string)runtimeReference.Attribute("Private"));
+        Assert.Equal("false", (string)runtimeReference.Attribute("ReferenceOutputAssembly"));
+        Assert.Equal("true", (string)runtimeReference.Attribute("SkipGetTargetFrameworkProperties"));
+
+        var runtimeTarget = doc.Descendants("Target")
+            .Single(target => (string)target.Attribute("Name") == "PackGsharpHotReloadRuntime");
+
+        Assert.Equal("_GetPackageFiles", (string)runtimeTarget.Attribute("BeforeTargets"));
+        Assert.Equal("Build", (string)runtimeTarget.Attribute("DependsOnTargets"));
+        var runtimePayload = runtimeTarget.Descendants("None")
+            .Single(item => (string)item.Attribute("Include") == "@(_GsharpHotReloadRuntimePayload)");
+        Assert.Equal("true", (string)runtimePayload.Attribute("Pack"));
+        Assert.Equal("tools\\hotreload\\", (string)runtimePayload.Attribute("PackagePath"));
     }
 
     [Fact]

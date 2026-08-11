@@ -40,6 +40,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Gsharp.HotReload.Runtime\Gsharp.HotReload.Runtime.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Package layout mirrors peachpie's SDK NuGet:
            sdk/Sdk.props, sdk/Sdk.targets
            build/Gsharp.NET.Sdk.props, build/Gsharp.NET.Current.Sdk.targets, build/Gsharp.NET.Core.Sdk.targets
@@ -136,6 +143,27 @@
       <None Include="@(_GsgenPayload)"
             Pack="true"
             PackagePath="tools\gsgen\"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Pack the runtime-side hot-reload agent/delta builder. The build-only
+       ProjectReference above orders this output before SDK packing. -->
+  <Target Name="PackGsharpHotReloadRuntime" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <_GsharpHotReloadRuntimeOutputDir>$(BaseOutputPath)\Gsharp.HotReload.Runtime\</_GsharpHotReloadRuntimeOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GsharpHotReloadRuntimePayload Include="$(_GsharpHotReloadRuntimeOutputDir)Gsharp.HotReload.Runtime.dll" />
+      <_GsharpHotReloadRuntimePayload Include="$(_GsharpHotReloadRuntimeOutputDir)Gsharp.HotReload.Runtime.pdb"
+                                      Condition="Exists('$(_GsharpHotReloadRuntimeOutputDir)Gsharp.HotReload.Runtime.pdb')" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(_GsharpHotReloadRuntimeOutputDir)Gsharp.HotReload.Runtime.dll')"
+           Text="Expected Gsharp.HotReload.Runtime output not found under '$(_GsharpHotReloadRuntimeOutputDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpHotReloadRuntimePayload)"
+            Pack="true"
+            PackagePath="tools\hotreload\"
             Visible="false" />
     </ItemGroup>
   </Target>

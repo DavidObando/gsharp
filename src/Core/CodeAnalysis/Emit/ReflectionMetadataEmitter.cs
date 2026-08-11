@@ -54,6 +54,9 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </remarks>
 internal sealed class ReflectionMetadataEmitter
 {
+    private const string ModuleInitializerAttributeName =
+        "System.Runtime.CompilerServices.ModuleInitializerAttribute";
+
     // Portable PDB metadata format version expected by all current readers
     // (System.Reflection.Metadata, dotnet-symbol, debuggers). 0x0100 = v1.0.
     private const ushort PortablePdbVersion = 0x0100;
@@ -155,6 +158,7 @@ internal sealed class ReflectionMetadataEmitter
     // (repointed in E-21).
     internal readonly FunctionEmitter functions;
     private readonly IReadOnlyList<(string Name, byte[] Data, bool IsPublic)>? embeddedResources;
+    private readonly ImmutableArray<FunctionSymbol> moduleInitializers;
 
     // PR-E-3: the well-known BCL MemberRef/TypeRef fields
     // (notImplementedExceptionCtorRef, delegateCombineRef/RemoveRef,
@@ -721,6 +725,9 @@ internal sealed class ReflectionMetadataEmitter
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
         this.embeddedResources = embeddedResources;
+        this.moduleInitializers = program is null
+            ? ImmutableArray<FunctionSymbol>.Empty
+            : program.Functions.Keys.Where(IsModuleInitializer).ToImmutableArray();
         this.cache = new MetadataTokenCache();
         this.remaps = new GenericRemapState();
         this.signatures = new SignatureEncoder(this);
@@ -1806,7 +1813,11 @@ internal sealed class ReflectionMetadataEmitter
         var nestedOrdered = aggregateTypes.NestedTypes.Types;
         var nestedMethodListRow = aggregateTypes.NestedTypes.FirstMethodRows;
 
-        int methodRow = 1;
+        // A real CLR module initializer is emitted as <Module>..cctor in row 1.
+        // Every ordinary MethodDef shifts by one only when at least one valid
+        // [ModuleInitializer] method exists, preserving historical PE hashes
+        // for all other compilations.
+        int methodRow = this.moduleInitializers.IsDefaultOrEmpty ? 1 : 2;
         var interfaceFirstMethodRow = new Dictionary<InterfaceSymbol, int>();
         var interfaceCctorRows = new Dictionary<InterfaceSymbol, int>();
         void PlanInterfaceMethods(InterfaceSymbol i)
@@ -2365,6 +2376,8 @@ internal sealed class ReflectionMetadataEmitter
             baseType: default(EntityHandle),
             fieldList: MetadataTokens.FieldDefinitionHandle(moduleFirstFieldRow),
             methodList: MetadataTokens.MethodDefinitionHandle(1));
+
+        this.EmitModuleInitializer();
 
         // Issue #973: pre-reserve the TypeDefinitionHandle for every user
         // TypeDef (interfaces, delegates, classes, structs, enums — top-level
@@ -3944,6 +3957,64 @@ internal sealed class ReflectionMetadataEmitter
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
             }
         }
+    }
+
+    private static bool IsModuleInitializer(FunctionSymbol function) =>
+        function.IsStatic &&
+        function.StaticOwnerType != null &&
+        !function.IsGeneric &&
+        function.Parameters.IsDefaultOrEmpty &&
+        function.Type == TypeSymbol.Void &&
+        function.Accessibility is Accessibility.Public or Accessibility.Internal &&
+        function.Attributes.Any(attribute =>
+            string.Equals(
+                attribute.AttributeType?.ClrType?.FullName,
+                ModuleInitializerAttributeName,
+                StringComparison.Ordinal));
+
+    private void EmitModuleInitializer()
+    {
+        if (this.moduleInitializers.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var bodyOffset = -1;
+        if (!this.emitCtx.MetadataOnly)
+        {
+            var il = new InstructionEncoder(new BlobBuilder());
+            foreach (var initializer in this.moduleInitializers)
+            {
+                if (!this.cache.MethodHandles.TryGetValue(initializer, out var initializerHandle))
+                {
+                    throw new InvalidOperationException(
+                        $"Module initializer '{initializer.Name}' has no planned MethodDef handle.");
+                }
+
+                il.Call(initializerHandle);
+            }
+
+            il.OpCode(ILOpCode.Ret);
+            bodyOffset = this.emitCtx.MethodBodyStream.AddMethodBody(
+                il,
+                maxStack: MaxStackTracker.ComputeMaxStack(il));
+        }
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: false)
+            .Parameters(0, returnType => returnType.Void(), _ => { });
+
+        this.emitCtx.Metadata.AddMethodDefinition(
+            attributes: MethodAttributes.Private |
+                MethodAttributes.HideBySig |
+                MethodAttributes.SpecialName |
+                MethodAttributes.RTSpecialName |
+                MethodAttributes.Static,
+            implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
+            name: this.emitCtx.Metadata.GetOrAddString(".cctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(signature),
+            bodyOffset: bodyOffset,
+            parameterList: this.customAttrEncoder.NextParameterHandle());
     }
 
     private ReservedBlob<GuidHandle> EmitModuleAndAssemblyRows()

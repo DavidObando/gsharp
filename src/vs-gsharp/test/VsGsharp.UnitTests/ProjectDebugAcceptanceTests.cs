@@ -193,7 +193,9 @@ public sealed class ProjectDebugAcceptanceTests
             "build",
             "Gsharp.NET.Core.Sdk.targets"));
         XElement buildTask = coreTargets.Descendants()
-            .Single(element => element.Name.LocalName == "BuildTask");
+            .Single(element =>
+                element.Name.LocalName == "BuildTask" &&
+                (string?)element.Parent?.Attribute("Name") == "CoreCompile");
         Assert.Equal("$(MSBuildProjectDirectory)", (string?)buildTask.Attribute("BasePath"));
         Assert.Equal("$(DebugType)", (string?)buildTask.Attribute("DebugType"));
         Assert.Equal("@(_DebugSymbolsIntermediatePath)", (string?)buildTask.Attribute("PdbFile"));
