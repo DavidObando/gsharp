@@ -123,6 +123,55 @@ public sealed class C
         Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The oahu-corpus shape (<c>ExtensionsSyncContext</c>, 14 sites): oblivious C#
+    /// binds a local from an <c>as</c> and dereferences it with no null test. Roslyn
+    /// never reports such a local maybe-null, so the ordinary forgiveness predicates
+    /// cannot see it — yet the local's G# type is <c>T?</c> and the dereference is
+    /// GS0116. Asserting at the dereference matches C#, which raises a
+    /// NullReferenceException at exactly that point.
+    /// </summary>
+    [Fact]
+    public void LocalBoundFromAs_DereferencedWithoutGuard_IsAssertedAtTheDereference()
+    {
+        string printed = Translate(@"
+public static class C
+{
+    public static void Go(System.Action<int, int> d, object o)
+    {
+        var p = o as object[];
+        d((int)p[0], (int)p[1]);
+    }
+}");
+
+        Assert.Contains("p!![0]", printed, StringComparison.Ordinal);
+        Assert.Contains("p!![1]", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The guarded counterpart must not change: C# tests the local, so Roslyn
+    /// reports it maybe-null and the existing predicates already assert inside the
+    /// guard. Asserting at the <c>as</c> instead would move the throw ahead of the
+    /// test and break this shape.
+    /// </summary>
+    [Fact]
+    public void LocalBoundFromAs_NullTested_KeepsGuardedShape()
+    {
+        string printed = Translate(@"
+public static class C
+{
+    public static int Guarded(object o)
+    {
+        var p = o as object[];
+        if (p != null) { return p.Length; }
+        return 0;
+    }
+}");
+
+        Assert.Contains("if p != nil", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("(o as []object)!!", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
