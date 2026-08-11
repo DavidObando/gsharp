@@ -12,7 +12,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
 /// Issue #3280: CLR value types box implicitly to <see cref="ValueType"/>,
-/// and enum values box implicitly to <see cref="Enum"/>, in every call shape.
+/// and enum values box implicitly to <see cref="Enum"/>, <see cref="ValueType"/>,
+/// and <see cref="object"/>, in every call shape.
 /// </summary>
 public sealed class Issue3280ValueTypeBaseBoxingTests
 {
@@ -27,57 +28,90 @@ public sealed class Issue3280ValueTypeBaseBoxingTests
             MatrixSource(shape),
             "System.ValueType[]",
             "System.Int32",
-            "5",
+            "42",
+            "System.ValueType[]",
+            "System.DayOfWeek",
+            "Friday",
             "System.Enum[]",
             "System.DayOfWeek",
             "Sunday",
             "System.Object[]",
+            "System.DayOfWeek",
+            "Monday",
+            "System.IComparable[]",
+            "System.Int32",
+            "7",
+            "System.Object[]",
             "System.Int32",
             "11",
+            "System.IComparable[]",
+            "System.Int32",
+            "12",
             "System.ValueType[]",
             "System.Int32",
             "22",
+            "System.ValueType[]",
+            "System.DayOfWeek",
+            "Saturday",
             "System.Enum[]",
             "System.DayOfWeek",
-            "Monday",
+            "Tuesday",
+            "System.Object[]",
+            "System.DayOfWeek",
+            "Wednesday",
             "System.DayOfWeek[]",
             "System.DayOfWeek",
-            "Tuesday");
+            "Thursday");
     }
 
     [Fact]
-    public void AlreadyBoxedValueTypeArgument_PreservesTargetTypeAndValue()
+    public void ReferenceBaseUpcasts_PreserveExistingBox()
     {
         AssertRuns(
             """
-            package Issue3280AlreadyBoxed
+            package Issue3280ReferenceBaseUpcasts
             import System
 
-            func Show[T](value T) {
-                Console.WriteLine([]T{value}.GetType())
-                Console.WriteLine(value.GetType())
-                Console.WriteLine(value)
-            }
+            func Reify[T](value T) T -> value
 
-            let boxed ValueType = 31
-            Show[ValueType](boxed)
+            let enumReference Enum = DayOfWeek.Wednesday
+            let valueTypeReference = Reify[ValueType](enumReference)
+            let objectReference = Reify[object](valueTypeReference)
+
+            Console.WriteLine(Object.ReferenceEquals(enumReference, valueTypeReference))
+            Console.WriteLine(Object.ReferenceEquals(valueTypeReference, objectReference))
+            Console.WriteLine([]ValueType{valueTypeReference}.GetType())
+            Console.WriteLine(objectReference.GetType())
+            Console.WriteLine(objectReference)
             """,
+            "True",
+            "True",
             "System.ValueType[]",
-            "System.Int32",
-            "31");
+            "System.DayOfWeek",
+            "Wednesday");
     }
 
     [Fact]
-    public void ReferenceTypeArgument_RemainsReferenceTyped()
+    public void ConversionClassifier_UsesClrBoxingAndReferenceRules()
     {
+        var valueType = TypeSymbol.FromClrType(typeof(ValueType));
+        var enumType = TypeSymbol.FromClrType(typeof(Enum));
+        var dayOfWeek = TypeSymbol.FromClrType(typeof(DayOfWeek));
+
+        Assert.True(Conversion.Classify(TypeSymbol.Int32, valueType).IsImplicit);
+        Assert.True(Conversion.Classify(dayOfWeek, valueType).IsImplicit);
+        Assert.True(Conversion.Classify(dayOfWeek, enumType).IsImplicit);
+        Assert.True(Conversion.Classify(dayOfWeek, TypeSymbol.Object).IsImplicit);
+        Assert.True(Conversion.Classify(enumType, valueType).IsImplicit);
+        Assert.True(Conversion.Classify(valueType, TypeSymbol.Object).IsImplicit);
         Assert.False(
             Conversion.Classify(
                 TypeSymbol.String,
-                TypeSymbol.FromClrType(typeof(ValueType))).Exists);
+                valueType).Exists);
         Assert.False(
             Conversion.Classify(
                 TypeSymbol.Int32,
-                TypeSymbol.FromClrType(typeof(Enum))).Exists);
+                enumType).Exists);
 
         AssertRuns(
             """
@@ -123,24 +157,23 @@ public sealed class Issue3280ValueTypeBaseBoxingTests
     }
 
     [Fact]
-    public void StructConstrainedTypeParameter_BoxesToValueType()
+    public void StructConstrainedTypeParameter_BoxesWhenReifiedToValueType()
     {
         AssertRuns(
             """
             package Issue3280StructConstraint
             import System
 
-            func Take(value ValueType) {
-                Console.WriteLine(value.GetType())
-                Console.WriteLine(value)
-            }
+            func Reify[T](value T) T -> value
 
-            func Forward[T struct](value T) {
-                Take(value)
-            }
+            func Box[T struct](value T) ValueType -> Reify[ValueType](value)
 
-            Forward[int32](42)
+            let boxed = Box[int32](42)
+            Console.WriteLine([]ValueType{boxed}.GetType())
+            Console.WriteLine(boxed.GetType())
+            Console.WriteLine(boxed)
             """,
+            "System.ValueType[]",
             "System.Int32",
             "42");
     }
@@ -220,20 +253,42 @@ public sealed class Issue3280ValueTypeBaseBoxingTests
                 Console.WriteLine(value)
             }
             """;
+        const string objectMethodBody = """
+            {
+                Console.WriteLine([]object{value}.GetType())
+                Console.WriteLine(value.GetType())
+                Console.WriteLine(value)
+            }
+            """;
+        const string comparableMethodBody = """
+            {
+                Console.WriteLine([]IComparable{value}.GetType())
+                Console.WriteLine(value.GetType())
+                Console.WriteLine(value)
+            }
+            """;
 
         var declaration = shape switch
         {
             "top-level" => "func TakeValueType(value ValueType) " + valueTypeMethodBody
                 + " func TakeEnum(value Enum) " + enumMethodBody
+                + " func TakeObject(value object) " + objectMethodBody
+                + " func TakeComparable(value IComparable) " + comparableMethodBody
                 + " func Show[T](value T) " + genericMethodBody,
             "instance" => "class Runner { init() {} func TakeValueType(value ValueType) " + valueTypeMethodBody
                 + " func TakeEnum(value Enum) " + enumMethodBody
+                + " func TakeObject(value object) " + objectMethodBody
+                + " func TakeComparable(value IComparable) " + comparableMethodBody
                 + " func Show[T](value T) " + genericMethodBody + " }",
             "extension" => "func (self string) TakeValueType(value ValueType) " + valueTypeMethodBody
                 + " func (self string) TakeEnum(value Enum) " + enumMethodBody
+                + " func (self string) TakeObject(value object) " + objectMethodBody
+                + " func (self string) TakeComparable(value IComparable) " + comparableMethodBody
                 + " func (self string) Show[T](value T) " + genericMethodBody,
             "shared" => "class Runner { shared { func TakeValueType(value ValueType) " + valueTypeMethodBody
                 + " func TakeEnum(value Enum) " + enumMethodBody
+                + " func TakeObject(value object) " + objectMethodBody
+                + " func TakeComparable(value IComparable) " + comparableMethodBody
                 + " func Show[T](value T) " + genericMethodBody + " } }",
             _ => throw new ArgumentOutOfRangeException(nameof(shape)),
         };
@@ -252,12 +307,18 @@ public sealed class Issue3280ValueTypeBaseBoxingTests
 
             {{declaration}}
 
-            {{target}}TakeValueType(5)
+            {{target}}TakeValueType(42)
+            {{target}}TakeValueType(DayOfWeek.Friday)
             {{target}}TakeEnum(DayOfWeek.Sunday)
+            {{target}}TakeObject(DayOfWeek.Monday)
+            {{target}}TakeComparable(7)
             {{target}}Show[object](11)
+            {{target}}Show[IComparable](12)
             {{target}}Show[ValueType](22)
-            {{target}}Show[Enum](DayOfWeek.Monday)
-            {{target}}Show[DayOfWeek](DayOfWeek.Tuesday)
+            {{target}}Show[ValueType](DayOfWeek.Saturday)
+            {{target}}Show[Enum](DayOfWeek.Tuesday)
+            {{target}}Show[object](DayOfWeek.Wednesday)
+            {{target}}Show[DayOfWeek](DayOfWeek.Thursday)
             """;
     }
 
