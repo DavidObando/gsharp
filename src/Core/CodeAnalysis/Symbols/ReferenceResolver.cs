@@ -1335,11 +1335,27 @@ public sealed class ReferenceResolver : IDisposable
 
     private static ImmutableArray<Assembly> BuildHostAssemblies()
     {
-        // Constructing the first resolver loads this dependency after the host
-        // snapshot unless it is forced here, making two unchanged snapshots differ.
-        _ = typeof(MetadataLoadContext).Assembly;
+        // Load resolver dependencies before taking the snapshot so the first
+        // and subsequent snapshots retain AppDomain's native assembly order.
+        foreach (var name in WellKnownBclAssemblyNames.Append("System.Reflection.MetadataLoadContext"))
+        {
+            try
+            {
+                _ = Assembly.Load(new AssemblyName(name));
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (FileLoadException)
+            {
+            }
+            catch (BadImageFormatException)
+            {
+            }
+        }
 
         var builder = ImmutableArray.CreateBuilder<Assembly>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
@@ -1357,35 +1373,14 @@ public sealed class ReferenceResolver : IDisposable
                 continue;
             }
 
-            builder.Add(asm);
-        }
-
-        foreach (var name in WellKnownBclAssemblyNames)
-        {
-            try
+            var name = asm.GetName().FullName;
+            if (seen.Add(name))
             {
-                var asm = Assembly.Load(new AssemblyName(name));
                 builder.Add(asm);
             }
-            catch (FileNotFoundException)
-            {
-            }
-            catch (FileLoadException)
-            {
-            }
-            catch (BadImageFormatException)
-            {
-            }
         }
 
-        return builder
-            .OrderBy(static assembly => assembly.GetName().FullName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static assembly => AssemblyLoadContext.GetLoadContext(assembly) == AssemblyLoadContext.Default ? 0 : 1)
-            .ThenBy(static assembly => AssemblyLoadContext.GetLoadContext(assembly)?.Name, StringComparer.Ordinal)
-            .ThenBy(static assembly => assembly.Location, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static assembly => assembly.ManifestModule.ModuleVersionId)
-            .DistinctBy(static assembly => assembly.GetName().FullName, StringComparer.OrdinalIgnoreCase)
-            .ToImmutableArray();
+        return builder.ToImmutable();
     }
 
     private static string? ChooseCoreAssemblyName(string[] paths)
