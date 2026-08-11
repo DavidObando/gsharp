@@ -725,9 +725,9 @@ internal sealed class ReflectionMetadataEmitter
     {
         this.emitCtx = new EmitContext(program, references, assemblyName, metadataOnly);
         this.embeddedResources = embeddedResources;
-        this.moduleInitializers = program.Functions.Keys
-            .Where(IsModuleInitializer)
-            .ToImmutableArray();
+        this.moduleInitializers = program is null
+            ? ImmutableArray<FunctionSymbol>.Empty
+            : program.Functions.Keys.Where(IsModuleInitializer).ToImmutableArray();
         this.cache = new MetadataTokenCache();
         this.remaps = new GenericRemapState();
         this.signatures = new SignatureEncoder(this);
