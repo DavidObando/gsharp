@@ -280,28 +280,33 @@ public class SdkLayoutTests
             .Single(target => (string)target.Attribute("Name") == "_GsharpPrepareHotReload");
         var manifestTarget = doc.Descendants(MsbuildNs + "Target")
             .Single(target => (string)target.Attribute("Name") == "_GsharpWriteHotReloadManifest");
-        Assert.Equal(
+        Assert.Contains(
+            "'$(_GsharpHotReloadSupported)' == 'true'",
             (string)prepareTarget.Attribute("Condition"),
-            (string)manifestTarget.Attribute("Condition"));
+            System.StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$(GsharpEnableHotReload)",
+            (string)prepareTarget.Attribute("Condition"),
+            System.StringComparison.Ordinal);
+        Assert.Contains(
+            "'$(GsharpEnableHotReload)' == 'true'",
+            (string)manifestTarget.Attribute("Condition"),
+            System.StringComparison.Ordinal);
         Assert.All(
             new[] { prepareTarget, manifestTarget },
-            target =>
-            {
-                var condition = (string)target.Attribute("Condition");
-                Assert.Contains(
-                    "'$(GsharpEnableHotReload)' == 'true'",
-                    condition,
-                    System.StringComparison.Ordinal);
-                Assert.Contains(
-                    "'$(_GsharpHotReloadSupported)' == 'true'",
-                    condition,
-                    System.StringComparison.Ordinal);
-                Assert.Equal(
-                    "@(_GsharpHotReloadWatch)",
-                    (string)Assert.Single(
-                        target.Elements(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"))
-                        .Attribute("WatchFiles"));
-            });
+            target => Assert.Equal(
+                "@(_GsharpHotReloadWatch)",
+                (string)Assert.Single(
+                    target.Elements(MsbuildNs + "WriteGsharpHotReloadArtifactsTask"))
+                    .Attribute("WatchFiles")));
+        Assert.Equal(
+            "$(GsharpEnableHotReload)",
+            (string)prepareTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("CopyRuntime"));
+        Assert.Equal(
+            "true",
+            (string)manifestTarget.Element(MsbuildNs + "WriteGsharpHotReloadArtifactsTask")
+                .Attribute("CopyRuntime"));
 
         Assert.Equal(
             "@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)",

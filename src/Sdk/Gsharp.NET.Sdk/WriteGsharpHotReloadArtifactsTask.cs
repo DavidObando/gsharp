@@ -52,6 +52,9 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
     [Required]
     public string? RuntimeAssemblyPath { get; set; }
 
+    /// <summary>Gets or sets whether the runtime assembly is copied to the output directory.</summary>
+    public bool CopyRuntime { get; set; } = true;
+
     /// <summary>Gets or sets the project's intermediate directory.</summary>
     [Required]
     public string? IntermediateDirectory { get; set; }
@@ -138,7 +141,11 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
 
             WriteIfChanged(manifestPath, manifest.ToString());
             WriteIfChanged(bootstrapPath, bootstrap);
-            CopyRuntime(runtimeAssemblyPath, outputDirectory);
+            if (this.CopyRuntime)
+            {
+                CopyRuntimeAssembly(runtimeAssemblyPath, outputDirectory);
+            }
+
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -228,7 +235,7 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
         File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
-    private static void CopyRuntime(string sourcePath, string outputDirectory)
+    private static void CopyRuntimeAssembly(string sourcePath, string outputDirectory)
     {
         Directory.CreateDirectory(outputDirectory);
         var destinationPath = Path.Combine(outputDirectory, Path.GetFileName(sourcePath));

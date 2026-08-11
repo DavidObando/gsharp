@@ -78,8 +78,8 @@
   </Target>
 
   <Target Name="_GsharpPrepareHotReload"
-          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
-    <Error Condition="!Exists('$(GsharpHotReloadRuntimeAssemblyFullPath)')"
+          Condition=" '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Error Condition=" '$(GsharpEnableHotReload)' == 'true' and !Exists('$(GsharpHotReloadRuntimeAssemblyFullPath)')"
            Text="G# hot reload runtime not found at '$(GsharpHotReloadRuntimeAssemblyFullPath)'." />
     <ItemGroup>
       <_GsharpHotReloadWatch Include="@(Compile);@(AdditionalFiles);$(MSBuildProjectFullPath)" />
@@ -93,13 +93,16 @@
         BootstrapPath="$(GsharpHotReloadBootstrapPath)"
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
         RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+        CopyRuntime="$(GsharpEnableHotReload)"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
     <ItemGroup>
+      <FileWrites Include="$(GsharpHotReloadBootstrapPath);$(GsharpHotReloadManifestPath)" />
+    </ItemGroup>
+    <ItemGroup Condition=" '$(GsharpEnableHotReload)' == 'true' ">
       <Compile Remove="$(GsharpHotReloadBootstrapPath)" />
       <Compile Include="$(GsharpHotReloadBootstrapPath)" />
-      <FileWrites Include="$(GsharpHotReloadBootstrapPath);$(GsharpHotReloadManifestPath)" />
     </ItemGroup>
   </Target>
 
@@ -119,6 +122,7 @@
         BootstrapPath="$(GsharpHotReloadBootstrapPath)"
         UpdateDirectory="$(GsharpHotReloadOutputDirectory)"
         RuntimeAssemblyPath="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+        CopyRuntime="true"
         IntermediateDirectory="$(IntermediateOutputPath)"
         OutputDirectory="$(OutputPath)"
         WatchFiles="@(_GsharpHotReloadWatch)" />
