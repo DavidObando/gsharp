@@ -140,13 +140,13 @@ public static class HotReloadAgent
             this.debounceTimer = new Timer(_ => _ = Task.Run(this.ProcessChangesAsync), null, Timeout.Infinite, Timeout.Infinite);
         }
 
+        public Mutex ProcessGuard => this.processGuard;
+
         private static StringComparer PathComparer =>
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
         private static StringComparison PathComparison =>
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-        public Mutex ProcessGuard => this.processGuard;
 
         public void Start()
         {
