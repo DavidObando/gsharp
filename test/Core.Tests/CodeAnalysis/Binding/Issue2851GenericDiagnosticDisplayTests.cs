@@ -213,10 +213,10 @@ public class Issue2851GenericDiagnosticDisplayTests
         Assert.Collection(
             bag,
             diagnostic => Assert.Equal(
-                "Cannot convert type 'Box[int32]' to 'Box[int32]?'. Provide a value of type 'Box[int32]?' instead.",
+                "Cannot convert type 'Box[int32]' to 'Box[int32]?'. An explicit conversion exists (are you missing a cast?)",
                 diagnostic.Message),
             diagnostic => Assert.Equal(
-                "Cannot convert type 'Conv[int32]?' to 'Conv[int32]'. Provide a value of type 'Conv[int32]' instead.",
+                "Cannot convert type 'Conv[int32]?' to 'Conv[int32]'. An explicit conversion exists (are you missing a cast?)",
                 diagnostic.Message));
     }
 
@@ -232,7 +232,7 @@ public class Issue2851GenericDiagnosticDisplayTests
 
         var diagnostic = Assert.Single(bag);
         Assert.Equal(
-            "Cannot convert type 'System.Collections.Generic.List[int32]' to 'string'. Provide a value of type 'string' instead.",
+            "Cannot convert type 'System.Collections.Generic.List[int32]' to 'string'. An explicit conversion exists (are you missing a cast?)",
             diagnostic.Message);
     }
 

@@ -51,7 +51,7 @@ public class Issue2947ImportedNestedGenericTypeTests
                 var error = Assert.Single(errors);
                 Assert.Equal("GS0156", error.Id);
                 Assert.Equal(
-                    "Cannot convert type 'glib.Outer[T].Color' to 'int32'. Provide a value of type 'int32' instead.",
+                    "Cannot convert type 'glib.Outer[T].Color' to 'int32'. An explicit conversion exists (are you missing a cast?)",
                     error.Message);
 
                 var function = compilation.BoundProgram.Functions.Keys.Single(symbol => symbol.Name == "Take");
@@ -82,7 +82,7 @@ public class Issue2947ImportedNestedGenericTypeTests
             Assert.Equal(
                 new[]
                 {
-                    "Cannot convert type 'glib.Outer[T].Color' to 'int32'. Provide a value of type 'int32' instead.",
+                    "Cannot convert type 'glib.Outer[T].Color' to 'int32'. An explicit conversion exists (are you missing a cast?)",
                 },
                 runtimeErrors.Select(diagnostic => diagnostic.Message));
         }
