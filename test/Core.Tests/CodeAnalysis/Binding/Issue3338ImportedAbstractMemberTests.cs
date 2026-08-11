@@ -63,7 +63,7 @@ public sealed class Issue3338ImportedAbstractMemberTests
                 libraryPath);
 
             Assert.False(result.Success);
-            var diagnostic = Assert.Single(result.Diagnostics.Where(d => d.Id == "GS0387"));
+            var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0387");
             Assert.Contains("Prepare", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("Optional", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("Render", diagnostic.Message, StringComparison.Ordinal);
@@ -303,7 +303,8 @@ public sealed class Issue3338ImportedAbstractMemberTests
 
             Assert.False(shadowedSlot.Success);
             var shadowedDiagnostic = Assert.Single(
-                shadowedSlot.Diagnostics.Where(d => d.Id == "GS0387"));
+                shadowedSlot.Diagnostics,
+                d => d.Id == "GS0387");
             Assert.Contains("Transform", shadowedDiagnostic.Message, StringComparison.Ordinal);
         }
         finally
