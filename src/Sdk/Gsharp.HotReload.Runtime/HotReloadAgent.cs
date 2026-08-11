@@ -113,12 +113,13 @@ public static class HotReloadAgent
 
             foreach (var directory in this.manifest.WatchedFiles.Keys
                 .Select(Path.GetDirectoryName)
-                .Where(path => !string.IsNullOrEmpty(path))
+                .OfType<string>()
+                .Where(path => path.Length != 0)
                 .Distinct(PathComparer))
             {
-                if (!IsUnderDirectory(directory!, this.manifest.ProjectDirectory))
+                if (!IsUnderDirectory(directory, this.manifest.ProjectDirectory))
                 {
-                    this.AddWatcher(directory!, includeSubdirectories: false);
+                    this.AddWatcher(directory, includeSubdirectories: false);
                 }
             }
 

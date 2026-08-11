@@ -142,12 +142,12 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
 
     private static string Require(string? value, string propertyName)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (value is null || string.IsNullOrWhiteSpace(value))
         {
             throw new ArgumentException($"WriteGsharpHotReloadArtifactsTask requires {propertyName}.");
         }
 
-        return value!;
+        return value;
     }
 
     private static string GetFullPath(string path, string projectDirectory) =>
