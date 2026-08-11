@@ -38,14 +38,13 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitConversion(BoundConversionExpression conv)
     {
-        // ADR-0122 / issues #1014 and #3268: `nil` materialises a null pointer
-        // as a zero native int. Emit it directly (the source `nil` would
-        // otherwise push an object `ldnull`, which is not a pointer value).
-        if (conv.Type is PointerTypeSymbol or FunctionPointerTypeSymbol
-            && conv.Expression.Type == TypeSymbol.Null)
+        // ADR-0122 / issues #1014, #3268, and #3285: `nil` materialises a null
+        // pointer as a zero native int. Emit it directly (the source `nil`
+        // would otherwise push an object `ldnull`, which is not a pointer
+        // value).
+        if (conv.Expression.Type == TypeSymbol.Null
+            && this.TryEmitPointerLikeDefault(conv.Type))
         {
-            this.il.LoadConstantI4(0);
-            this.il.OpCode(ILOpCode.Conv_i);
             return;
         }
 
@@ -1160,6 +1159,14 @@ internal sealed partial class MethodBodyEmitter
     {
         var type = node.Type;
 
+        // Issue #3285: pointer defaults use the same native-int zero as
+        // explicit `nil` conversions. `ldnull` is an object reference and is
+        // invalid when the evaluation-stack slot expects a pointer.
+        if (this.TryEmitPointerLikeDefault(type))
+        {
+            return;
+        }
+
         // Issue #774: a type parameter or erased open generic (e.g. `T` or
         // `List[T]`) may close to either a reference type or a value type
         // at runtime; `ldnull` is invalid for the value-type case. Always
@@ -1204,6 +1211,18 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(type));
 
         this.il.LoadLocal(slot);
+    }
+
+    private bool TryEmitPointerLikeDefault(TypeSymbol type)
+    {
+        if (type is not PointerTypeSymbol and not FunctionPointerTypeSymbol)
+        {
+            return false;
+        }
+
+        this.il.LoadConstantI4(0);
+        this.il.OpCode(ILOpCode.Conv_i);
+        return true;
     }
 
     /// <summary>
