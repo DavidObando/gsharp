@@ -1075,7 +1075,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             string message =
-                "a non-trivial pattern-scrutinee/range-slice operand here has no enclosing statement to host a " +
+                "a non-trivial pattern-scrutinee operand here has no enclosing statement to host a " +
                 "single-evaluation spill (a field/property initializer or a base(...)/this(...) constructor " +
                 "argument has no G# lowering for this yet); it is embedded as-is, which re-evaluates it if it " +
                 "is read more than once (issue #1731 N1).";
@@ -1085,7 +1085,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #1849: translates `expression` at a null-seam site (a field/
         // property initializer) so that a non-trivial `is`-pattern scrutinee or
-        // range-slice start operand nested inside it is evaluated exactly once
+        // operand nested inside it is evaluated exactly once
         // even though the site has no statement to host a spill `let`. When a
         // spill seam IS active (this null-seam site is unreachable, or is
         // nested inside one some other way), translation proceeds exactly as
@@ -1101,7 +1101,7 @@ public sealed partial class CSharpToGSharpTranslator
         // rewritten to call it, passing the captured operands (translated in
         // their original left-to-right order) as arguments. Each captured
         // operand is thus evaluated exactly once, by the CALLER, before the
-        // helper runs the pattern/range-slice logic against the parameter.
+        // helper runs the pattern logic against the parameter.
         private GExpression TranslateNullSeamExpression(ExpressionSyntax expression, INamedTypeSymbol containingType)
         {
             if (this.state.PendingSpillPrologue != null)
@@ -1226,7 +1226,7 @@ public sealed partial class CSharpToGSharpTranslator
         // <see cref="TranslateNullSeamArgument"/>). If translating `translate`
         // captured no NEW (non-pre-seeded) operand, the pre-seed is discarded and
         // the translated expression is returned unchanged — the common case:
-        // most initializers/arguments contain no non-trivial pattern/range-slice
+        // most initializers/arguments contain no non-trivial pattern
         // operand at all, so no helper is warranted just because the expression
         // happens to read a constructor parameter. Otherwise a private static
         // helper taking every capture (pre-seeded passthroughs plus newly
@@ -1271,7 +1271,7 @@ public sealed partial class CSharpToGSharpTranslator
             // argument expression this helper will be invoked with) can itself
             // reference a sibling capture's synthesized parameter name — this
             // happens when a null-seam operand is ITSELF nested inside another
-            // null-seam operand (e.g. a range-slice start spilled inside an
+            // null-seam operand (e.g. an operand spilled inside an
             // is-pattern scrutinee that is also spilled: `Y[Z()..a] is [1,2]`).
             // The inner spill's `__pN` placeholder only exists as a PARAMETER
             // inside this helper's own body — it is not in scope at the call

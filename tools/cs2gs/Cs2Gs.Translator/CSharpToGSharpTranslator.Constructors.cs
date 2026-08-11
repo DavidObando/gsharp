@@ -1045,7 +1045,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #1731 N1: attribute-argument expressions here can never be an
         // `is`-pattern or a range-slice (i.e. can never reach `SpillOperand`'s
-        // no-seam fallback) — C# requires every attribute argument to be a
+        // no-seam fallback). Since #1896 a range-slice does not spill in ANY
+        // position — the native `recv[start..end]` form embeds each bound once —
+        // so only the `is`-pattern half of this argument still does any work; the
+        // range-slice half is kept because it remains true and costs nothing.
+        // C# requires every attribute argument to be a
         // compile-time constant (or a `typeof`/array of constants), and
         // neither an `is` pattern-match nor a `x[a..b]` range-slice is ever a
         // constant expression. So the double-evaluation gap this file

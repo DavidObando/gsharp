@@ -170,7 +170,7 @@ internal sealed class DocumentTranslationState
 
     // The active statement-seam prologue (issue #1731): several lowerings
     // (lock targets, chained-assignment link targets, non-trivial pattern
-    // scrutinees, range-slice start operands) must embed the SAME translated
+    // scrutinees) must embed the SAME translated
     // operand at more than one output position; naively reusing the operand's
     // node would print — and so re-evaluate — it once per embed. `SpillOperand`
     // hoists such an operand into a fresh `let` appended here, evaluated
@@ -219,7 +219,7 @@ internal sealed class DocumentTranslationState
     // non-trivial operand is recorded here as a would-be synthetic helper
     // parameter (name + translated operand + resolved type) and replaced
     // with a bare reference to that parameter, so the surrounding
-    // pattern/range-slice lowering is unaffected — it just ends up reading a
+    // pattern lowering is unaffected — it just ends up reading a
     // parameter instead of a spilled local. The caller then synthesizes a
     // private static helper method taking these captures as parameters and
     // rewrites the null-seam expression into a call to it, passing the

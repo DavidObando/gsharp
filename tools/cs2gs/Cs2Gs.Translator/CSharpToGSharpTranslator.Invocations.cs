@@ -828,6 +828,15 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver,
             ExpressionSyntax receiverSyntax)
         {
+            // Issue #3360 considered adding an `IsTrivialOperand` guard here, as at
+            // `BuildPositiveValueGuardHoist`. It would be WRONG. `IsTrivialOperand`
+            // answers "is this safe to DUPLICATE", but the temp here exists for
+            // CAPTURE TIMING: a C# method group evaluates its receiver immediately
+            // and captures that value, whereas a G# lambda closing over the
+            // variable would re-read it at invocation. For a receiver that is
+            // reassigned between the method-group conversion and the call, those
+            // differ — and a bare identifier is exactly the shape that can be
+            // reassigned. The temp is load-bearing, like `CaptureAssignmentValue`'s.
             if (this.state.PendingSpillPrologue != null)
             {
                 string temp = $"__spill{this.state.SpillCounter++}";

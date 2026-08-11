@@ -44,13 +44,21 @@ public sealed class Issue2646DeclarationPatternTranslationTests
             }
             """);
 
-        Assert.Contains("let __spill0 = rewriteCode", printed, StringComparison.Ordinal);
+        // Issue #3360: `rewriteCode` is a bare local, so the scrutinee needs no
+        // spill — it is read twice (guard + narrowing conversion) but is safe to
+        // duplicate. The narrowing SHAPE is unchanged: a separate typed binder
+        // local, so `code` does not depend on flow narrowing surviving this
+        // enclosing try/block, which is the whole point of issue #2646.
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.Contains("var code int32", printed, StringComparison.Ordinal);
-        Assert.Contains("if __spill0 is int32", printed, StringComparison.Ordinal);
-        Assert.Contains("code = int32(__spill0)", printed, StringComparison.Ordinal);
+        Assert.Contains("if rewriteCode is int32", printed, StringComparison.Ordinal);
+        Assert.Contains("code = int32(rewriteCode)", printed, StringComparison.Ordinal);
         Assert.Contains("return code", printed, StringComparison.Ordinal);
+        // `code` must be its own typed local, not a smart-cast alias of
+        // `rewriteCode` — that is issue #2646's whole point, and it is unchanged.
+        // (The guard now TESTS `rewriteCode` directly rather than a spill temp,
+        // which is issue #3360 and is orthogonal.)
         Assert.DoesNotContain("let code = rewriteCode", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("if rewriteCode is int32", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", printed, StringComparison.Ordinal);
     }
 
@@ -80,7 +88,9 @@ public sealed class Issue2646DeclarationPatternTranslationTests
             """);
 
         Assert.Contains("var code int32", printed, StringComparison.Ordinal);
-        Assert.Contains("code = int32(__spill0)", printed, StringComparison.Ordinal);
+        // Issue #3360: `value` is a bare parameter — no spill needed.
+        Assert.Contains("code = int32(value)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return value", printed, StringComparison.Ordinal);
         Assert.Equal(
             $"43{Environment.NewLine}-1",

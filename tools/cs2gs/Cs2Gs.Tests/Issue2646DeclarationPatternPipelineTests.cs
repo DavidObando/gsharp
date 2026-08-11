@@ -89,7 +89,9 @@ public sealed class Issue2646DeclarationPatternPipelineTests
             MigrationPipeline.SanitizeAppId(app.AppId),
             "Program.gs"));
         Assert.Contains("var code int32", translated, StringComparison.Ordinal);
-        Assert.Contains("code = int32(__spill0)", translated, StringComparison.Ordinal);
+        // Issue #3360: `rewriteCode` is a bare local — no spill needed.
+        Assert.Contains("code = int32(rewriteCode)", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("let code = rewriteCode", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("return rewriteCode", translated, StringComparison.Ordinal);
     }
