@@ -119,6 +119,17 @@
         WatchFiles="@(_GsharpHotReloadWatch)" />
   </Target>
 
+  <Target Name="_GsharpCopyHotReloadRuntime"
+          AfterTargets="CopyFilesToOutputDirectory"
+          Condition=" '$(GsharpEnableHotReload)' == 'true' and '$(_GsharpHotReloadSupported)' == 'true' ">
+    <Copy SourceFiles="$(GsharpHotReloadRuntimeAssemblyFullPath)"
+          DestinationFiles="$(TargetDir)Gsharp.HotReload.Runtime.dll"
+          SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <FileWrites Include="$(TargetDir)Gsharp.HotReload.Runtime.dll" />
+    </ItemGroup>
+  </Target>
+
   <!-- Phase 7.7b / Issue #855: set DocumentationFile here (in targets) where
        IntermediateOutputPath and TargetName are already resolved by the .NET SDK.
        Setting it in Sdk.props caused both properties to be empty, producing a
