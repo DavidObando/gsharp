@@ -52,7 +52,7 @@ public sealed class WriteGsharpHotReloadArtifactsTask : Microsoft.Build.Utilitie
     [Required]
     public string? RuntimeAssemblyPath { get; set; }
 
-    /// <summary>Gets or sets whether the runtime assembly is copied to the output directory.</summary>
+    /// <summary>Gets or sets a value indicating whether the runtime assembly is copied to the output directory.</summary>
     public bool CopyRuntime { get; set; } = true;
 
     /// <summary>Gets or sets the project's intermediate directory.</summary>
