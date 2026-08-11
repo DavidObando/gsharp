@@ -1721,6 +1721,47 @@ public sealed class StructSymbol : TypeSymbol
         return changed ? builder.MoveToImmutable() : default;
     }
 
+    internal static StructSymbol SubstituteConstructionArguments(
+        StructSymbol type,
+        Func<TypeSymbol, TypeSymbol> substituteOne,
+        Func<Type, Type>? mapClrType = null)
+    {
+        var definition = type.Definition;
+        if (definition == null)
+        {
+            return type;
+        }
+
+        var enclosingArguments = ImmutableArray.CreateBuilder<TypeSymbol>(type.EnclosingTypeArguments.Length);
+        var ownArguments = ImmutableArray.CreateBuilder<TypeSymbol>(type.TypeArguments.Length);
+        var changed = false;
+
+        foreach (var argument in type.EnclosingTypeArguments)
+        {
+            var substituted = substituteOne(argument);
+            changed |= !ReferenceEquals(substituted, argument);
+            enclosingArguments.Add(substituted);
+        }
+
+        foreach (var argument in type.TypeArguments)
+        {
+            var substituted = substituteOne(argument);
+            changed |= !ReferenceEquals(substituted, argument);
+            ownArguments.Add(substituted);
+        }
+
+        if (!changed)
+        {
+            return type;
+        }
+
+        var substitutedEnclosing = enclosingArguments.MoveToImmutable();
+        var substitutedOwn = ownArguments.MoveToImmutable();
+        return !substitutedEnclosing.IsDefaultOrEmpty
+            ? ConstructNestedGeneric(definition, substitutedEnclosing, substitutedOwn, mapClrType)
+            : Construct(definition, substitutedOwn, mapClrType);
+    }
+
     /// <summary>
     /// Removes all entries from the static constructed-struct caches.
     /// Called by <see cref="ReferenceResolver.Dispose"/> to release stale
@@ -2424,18 +2465,7 @@ public sealed class StructSymbol : TypeSymbol
             && !ReferenceEquals(ss.Definition, ss)
             && !ss.TypeArguments.IsDefaultOrEmpty)
         {
-            var substitutedStructArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ss.TypeArguments.Length);
-            var structChanged = false;
-            for (var i = 0; i < ss.TypeArguments.Length; i++)
-            {
-                var substituted = SubstituteNested(ss.TypeArguments[i]);
-                substitutedStructArgs.Add(substituted);
-                structChanged |= !ReferenceEquals(substituted, ss.TypeArguments[i]);
-            }
-
-            return structChanged
-                ? StructSymbol.Construct(ss.Definition, substitutedStructArgs.MoveToImmutable(), mapClrType)
-                : type;
+            return SubstituteConstructionArguments(ss, SubstituteNested, mapClrType);
         }
 
         // Issue #1521: a member type that is a reference to a type nested inside
@@ -2549,6 +2579,12 @@ public sealed class StructSymbol : TypeSymbol
         {
             var inner = SubstituteNested(a.ElementType);
             return ReferenceEquals(inner, a.ElementType) ? type : ArrayTypeSymbol.Get(inner, a.Length);
+        }
+
+        if (type is ChannelTypeSymbol channel)
+        {
+            var inner = SubstituteNested(channel.ElementType);
+            return ReferenceEquals(inner, channel.ElementType) ? type : ChannelTypeSymbol.Get(inner);
         }
 
         // Issue #1503: a `map[K, V]` element of a generic member (e.g. a
