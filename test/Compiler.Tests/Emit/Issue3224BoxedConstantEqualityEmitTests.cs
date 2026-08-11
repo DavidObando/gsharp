@@ -43,7 +43,7 @@ public sealed class Issue3224BoxedConstantEqualityEmitTests
             """;
 
         Assert.Equal(
-            "False\nTrue\nFalse\nTrue\nFalse\nTrue\n",
+            $"False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}",
             CompileVerifyAndRun(Source));
     }
 
@@ -103,7 +103,7 @@ public sealed class Issue3224BoxedConstantEqualityEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

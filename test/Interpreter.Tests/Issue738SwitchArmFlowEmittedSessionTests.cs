@@ -36,7 +36,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(classify(42))
             """;
 
-        Assert.Equal("string\nother\n", RunSubmission(source));
+        Assert.Equal($"string{Environment.NewLine}other{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(classify(2))
             """;
 
-        Assert.Equal("one\ndefault\n", RunSubmission(source));
+        Assert.Equal($"one{Environment.NewLine}default{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(describe(3))
             """;
 
-        Assert.Equal("one\npost-switch (default)\nother\n", RunSubmission(source));
+        Assert.Equal($"one{Environment.NewLine}post-switch (default){Environment.NewLine}other{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(classify(2))
             """;
 
-        Assert.Equal("caught\nafter-switch\n", RunSubmission(source));
+        Assert.Equal($"caught{Environment.NewLine}after-switch{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(first(9))
             """;
 
-        Assert.Equal("2\n-1\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.WriteLine(sumOdd())
             """;
 
-        Assert.Equal("9\n", RunSubmission(source));
+        Assert.Equal($"9{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
         // i=0: j=0 (skip), j=1 (default, hits=1), j=2 (default, hits=2)
         // i=1: j=0 (skip), j=1 (default, hits=3), j=2 → break outer.
         // Outer terminates → 3.
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class Issue738SwitchArmFlowEmittedSessionTests
 
         // Each outer i (3 of them): j=0 (skip), j=1 (hits++), j=2 → continue outer (skip +100).
         // Hits across 3 outer iterations: 3 increments only → 3.
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -256,6 +256,6 @@ public class Issue738SwitchArmFlowEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

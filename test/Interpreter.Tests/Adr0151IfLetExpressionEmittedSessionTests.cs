@@ -25,7 +25,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run("hi"))
             """;
 
-        Assert.Equal("hi\n", RunSubmission(source));
+        Assert.Equal($"hi{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("none\n", RunSubmission(source));
+        Assert.Equal($"none{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run("hello"))
             """;
 
-        Assert.Equal("short\nhello\n", RunSubmission(source));
+        Assert.Equal($"short{Environment.NewLine}hello{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(calls)
             """;
 
-        Assert.Equal("x\n1\n", RunSubmission(source));
+        Assert.Equal($"x{Environment.NewLine}1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(secondCalls)
             """;
 
-        Assert.Equal("none\n0\n", RunSubmission(source));
+        Assert.Equal($"none{Environment.NewLine}0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(guardCalls)
             """;
 
-        Assert.Equal("none\n0\n", RunSubmission(source));
+        Assert.Equal($"none{Environment.NewLine}0{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(log)
             """;
 
-        Assert.Equal("AB\nab\n", RunSubmission(source));
+        Assert.Equal($"AB{Environment.NewLine}ab{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("hi!\nnone\n", RunSubmission(source));
+        Assert.Equal($"hi!{Environment.NewLine}none{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run(nil))
             """;
 
-        Assert.Equal("3\n-1\n-1\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run(nil, nil))
             """;
 
-        Assert.Equal("a\nb\nnone\n", RunSubmission(source));
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}none{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(Run("abc"))
             """;
 
-        Assert.Equal("4\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public class Adr0151IfLetExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("4\n-1\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -227,6 +227,6 @@ public class Adr0151IfLetExpressionEmittedSessionTests
         using var engine = new EmittedSessionEngine { CaptureConsole = true };
         var cell = engine.Evaluate(text);
         Assert.DoesNotContain(cell.Diagnostics, d => d.Id != "GS0286");
-        return cell.Output.Replace("\r\n", "\n");
+        return cell.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

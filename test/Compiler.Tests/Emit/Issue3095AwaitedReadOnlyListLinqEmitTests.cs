@@ -75,7 +75,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Console.WriteLine(InterfaceListControl(Store).Count)
             """;
 
-        Assert.Equal("2\nTrue\nTrue\n2\n2\n2\n", CompileVerifyAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Console.WriteLine(nested[0][1].Value)
             """;
 
-        Assert.Equal("2\n1\n2\n", CompileVerifyAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Console.WriteLine(Marker3095Control().Mark[string](3))
             """;
 
-        Assert.Equal("5\nmark:3\n", CompileVerifyAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}mark:3{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Console.WriteLine(result)
             """;
 
-        Assert.Equal("5\n", CompileVerifyAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Console.WriteLine(result)
             """;
 
-        Assert.Equal("mark:7\n", CompileVerifyAndRun(source));
+        Assert.Equal($"mark:7{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     private static string CompileVerifyAndRun(string source)
@@ -293,7 +293,7 @@ public sealed class Issue3095AwaitedReadOnlyListLinqEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

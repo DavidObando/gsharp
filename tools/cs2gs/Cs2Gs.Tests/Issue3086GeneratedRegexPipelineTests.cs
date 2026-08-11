@@ -69,9 +69,9 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             Environment.NewLine,
             Directory.GetFiles(appDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        string defaultPatternField = translated.Split('\n').Single(
+        string defaultPatternField = translated.Split(Environment.NewLine).Single(
             line => line.Contains("__generatedRegex_DefaultPattern Regex =", StringComparison.Ordinal));
-        string infinitePatternField = translated.Split('\n').Single(
+        string infinitePatternField = translated.Split(Environment.NewLine).Single(
             line => line.Contains("__generatedRegex_InfinitePattern Regex =", StringComparison.Ordinal));
 
         Assert.Contains("let __generatedRegex_Pattern Regex = Regex(", translated, StringComparison.Ordinal);

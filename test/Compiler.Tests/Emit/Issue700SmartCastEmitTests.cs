@@ -57,7 +57,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nnot dog\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}not dog{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nskipped\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}skipped{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nno\nno\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}no{Environment.NewLine}no{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("x:C\ny:B\n", output);
+        Assert.Equal($"x:C{Environment.NewLine}y:B{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nRex (dog)\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}Rex (dog){Environment.NewLine}", output);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class Issue700SmartCastEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -268,7 +268,7 @@ public class Issue700SmartCastEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

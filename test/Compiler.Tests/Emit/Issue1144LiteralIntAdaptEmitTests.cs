@@ -35,7 +35,7 @@ public class Issue1144LiteralIntAdaptEmitTests
             run()
             """;
 
-        Assert.Equal("11\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class Issue1144LiteralIntAdaptEmitTests
             """;
 
         // 1 | 4 == 5
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue1144LiteralIntAdaptEmitTests
             run()
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue1144LiteralIntAdaptEmitTests
             run()
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue1144LiteralIntAdaptEmitTests
             run()
             """;
 
-        Assert.Equal("9223372036854775807\n", CompileAndRun(source));
+        Assert.Equal($"9223372036854775807{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -182,7 +182,7 @@ public class Issue1144LiteralIntAdaptEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

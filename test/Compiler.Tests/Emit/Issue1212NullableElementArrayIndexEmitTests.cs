@@ -42,7 +42,7 @@ public class Issue1212NullableElementArrayIndexEmitTests
             main()
             """;
 
-        Assert.Equal("42\n7\nnil\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}7{Environment.NewLine}nil{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue1212NullableElementArrayIndexEmitTests
             main()
             """;
 
-        Assert.Equal("set\nhi\n", CompileAndRun(source));
+        Assert.Equal($"set{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1212NullableElementArrayIndexEmitTests
             main()
             """;
 
-        Assert.Equal("3\ncleared\n3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}cleared{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1212NullableElementArrayIndexEmitTests
             main()
             """;
 
-        Assert.Equal("nil-array\n20\n", CompileAndRun(source));
+        Assert.Equal($"nil-array{Environment.NewLine}20{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -174,7 +174,7 @@ public class Issue1212NullableElementArrayIndexEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

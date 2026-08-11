@@ -78,7 +78,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -162,7 +162,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.(UseFoo|UseBar)$");
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -211,7 +211,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.(UseFoo|UseBar)$");
-        Assert.Equal("10\n20\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -250,7 +250,7 @@ public class Issue2370ExplicitInterfaceStaticMemberEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Use$");
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     /// <summary>

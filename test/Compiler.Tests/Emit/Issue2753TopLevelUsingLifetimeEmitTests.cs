@@ -56,7 +56,7 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
 
         var result = CompileAndRun(source);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("before\nping:outer\ndispose:inner\ndispose:outer\n", result.StandardOutput);
+        Assert.Equal($"before{Environment.NewLine}ping:outer{Environment.NewLine}dispose:inner{Environment.NewLine}dispose:outer{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
 
         var result = CompileAndRun(source);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("ping\nrestore\ndisposed\n", result.StandardOutput);
+        Assert.Equal($"ping{Environment.NewLine}restore{Environment.NewLine}disposed{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
         Assert.True(
             result.ExitCode == 0,
             $"exited {result.ExitCode}\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
-        Assert.Equal("ping\ndisposed\n", result.StandardOutput);
+        Assert.Equal($"ping{Environment.NewLine}disposed{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
 
         var result = CompileAndRun(source);
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Equal("before\ndisposed\n", result.StandardOutput);
+        Assert.Equal($"before{Environment.NewLine}disposed{Environment.NewLine}", result.StandardOutput);
         Assert.Contains("boom", result.StandardError);
     }
 
@@ -203,7 +203,7 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
 
         var result = CompileAndRun(source);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("body\ndispose:inner\nafter\ndispose:outer\n", result.StandardOutput);
+        Assert.Equal($"body{Environment.NewLine}dispose:inner{Environment.NewLine}after{Environment.NewLine}dispose:outer{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -279,8 +279,8 @@ public class Issue2753TopLevelUsingLifetimeEmitTests
                 RedirectStandardError = true,
                 UseShellExecute = false,
             })!;
-            var standardOutput = process.StandardOutput.ReadToEnd().Replace("\r\n", "\n");
-            var standardError = process.StandardError.ReadToEnd().Replace("\r\n", "\n");
+            var standardOutput = process.StandardOutput.ReadToEnd().ReplaceLineEndings(Environment.NewLine);
+            var standardError = process.StandardError.ReadToEnd().ReplaceLineEndings(Environment.NewLine);
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             return (process.ExitCode, standardOutput, standardError);
         }

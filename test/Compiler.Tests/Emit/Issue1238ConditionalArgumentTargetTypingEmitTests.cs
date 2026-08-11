@@ -47,7 +47,7 @@ public class Issue1238ConditionalArgumentTargetTypingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("none\nhi\n", output);
+        Assert.Equal($"none{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue1238ConditionalArgumentTargetTypingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("none\nval\n", output);
+        Assert.Equal($"none{Environment.NewLine}val{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue1238ConditionalArgumentTargetTypingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("empty\nok\n", output);
+        Assert.Equal($"empty{Environment.NewLine}ok{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -189,7 +189,7 @@ public class Issue1238ConditionalArgumentTargetTypingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

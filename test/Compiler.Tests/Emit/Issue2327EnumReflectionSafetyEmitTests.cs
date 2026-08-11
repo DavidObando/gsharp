@@ -55,7 +55,7 @@ public class Issue2327EnumReflectionSafetyEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ public class Issue2327EnumReflectionSafetyEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -110,7 +110,7 @@ public class Issue2327EnumReflectionSafetyEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -141,7 +141,7 @@ public class Issue2327EnumReflectionSafetyEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -211,7 +211,7 @@ public class Issue2327EnumReflectionSafetyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

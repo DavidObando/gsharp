@@ -35,7 +35,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(a[^5])
             """;
 
-        Assert.Equal("50\n40\n10\n", CompileAndRun(source));
+        Assert.Equal($"50{Environment.NewLine}40{Environment.NewLine}10{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(b[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n10\n20\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n40\n50\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}40{Environment.NewLine}50{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(b[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(s[^2..])
             """;
 
-        Assert.Equal("abc\nbcde\nef\n", CompileAndRun(source));
+        Assert.Equal($"abc{Environment.NewLine}bcde{Environment.NewLine}ef{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(sub[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue1022FromEndIndexEmitTests
             Console.WriteLine(a[1 ^ 2])
             """;
 
-        Assert.Equal("-1\n5\n40\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}5{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -216,7 +216,7 @@ public class Issue1022FromEndIndexEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -75,7 +75,7 @@ public sealed class ImportedExtensionDeclaringAssemblyInvariantEmitTests
         var assembly = reader.GetAssemblyReference((AssemblyReferenceHandle)parent.ResolutionScope);
 
         Assert.Equal("ClassLibrary1", reader.GetString(assembly.Name));
-        Assert.Equal("correct\n", Run(artifacts.OutputPath));
+        Assert.Equal($"correct{Environment.NewLine}", Run(artifacts.OutputPath));
     }
 
     private static CompilationArtifacts Compile(bool shadowReferenceFirst)
@@ -170,7 +170,7 @@ public sealed class ImportedExtensionDeclaringAssemblyInvariantEmitTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private sealed class CompilationArtifacts : IDisposable

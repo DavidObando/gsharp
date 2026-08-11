@@ -53,7 +53,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
             Console.WriteLine(result.ToString())
             """;
 
-        Assert.Equal("True\nEmerald\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}Emerald{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
             Console.WriteLine(ok)
             """;
 
-        Assert.Equal("False\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
             Console.WriteLine(result.ToString())
             """;
 
-        Assert.Equal("True\nEmerald\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}Emerald{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
             Console.WriteLine(r.ToString())
             """;
 
-        Assert.Equal("True\nEmerald\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}Emerald{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
             Console.WriteLine(d.ToString())
             """;
 
-        Assert.Equal("True\nFriday\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}Friday{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -187,7 +187,7 @@ public class Issue1599EnumTryParseOutVarEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

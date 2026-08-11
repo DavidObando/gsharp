@@ -42,7 +42,7 @@ public class Issue975InterpolatedBaseArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("only 3 left\n", output);
+        Assert.Equal($"only 3 left{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue975InterpolatedBaseArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("bob has 007 items, next [  08]\n", output);
+        Assert.Equal($"bob has 007 items, next [  08]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue975InterpolatedBaseArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("plain literal\nonly 9 left\n", output);
+        Assert.Equal($"plain literal{Environment.NewLine}only 9 left{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -159,7 +159,7 @@ public class Issue975InterpolatedBaseArgEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

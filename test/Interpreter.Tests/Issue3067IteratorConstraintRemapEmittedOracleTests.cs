@@ -23,7 +23,7 @@ public class Issue3067IteratorConstraintRemapEmittedOracleTests
         Assert.False(
             result.Diagnostics.Any(d => d.IsError),
             string.Join(Environment.NewLine, result.Diagnostics));
-        Assert.Equal(expected + "\n", result.Output.Replace("\r\n", "\n"));
+        Assert.Equal(expected + Environment.NewLine, result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private const string TopLevelSource = """

@@ -44,7 +44,7 @@ public class Issue1728ObjectInitializerWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n2\n", output);
+        Assert.Equal($"10{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class Issue1728ObjectInitializerWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n2\nhi\n", output);
+        Assert.Equal($"10{Environment.NewLine}2{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue1728ObjectInitializerWithCtorArgsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -171,7 +171,7 @@ public class Issue1728ObjectInitializerWithCtorArgsEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

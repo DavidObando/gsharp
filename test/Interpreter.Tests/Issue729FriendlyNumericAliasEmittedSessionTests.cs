@@ -60,7 +60,7 @@ let y int32 = sumAlias(x, 4)
 Console.WriteLine(y)
 ";
 
-        Assert.Equal("9\n", RunSubmission(source));
+        Assert.Equal($"9{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -78,6 +78,6 @@ Console.WriteLine(y)
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

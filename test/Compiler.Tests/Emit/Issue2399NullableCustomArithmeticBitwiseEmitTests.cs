@@ -87,7 +87,7 @@ public class Issue2399NullableCustomArithmeticBitwiseEmitTests
             """;
 
         Assert.Equal(
-            "22\n2\n120\n1\n2\n8\n14\n6\n48\n3\nTrue\nTrue\nTrue\n13\n11\n",
+            $"22{Environment.NewLine}2{Environment.NewLine}120{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}8{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}48{Environment.NewLine}3{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}13{Environment.NewLine}11{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -190,7 +190,7 @@ public class Issue2399NullableCustomArithmeticBitwiseEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

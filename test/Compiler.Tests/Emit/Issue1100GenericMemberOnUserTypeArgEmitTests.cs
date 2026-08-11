@@ -78,7 +78,7 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
             Console.WriteLine(c.count())
             """;
 
-        Assert.Equal("3\n42\n0\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}42{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
             Console.WriteLine(b.size())
             """;
 
-        Assert.Equal("7\n2\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
             Console.WriteLine(C().run())
             """;
 
-        Assert.Equal("28\n", CompileAndRun(source));
+        Assert.Equal($"28{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
             Console.WriteLine(C().run())
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -253,7 +253,7 @@ public class Issue1100GenericMemberOnUserTypeArgEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

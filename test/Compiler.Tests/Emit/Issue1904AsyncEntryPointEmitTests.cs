@@ -45,7 +45,7 @@ public class Issue1904AsyncEntryPointEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 0);
-        Assert.Equal("start\nend\n", output);
+        Assert.Equal($"start{Environment.NewLine}end{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue1904AsyncEntryPointEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 42);
-        Assert.Equal("start\n", output);
+        Assert.Equal($"start{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1904AsyncEntryPointEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 0);
-        Assert.Equal("start\nend\n", output);
+        Assert.Equal($"start{Environment.NewLine}end{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue1904AsyncEntryPointEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 7);
-        Assert.Equal("start\n", output);
+        Assert.Equal($"start{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue1904AsyncEntryPointEmitTests
             """;
 
         var output = CompileAndRun(source, expectedExitCode: 0);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -202,7 +202,7 @@ public class Issue1904AsyncEntryPointEmitTests
                 proc.ExitCode == expectedExitCode,
                 $"expected exit {expectedExitCode}, got {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

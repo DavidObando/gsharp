@@ -38,14 +38,14 @@ public sealed class Adr0157ReplValueFormatterTests
     [Fact]
     public void CompatEcho_PlainStruct_RendersCompositeLiteral()
     {
-        Assert.Equal("Point{X: 1, Y: 2}\n", EchoOf(PointStructCell));
+        Assert.Equal($"Point{{X: 1, Y: 2}}{Environment.NewLine}", EchoOf(PointStructCell));
     }
 
     [Fact]
     public void CompatEcho_DataStructOverride_Unchanged()
     {
         Assert.Equal(
-            "Point(X=1, Y=2)\n",
+            $"Point(X=1, Y=2){Environment.NewLine}",
             EchoOf("""
                 data struct Point {
                     var X int32
@@ -59,7 +59,7 @@ public sealed class Adr0157ReplValueFormatterTests
     public void CompatEcho_UserToStringOverride_Unchanged()
     {
         Assert.Equal(
-            "tag:11\n",
+            $"tag:11{Environment.NewLine}",
             EchoOf("""
                 struct Tagged {
                     var Id int32
@@ -73,7 +73,7 @@ public sealed class Adr0157ReplValueFormatterTests
     public void CompatEcho_NestedClassWithNilField_RendersRecursively()
     {
         Assert.Equal(
-            "Node{Name: \"root\", Next: Node{Name: \"leaf\", Next: nil}}\n",
+            $"Node{{Name: \"root\", Next: Node{{Name: \"leaf\", Next: nil}}}}{Environment.NewLine}",
             EchoOf("""
                 class Node {
                     var Name string
@@ -88,7 +88,7 @@ public sealed class Adr0157ReplValueFormatterTests
     public void CompatEcho_ReferenceCycle_TerminatesWithElision()
     {
         Assert.Equal(
-            "Node{Name: \"a\", Next: Node{Name: \"b\", Next: ...}}\n",
+            $"Node{{Name: \"a\", Next: Node{{Name: \"b\", Next: ...}}}}{Environment.NewLine}",
             EchoOf("""
                 class Node {
                     var Name string
@@ -104,9 +104,9 @@ public sealed class Adr0157ReplValueFormatterTests
     [Fact]
     public void CompatEcho_Collections_RenderElementwiseWithCap()
     {
-        Assert.Equal("[1, 2, 3]\n", EchoOf("let xs = []int32{1, 2, 3}"));
+        Assert.Equal($"[1, 2, 3]{Environment.NewLine}", EchoOf("let xs = []int32{1, 2, 3}"));
         Assert.Equal(
-            "[1, 2, 3, 4, 5, 6, 7, 8, ...]\n",
+            $"[1, 2, 3, 4, 5, 6, 7, 8, ...]{Environment.NewLine}",
             EchoOf("let xs = []int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}"));
     }
 
@@ -180,7 +180,7 @@ public sealed class Adr0157ReplValueFormatterTests
     private static string EchoOf(string submission)
     {
         var previousOut = Console.Out;
-        using var writer = new StringWriter { NewLine = "\n" };
+        using var writer = new StringWriter { NewLine = Environment.NewLine };
         Console.SetOut(writer);
         try
         {
@@ -192,6 +192,6 @@ public sealed class Adr0157ReplValueFormatterTests
             Console.SetOut(previousOut);
         }
 
-        return writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return writer.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -185,7 +185,7 @@ public class Issue1019StaticInterfacePropertyEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Describe$");
-        Assert.Equal("apple\n", output);
+        Assert.Equal($"apple{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -376,7 +376,7 @@ public class Issue1019StaticInterfacePropertyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

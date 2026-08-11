@@ -98,7 +98,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(F[int32](b, -1))
             """;
 
-        Assert.Equal("42\n-1\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(c.F("nope"))
             """;
 
-        Assert.Equal("Friday\nother\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}other{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(Describe[DayOfWeek](d))
             """;
 
-        Assert.Equal("string:hi\nint32:7\nenum:Tuesday\nother\n", CompileAndRun(source));
+        Assert.Equal($"string:hi{Environment.NewLine}int32:7{Environment.NewLine}enum:Tuesday{Environment.NewLine}other{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(Probe[DayOfWeek](b, DayOfWeek.Monday).ToString())
             """;
 
-        Assert.Equal("Wednesday\nMonday\n", CompileAndRun(source));
+        Assert.Equal($"Wednesday{Environment.NewLine}Monday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(F[Dog](b, Dog()))
             """;
 
-        Assert.Equal("Woof\nother\n", CompileAndRun(source));
+        Assert.Equal($"Woof{Environment.NewLine}other{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(F[string](a, "none"))
             """;
 
-        Assert.Equal("hello\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(F[int32](b, -1))
             """;
 
-        Assert.Equal("42\n-1\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(conv.ConvertTo(nil, nil, "hi", typeof(string)))
             """;
 
-        Assert.Equal("Friday\nhi\n", CompileAndRun(source, requiresFullBcl: true));
+        Assert.Equal($"Friday{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source, requiresFullBcl: true));
     }
 
     [Fact]
@@ -345,7 +345,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             Console.WriteLine(conv.ConvertTo(nil, nil, "hi", typeof(string)))
             """;
 
-        Assert.Equal("Saturday\nhi\n", CompileAndRun(source, requiresFullBcl: true));
+        Assert.Equal($"Saturday{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source, requiresFullBcl: true));
     }
 
     private static string CompileAndRun(string source, bool requiresFullBcl = false)
@@ -439,7 +439,7 @@ public class Issue2335StructConstrainedGenericPatternEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

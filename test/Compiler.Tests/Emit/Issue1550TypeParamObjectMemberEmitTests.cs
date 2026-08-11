@@ -49,7 +49,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("Int32\n", CompileAndRun(source));
+        Assert.Equal($"Int32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("i1550_class_tostring.Widget1550\n", CompileAndRun(source));
+        Assert.Equal($"i1550_class_tostring.Widget1550{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("Monday\n", CompileAndRun(source));
+        Assert.Equal($"Monday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -178,7 +178,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -205,7 +205,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
             }
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -342,7 +342,7 @@ public class Issue1550TypeParamObjectMemberEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

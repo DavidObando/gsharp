@@ -34,7 +34,7 @@ public class Issue662ValueTaskGetResultWarningEmitTests
 
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source);
         Assert.True(exitCode == 0, $"exited {exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        Assert.Equal("True\n", stdout);
+        Assert.Equal($"True{Environment.NewLine}", stdout);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class Issue662ValueTaskGetResultWarningEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

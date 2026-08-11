@@ -47,7 +47,7 @@ public class Issue1918ValueTaskAsyncEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue1918ValueTaskAsyncEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("done\n", output);
+        Assert.Equal($"done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1918ValueTaskAsyncEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1918ValueTaskAsyncEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("completed\n", output);
+        Assert.Equal($"completed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue1918ValueTaskAsyncEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -193,7 +193,7 @@ public class Issue1918ValueTaskAsyncEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

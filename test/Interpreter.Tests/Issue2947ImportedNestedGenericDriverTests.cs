@@ -99,7 +99,7 @@ public class Issue2947ImportedNestedGenericDriverTests
             var reportedPath = WriteSource(directory, "reported.gs", ReportedSource);
             var bare = RunCompiler("/nowarn:GS9100", "/r:" + libraryPath, reportedPath);
             AssertSucceeded(bare, "reported bare gsc");
-            Assert.Equal("Success.\n", Normalize(bare.StandardOutput));
+            Assert.Equal($"Success.{Environment.NewLine}", Normalize(bare.StandardOutput));
             Assert.Equal(string.Empty, bare.StandardError);
 
             var executedReportedPath = WriteSource(directory, "reported-executed.gs", ExecutedReportedSource);
@@ -111,12 +111,12 @@ public class Issue2947ImportedNestedGenericDriverTests
                 "/r:" + libraryPath,
                 executedReportedPath);
             AssertSucceeded(emitted, "reported emit");
-            Assert.Equal("5\n", RunAssembly(directory, reportedAssemblyPath));
+            Assert.Equal($"5{Environment.NewLine}", RunAssembly(directory, reportedAssemblyPath));
 
             _ = Assembly.LoadFrom(libraryPath);
             var gsi = RunGsi(executedReportedPath);
             AssertSucceeded(gsi, "reported gsi");
-            Assert.Equal("5\n", Normalize(gsi.StandardOutput));
+            Assert.Equal($"5{Environment.NewLine}", Normalize(gsi.StandardOutput));
             Assert.Equal(string.Empty, gsi.StandardError);
 
             var diagnosticPath = WriteSource(directory, "diagnostic.gs", DiagnosticSource);
@@ -256,7 +256,7 @@ public class Issue2947ImportedNestedGenericDriverTests
             "/r:" + libraryPath,
             sourcePath);
         AssertSucceeded(compilation, name);
-        Assert.Equal(matrix.ExpectedValue + "\n", RunAssembly(directory, assemblyPath));
+        Assert.Equal(matrix.ExpectedValue + Environment.NewLine, RunAssembly(directory, assemblyPath));
     }
 
     private static DriverResult RunCompiler(params string[] arguments)
@@ -338,7 +338,7 @@ public class Issue2947ImportedNestedGenericDriverTests
     }
 
     private static string Normalize(string value)
-        => value.Replace("\r\n", "\n", StringComparison.Ordinal);
+        => value.ReplaceLineEndings(Environment.NewLine);
 
     private sealed record DriverResult(int ExitCode, string StandardOutput, string StandardError)
     {

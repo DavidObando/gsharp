@@ -63,7 +63,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("retries=5\nexecuted\n", output);
+        Assert.Equal($"retries=5{Environment.NewLine}executed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("ran\n3\n", output);
+        Assert.Equal($"ran{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("annotated\n", output);
+        Assert.Equal($"annotated{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("as-cast\n", output);
+        Assert.Equal($"as-cast{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("go\ngo\n", output);
+        Assert.Equal($"go{Environment.NewLine}go{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("single\n", output);
+        Assert.Equal($"single{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -344,7 +344,7 @@ public class Issue658CtorClrInterfaceParamEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

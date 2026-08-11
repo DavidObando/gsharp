@@ -57,7 +57,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("a\n1\nb\n2\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}1{Environment.NewLine}b{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("a\n1\nb\n2\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}1{Environment.NewLine}b{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue939ForInUserElementTypeEmitTests
             Console.WriteLine(total)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("deep\n7\n", CompileAndRun(source));
+        Assert.Equal($"deep{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("k\ndictval\n3\n", CompileAndRun(source));
+        Assert.Equal($"k{Environment.NewLine}dictval{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("k\ndictval\n3\n", CompileAndRun(source));
+        Assert.Equal($"k{Environment.NewLine}dictval{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("5\n6\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue939ForInUserElementTypeEmitTests
             }
             """;
 
-        Assert.Equal("x\n9\n", CompileAndRun(source));
+        Assert.Equal($"x{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -288,7 +288,7 @@ public class Issue939ForInUserElementTypeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

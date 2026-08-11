@@ -39,7 +39,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -129,7 +129,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -151,7 +151,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("matched\n", output);
+        Assert.Equal($"matched{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("matched\n", output);
+        Assert.Equal($"matched{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("0:a\n1:b\n", output);
+        Assert.Equal($"0:a{Environment.NewLine}1:b{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("4\n", output);
+        Assert.Equal($"4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRun(gsource);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public class Issue611SliceArrayParityTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -321,7 +321,7 @@ public class Issue611SliceArrayParityTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -363,7 +363,7 @@ public class Issue611SliceArrayParityTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{runOut}\nstderr:\n{runErr}");
 
-            return runOut.Replace("\r\n", "\n");
+            return runOut.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

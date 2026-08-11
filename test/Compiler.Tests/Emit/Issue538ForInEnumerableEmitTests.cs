@@ -49,7 +49,7 @@ public class Issue538ForInEnumerableEmitTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath);
-            Assert.Equal("alpha\nbeta\ngamma\n3\n", output);
+            Assert.Equal($"alpha{Environment.NewLine}beta{Environment.NewLine}gamma{Environment.NewLine}3{Environment.NewLine}", output);
         }
         finally
         {
@@ -79,7 +79,7 @@ public class Issue538ForInEnumerableEmitTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath);
-            Assert.Equal("15\n", output);
+            Assert.Equal($"15{Environment.NewLine}", output);
         }
         finally
         {
@@ -110,7 +110,7 @@ public class Issue538ForInEnumerableEmitTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath);
-            Assert.Equal("x\ny\n2\n", output);
+            Assert.Equal($"x{Environment.NewLine}y{Environment.NewLine}2{Environment.NewLine}", output);
         }
         finally
         {
@@ -138,7 +138,7 @@ public class Issue538ForInEnumerableEmitTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath);
-            Assert.Equal("0\n", output);
+            Assert.Equal($"0{Environment.NewLine}", output);
         }
         finally
         {
@@ -169,7 +169,7 @@ public class Issue538ForInEnumerableEmitTests
                 """;
 
             var output = CompileAndRunWithHelper(source, tempDir, helperPath);
-            Assert.Equal("10\n20\n30\n3\n", output);
+            Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}3{Environment.NewLine}", output);
         }
         finally
         {
@@ -198,7 +198,7 @@ public class Issue538ForInEnumerableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\nb\n2\n", output);
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public class Issue538ForInEnumerableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\nworld\n", output);
+        Assert.Equal($"hello{Environment.NewLine}world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue538ForInEnumerableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("97\n98\n99\n", output);
+        Assert.Equal($"97{Environment.NewLine}98{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -445,7 +445,7 @@ public class Issue538ForInEnumerableEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

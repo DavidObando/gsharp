@@ -139,8 +139,8 @@ public class Issue2263CrossAssemblyDataClassWithTests
 
         var output = LoadInvokeCaptureStdout(peStream, libraryPath, "Issue2263-Runner");
         var lines = output
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+.ReplaceLineEndings(Environment.NewLine)
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(new[] { "1", "2", "99", "2", "5", "9", "0" }, lines);
     }

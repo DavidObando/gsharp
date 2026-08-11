@@ -50,7 +50,7 @@ public class Issue1617NaNOrderedComparisonEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nFalse\nFalse\nFalse\nTrue\nTrue\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1617NaNOrderedComparisonEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nFalse\nFalse\nFalse\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue1617NaNOrderedComparisonEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nFalse\nTrue\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -172,7 +172,7 @@ public class Issue1617NaNOrderedComparisonEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

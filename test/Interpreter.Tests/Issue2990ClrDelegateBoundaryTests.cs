@@ -35,7 +35,7 @@ public class Issue2990ClrDelegateBoundaryTests
             Console.WriteLine(items.Where((item Item) -> item.V == 22).First().V)
             """;
 
-        Assert.Equal("11\n22\n", Evaluate(Source));
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue2990ClrDelegateBoundaryTests
             Console.WriteLine(items.Find((item Item) -> item.V == 55).V)
             """;
 
-        Assert.Equal("44\n55\n", Evaluate(Source));
+        Assert.Equal($"44{Environment.NewLine}55{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue2990ClrDelegateBoundaryTests
             Console.WriteLine(item.V)
             """;
 
-        Assert.Equal("66\n", Evaluate(Source));
+        Assert.Equal($"66{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue2990ClrDelegateBoundaryTests
             Console.WriteLine(Pick(items, (item) -> item.V == 88))
             """;
 
-        Assert.Equal("88\n", Evaluate(Source));
+        Assert.Equal($"88{Environment.NewLine}", Evaluate(Source));
     }
 
     private static string Evaluate(string source)
@@ -109,6 +109,6 @@ public class Issue2990ClrDelegateBoundaryTests
 
         Assert.Empty(result.Diagnostics);
 
-        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

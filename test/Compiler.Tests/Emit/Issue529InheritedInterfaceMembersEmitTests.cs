@@ -41,7 +41,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -102,7 +102,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("from IA via IB\n", output);
+        Assert.Equal($"from IA via IB{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -140,7 +140,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -182,7 +182,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("deep\n", output);
+        Assert.Equal($"deep{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -219,7 +219,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("dm\ndp\n", output);
+        Assert.Equal($"dm{Environment.NewLine}dp{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -242,7 +242,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -283,7 +283,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("a\nb\n", output);
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}", output);
     }
 
     // ---------------------------------------------------------------
@@ -351,7 +351,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -447,7 +447,7 @@ public class Issue529InheritedInterfaceMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

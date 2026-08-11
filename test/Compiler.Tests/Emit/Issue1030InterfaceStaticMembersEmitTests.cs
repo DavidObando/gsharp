@@ -123,7 +123,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\ncounter\n100\n15\n", output);
+        Assert.Equal($"10{Environment.NewLine}counter{Environment.NewLine}100{Environment.NewLine}15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Run$");
-        Assert.Equal("3\n3\n", output);
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source, ignoredErrorScope: @"<Program>\.Describe$");
-        Assert.Equal("default-name\nbanana\n", output);
+        Assert.Equal($"default-name{Environment.NewLine}banana{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -355,7 +355,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\nbox\n99\n15\n110\n", output);
+        Assert.Equal($"10{Environment.NewLine}box{Environment.NewLine}99{Environment.NewLine}15{Environment.NewLine}110{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n1\n", output);
+        Assert.Equal($"5{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -409,7 +409,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     private static string CompileLibrary(string source)
@@ -531,7 +531,7 @@ public class Issue1030InterfaceStaticMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

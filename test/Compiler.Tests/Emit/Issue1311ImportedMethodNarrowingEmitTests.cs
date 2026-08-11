@@ -39,7 +39,7 @@ public class Issue1311ImportedMethodNarrowingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("3\n65\n0\n255\n", output);
+        Assert.Equal($"3{Environment.NewLine}65{Environment.NewLine}0{Environment.NewLine}255{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue1311ImportedMethodNarrowingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

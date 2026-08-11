@@ -40,7 +40,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Func`1\n", output);
+        Assert.Equal($"Func`1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Func`2\n", output);
+        Assert.Equal($"Func`2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Action`1\n", output);
+        Assert.Equal($"Action`1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Action`2\n", output);
+        Assert.Equal($"Action`2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Action\n", output);
+        Assert.Equal($"Action{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -298,7 +298,7 @@ public class Issue1989MultiArityOpenGenericTypeOfEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -47,7 +47,7 @@ public class Issue1443DefaultSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1443DefaultSwitchArmEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n20\n0\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -150,7 +150,7 @@ public class Issue1443DefaultSwitchArmEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

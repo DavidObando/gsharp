@@ -46,7 +46,7 @@ public class ReturnInTryFinallyEmitTests
             }
             """;
 
-        Assert.Equal("finally ran\n7\n", CompileAndRun(src));
+        Assert.Equal($"finally ran{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class ReturnInTryFinallyEmitTests
             }
             """;
 
-        Assert.Equal("finally ran\n42\n", CompileAndRun(src));
+        Assert.Equal($"finally ran{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class ReturnInTryFinallyEmitTests
             }
             """;
 
-        Assert.Equal("inner finally\nouter finally\n100\n", CompileAndRun(src));
+        Assert.Equal($"inner finally{Environment.NewLine}outer finally{Environment.NewLine}100{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class ReturnInTryFinallyEmitTests
             }
             """;
 
-        Assert.Equal("before return\nfinally ran\ndone\n", CompileAndRun(src));
+        Assert.Equal($"before return{Environment.NewLine}finally ran{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class ReturnInTryFinallyEmitTests
             }
             """;
 
-        Assert.Equal("finally ran\n1\nfinally ran\n2\n", CompileAndRun(src));
+        Assert.Equal($"finally ran{Environment.NewLine}1{Environment.NewLine}finally ran{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(src));
     }
 
     private static string CompileAndRun(string source)
@@ -220,7 +220,7 @@ public class ReturnInTryFinallyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

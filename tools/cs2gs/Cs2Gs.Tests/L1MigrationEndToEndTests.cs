@@ -59,7 +59,7 @@ public class L1MigrationEndToEndTests
         // T3: the entry class became top-level — a top-level func and the entry
         // body as top-level statements — with no `shared { }` block and no `Main`.
         Assert.Contains("private func PrintFizzBuzz(upTo int32) {", printed);
-        Assert.Contains("\nlet cart = Cart(\"Ada\")", printed);
+        Assert.Contains($"{Environment.NewLine}let cart = Cart(\"Ada\")", printed);
         Assert.DoesNotContain("shared {", printed);
         Assert.DoesNotContain("func Main", printed);
 
@@ -129,7 +129,9 @@ public class L1MigrationEndToEndTests
         return (unit, context, GSharpPrinter.Print(unit));
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n").TrimEnd('\n') + "\n";
+    private static string Normalize(string text) =>
+        text.ReplaceLineEndings(Environment.NewLine)
+            .TrimEnd(Environment.NewLine.ToCharArray()) + Environment.NewLine;
 
     private static (int Exit, string Output) RunDotnet(string arguments)
     {

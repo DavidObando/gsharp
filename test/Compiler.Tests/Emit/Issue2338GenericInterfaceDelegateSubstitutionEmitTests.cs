@@ -101,7 +101,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\nhi\n", output);
+        Assert.Equal($"42{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -191,7 +191,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("55\nworld\n", output);
+        Assert.Equal($"55{Environment.NewLine}world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=10\n", output);
+        Assert.Equal($"n=10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=21\n", output);
+        Assert.Equal($"n=21{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("123\n", output);
+        Assert.Equal($"123{Environment.NewLine}", output);
     }
 
     // Non-generic control: confirms the fix does not disturb the
@@ -322,7 +322,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -399,7 +399,7 @@ public class Issue2338GenericInterfaceDelegateSubstitutionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

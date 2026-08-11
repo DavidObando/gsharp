@@ -62,7 +62,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("caught: boom1437a\n", output);
+        Assert.Equal($"caught: boom1437a{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("outer caught: inner1437b\n", output);
+        Assert.Equal($"outer caught: inner1437b{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("P1437c:z\n", output);
+        Assert.Equal($"P1437c:z{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("O1437d:Iq\n", output);
+        Assert.Equal($"O1437d:Iq{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("str:hi1437e\nint\n", output);
+        Assert.Equal($"str:hi1437e{Environment.NewLine}int{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class Issue1437CatchInLambdaEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -274,7 +274,7 @@ public class Issue1437CatchInLambdaEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

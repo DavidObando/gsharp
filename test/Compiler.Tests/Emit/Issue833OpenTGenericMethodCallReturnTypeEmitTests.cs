@@ -47,7 +47,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\ndone\n", output);
+        Assert.Equal($"0{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n0\n", output);
+        Assert.Equal($"0{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n42\n42\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -229,7 +229,7 @@ public class Issue833OpenTGenericMethodCallReturnTypeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

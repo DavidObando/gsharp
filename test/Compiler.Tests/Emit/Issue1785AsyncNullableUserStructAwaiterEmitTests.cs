@@ -60,7 +60,7 @@ public class Issue1785AsyncNullableUserStructAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue1785AsyncNullableUserStructAwaiterEmitTests
         // G# has no user-defined enum ToString override here, so
         // Console.WriteLine prints the underlying int32 value (Green = 1).
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue1785AsyncNullableUserStructAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -202,7 +202,7 @@ public class Issue1785AsyncNullableUserStructAwaiterEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

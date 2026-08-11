@@ -41,7 +41,10 @@ public class Issue1733FloatInfinityDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var expected = $"{double.PositiveInfinity}\n{double.NegativeInfinity}\nTrue\nTrue\n";
+        var expected =
+            $"{double.PositiveInfinity}{Environment.NewLine}" +
+            $"{double.NegativeInfinity}{Environment.NewLine}" +
+            $"True{Environment.NewLine}True{Environment.NewLine}";
         Assert.Equal(expected, output);
     }
 
@@ -63,7 +66,10 @@ public class Issue1733FloatInfinityDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var expected = $"{float.PositiveInfinity}\n{float.NegativeInfinity}\nTrue\nTrue\n";
+        var expected =
+            $"{float.PositiveInfinity}{Environment.NewLine}" +
+            $"{float.NegativeInfinity}{Environment.NewLine}" +
+            $"True{Environment.NewLine}True{Environment.NewLine}";
         Assert.Equal(expected, output);
     }
 
@@ -141,7 +147,7 @@ public class Issue1733FloatInfinityDefaultEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

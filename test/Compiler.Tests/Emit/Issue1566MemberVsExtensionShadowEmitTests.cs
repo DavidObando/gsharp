@@ -53,7 +53,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("member\n", output);
+        Assert.Equal($"member{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("zero-two\n", output);
+        Assert.Equal($"zero-two{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("static-member\n", output);
+        Assert.Equal($"static-member{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("struct-member\n", output);
+        Assert.Equal($"struct-member{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("member\nextension\n", output);
+        Assert.Equal($"member{Environment.NewLine}extension{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ext-called\n", output);
+        Assert.Equal($"ext-called{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -216,7 +216,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("alpha\nbeta\n", output);
+        Assert.Equal($"alpha{Environment.NewLine}beta{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -293,7 +293,7 @@ public class Issue1566MemberVsExtensionShadowEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

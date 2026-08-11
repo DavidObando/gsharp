@@ -58,7 +58,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
             MainWindow().Open()
             """);
 
-        Assert.Equal("base-opened\nasync-opened\n", fixture.Run(result.OutputPath));
+        Assert.Equal($"base-opened{Environment.NewLine}async-opened{Environment.NewLine}", fixture.Run(result.OutputPath));
 
         var assembly = Assembly.LoadFrom(result.OutputPath);
         var mainWindow = assembly.GetType("Oahu.App.Avalonia.MainWindow")!;
@@ -90,7 +90,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
             MainWindow().Open()
             """);
 
-        Assert.Equal("base-opened\nsync-opened\n", fixture.Run(result.OutputPath));
+        Assert.Equal($"base-opened{Environment.NewLine}sync-opened{Environment.NewLine}", fixture.Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { fixture.LibraryPath });
         AssertNoForwarder(result.OutputPath, "Issue2667.Sync.MainWindow");
     }
@@ -117,7 +117,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
             Console.WriteLine(MainWindow().DescribeAsync().Result)
             """);
 
-        Assert.Equal("derived\n", fixture.Run(result.OutputPath));
+        Assert.Equal($"derived{Environment.NewLine}", fixture.Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { fixture.LibraryPath });
         AssertNoForwarder(result.OutputPath, "Issue2667.Virtual.MainWindow");
     }
@@ -201,7 +201,7 @@ public sealed class Issue2667AsyncVoidImportedBaseReceiverEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
 
         public void Dispose()

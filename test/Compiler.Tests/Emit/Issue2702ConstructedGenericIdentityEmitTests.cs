@@ -88,7 +88,7 @@ public class Issue2702ConstructedGenericIdentityEmitTests
             Console.WriteLine(JobScheduler().Run().GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("7\n", CompileVerifyAndRun(source, string.Join(", ", ExactFingerprintPrefixes)));
+        Assert.Equal($"7{Environment.NewLine}", CompileVerifyAndRun(source, string.Join(", ", ExactFingerprintPrefixes)));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue2702ConstructedGenericIdentityEmitTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:\n{error}");
-            return output.Replace("\r\n", "\n");
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

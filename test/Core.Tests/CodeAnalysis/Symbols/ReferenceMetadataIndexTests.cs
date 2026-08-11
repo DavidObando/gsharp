@@ -53,7 +53,7 @@ public class ReferenceMetadataIndexTests
     {
         // Mirror File.ReadAllLines: split on '\n', strip trailing '\r', drop the
         // empty trailing entry produced by the final newline.
-        var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
+        var lines = text.ReplaceLineEndings(Environment.NewLine).Split(Environment.NewLine).ToList();
         if (lines.Count > 0 && lines[lines.Count - 1].Length == 0)
         {
             lines.RemoveAt(lines.Count - 1);

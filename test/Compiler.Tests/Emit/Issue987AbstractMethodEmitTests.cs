@@ -96,7 +96,7 @@ public class Issue987AbstractMethodEmitTests
             """;
 
         var output = CompileAndRun(source);
-        var first = output.Replace("\r\n", "\n").Split('\n')[0];
+        var first = output.ReplaceLineEndings(Environment.NewLine).Split(Environment.NewLine)[0];
         var value = double.Parse(first, System.Globalization.CultureInfo.InvariantCulture);
         Assert.True(Math.Abs(value - 12.566) < 0.01, $"expected area ≈ 12.566 via virtual dispatch but got {value}");
     }
@@ -253,7 +253,7 @@ public class Issue987AbstractMethodEmitTests
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(proc.ExitCode == 0, $"exited {proc.ExitCode}\nstdout:\n{procOut}\nstderr:\n{procErr}");
 
-            return procOut.Replace("\r\n", "\n");
+            return procOut.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

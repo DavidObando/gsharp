@@ -129,7 +129,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(cache[key].Name)
             """;
 
-        Assert.Equal("indexer-bound\n", CompileAndRun(source));
+        Assert.Equal($"indexer-bound{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(cache[key])
             """;
 
-        Assert.Equal("new\n", CompileAndRun(source));
+        Assert.Equal($"new{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(cache[key].ToString())
             """;
 
-        Assert.Equal("01234567-89ab-cdef-0123-456789abcdef\n", CompileAndRun(source));
+        Assert.Equal($"01234567-89ab-cdef-0123-456789abcdef{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(cache[key][0].Name)
             """;
 
-        Assert.Equal("nested\n", CompileAndRun(source));
+        Assert.Equal($"nested{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -247,7 +247,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(valueCalls)
             """;
 
-        Assert.Equal("15\n1\n1\n1\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -268,7 +268,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "setter-bound\nnamed:key\n",
+            $"setter-bound{Environment.NewLine}named:key{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -289,7 +289,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "ref-bound\nref-bound\n",
+            $"ref-bound{Environment.NewLine}ref-bound{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -311,7 +311,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "generic\ngeneric\n",
+            $"generic{Environment.NewLine}generic{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -331,7 +331,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "ObjectKey2471\n",
+            $"ObjectKey2471{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -351,7 +351,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "interface\n",
+            $"interface{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -373,7 +373,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "generic\n",
+            $"generic{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -397,7 +397,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "1\n2\n",
+            $"1{Environment.NewLine}2{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -419,7 +419,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             """;
 
         Assert.Equal(
-            "object\n",
+            $"object{Environment.NewLine}",
             CompileAndRun(gsharpSource, CustomIndexerCSharpSource));
     }
 
@@ -445,7 +445,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
             Console.WriteLine(calls)
             """;
 
-        Assert.Equal("15\n1\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -554,7 +554,7 @@ public class Issue2471DictionaryIndexerSameCompilationTypeTests
                 process.ExitCode == 0,
                 $"dotnet exec failed ({process.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

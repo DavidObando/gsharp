@@ -167,8 +167,8 @@ public class Issue3110And3113ConstantPatternEqualityTests
     private static string NormalizeValues(string output) =>
         string.Join(
             "\n",
-            output.Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            output.ReplaceLineEndings(Environment.NewLine)
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
                 .Where(line => line != "Success."));
 
     private static string CreateEmptyDirectory(string name)

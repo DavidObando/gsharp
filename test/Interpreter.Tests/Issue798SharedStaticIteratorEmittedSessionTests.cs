@@ -47,7 +47,7 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("6\n", RunSubmission(source));
+        Assert.Equal($"6{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("123\n", RunSubmission(source));
+        Assert.Equal($"123{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.WriteLine(sum)
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -186,6 +186,6 @@ public class Issue798SharedStaticIteratorEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -32,7 +32,7 @@ public class Issue537ForCharInStringEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // 'a'=97, 'b'=98, 'c'=99
-        Assert.Equal("97\n98\n99\n", output);
+        Assert.Equal($"97{Environment.NewLine}98{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // 'x'=120, 'y'=121, 'z'=122
-        Assert.Equal("120\n121\n122\n", output);
+        Assert.Equal($"120{Environment.NewLine}121{Environment.NewLine}122{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue537ForCharInStringEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // U+00E9=233, U+20AC=8364, U+65E5=26085
-        Assert.Equal("233\n8364\n26085\n", output);
+        Assert.Equal($"233{Environment.NewLine}8364{Environment.NewLine}26085{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // High surrogate: 0xD83D = 55357, Low surrogate: 0xDE00 = 56832
-        Assert.Equal("55357\n56832\n", output);
+        Assert.Equal($"55357{Environment.NewLine}56832{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // 'h'=104, 'i'=105
-        Assert.Equal("104\n105\n", output);
+        Assert.Equal($"104{Environment.NewLine}105{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue537ForCharInStringEmitTests
 
         var output = CompileAndRun(source);
         // i=0, 'A'=65, i=1, 'B'=66
-        Assert.Equal("0\n65\n1\n66\n", output);
+        Assert.Equal($"0{Environment.NewLine}65{Environment.NewLine}1{Environment.NewLine}66{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -234,6 +234,6 @@ public class Issue537ForCharInStringEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

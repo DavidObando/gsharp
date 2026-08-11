@@ -100,7 +100,7 @@ public sealed class Adr0156EmitToMemorySpikeTests
         var emitTimer = Stopwatch.StartNew();
         for (var i = 0; i < iterations; i++)
         {
-            Assert.Equal("42\n", RunEmitOnce(source));
+            Assert.Equal($"42{Environment.NewLine}", RunEmitOnce(source));
         }
 
         emitTimer.Stop();
@@ -150,7 +150,7 @@ public sealed class Adr0156EmitToMemorySpikeTests
             Assert.NotNull(entryPoint);
 
             var previousOut = Console.Out;
-            using var writer = new StringWriter { NewLine = "\n" };
+            using var writer = new StringWriter { NewLine = Environment.NewLine };
             Console.SetOut(writer);
             object returnValue;
             try
@@ -180,7 +180,7 @@ public sealed class Adr0156EmitToMemorySpikeTests
         }
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+    private static string Normalize(string text) => text.ReplaceLineEndings(Environment.NewLine);
 
     private static string LocateSamplesDirectory()
     {

@@ -69,7 +69,9 @@ public sealed class Issue2617ImportedGenericStaticExplicitTypeArgumentTests
 
         using var result = Compile(source, target: "exe");
         Assert.DoesNotContain("GS0159", result.Stdout + result.Stderr, StringComparison.Ordinal);
-        Assert.Equal($"default:{settingsType}\n{settingsType}\n", Run(result.OutputPath));
+        Assert.Equal(
+            $"default:{settingsType}{Environment.NewLine}{settingsType}{Environment.NewLine}",
+            Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { result.ContractsPath });
     }
 
@@ -90,7 +92,7 @@ public sealed class Issue2617ImportedGenericStaticExplicitTypeArgumentTests
             """;
 
         using var result = Compile(source, target: "exe");
-        Assert.Equal("file:custom.json\nUserSettings\n", Run(result.OutputPath));
+        Assert.Equal($"file:custom.json{Environment.NewLine}UserSettings{Environment.NewLine}", Run(result.OutputPath));
     }
 
     [Fact]
@@ -218,7 +220,7 @@ public sealed class Issue2617ImportedGenericStaticExplicitTypeArgumentTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

@@ -93,7 +93,7 @@ public sealed class Issue2644TransitiveGenericInterfaceEmitTests
                         consumerSource,
                     }));
             IlVerifier.Verify(executablePath, additionalReferences: new[] { libraryPath });
-            Assert.Equal("region\nregion\n", Run(executablePath, directory));
+            Assert.Equal($"region{Environment.NewLine}region{Environment.NewLine}", Run(executablePath, directory));
         }
         finally
         {
@@ -141,6 +141,6 @@ public sealed class Issue2644TransitiveGenericInterfaceEmitTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

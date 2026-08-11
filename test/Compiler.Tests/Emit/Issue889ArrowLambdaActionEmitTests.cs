@@ -39,7 +39,7 @@ public class Issue889ArrowLambdaActionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class Issue889ArrowLambdaActionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue889ArrowLambdaActionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue889ArrowLambdaActionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue889ArrowLambdaActionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue889ArrowLambdaActionEmitTests
                 """;
 
             var output = CompileAndRun(source, referencePaths: new[] { helperDll });
-            Assert.Equal("1\n", output);
+            Assert.Equal($"1{Environment.NewLine}", output);
         }
         finally
         {
@@ -255,7 +255,7 @@ public class Issue889ArrowLambdaActionEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

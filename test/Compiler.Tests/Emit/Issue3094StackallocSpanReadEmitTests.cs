@@ -74,7 +74,7 @@ public class Issue3094StackallocSpanReadEmitTests
             ignoredErrorCodes: new[] { "Unverifiable" },
             ignoredErrorScope: @"<Program>\.HasMagic$");
 
-        Assert.Equal("True\nFalse\nTrue\nFalse\n9\n", program.Run());
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}9{Environment.NewLine}", program.Run());
         AssertIlShape(program.AssemblyPath);
     }
 
@@ -279,7 +279,7 @@ public class Issue3094StackallocSpanReadEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"Emitted program exited {process.ExitCode}:\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
 
         public void Dispose()

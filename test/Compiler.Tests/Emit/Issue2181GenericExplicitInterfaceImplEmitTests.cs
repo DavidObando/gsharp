@@ -141,7 +141,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
             Console.WriteLine(cb.Interact(21))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
             Console.WriteLine(cb.Interact(7))
             """;
 
-        Assert.Equal("base\n", CompileAndRun(source));
+        Assert.Equal($"base{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileLibrary(string source)
@@ -273,7 +273,7 @@ public class Issue2181GenericExplicitInterfaceImplEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

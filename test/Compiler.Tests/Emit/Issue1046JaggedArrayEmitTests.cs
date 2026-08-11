@@ -40,7 +40,7 @@ public class Issue1046JaggedArrayEmitTests
             Console.WriteLine(jagged[1][2])
             """;
 
-        Assert.Equal("2\n2\n5\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class Issue1046JaggedArrayEmitTests
             Console.WriteLine(rows[1][0])
             """;
 
-        Assert.Equal("2\n20\n30\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1046JaggedArrayEmitTests
             Console.WriteLine(row[1])
             """;
 
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1046JaggedArrayEmitTests
             Console.WriteLine(check(rows))
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -137,7 +137,7 @@ public class Issue1046JaggedArrayEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

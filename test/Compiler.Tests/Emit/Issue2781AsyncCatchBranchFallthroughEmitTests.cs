@@ -147,7 +147,7 @@ public class Issue2781AsyncCatchBranchFallthroughEmitTests
             plain-canceled
             plain-general
 
-            """.Replace("\r\n", "\n"),
+            """.ReplaceLineEndings(Environment.NewLine),
             CompileVerifyAndRun(Source));
     }
 
@@ -202,6 +202,6 @@ public class Issue2781AsyncCatchBranchFallthroughEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

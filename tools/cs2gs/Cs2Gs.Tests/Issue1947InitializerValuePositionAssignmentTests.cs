@@ -178,7 +178,7 @@ namespace Demo
 }");
 
         bool hasStrayLine = Array.Exists(
-            printed.Split('\n'),
+            printed.Split(Environment.NewLine),
             line => line.Trim() == "Name = \"ada\"");
         Assert.False(hasStrayLine, $"Found stray bare assignment statement in:\n{printed}");
         Assert.Contains("ProfileCard{Name: \"ada\"}", printed);

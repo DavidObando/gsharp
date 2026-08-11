@@ -65,7 +65,7 @@ public class Issue2863ImportedOverrideEmitTests
             }
             """;
 
-        Assert.Equal("derived:7\n", CompileAndRun(source, library, "i2863lib"));
+        Assert.Equal($"derived:7{Environment.NewLine}", CompileAndRun(source, library, "i2863lib"));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue2863ImportedOverrideEmitTests
             }
             """;
 
-        Assert.Equal("square:4\n", CompileAndRun(source, library, "i2863lib2"));
+        Assert.Equal($"square:4{Environment.NewLine}", CompileAndRun(source, library, "i2863lib2"));
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue2863ImportedOverrideEmitTests
             }
             """;
 
-        Assert.Equal("square,circle\n", CompileAndRun(source, library, "i2863lib3"));
+        Assert.Equal($"square,circle{Environment.NewLine}", CompileAndRun(source, library, "i2863lib3"));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue2863ImportedOverrideEmitTests
             }
             """;
 
-        Assert.Equal("one,two\n", CompileAndRun(source, library, "i2863lib4"));
+        Assert.Equal($"one,two{Environment.NewLine}", CompileAndRun(source, library, "i2863lib4"));
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class Issue2863ImportedOverrideEmitTests
             }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source, library, "i2863lib6"));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source, library, "i2863lib6"));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -283,7 +283,7 @@ public class Issue2863ImportedOverrideEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

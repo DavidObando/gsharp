@@ -27,7 +27,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(Marker[int32]())
             """;
 
-        Assert.Equal("11\n", RunSubmission(source));
+        Assert.Equal($"11{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(ComparerName[int32]())
             """;
 
-        Assert.Equal("GenericComparer`1\n", RunSubmission(source));
+        Assert.Equal($"GenericComparer`1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(numbers[0])
             """;
 
-        Assert.Equal("33\n", RunSubmission(source));
+        Assert.Equal($"33{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(CapacityOf[int32](numbers))
             """;
 
-        Assert.Equal("44\n", RunSubmission(source));
+        Assert.Equal($"44{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(numbers.Capacity)
             """;
 
-        Assert.Equal("55\n", RunSubmission(source));
+        Assert.Equal($"55{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(First[int32](numbers))
             """;
 
-        Assert.Equal("66\n", RunSubmission(source));
+        Assert.Equal($"66{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(numbers[0])
             """;
 
-        Assert.Equal("77\n", RunSubmission(source));
+        Assert.Equal($"77{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(holder.CountOf(numbers))
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(Holder[int32].CountOf(numbers))
             """;
 
-        Assert.Equal("4\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(counter(numbers))
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(counter(numbers))
             """;
 
-        Assert.Equal("3\n", RunSubmission(source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -257,7 +257,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(counter(words))
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(counter(numbers))
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -323,7 +323,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(counter(numbers))
             """;
 
-        Assert.Equal("1\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(GetCount[int32](holder, numbers))
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -375,7 +375,7 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.WriteLine(GenericStaticSlot[int32].Value)
             """;
 
-        Assert.Equal("111\n", RunSubmission(source));
+        Assert.Equal($"111{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -393,6 +393,6 @@ public class Issue2992SymbolicClrTypeEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

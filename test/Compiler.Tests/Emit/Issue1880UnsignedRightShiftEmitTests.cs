@@ -39,7 +39,9 @@ public class Issue1880UnsignedRightShiftEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal($"{unchecked((int)((uint)(-8) >> 1))}\n{-8 >> 1}\n", output);
+        Assert.Equal(
+            $"{unchecked((int)((uint)(-8) >> 1))}{Environment.NewLine}{-8 >> 1}{Environment.NewLine}",
+            output);
     }
 
     [Fact]
@@ -57,7 +59,7 @@ public class Issue1880UnsignedRightShiftEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal($"{unchecked((int)((uint)(-8) >> 1))}\n", output);
+        Assert.Equal($"{unchecked((int)((uint)(-8) >> 1))}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -77,7 +79,9 @@ public class Issue1880UnsignedRightShiftEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal($"{4294967288u >> 1}\n{4294967288u >> 1}\n", output);
+        Assert.Equal(
+            $"{4294967288u >> 1}{Environment.NewLine}{4294967288u >> 1}{Environment.NewLine}",
+            output);
     }
 
     [Fact]
@@ -97,7 +101,9 @@ public class Issue1880UnsignedRightShiftEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal($"{unchecked((long)((ulong)(-8L) >> 1))}\n{-8L >> 1}\n", output);
+        Assert.Equal(
+            $"{unchecked((long)((ulong)(-8L) >> 1))}{Environment.NewLine}{-8L >> 1}{Environment.NewLine}",
+            output);
     }
 
     private static string CompileAndRun(string source)
@@ -174,7 +180,7 @@ public class Issue1880UnsignedRightShiftEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

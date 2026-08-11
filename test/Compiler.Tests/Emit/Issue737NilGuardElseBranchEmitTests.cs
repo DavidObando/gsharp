@@ -50,7 +50,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n-1\n", output);
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n-1\n", output);
+        Assert.Equal($"2{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n-1\n-1\n", output);
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n-1\n-1\n", output);
+        Assert.Equal($"4{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi Alice\nnone\n", output);
+        Assert.Equal($"hi Alice{Environment.NewLine}none{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("disposed\nok\nnone\n", output);
+        Assert.Equal($"disposed{Environment.NewLine}ok{Environment.NewLine}none{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n-1\n", output);
+        Assert.Equal($"1{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -253,7 +253,7 @@ public class Issue737NilGuardElseBranchEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("got: hi\nnil!\n", output);
+        Assert.Equal($"got: hi{Environment.NewLine}nil!{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -318,7 +318,7 @@ public class Issue737NilGuardElseBranchEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

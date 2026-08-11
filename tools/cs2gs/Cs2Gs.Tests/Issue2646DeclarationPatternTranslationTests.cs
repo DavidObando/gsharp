@@ -83,10 +83,10 @@ public sealed class Issue2646DeclarationPatternTranslationTests
         Assert.Contains("code = int32(__spill0)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("return value", printed, StringComparison.Ordinal);
         Assert.Equal(
-            "43\n-1",
+            $"43{Environment.NewLine}-1",
             CompileAndRun(
                 printed,
-                "System.Console.WriteLine(C().Read(42))\nSystem.Console.WriteLine(C().Read(\"no\"))").Trim());
+                $"System.Console.WriteLine(C().Read(42)){Environment.NewLine}System.Console.WriteLine(C().Read(\"no\"))").Trim());
     }
 
     private static string Translate(string source)

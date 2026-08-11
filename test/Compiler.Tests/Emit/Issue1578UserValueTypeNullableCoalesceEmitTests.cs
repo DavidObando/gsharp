@@ -49,7 +49,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(none).x)
             """;
 
-        Assert.Equal("-1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(some).x)
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(some) == CeColor.Blue)
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(some).b)
             """;
 
-        Assert.Equal("fb\npresent\n", CompileAndRun(source));
+        Assert.Equal($"fb{Environment.NewLine}present{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(none).name)
             """;
 
-        Assert.Equal("fallback\n", CompileAndRun(source));
+        Assert.Equal($"fallback{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(none).ToString())
             """;
 
-        Assert.Equal("CoalEmptyPkg.CeUnit\n", CompileAndRun(source));
+        Assert.Equal($"CoalEmptyPkg.CeUnit{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Chain(none, w).x)
             """;
 
-        Assert.Equal("-99\n5\n", CompileAndRun(source));
+        Assert.Equal($"-99{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(GetX(some))
             """;
 
-        Assert.Equal("42\n9\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -233,7 +233,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(none, w).x)
             """;
 
-        Assert.Equal("-5\n7\n", CompileAndRun(source));
+        Assert.Equal($"-5{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             Console.WriteLine(Coalesce(some))
             """;
 
-        Assert.Equal("-1\n8\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -328,7 +328,7 @@ public class Issue1578UserValueTypeNullableCoalesceEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

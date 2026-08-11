@@ -50,7 +50,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
             Console.WriteLine(ViaSelect(d))
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
             Console.WriteLine(ViaWhere(d))
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
             Console.WriteLine(Chained(d))
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
             Console.WriteLine(SelectFirst(d))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
             Console.WriteLine(SelectPrimitive(d))
             """;
 
-        Assert.Equal("14\n", CompileAndRun(source));
+        Assert.Equal($"14{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -221,7 +221,7 @@ public class Issue1334DictionaryLinqReceiverErasureEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

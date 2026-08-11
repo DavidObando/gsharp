@@ -59,7 +59,7 @@ public class Issue2228DataClassWithEmitTests
 
         var output = CompileAndRun(source);
         Assert.Equal(
-            "downloads\n1\nFalse\nelsewhere\n1\nFalse\nelsewhere\nTrue\nTrue\nTrue\n",
+            $"downloads{Environment.NewLine}1{Environment.NewLine}False{Environment.NewLine}elsewhere{Environment.NewLine}1{Environment.NewLine}False{Environment.NewLine}elsewhere{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}",
             output);
     }
 
@@ -145,7 +145,7 @@ public class Issue2228DataClassWithEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -195,7 +195,7 @@ public class Issue2228DataClassWithEmitTests
 
             var combined = compileOut.ToString() + compileErr.ToString();
             return new System.Collections.Generic.List<string>(
-                combined.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+                combined.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         }
         finally
         {

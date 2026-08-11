@@ -30,7 +30,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.WriteLine(Guard(nilFn))
             """;
 
-        Assert.Equal("bound\nnil\n", RunSubmission(source));
+        Assert.Equal($"bound{Environment.NewLine}nil{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.WriteLine(IsBound(nilFn))
             """;
 
-        Assert.Equal("True\nFalse\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.WriteLine(Apply(1, (n int32) -> n + 1))
             """;
 
-        Assert.Equal("True\nFalse\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.WriteLine(Sum(nilSeq))
             """;
 
-        Assert.Equal("6\n-1\n", RunSubmission(source));
+        Assert.Equal($"6{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.WriteLine(HasAny(nilSeq))
             """;
 
-        Assert.Equal("True\nFalse\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("nil\n", output);
+        Assert.Contains($"nil{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             """;
 
         var output = RunSubmission(source);
-        Assert.Contains("bound\nnil\n", output);
+        Assert.Contains($"bound{Environment.NewLine}nil{Environment.NewLine}", output);
     }
 
     private static string RunSubmission(string text)
@@ -167,6 +167,6 @@ public class Issue796FunctionAndSequenceNilCompareEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

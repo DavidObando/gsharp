@@ -57,7 +57,7 @@ public class Issue1567GetOnlyCollectionInitEmitTests
             Console.WriteLine(many.Items[2])
             """;
 
-        Assert.Equal("0\n1\n42\n3\n10\n30\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}42{Environment.NewLine}3{Environment.NewLine}10{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1567GetOnlyCollectionInitEmitTests
             Console.WriteLine(b.Names[2])
             """;
 
-        Assert.Equal("hi\n3\nalice\ncarol\n", CompileAndRun(source));
+        Assert.Equal($"hi{Environment.NewLine}3{Environment.NewLine}alice{Environment.NewLine}carol{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue1567GetOnlyCollectionInitEmitTests
             Console.WriteLine(b.Lookup["c"])
             """;
 
-        Assert.Equal("3\n1\n2\n3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue1567GetOnlyCollectionInitEmitTests
             Console.WriteLine(b.Items[2])
             """;
 
-        Assert.Equal("3\n1\n3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}1{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class Issue1567GetOnlyCollectionInitEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return (0, stdout.Replace("\r\n", "\n"), diagnostics);
+            return (0, stdout.ReplaceLineEndings(Environment.NewLine), diagnostics);
         }
         finally
         {

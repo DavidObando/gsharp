@@ -29,7 +29,7 @@ public class StdoutParityNormalizeTests
     [Fact]
     public void Normalize_SingleTerminalNewline_IsTolerated()
     {
-        Assert.Equal(StdoutParity.Normalize("a\n"), StdoutParity.Normalize("a"));
+        Assert.Equal(StdoutParity.Normalize($"a{Environment.NewLine}"), StdoutParity.Normalize("a"));
     }
 
     [Fact]
@@ -48,6 +48,6 @@ public class StdoutParityNormalizeTests
     [Fact]
     public void Normalize_CrlfAndLf_NormalizeEqual()
     {
-        Assert.Equal(StdoutParity.Normalize("a\r\nb\r\n"), StdoutParity.Normalize("a\nb\n"));
+        Assert.Equal(StdoutParity.Normalize($"a{Environment.NewLine}b{Environment.NewLine}"), StdoutParity.Normalize($"a{Environment.NewLine}b{Environment.NewLine}"));
     }
 }

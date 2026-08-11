@@ -31,7 +31,7 @@ public class Issue3085PrimitiveStaticParseEmitTests
         {
             Assert.True(compilation.ExitCode == 0, compilation.Output);
             IlVerifier.Verify(compilation.AssemblyPath);
-            Assert.Equal("314159\n", Run(compilation.AssemblyPath, compilation.WorkDirectory));
+            Assert.Equal($"314159{Environment.NewLine}", Run(compilation.AssemblyPath, compilation.WorkDirectory));
         }
         finally
         {
@@ -127,7 +127,7 @@ public class Issue3085PrimitiveStaticParseEmitTests
         string stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "Compiled program timed out.");
         Assert.True(process.ExitCode == 0, $"Program exited {process.ExitCode}:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void DeleteDirectory(string path)

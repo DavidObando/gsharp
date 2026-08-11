@@ -100,7 +100,7 @@ namespace Corpus.Issue1182
         string rendered = Render();
 
         // A bare `= default` (GS0265) must never appear; it is always typed or `nil`.
-        Assert.DoesNotContain("= default\n", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain($"= default{Environment.NewLine}", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("= default)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("= default ", rendered, StringComparison.Ordinal);
     }

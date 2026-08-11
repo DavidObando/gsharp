@@ -48,7 +48,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(SumV(GetE(l)))
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(c.V)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(SumX(GetE(l)))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue1304MemberErasureEmitTests
             Console.WriteLine(Sum(GetE(l)))
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -200,7 +200,7 @@ public class Issue1304MemberErasureEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

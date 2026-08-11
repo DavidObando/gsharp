@@ -66,7 +66,7 @@ public class Issue1229UserClassToObjectEmitTests
             """;
 
         Assert.Equal(
-            "D\nD\nD\nD\nD\nD\n",
+            $"D{Environment.NewLine}D{Environment.NewLine}D{Environment.NewLine}D{Environment.NewLine}D{Environment.NewLine}D{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -88,7 +88,7 @@ public class Issue1229UserClassToObjectEmitTests
             Console.WriteLine(o.GetType().Name)
             """;
 
-        Assert.Equal("Grandchild\n", CompileAndRun(source));
+        Assert.Equal($"Grandchild{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class Issue1229UserClassToObjectEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -44,7 +44,8 @@ public sealed class TestExplorerFixtureContractTests
             "TestExplorerFixtures.sln"));
         Assert.Equal(
             frameworks.Length,
-            fixtureSolution.Split('\n').Count(line => line.StartsWith("Project(", StringComparison.Ordinal)));
+            fixtureSolution.Split(Environment.NewLine)
+                .Count(line => line.StartsWith("Project(", StringComparison.Ordinal)));
         Assert.All(
             frameworks,
             framework => Assert.Contains($"\"{RequiredString(framework, "project")}\"", fixtureSolution));

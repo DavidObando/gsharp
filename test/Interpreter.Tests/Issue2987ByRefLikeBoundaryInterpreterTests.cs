@@ -51,7 +51,7 @@ public class Issue2987ByRefLikeBoundaryInterpreterTests
         var result = EmittedOracle.Evaluate(Source);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-        Assert.Equal("33\n-11\n", result.Output.Replace("\r\n", "\n"));
+        Assert.Equal($"33{Environment.NewLine}-11{Environment.NewLine}", result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 }
 

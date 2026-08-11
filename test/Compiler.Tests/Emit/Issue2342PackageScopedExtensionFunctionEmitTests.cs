@@ -255,7 +255,7 @@ public class Issue2342PackageScopedExtensionFunctionEmitTests
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
 
             var combined = compileOut + compileErr;
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

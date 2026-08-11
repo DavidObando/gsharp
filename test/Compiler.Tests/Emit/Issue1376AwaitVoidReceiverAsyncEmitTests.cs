@@ -46,7 +46,7 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
             RunAsync().GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("hello\nworld\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}world{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
             "x".RunAsync().GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("a:x\nb:x\n", CompileAndRun(source));
+        Assert.Equal($"a:x{Environment.NewLine}b:x{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -143,7 +143,7 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -452,7 +452,7 @@ public class Issue2799NullConditionalStructuralDelegateReceiverEmitTests
         var stderr = proc.StandardError.ReadToEnd();
         Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(proc.ExitCode == 0, $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static Assembly CompileToAssembly(string source, string target)

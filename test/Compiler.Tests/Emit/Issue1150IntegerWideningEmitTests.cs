@@ -47,7 +47,7 @@ public class Issue1150IntegerWideningEmitTests
             run()
             """;
 
-        Assert.Equal("6\n6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1150IntegerWideningEmitTests
             run()
             """;
 
-        Assert.Equal("10\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1150IntegerWideningEmitTests
             run()
             """;
 
-        Assert.Equal("15\n", CompileAndRun(source));
+        Assert.Equal($"15{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1150IntegerWideningEmitTests
 
         // 200 + 100 == 300 — proving the uint8 operand widened to int32 (a
         // narrow uint8 add would have wrapped at 256).
-        Assert.Equal("300\n", CompileAndRun(source));
+        Assert.Equal($"300{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -173,7 +173,7 @@ public class Issue1150IntegerWideningEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

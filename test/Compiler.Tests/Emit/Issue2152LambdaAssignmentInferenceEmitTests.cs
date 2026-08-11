@@ -35,7 +35,7 @@ public class Issue2152LambdaAssignmentInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class Issue2152LambdaAssignmentInferenceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("8\n", output);
+        Assert.Equal($"8{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string[] referencePaths = null)
@@ -130,7 +130,7 @@ public class Issue2152LambdaAssignmentInferenceEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

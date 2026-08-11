@@ -38,7 +38,7 @@ public class Issue992AndOrPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("small-positive\nextreme\nextreme\nother\n", output);
+        Assert.Equal($"small-positive{Environment.NewLine}extreme{Environment.NewLine}extreme{Environment.NewLine}other{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class Issue992AndOrPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("A\nA\nC\nC\n", output);
+        Assert.Equal($"A{Environment.NewLine}A{Environment.NewLine}C{Environment.NewLine}C{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue992AndOrPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("nonpositive\nnonpositive\npositive\n", output);
+        Assert.Equal($"nonpositive{Environment.NewLine}nonpositive{Environment.NewLine}positive{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue992AndOrPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("other\none\nother\n", output);
+        Assert.Equal($"other{Environment.NewLine}one{Environment.NewLine}other{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue992AndOrPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nother dog\nGeneric\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}other dog{Environment.NewLine}Generic{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -205,7 +205,7 @@ public class Issue992AndOrPatternEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

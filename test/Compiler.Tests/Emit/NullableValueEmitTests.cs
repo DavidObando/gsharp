@@ -52,7 +52,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n[]\n", output);
+        Assert.Equal($"False{Environment.NewLine}[]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n[]\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}[]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n[]\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}[]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n[]\n", output);
+        Assert.Equal($"7{Environment.NewLine}[]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -266,7 +266,7 @@ public class NullableValueEmitTests
             """;
 
         var output = CompileAndRunWithProbe(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -390,7 +390,7 @@ public class NullableValueEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

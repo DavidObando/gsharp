@@ -47,7 +47,7 @@ public class Issue1260BaseBclCallEmitTests
         // base.ToString() delegates to object.ToString() (the type's full name),
         // then the override appends "!". The key assertion is that no infinite
         // recursion occurs and the suffix is present.
-        Assert.Equal("Probe.Greeter!\n", output);
+        Assert.Equal($"Probe.Greeter!{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1260BaseBclCallEmitTests
         var output = CompileAndRun(source);
 
         // The virtual-with-body base Dispose(bool) runs and returns; no recursion.
-        Assert.Equal("disposing=True\ndone\n", output);
+        Assert.Equal($"disposing=True{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue1260BaseBclCallEmitTests
         // The nearest user base (Wrapper) does not declare Dispose(bool); the
         // base call resolves up to MemoryStream.Dispose(bool).
         var output = CompileAndRun(source);
-        Assert.Equal("after-base\n", output);
+        Assert.Equal($"after-base{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue1260BaseBclCallEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -318,7 +318,7 @@ public class Issue1260BaseBclCallEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

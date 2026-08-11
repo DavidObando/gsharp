@@ -27,7 +27,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(arr.MyFirst(99))
             """;
 
-        Assert.Equal("99\n", RunSubmission(source));
+        Assert.Equal($"99{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(arr.HeadOr(7))
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(arr.HeadOr("z"))
             """;
 
-        Assert.Equal("z\n", RunSubmission(source));
+        Assert.Equal($"z{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(s.MyOrElse("def"))
             """;
 
-        Assert.Equal("def\n", RunSubmission(source));
+        Assert.Equal($"def{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(v.MyOrElse(99))
             """;
 
-        Assert.Equal("99\n", RunSubmission(source));
+        Assert.Equal($"99{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(d.MyCount())
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.WriteLine(a.FirstOr(99))
             """;
 
-        Assert.Equal("99\n", RunSubmission(source));
+        Assert.Equal($"99{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -139,6 +139,6 @@ public class Issue773GenericReceiverEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

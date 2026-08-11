@@ -54,7 +54,7 @@ public class Issue2618DelegateLikeConversionEmitTests
             }
             """;
 
-        Assert.Equal("7\n7\n", CompileAndRun(Source));
+        Assert.Equal($"7{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue2618DelegateLikeConversionEmitTests
             string error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, error);
-            return output.Replace("\r\n", "\n");
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

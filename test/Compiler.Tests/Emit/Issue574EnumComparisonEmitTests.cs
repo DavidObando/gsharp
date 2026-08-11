@@ -54,7 +54,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(k != ConsoleKey.L)
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(k != ConsoleKey.A)
             """;
 
-        Assert.Equal("False\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(a != c)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: ordering on signed-backed (int) CLR enum ─────────────
@@ -107,7 +107,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(a <= a)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(b >= b)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: ordering on unsigned-backed (byte) enum — exercises clt_un / cgt_un ──
@@ -161,7 +161,7 @@ public class Issue574EnumComparisonEmitTests
             """;
 
         Assert.Equal(
-            "True\nTrue\nTrue\nTrue\nTrue\nTrue\n",
+            $"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}",
             CompileAndRunWithSiblingCs(csSource, gsSource, "Probe574"));
     }
 
@@ -186,7 +186,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(c != Color.Red)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: user-defined G# enum ordering ─────────────────────────
@@ -214,7 +214,7 @@ public class Issue574EnumComparisonEmitTests
             Console.WriteLine(r <= g)
             """;
 
-        Assert.Equal("True\nTrue\nTrue\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Negative: mixed-enum equality is still rejected ─────────────────
@@ -319,7 +319,7 @@ public class Issue574EnumComparisonEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -370,7 +370,7 @@ public class Issue574EnumComparisonEmitTests
             Assert.True(compileExit != 0, $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -466,7 +466,7 @@ public class Issue574EnumComparisonEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

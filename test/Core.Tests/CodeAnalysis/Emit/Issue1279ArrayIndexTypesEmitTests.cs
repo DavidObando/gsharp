@@ -122,7 +122,7 @@ Console.WriteLine(a[1])
                 Console.SetOut(stdout);
             }
 
-            return captured.ToString().Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine).TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
         }
         finally
         {

@@ -52,7 +52,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(h.Map.Count)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(Dictionary[string, int32]().Count)
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d["a"].Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d["a"].Count)
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(d.Count)
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -278,7 +278,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(len(m))
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -299,7 +299,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(xs.Count)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public class Issue693DictionaryConstructionEmitTests
             Console.WriteLine(kvp.Key)
             """;
 
-        Assert.Equal("k\n", CompileAndRun(source));
+        Assert.Equal($"k{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -385,7 +385,7 @@ public class Issue693DictionaryConstructionEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

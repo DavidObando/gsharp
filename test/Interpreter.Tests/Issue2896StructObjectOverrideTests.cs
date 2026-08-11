@@ -74,7 +74,7 @@ public class Issue2896StructObjectOverrideTests
     public void AllObjectOverrides_DirectAndBoxed_DispatchAtTopLevelAndInsideFunction(string source)
     {
         Assert.Equal(
-            "OVERRIDDEN-11\nOVERRIDDEN-11\nFalse\nFalse\n289611\n289611\n",
+            $"OVERRIDDEN-11{Environment.NewLine}OVERRIDDEN-11{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}289611{Environment.NewLine}289611{Environment.NewLine}",
             RunEmittedOracle(source));
     }
 
@@ -92,7 +92,7 @@ public class Issue2896StructObjectOverrideTests
         var suffix = Guid.NewGuid().ToString("N");
         var source = BuildClassOverrideChainSource(insideFunction, suffix);
 
-        Assert.Equal("L0-11\nL1-22\nL2-33\n", await RunDriverAsync(source, suffix, driver));
+        Assert.Equal($"L0-11{Environment.NewLine}L1-22{Environment.NewLine}L2-33{Environment.NewLine}", await RunDriverAsync(source, suffix, driver));
     }
 
     [Theory]
@@ -107,10 +107,10 @@ public class Issue2896StructObjectOverrideTests
 
         var expected = surface switch
         {
-            "dictionary" => "DICT-1\n",
-            "hashSet" => "HASHSET-1\n",
-            "listContains" => "LIST-True\n",
-            "format" => "FORMAT-TOSTRING-33\nINTERP-TOSTRING-33\n",
+            "dictionary" => $"DICT-1{Environment.NewLine}",
+            "hashSet" => $"HASHSET-1{Environment.NewLine}",
+            "listContains" => $"LIST-True{Environment.NewLine}",
+            "format" => $"FORMAT-TOSTRING-33{Environment.NewLine}INTERP-TOSTRING-33{Environment.NewLine}",
             _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
         };
         Assert.Equal(expected, await RunDriverAsync(source, suffix, driver));
@@ -159,7 +159,7 @@ public class Issue2896StructObjectOverrideTests
         // to match it; those engines are deleted, so the goldens stand as
         // emitted assertions across the surviving hosts (bare gsc script,
         // gsi script, and the interactive emitted engine).
-        Assert.Equal(expected + "\n", emitted);
+        Assert.Equal(expected + Environment.NewLine, emitted);
         Assert.All(
             new[]
             {
@@ -184,7 +184,7 @@ public class Issue2896StructObjectOverrideTests
         var suffix = Guid.NewGuid().ToString("N");
         var source = BuildDepthFourBclOverrideSource(insideFunction, suffix);
 
-        Assert.Equal("FORMAT-LEVEL-44\nINTERP-LEVEL-44\n", await RunDriverAsync(source, suffix, driver));
+        Assert.Equal($"FORMAT-LEVEL-44{Environment.NewLine}INTERP-LEVEL-44{Environment.NewLine}", await RunDriverAsync(source, suffix, driver));
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class Issue2896StructObjectOverrideTests
             SHARED-43
             SHARED-OVERRIDDEN-43
             SHARED-OVERRIDDEN-43
-            """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+            """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
             RunEmittedOracle(Source));
     }
 
@@ -324,8 +324,8 @@ public class Issue2896StructObjectOverrideTests
         // (the CLR type name). The evaluator's record-style rendering for
         // plain structs retired with it.
         Assert.Equal(
-            "DataValue(Number=7)\nDataValue(Number=7)\n"
-                + "Issue2896.Controls.DefaultValue\nIssue2896.Controls.DefaultValue\n",
+            $"DataValue(Number=7){Environment.NewLine}DataValue(Number=7){Environment.NewLine}"
+                + $"Issue2896.Controls.DefaultValue{Environment.NewLine}Issue2896.Controls.DefaultValue{Environment.NewLine}",
             RunEmittedOracle(Source));
     }
 
@@ -337,7 +337,7 @@ public class Issue2896StructObjectOverrideTests
             errors.Length == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(diagnostic => diagnostic.ToString())));
 
-        return result.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string BuildIssue3134Source(string surface, string suffix)
@@ -568,7 +568,7 @@ public class Issue2896StructObjectOverrideTests
             _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, null),
         };
 
-        Assert.Equal(expected, output.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Equal(expected, output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static string BuildIssue3173Source(string specimen, string suffix)
@@ -734,7 +734,7 @@ public class Issue2896StructObjectOverrideTests
             cell.HasError,
             "interactive engine failed:\n" + string.Join("\n", cell.Diagnostics.Select(diagnostic => diagnostic.ToString())));
         Assert.Equal(string.Empty, cell.StandardError);
-        return cell.Output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return cell.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string BuildClassOverrideChainSource(bool insideFunction, string suffix)
@@ -908,8 +908,8 @@ public class Issue2896StructObjectOverrideTests
             result.ExitCode == 0,
             $"gsc script failed ({result.ExitCode})\nstdout:\n{result.StandardOutput}\nstderr:\n{result.StandardError}");
         Assert.Equal(string.Empty, result.StandardError);
-        Assert.EndsWith("Success.\n", result.StandardOutput, StringComparison.Ordinal);
-        return result.StandardOutput[..^"Success.\n".Length];
+        Assert.EndsWith($"Success.{Environment.NewLine}", result.StandardOutput, StringComparison.Ordinal);
+        return result.StandardOutput[..^$"Success.{Environment.NewLine}".Length];
     }
 
     private static string RunGsiScript(string sourcePath)
@@ -956,7 +956,7 @@ public class Issue2896StructObjectOverrideTests
             ["exec", "--runtimeconfig", runtimeConfigPath, outputPath]);
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardError);
-        return result.StandardOutput.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return result.StandardOutput.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) CaptureConsole(Func<int> action)
@@ -972,8 +972,8 @@ public class Issue2896StructObjectOverrideTests
             var exitCode = action();
             return (
                 exitCode,
-                stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
-                stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+                stdout.ToString().ReplaceLineEndings(Environment.NewLine),
+                stderr.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

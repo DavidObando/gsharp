@@ -64,7 +64,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(s.GetAt(0))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(s.GetAt(0).Price)
             """;
 
-        Assert.Equal("y\n42\n", CompileAndRun(source));
+        Assert.Equal($"y{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(s.GetAt(0))
             """;
 
-        Assert.Equal("hello\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(r[0])
             """;
 
-        Assert.Equal("99\n", CompileAndRun(source));
+        Assert.Equal($"99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(b.At(0) + b.At(1) + b.At(2))
             """;
 
-        Assert.Equal("3\n60\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}60{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(m.Get("a") + m.Get("b"))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public class Issue968GenericCollectionWriteEmitTests
             Console.WriteLine(s.GetAt(1))
             """;
 
-        Assert.Equal("300\n200\n", CompileAndRun(source));
+        Assert.Equal($"300{Environment.NewLine}200{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -295,7 +295,7 @@ public class Issue968GenericCollectionWriteEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

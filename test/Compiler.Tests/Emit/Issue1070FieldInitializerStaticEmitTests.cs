@@ -58,7 +58,7 @@ public class Issue1070FieldInitializerStaticEmitTests
         // 16 = const BlockSize used as the instance array length.
         // 70 = First(10) + Total(10+20+30=60); First and Total are shared
         // field initializers that read the sibling shared `Rates` field.
-        Assert.Equal("16\n70\n", output);
+        Assert.Equal($"16{Environment.NewLine}70{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue1070FieldInitializerStaticEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("24\n", output);
+        Assert.Equal($"24{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1070FieldInitializerStaticEmitTests
 
         var output = CompileAndRun(source);
 
-        Assert.Equal("6\n", output);
+        Assert.Equal($"6{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -177,7 +177,7 @@ public class Issue1070FieldInitializerStaticEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

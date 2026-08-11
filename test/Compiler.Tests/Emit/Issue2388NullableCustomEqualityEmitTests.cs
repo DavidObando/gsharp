@@ -59,7 +59,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(a == b)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(a == b)
             """;
 
-        Assert.Equal("False\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(a != c)
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(n != a)
             """;
 
-        Assert.Equal("False\nFalse\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(a != b)
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Theory]
@@ -144,7 +144,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(a {{op}} b)
             """;
 
-        Assert.Equal(expected ? "True\n" : "False\n", CompileAndRun(source));
+        Assert.Equal(expected ? $"True{Environment.NewLine}" : $"False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(n < n)
             """;
 
-        Assert.Equal("False\nFalse\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(b == a)
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(g1 != g3)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(n == n)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(low < missing)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(left + missing == nil)
             """;
 
-        Assert.Equal("42\n42\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -306,7 +306,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             Console.WriteLine(left + missing == nil)
             """;
 
-        Assert.Equal("kept\n42\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"kept{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -482,7 +482,7 @@ public class Issue2388NullableCustomEqualityEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

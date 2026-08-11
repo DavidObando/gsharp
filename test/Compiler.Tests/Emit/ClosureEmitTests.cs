@@ -45,7 +45,7 @@ public class ClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class ClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("34\n", output);
+        Assert.Equal($"34{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class ClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Hello, world!\n", output);
+        Assert.Equal($"Hello, world!{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class ClosureEmitTests
         var output = CompileAndRun(source);
         // First call: shared c becomes 11, returns 11.
         // Second call: shared c becomes 12, returns 12.
-        Assert.Equal("11\n12\n", output);
+        Assert.Equal($"11{Environment.NewLine}12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class ClosureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n101\n", output);
+        Assert.Equal($"6{Environment.NewLine}101{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -198,7 +198,7 @@ public class ClosureEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

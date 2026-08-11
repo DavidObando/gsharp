@@ -37,7 +37,7 @@ public class Issue1113TransitiveConstraintEmitTests
             func Main() { System.Console.WriteLine(Helper().Call()) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue1113TransitiveConstraintEmitTests
             func Main() { System.Console.WriteLine(Helper().Call()) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue1113TransitiveConstraintEmitTests
             func Main() { System.Console.WriteLine(Helper().Call()) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue1113TransitiveConstraintEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

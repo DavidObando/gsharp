@@ -36,7 +36,7 @@ public class Issue1397InterfaceMethodGroupEmitTests
             Console.WriteLine(Use(Reader()))
             """;
 
-        Assert.Equal("50\n", CompileAndRun(source));
+        Assert.Equal($"50{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue1397InterfaceMethodGroupEmitTests
             Console.WriteLine(Use(Reader()))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -127,7 +127,7 @@ public class Issue1397InterfaceMethodGroupEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

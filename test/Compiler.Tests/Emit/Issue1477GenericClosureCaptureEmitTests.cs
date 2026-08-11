@@ -62,7 +62,7 @@ public class Issue1477GenericClosureCaptureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1477GenericClosureCaptureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue1477GenericClosureCaptureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue1477GenericClosureCaptureEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\nworld\n", output);
+        Assert.Equal($"99{Environment.NewLine}world{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -218,7 +218,7 @@ public class Issue1477GenericClosureCaptureEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

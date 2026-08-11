@@ -532,7 +532,7 @@ public class Issue2907IteratorLoopCaptureTests
         Assert.NotEmpty(assembly.GetTypes());
 
         var output = RunBounded(assemblyPath, name);
-        Assert.Equal($"{expected}\n{expected}\n", output);
+        Assert.Equal($"{expected}{Environment.NewLine}{expected}{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -632,7 +632,7 @@ public class Issue2907IteratorLoopCaptureTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal("0,1,\n", RunBounded(assemblyPath, nameof(NonIteratorLoopCaptureGuard)));
+        Assert.Equal($"0,1,{Environment.NewLine}", RunBounded(assemblyPath, nameof(NonIteratorLoopCaptureGuard)));
     }
 
     private static object[] BuildCase(
@@ -668,7 +668,7 @@ public class Issue2907IteratorLoopCaptureTests
         IlVerifier.Verify(assemblyPath);
         var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
         Assert.NotEmpty(assembly.GetTypes());
-        Assert.Equal($"{expected}\n{expected}\n", RunBounded(assemblyPath, name));
+        Assert.Equal($"{expected}{Environment.NewLine}{expected}{Environment.NewLine}", RunBounded(assemblyPath, name));
     }
 
     private static string Compile(string source, string name, string target = "exe")
@@ -737,6 +737,6 @@ public class Issue2907IteratorLoopCaptureTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"{name}: emitted program failed:\n{error}");
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

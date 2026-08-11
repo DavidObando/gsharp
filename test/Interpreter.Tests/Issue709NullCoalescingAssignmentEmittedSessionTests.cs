@@ -140,7 +140,7 @@ public class Issue709NullCoalescingAssignmentEmittedSessionTests
         // Second call: receiver=2 (receiver called again),
         //              rhs still 1 (short-circuited because b.Name not nil),
         //              b.Name still v.
-        var lines = output.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+        var lines = output.ReplaceLineEndings(Environment.NewLine).TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
         Assert.Equal("1", lines[0]);
         Assert.Equal("1", lines[1]);
         Assert.Equal("v", lines[2]);

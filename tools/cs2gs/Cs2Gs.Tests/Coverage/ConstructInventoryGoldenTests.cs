@@ -38,7 +38,7 @@ public class ConstructInventoryGoldenTests
         string generated = RoslynSurface.BuildSnapshot();
         string goldenPath = Path.Combine(RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests", "Coverage", "roslyn-surface.golden.txt");
         Assert.True(File.Exists(goldenPath), $"missing golden at {goldenPath}");
-        string golden = File.ReadAllText(goldenPath).Replace("\r\n", "\n");
+        string golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
 
         if (!string.Equals(generated, golden, StringComparison.Ordinal))
         {
@@ -65,7 +65,7 @@ public class ConstructInventoryGoldenTests
         string path = InventoryPath();
         ConstructInventory inventory = ConstructInventory.Load(path);
         string canonical = inventory.ToJson();
-        string onDisk = File.ReadAllText(path).Replace("\r\n", "\n");
+        string onDisk = File.ReadAllText(path).ReplaceLineEndings(Environment.NewLine);
         Assert.True(
             string.Equals(canonical, onDisk, StringComparison.Ordinal),
             $"{ConstructInventory.RepoRelativePath} is not canonically formatted/sorted; run `cs2gs coverage --write`.");
@@ -78,7 +78,7 @@ public class ConstructInventoryGoldenTests
         string generated = inventory.BuildMatrixMarkdown();
         string docPath = Path.Combine(RepoRoot(), "docs", "cs2gs-coverage-matrix.md");
         Assert.True(File.Exists(docPath), $"missing generated matrix at {docPath}; run `cs2gs coverage --write`.");
-        string onDisk = File.ReadAllText(docPath).Replace("\r\n", "\n");
+        string onDisk = File.ReadAllText(docPath).ReplaceLineEndings(Environment.NewLine);
 
         if (!string.Equals(generated, onDisk, StringComparison.Ordinal))
         {
@@ -103,7 +103,7 @@ public class ConstructInventoryGoldenTests
     public void MatrixDocument_HeaderCountsMatchRowCounts()
     {
         ConstructInventory inventory = LoadInventory();
-        string[] lines = inventory.BuildMatrixMarkdown().Split('\n');
+        string[] lines = inventory.BuildMatrixMarkdown().Split(Environment.NewLine);
 
         var summaryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var sectionHeadingCounts = new Dictionary<string, int>(StringComparer.Ordinal);

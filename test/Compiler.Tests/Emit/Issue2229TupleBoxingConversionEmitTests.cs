@@ -40,7 +40,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("count:42\n", output);
+        Assert.Equal($"count:42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok:True\n", output);
+        Assert.Equal($"ok:True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("count:nil\n", output);
+        Assert.Equal($"count:nil{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("count=7;ok=False;\n", output);
+        Assert.Equal($"count=7;ok=False;{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -190,7 +190,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
 
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

@@ -35,7 +35,7 @@ public class Issue1129StringIndexerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("66\n", output);
+        Assert.Equal($"66{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class Issue1129StringIndexerEmitTests
         var output = CompileAndRun(source);
 
         // 'A' = 65
-        Assert.Equal("65\n", output);
+        Assert.Equal($"65{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1129StringIndexerEmitTests
         var output = CompileAndRun(source);
 
         // 'C' = 67
-        Assert.Equal("67\n", output);
+        Assert.Equal($"67{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1129StringIndexerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("D\n", output);
+        Assert.Equal($"D{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -159,6 +159,6 @@ public class Issue1129StringIndexerEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

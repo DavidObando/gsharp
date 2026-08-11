@@ -36,7 +36,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             main()
             """;
 
-        Assert.Equal("first\nfirst\n", CompileAndRun(source));
+        Assert.Equal($"first{Environment.NewLine}first{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             main()
             """;
 
-        Assert.Equal("42\n42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             main()
             """;
 
-        Assert.Equal("set\nset\n", CompileAndRun(source));
+        Assert.Equal($"set{Environment.NewLine}set{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             main()
             """;
 
-        Assert.Equal("Alice\nAlice\n", CompileAndRun(source));
+        Assert.Equal($"Alice{Environment.NewLine}Alice{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
             main()
             """;
 
-        Assert.Equal("v\nv\n", CompileAndRun(source));
+        Assert.Equal($"v{Environment.NewLine}v{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
         // First call: receiver=1, rhs=1 (Name was nil), b.Name=v.
         // Second call: receiver=2 (called again), rhs still 1 (b.Name is
         // no longer nil so RHS is short-circuited), b.Name still v.
-        Assert.Equal("1\n1\nv\n2\n1\nv\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}v{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}v{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -244,7 +244,7 @@ public class Issue709NullCoalescingAssignmentEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -37,7 +37,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             run()
             """;
 
-        Assert.Equal("10\n9\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             run()
             """;
 
-        Assert.Equal("6\n6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
 
         // i: 3 -> guard true, (3>1) true, i=2, body; i=2 guard true, (2>1) true,
         // i=1, body; i=1 guard true, (1>1) false, i=0, stop. 2 iterations, i=0.
-        Assert.Equal("2\n0\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             """;
 
         // `cond` is false, so the right operand `c--` is never evaluated.
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             run()
             """;
 
-        Assert.Equal("100\n101\n199\n199\n", CompileAndRun(source));
+        Assert.Equal($"100{Environment.NewLine}101{Environment.NewLine}199{Environment.NewLine}199{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
 
         // Old value 50, mutated to 51, and the receiver getArr() is evaluated
         // exactly once (single-evaluation of the indexed target's receiver).
-        Assert.Equal("50\n51\n1\n", CompileAndRun(source));
+        Assert.Equal($"50{Environment.NewLine}51{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             run()
             """;
 
-        Assert.Equal("7\n8\n7\n7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}8{Environment.NewLine}7{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
             run()
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -272,7 +272,7 @@ public class Issue1027IncrementDecrementExpressionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

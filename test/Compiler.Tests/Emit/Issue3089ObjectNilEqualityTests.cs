@@ -75,7 +75,7 @@ public sealed class Issue3089ObjectNilEqualityTests
             text
             <nil>
 
-            """.Replace("\r\n", "\n", StringComparison.Ordinal),
+            """.ReplaceLineEndings(Environment.NewLine),
             CompileVerifyAndRun(Source));
     }
 
@@ -139,7 +139,7 @@ public sealed class Issue3089ObjectNilEqualityTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

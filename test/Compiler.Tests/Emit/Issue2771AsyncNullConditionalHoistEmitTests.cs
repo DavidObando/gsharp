@@ -275,7 +275,7 @@ public class Issue2771AsyncNullConditionalHoistEmitTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, error);
-            return output.Replace("\r\n", "\n");
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

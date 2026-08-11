@@ -60,7 +60,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("27\n", CompileAndRun(source));
+        Assert.Equal($"27{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("same7\ndone\n", CompileAndRun(source));
+        Assert.Equal($"same7{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -229,7 +229,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("cross7\ndone\n", CompileAndRun(consumer, library, "i2840lib"));
+        Assert.Equal($"cross7{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(consumer, library, "i2840lib"));
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("gm3\ndone\n", CompileAndRun(source));
+        Assert.Equal($"gm3{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -306,7 +306,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("sg\ndone\n", CompileAndRun(source));
+        Assert.Equal($"sg{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -332,7 +332,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
             }
             """;
 
-        Assert.Equal("2\n2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -411,7 +411,7 @@ public class Issue2840NullableFunctionToDelegateEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -89,7 +89,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a b \nb c \nc d \n", output);
+        Assert.Equal($"a b {Environment.NewLine}b c {Environment.NewLine}c d {Environment.NewLine}", output);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1 2 \n2 3 \n3 4 \n", output);
+        Assert.Equal($"1 2 {Environment.NewLine}2 3 {Environment.NewLine}3 4 {Environment.NewLine}", output);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n", output);
+        Assert.Equal($"4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -301,7 +301,7 @@ public class Issue832DiscardedOpenTReturnEmitTests
                     "exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

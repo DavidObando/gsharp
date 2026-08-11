@@ -57,7 +57,7 @@ public class Issue2874ImportedVirtualPropertyAbstractnessTests
             }
             """;
 
-        Assert.Equal("n,x\n", CompileAndRun(source, library, "i2874lib1"));
+        Assert.Equal($"n,x{Environment.NewLine}", CompileAndRun(source, library, "i2874lib1"));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue2874ImportedVirtualPropertyAbstractnessTests
             }
             """;
 
-        Assert.Equal("acct\n", CompileAndRun(source, library, "i2874lib2"));
+        Assert.Equal($"acct{Environment.NewLine}", CompileAndRun(source, library, "i2874lib2"));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue2874ImportedVirtualPropertyAbstractnessTests
             }
             """;
 
-        Assert.Equal("7,14\n", CompileAndRun(source, library, "i2874lib3"));
+        Assert.Equal($"7,14{Environment.NewLine}", CompileAndRun(source, library, "i2874lib3"));
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class Issue2874ImportedVirtualPropertyAbstractnessTests
             }
             """;
 
-        Assert.Equal("captcha\n", CompileAndRunAgainstReferenceAssembly(source, library, "i2874lib4"));
+        Assert.Equal($"captcha{Environment.NewLine}", CompileAndRunAgainstReferenceAssembly(source, library, "i2874lib4"));
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public class Issue2874ImportedVirtualPropertyAbstractnessTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

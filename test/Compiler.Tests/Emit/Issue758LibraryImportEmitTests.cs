@@ -43,7 +43,7 @@ public class Issue758LibraryImportEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue758LibraryImportEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue758LibraryImportEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue758LibraryImportEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -206,7 +206,7 @@ Console.WriteLine(b.raw)
     }
 
     private static string[] SplitLines(string output) =>
-        output.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+        output.ReplaceLineEndings(Environment.NewLine).TrimEnd(Environment.NewLine.ToCharArray()).Split(Environment.NewLine);
 
     private static string CompileLoadInvokeCaptureStdout(string source, string contextName)
     {

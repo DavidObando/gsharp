@@ -58,7 +58,7 @@ public sealed class Issue3217NilOnLeftComparisonEmitTests
             """;
 
         Assert.Equal(
-            "7\nsome\nisnil\nTrue\nFalse\nTrue\nhi\n",
+            $"7{Environment.NewLine}some{Environment.NewLine}isnil{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}hi{Environment.NewLine}",
             CompileVerifyAndRun(Source));
     }
 
@@ -118,7 +118,7 @@ public sealed class Issue3217NilOnLeftComparisonEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

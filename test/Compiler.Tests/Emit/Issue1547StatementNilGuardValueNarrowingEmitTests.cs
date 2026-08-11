@@ -55,7 +55,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("21\n0\n", output);
+        Assert.Equal($"21{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n-1\n", output);
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n0\n", output);
+        Assert.Equal($"12{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nA\n5\n", output);
+        Assert.Equal($"True{Environment.NewLine}A{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("105\n-3\n-1\n", output);
+        Assert.Equal($"105{Environment.NewLine}-3{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n-1\n", output);
+        Assert.Equal($"3{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -326,7 +326,7 @@ public class Issue1547StatementNilGuardValueNarrowingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

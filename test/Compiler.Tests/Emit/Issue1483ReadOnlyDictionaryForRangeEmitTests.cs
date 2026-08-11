@@ -56,7 +56,7 @@ public class Issue1483ReadOnlyDictionaryForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("solo\n7\n", output);
+        Assert.Equal($"solo{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1483ReadOnlyDictionaryForRangeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("33\n", output);
+        Assert.Equal($"33{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -149,7 +149,7 @@ public class Issue1483ReadOnlyDictionaryForRangeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

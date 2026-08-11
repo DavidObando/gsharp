@@ -51,7 +51,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n7\nTrue\nx\n", output);
+        Assert.Equal($"0{Environment.NewLine}7{Environment.NewLine}True{Environment.NewLine}x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n3\n", output);
+        Assert.Equal($"0{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -181,7 +181,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nhi\n", output);
+        Assert.Equal($"True{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class Issue1496IfExpressionDefaultEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -278,7 +278,7 @@ public class Issue1496IfExpressionDefaultEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

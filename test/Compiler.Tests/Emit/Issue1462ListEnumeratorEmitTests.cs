@@ -69,7 +69,7 @@ public class Issue1462ListEnumeratorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue1462ListEnumeratorEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0,24,24,1,2\n", output);
+        Assert.Equal($"0,24,24,1,2{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -260,7 +260,7 @@ public class Issue1462ListEnumeratorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

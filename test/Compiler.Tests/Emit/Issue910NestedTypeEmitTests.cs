@@ -43,7 +43,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Sum())
             """);
 
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("from-nested-class\n", output);
+        Assert.Equal($"from-nested-class{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Pick())
             """);
 
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Pick())
             """);
 
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("from-nested-interface\n", output);
+        Assert.Equal($"from-nested-interface{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("iface-in-struct\n", output);
+        Assert.Equal($"iface-in-struct{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -323,7 +323,7 @@ public class Issue910NestedTypeEmitTests
             Console.WriteLine(o.Make())
             """);
 
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -389,7 +389,7 @@ public class Issue910NestedTypeEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

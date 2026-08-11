@@ -44,7 +44,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(v == nil)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine((v!!).x)
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(r.x)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(GetX(p))
             """;
 
-        Assert.Equal("99\n", CompileAndRun(source));
+        Assert.Equal($"99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(r == ColorA.Green)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(v == nil)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(Describe(none))
             """;
 
-        Assert.Equal("5\n-1\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(Pick(none) == ColorC.Red)
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(GetB(lifted))
             """;
 
-        Assert.Equal("1\nhi\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -247,7 +247,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(GetName(n))
             """;
 
-        Assert.Equal("widget\n", CompileAndRun(source));
+        Assert.Equal($"widget{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -268,7 +268,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(MakeNil() == nil)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(Take(p))
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -310,7 +310,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             Console.WriteLine(Read(o))
             """;
 
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -386,7 +386,7 @@ public class Issue1572UserValueTypeNullableEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

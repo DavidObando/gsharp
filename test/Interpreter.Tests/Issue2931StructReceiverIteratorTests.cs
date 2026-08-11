@@ -60,7 +60,7 @@ public class Issue2931StructReceiverIteratorTests
             }
             """;
 
-        Assert.Equal("100\n110\n160\n163\n3\n160\n400\n", RunSubmission(Source));
+        Assert.Equal($"100{Environment.NewLine}110{Environment.NewLine}160{Environment.NewLine}163{Environment.NewLine}3{Environment.NewLine}160{Environment.NewLine}400{Environment.NewLine}", RunSubmission(Source));
     }
 
     private static string RunSubmission(string source)
@@ -78,6 +78,6 @@ public class Issue2931StructReceiverIteratorTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n");
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

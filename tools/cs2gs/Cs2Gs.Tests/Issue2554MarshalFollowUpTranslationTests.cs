@@ -177,7 +177,7 @@ public sealed class Issue2554MarshalFollowUpTranslationTests
 
         (int runExit, string runOutput) = RunDotnet($"\"{outputPath}\"");
         Assert.True(runExit == 0, "Translated program must run successfully. Output:\n" + runOutput);
-        Assert.Equal("True\nTrue\n", runOutput.Replace("\r\n", "\n"));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", runOutput.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static LoadedCSharpProject Load(string source)

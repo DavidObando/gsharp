@@ -62,7 +62,7 @@ public class Issue1180SmartCastMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nnot dog\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}not dog{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue1180SmartCastMembersEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Rex:woof\nnot dog\n", output);
+        Assert.Equal($"Rex:woof{Environment.NewLine}not dog{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -155,7 +155,7 @@ public class Issue1180SmartCastMembersEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

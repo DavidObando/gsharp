@@ -118,7 +118,7 @@ public class DefaultInterfaceMethodsEmitTests
             """;
 
         var output = CompileGsharpLibAndRunCsharpConsumer(gsource, consumerCs);
-        Assert.Equal("hi (default)\nLOUD\n", output);
+        Assert.Equal($"hi (default){Environment.NewLine}LOUD{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class DefaultInterfaceMethodsEmitTests
             Console.WriteLine(probe.Same());
             """;
 
-        Assert.Equal("ProbeImpl\nTrue\nTrue\n", CompileGsharpLibAndRunCsharpConsumer(gsource, consumerCs));
+        Assert.Equal($"ProbeImpl{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileGsharpLibAndRunCsharpConsumer(gsource, consumerCs));
     }
 
     [Fact]
@@ -281,7 +281,7 @@ public class DefaultInterfaceMethodsEmitTests
                 Console.SetError(prevErr);
             }
 
-            return stdoutWriter.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            return stdoutWriter.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         }
         finally
         {
@@ -383,7 +383,7 @@ public class DefaultInterfaceMethodsEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

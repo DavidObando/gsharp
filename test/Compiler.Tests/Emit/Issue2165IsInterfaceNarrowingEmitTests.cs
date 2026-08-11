@@ -43,7 +43,7 @@ public class Issue2165IsInterfaceNarrowingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("41\n", output);
+        Assert.Equal($"41{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue2165IsInterfaceNarrowingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -125,7 +125,7 @@ public class Issue2165IsInterfaceNarrowingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -38,7 +38,7 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("method-return-ok\n", output);
+        Assert.Equal($"method-return-ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("method-param-ok\n", output);
+        Assert.Equal($"method-param-ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("dict-ok\n", output);
+        Assert.Equal($"dict-ok{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -183,7 +183,7 @@ public class Issue671UserTypeAsClrGenericArgEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

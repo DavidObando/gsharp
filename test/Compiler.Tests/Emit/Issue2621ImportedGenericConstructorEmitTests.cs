@@ -58,7 +58,7 @@ public sealed class Issue2621ImportedGenericConstructorEmitTests
             var result = Compile(directory, source, outputPath, fixturePath);
             Assert.True(result.ExitCode == 0, $"compile failed\n{result.Stdout}\n{result.Stderr}");
             IlVerifier.Verify(outputPath, additionalReferences: new[] { fixturePath });
-            Assert.Equal("7\n0\n3\n", Run(outputPath));
+            Assert.Equal($"7{Environment.NewLine}0{Environment.NewLine}3{Environment.NewLine}", Run(outputPath));
 
             const string invalidSource = """
                 package Oahu.Cli.Commands
@@ -165,6 +165,6 @@ public sealed class Issue2621ImportedGenericConstructorEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

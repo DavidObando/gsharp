@@ -63,7 +63,7 @@ public class Issue1071AsyncOverrideEmitTests
 
         var output = CompileAndRunThroughMetadataLoadContext(source);
 
-        Assert.Equal("override-ran\n42\n", output);
+        Assert.Equal($"override-ran{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunThroughMetadataLoadContext(string source)
@@ -136,7 +136,7 @@ public class Issue1071AsyncOverrideEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

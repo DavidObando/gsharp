@@ -58,7 +58,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a != b)
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a != b)
             """;
 
-        Assert.Equal("False\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a != b)
             """;
 
-        Assert.Equal("True\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(b != a)
             """;
 
-        Assert.Equal("False\nFalse\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(n != f)
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Ordering ───────────────────────────
@@ -149,7 +149,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a <= a)
             """;
 
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a >= b)
             """;
 
-        Assert.Equal("True\nFalse\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a >= n)
             """;
 
-        Assert.Equal("False\nFalse\nFalse\nFalse\nFalse\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(b > a)
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Arithmetic ─────────────────────────
@@ -221,7 +221,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(s ?? -1)
             """;
 
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(s3 ?? -1)
             """;
 
-        Assert.Equal("-1\n-1\n-1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(prod ?? 0)
             """;
 
-        Assert.Equal("6\n40\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(r ?? -1)
             """;
 
-        Assert.Equal("3\n2\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Bitwise ────────────────────────────
@@ -299,7 +299,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(xorV ?? -1)
             """;
 
-        Assert.Equal("7\n2\n5\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}2{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -319,7 +319,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(xorV ?? -1)
             """;
 
-        Assert.Equal("-1\n-1\n-1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}-1{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Mixed-mode lift ────────────────────
@@ -347,7 +347,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(3 < a)
             """;
 
-        Assert.Equal("10\n10\nTrue\nTrue\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}10{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -365,7 +365,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(n < 9)
             """;
 
-        Assert.Equal("-1\nFalse\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Regression guards ─────────────────
@@ -387,7 +387,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(n != nil)
             """;
 
-        Assert.Equal("False\nTrue\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -407,7 +407,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(a > b)
             """;
 
-        Assert.Equal("10\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"10{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public class NullableLiftedBinaryOperatorEmitTests
             Console.WriteLine(n ?? 99)
             """;
 
-        Assert.Equal("7\n99\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}99{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────── Helpers ───────────────────────────
@@ -499,7 +499,7 @@ public class NullableLiftedBinaryOperatorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

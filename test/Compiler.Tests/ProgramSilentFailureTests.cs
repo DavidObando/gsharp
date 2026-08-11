@@ -38,7 +38,7 @@ public class ProgramSilentFailureTests
         Assert.Equal(0, exitCode);
 
         // No GS9998 should appear for a valid program
-        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         foreach (var line in lines)
         {
             var match = DiagnosticLine.Match(line.Trim());
@@ -80,7 +80,7 @@ public class ProgramSilentFailureTests
 
         Assert.NotEqual(0, exitCode);
 
-        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         foreach (var line in lines)
         {
             var match = DiagnosticLine.Match(line.Trim());

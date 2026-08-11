@@ -216,7 +216,7 @@ public class Issue3067IteratorConstraintRemapTests
                 type => type.Name.StartsWith("<" + methodName + ">d__", StringComparison.Ordinal));
 
             AssertConstraints(stateMachine, shape);
-            Assert.Equal(expectedOutput + "\n", Run(assemblyPath, directory));
+            Assert.Equal(expectedOutput + Environment.NewLine, Run(assemblyPath, directory));
         }
         finally
         {
@@ -243,7 +243,7 @@ public class Issue3067IteratorConstraintRemapTests
             if (driver == Driver.Emit)
             {
                 var assemblyPath = Compile(source, directory);
-                Assert.Equal(expected + "\n", Run(assemblyPath, directory));
+                Assert.Equal(expected + Environment.NewLine, Run(assemblyPath, directory));
                 return;
             }
 
@@ -259,7 +259,7 @@ public class Issue3067IteratorConstraintRemapTests
                 Console.SetOut(previous);
             }
 
-            Assert.Contains(expected + "\n", output.ToString().Replace("\r\n", "\n"));
+            Assert.Contains(expected + Environment.NewLine, output.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -446,7 +446,7 @@ public class Issue3067IteratorConstraintRemapTests
             throw new TimeoutException("dotnet child process timed out.");
         }
 
-        var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n");
+        var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
         var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(
             process.ExitCode == 0,

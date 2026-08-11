@@ -55,7 +55,7 @@ public class Issue2703AsyncFilteredCatchEmitTests
             Console.WriteLine(RunOneAsync(false).GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("cancel:canceled\nerror:failed\n", CompileVerifyAndRun(Source, "RunOneAsync"));
+        Assert.Equal($"cancel:canceled{Environment.NewLine}error:failed{Environment.NewLine}", CompileVerifyAndRun(Source, "RunOneAsync"));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue2703AsyncFilteredCatchEmitTests
             """;
 
         Assert.Equal(
-            "timeout:timed out\nerror:offline\n",
+            $"timeout:timed out{Environment.NewLine}error:offline{Environment.NewLine}",
             CompileVerifyAndRun(Source, "CheckAudibleApiReachableAsync"));
     }
 
@@ -185,6 +185,6 @@ public class Issue2703AsyncFilteredCatchEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

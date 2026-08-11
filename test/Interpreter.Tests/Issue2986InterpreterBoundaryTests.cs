@@ -39,7 +39,7 @@ public class Issue2986InterpreterBoundaryTests
         var pInvokePath = LocateSample("PInvoke.gs");
         var pInvoke = RunBatchFile(pInvokePath);
         Assert.Equal(0, pInvoke.ExitCode);
-        Assert.Equal("13\n", pInvoke.StandardOutput.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal($"13{Environment.NewLine}", pInvoke.StandardOutput.ReplaceLineEndings(Environment.NewLine));
         Assert.Equal(string.Empty, pInvoke.StandardError);
     }
 

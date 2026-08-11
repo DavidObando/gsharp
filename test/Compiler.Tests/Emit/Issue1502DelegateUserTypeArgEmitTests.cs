@@ -49,7 +49,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("x\n", output);
+        Assert.Equal($"x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n2\n", output);
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -337,7 +337,7 @@ public class Issue1502DelegateUserTypeArgEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

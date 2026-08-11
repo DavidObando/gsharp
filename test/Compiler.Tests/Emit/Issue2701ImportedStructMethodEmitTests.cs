@@ -43,7 +43,7 @@ public sealed class Issue2701ImportedStructMethodEmitTests
         using var artifacts = Compile(OahuSource);
 
         Assert.DoesNotContain("GS9998", artifacts.Diagnostics, StringComparison.Ordinal);
-        Assert.Equal("icon:on\n", Run(artifacts.OutputPath));
+        Assert.Equal($"icon:on{Environment.NewLine}", Run(artifacts.OutputPath));
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.FixturePath });
 
         using var stream = File.OpenRead(artifacts.OutputPath);
@@ -152,7 +152,7 @@ public sealed class Issue2701ImportedStructMethodEmitTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private sealed class CompilationArtifacts : IDisposable

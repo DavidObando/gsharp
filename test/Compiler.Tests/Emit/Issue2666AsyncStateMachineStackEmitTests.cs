@@ -76,7 +76,7 @@ public class Issue2666AsyncStateMachineStackEmitTests
             Console.WriteLine(result)
             """;
 
-        Assert.Equal("42\n", CompileVerifyAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue2666AsyncStateMachineStackEmitTests
             Console.WriteLine(MainWindow().OnRunDownloadPipeline(items).GetAwaiter().GetResult())
             """;
 
-        Assert.Equal("1\n", CompileVerifyAndRun(source, HelperSource));
+        Assert.Equal($"1{Environment.NewLine}", CompileVerifyAndRun(source, HelperSource));
     }
 
     private static string CompileVerifyAndRun(string source, string helperSource = null)
@@ -189,7 +189,7 @@ public class Issue2666AsyncStateMachineStackEmitTests
             var error = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:\n{error}");
-            return output.Replace("\r\n", "\n");
+            return output.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

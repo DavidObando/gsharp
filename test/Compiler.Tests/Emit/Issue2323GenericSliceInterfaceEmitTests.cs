@@ -49,7 +49,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.Count())
             """;
 
-        Assert.Equal("3\n", CompileAndRun(gsource));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.items.Count)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(gsource));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.items[1])
             """;
 
-        Assert.Equal("3\n2\n", CompileAndRun(gsource));
+        Assert.Equal($"3{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.items.Count)
             """;
 
-        Assert.Equal("7\n2\n", CompileAndRun(gsource));
+        Assert.Equal($"7{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.items.Count)
             """;
 
-        Assert.Equal("5\n", CompileAndRun(gsource));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
             Console.WriteLine(h.items[2])
             """;
 
-        Assert.Equal("3\nc\n", CompileAndRun(gsource));
+        Assert.Equal($"3{Environment.NewLine}c{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -301,7 +301,7 @@ public class Issue2323GenericSliceInterfaceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

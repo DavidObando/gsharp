@@ -44,7 +44,7 @@ public sealed class Issue3093SequenceInterfaceEmittedSessionTests
             }
             """;
 
-        Assert.Equal("3\n3\n", RunSubmission(Source));
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", RunSubmission(Source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public sealed class Issue3093SequenceInterfaceEmittedSessionTests
             }
             """;
 
-        Assert.Equal("3\n", RunSubmission(Source));
+        Assert.Equal($"3{Environment.NewLine}", RunSubmission(Source));
     }
 
     private static string RunSubmission(string source)
@@ -86,6 +86,6 @@ public sealed class Issue3093SequenceInterfaceEmittedSessionTests
             Console.SetOut(previousOut);
         }
 
-        return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

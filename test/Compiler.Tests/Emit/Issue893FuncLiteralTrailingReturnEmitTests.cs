@@ -44,7 +44,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(net)
             """;
 
-        Assert.Equal("network\n", CompileAndRun(source));
+        Assert.Equal($"network{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(evens.Count())
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(doubleThenAddOne(20))
             """;
 
-        Assert.Equal("41\n", CompileAndRun(source));
+        Assert.Equal($"41{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(widen(41))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(found)
             """;
 
-        Assert.Equal("network\n", CompileAndRun(source));
+        Assert.Equal($"network{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             act("ok")
             """;
 
-        Assert.Equal("ok\n", CompileAndRun(source));
+        Assert.Equal($"ok{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
             Console.WriteLine(pick(false))
             """;
 
-        Assert.Equal("1\n2\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -239,7 +239,7 @@ public class Issue893FuncLiteralTrailingReturnEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

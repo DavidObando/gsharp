@@ -66,7 +66,7 @@ public class Issue1034StructPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n20\n", output);
+        Assert.Equal($"10{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1034StructPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n22\n11\n22\n", output);
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}11{Environment.NewLine}22{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue1034StructPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n6\n", output);
+        Assert.Equal($"1{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue1034StructPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n33\n44\n", output);
+        Assert.Equal($"5{Environment.NewLine}33{Environment.NewLine}44{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class Issue1034StructPointerEmitTests
 
         // q = p + 3 -> arr[3].x == 7; r = q - 1 -> arr[2].x == 5;
         // q - p == 3 and p - q == -3 (scaled by sizeof(Point) == 8 bytes).
-        Assert.Equal("7\n5\n3\n-3\n", output);
+        Assert.Equal($"7{Environment.NewLine}5{Environment.NewLine}3{Environment.NewLine}-3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue1034StructPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -246,7 +246,7 @@ public class Issue1034StructPointerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

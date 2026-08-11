@@ -27,7 +27,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n2\n", output);
+        Assert.Equal($"99{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n0\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}0{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class MapEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("one\ntwo\n\n", output);
+        Assert.Equal($"one{Environment.NewLine}two{Environment.NewLine}{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -189,7 +189,7 @@ public class MapEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

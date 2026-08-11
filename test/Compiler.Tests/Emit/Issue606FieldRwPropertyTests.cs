@@ -48,7 +48,7 @@ public class Issue606FieldRwPropertyTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
-        Assert.Equal("hello\nworld\n", output);
+        Assert.Equal($"hello{Environment.NewLine}world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue606FieldRwPropertyTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue606FieldRwPropertyTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
-        Assert.Equal("direct\n", output);
+        Assert.Equal($"direct{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue606FieldRwPropertyTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef606");
-        Assert.Equal("getter-only\n", output);
+        Assert.Equal($"getter-only{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public class Issue606FieldRwPropertyTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -385,7 +385,7 @@ public class Issue606FieldRwPropertyTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

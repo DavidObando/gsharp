@@ -43,7 +43,7 @@ var t2 = compute(5)
 t2.Wait()
 Console.WriteLine(t2.Result)
 ";
-        const string Expected = "6\n15\n";
+        string Expected = $"6{Environment.NewLine}15{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_PureAsyncSequence_TaskFromResult));
     }
 
@@ -64,7 +64,7 @@ async func run() {
 
 run().Wait()
 ";
-        const string Expected = "A\nB\nC\n";
+        string Expected = $"A{Environment.NewLine}B{Environment.NewLine}C{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_RealSuspension_TaskDelay));
     }
 
@@ -94,7 +94,7 @@ var t = run()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "7\n";
+        string Expected = $"7{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithMultipleAwaitsInTry));
     }
 
@@ -126,7 +126,7 @@ var t = run()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "11\n";
+        string Expected = $"11{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithNestedTryAroundAwait));
     }
 
@@ -156,7 +156,7 @@ var t = run()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "1\n";
+        string Expected = $"1{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncTryFinally_RunsOnceOnNormalCompletion));
     }
 
@@ -182,7 +182,7 @@ var t = safe()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "42\n";
+        string Expected = $"42{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithTryCatch_AroundAwait));
     }
 
@@ -208,7 +208,7 @@ var t = withFinally()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "11\n";
+        string Expected = $"11{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncWithTryFinally_AroundAwait));
     }
 
@@ -232,7 +232,7 @@ var t = accum()
 t.Wait()
 Console.WriteLine(t.Result)
 ";
-        const string Expected = "30\n";
+        string Expected = $"30{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncAccumulator_MultipleAwaits));
     }
 
@@ -253,7 +253,7 @@ for x in nums() {
     Console.WriteLine(x)
 }
 ";
-        const string Expected = "1\n2\n3\n";
+        string Expected = $"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_SyncIterator_Sequence));
     }
 
@@ -281,7 +281,7 @@ async func consume() {
 
 consume().Wait()
 ";
-        const string Expected = "10\n20\n30\n";
+        string Expected = $"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_AsyncIterator_YieldWithAwait));
     }
 
@@ -310,7 +310,7 @@ await for x in gen() {
     Console.WriteLine(x)
 }
 ";
-        const string Expected = "10\n20\n30\n";
+        string Expected = $"10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}";
         Assert.Equal(Expected, RunEmitter(Source, nameof(AsyncIterator_TopLevelAwaitFor_ProducesValues)));
     }
 
@@ -333,7 +333,7 @@ scope {
 }
 Console.WriteLine(""end"")
 ";
-        const string Expected = "hello\nend\n";
+        string Expected = $"hello{Environment.NewLine}end{Environment.NewLine}";
         AssertEmitOutput(Source, Expected, nameof(Emit_GoScope_AsyncTarget));
     }
 
@@ -388,7 +388,7 @@ Console.WriteLine(""end"")
                 Console.SetOut(stdout);
             }
 
-            return captured.ToString().Replace("\r\n", "\n");
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

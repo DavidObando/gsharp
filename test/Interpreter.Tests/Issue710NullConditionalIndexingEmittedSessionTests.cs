@@ -134,8 +134,8 @@ public class Issue710NullConditionalIndexingEmittedSessionTests
 
             main()
             """;
-        var output = RunSubmission(source).Replace("\r\n", "\n");
-        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var output = RunSubmission(source).ReplaceLineEndings(Environment.NewLine);
+        var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("8", lines[0]);
         Assert.Equal("1", lines[1]);
         Assert.Equal("1", lines[2]);
@@ -176,8 +176,8 @@ public class Issue710NullConditionalIndexingEmittedSessionTests
             Console.WriteLine(trace)
             """;
 
-        var output = RunSubmission(source).Replace("\r\n", "\n");
-        Assert.Contains("nil\nR\nbcd\nRSE\n", output);
+        var output = RunSubmission(source).ReplaceLineEndings(Environment.NewLine);
+        Assert.Contains($"nil{Environment.NewLine}R{Environment.NewLine}bcd{Environment.NewLine}RSE{Environment.NewLine}", output);
     }
 
     [Fact]

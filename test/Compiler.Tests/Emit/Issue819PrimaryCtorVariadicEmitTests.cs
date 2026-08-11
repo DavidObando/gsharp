@@ -49,7 +49,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("project\n3\na\nc\n", output);
+        Assert.Equal($"project{Environment.NewLine}3{Environment.NewLine}a{Environment.NewLine}c{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("only\n0\n", output);
+        Assert.Equal($"only{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ONE\ntwo\n", output);
+        Assert.Equal($"ONE{Environment.NewLine}two{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n3\n2\n4\n", output);
+        Assert.Equal($"1{Environment.NewLine}3{Environment.NewLine}2{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("project\n2\n", output);
+        Assert.Equal($"project{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\nd\n", output);
+        Assert.Equal($"4{Environment.NewLine}d{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
             csSiblingName: "Probe.CSharp",
             gsSource: gsource);
 
-        Assert.Equal("x\n3\nalpha\n", output);
+        Assert.Equal($"x{Environment.NewLine}3{Environment.NewLine}alpha{Environment.NewLine}", output);
     }
 
     private static bool HasParamArray(System.Reflection.ParameterInfo p) =>
@@ -343,7 +343,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -467,7 +467,7 @@ public class Issue819PrimaryCtorVariadicEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

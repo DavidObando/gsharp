@@ -157,7 +157,7 @@ public class Issue1262DiscardParameterEmitTests
                 Console.SetOut(prevOut2);
             }
 
-            return captured.ToString().Replace("\r\n", "\n");
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -27,7 +27,7 @@ public sealed class Issue3076GenericStaticClrStoreEmittedSessionTests
             System.Console.SetOut(previousOut);
         }
 
-        Assert.Equal(expected, outWriter.ToString().Replace("\r\n", "\n"));
+        Assert.Equal(expected, outWriter.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     private static string Source(bool throughTypeParameter)

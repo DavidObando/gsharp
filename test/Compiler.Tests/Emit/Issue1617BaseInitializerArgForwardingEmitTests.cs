@@ -58,7 +58,7 @@ public class Issue1617BaseInitializerArgForwardingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("outer-1617\nroot-1617\n", output);
+        Assert.Equal($"outer-1617{Environment.NewLine}root-1617{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -135,7 +135,7 @@ public class Issue1617BaseInitializerArgForwardingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

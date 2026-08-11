@@ -103,7 +103,7 @@ public class Issue3286FunctionPointerNilComparisonEmitTests
             False
             True
 
-            """.ReplaceLineEndings("\n"),
+            """.ReplaceLineEndings(Environment.NewLine),
             await CompileAndRun(Source));
     }
 
@@ -176,7 +176,7 @@ public class Issue3286FunctionPointerNilComparisonEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"sample exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.ReplaceLineEndings("\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

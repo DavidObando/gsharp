@@ -87,7 +87,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(InstanceOuterSiblingCs, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("42\n7\n", output);
+        Assert.Equal($"42{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(StaticOuterSiblingCs, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("99\n5\n", output);
+        Assert.Equal($"99{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(DeeplyNestedSiblingCs, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("7\n123\n", output);
+        Assert.Equal($"7{Environment.NewLine}123{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(InstanceOuterSiblingCs, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("55\n", output);
+        Assert.Equal($"55{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(InstanceOuterSiblingCs, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -242,7 +242,7 @@ public class Issue569NestedTypeConstructionTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("77\n", output);
+        Assert.Equal($"77{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -333,7 +333,7 @@ public class Issue569NestedTypeConstructionTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -403,7 +403,7 @@ public class Issue569NestedTypeConstructionTests
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

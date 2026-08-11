@@ -70,7 +70,7 @@ public class Issue2325NestedDelegateEmitTests
             Invoke2((inner (object?) -> void, arg object?) -> inner(arg))
             """;
 
-        Assert.Equal("\n", CompileAndRun(gsource));
+        Assert.Equal(Environment.NewLine, CompileAndRun(gsource));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue2325NestedDelegateEmitTests
             Console.WriteLine(Invoke2((inner (int32) -> int32, arg int32) -> inner(arg)))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(gsource));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue2325NestedDelegateEmitTests
             SendOrPost((callback (object?) -> void, state object?) -> callback(state), () -> Console.WriteLine("done"))
             """;
 
-        Assert.Equal("hello\ndone\n", CompileAndRun(gsource));
+        Assert.Equal($"hello{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     private static string CompileAndRun(string source)
@@ -186,7 +186,7 @@ public class Issue2325NestedDelegateEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

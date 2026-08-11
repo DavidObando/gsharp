@@ -68,7 +68,7 @@ public class Issue1799MapAndInterfaceSlotConcurrencyInterpreterTests
         {
             var result = EmittedOracle.Evaluate(source);
             Assert.DoesNotContain(result.Diagnostics, d => d.Id != "GS0286");
-            Assert.Equal("7\n", result.Output.Replace("\r\n", "\n"));
+            Assert.Equal($"7{Environment.NewLine}", result.Output.ReplaceLineEndings(Environment.NewLine));
         }
     }
 }

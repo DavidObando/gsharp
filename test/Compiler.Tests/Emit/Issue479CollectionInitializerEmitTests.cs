@@ -30,7 +30,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(xs[2])
             """;
 
-        Assert.Equal("3\n1\n3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}1{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(hs.Contains(9))
             """;
 
-        Assert.Equal("3\nTrue\nFalse\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(hs.Contains(20))
             """;
 
-        Assert.Equal("3\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(d["c"])
             """;
 
-        Assert.Equal("3\n1\n3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}1{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(d["y"])
             """;
 
-        Assert.Equal("2\n7\n8\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}7{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(d["k"])
             """;
 
-        Assert.Equal("1\n99\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(indexed["error"] == nil)
             """;
 
-        Assert.Equal("True\nTrue\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(d["KEY"])
             """;
 
-        Assert.Equal("1\n5\n5\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}5{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(xs.Count)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -212,7 +212,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(m[1][2])
             """;
 
-        Assert.Equal("2\n2\n3\n5\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(d["odds"].Count)
             """;
 
-        Assert.Equal("2\n2\n3\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -247,7 +247,7 @@ public class Issue479CollectionInitializerEmitTests
             Console.WriteLine(List[int32]{ 5, 6, 7, 8 }.Count)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -350,7 +350,7 @@ public class Issue479CollectionInitializerEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return (0, stdout.Replace("\r\n", "\n"), diagnostics);
+            return (0, stdout.ReplaceLineEndings(Environment.NewLine), diagnostics);
         }
         finally
         {

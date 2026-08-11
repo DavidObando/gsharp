@@ -36,7 +36,7 @@ public class Issue1391DefaultArgImportedGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class Issue1391DefaultArgImportedGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1391DefaultArgImportedGenericEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\n", output);
+        Assert.Equal($"False{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -132,7 +132,7 @@ public class Issue1391DefaultArgImportedGenericEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

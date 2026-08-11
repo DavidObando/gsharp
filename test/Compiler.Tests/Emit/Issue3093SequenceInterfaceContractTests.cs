@@ -56,7 +56,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
         WithDirectory(directory =>
         {
             var assemblyPath = Compile(Source, directory);
-            Assert.Equal("3\n3\n", Run(assemblyPath));
+            Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", Run(assemblyPath));
 
             var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
             var detector = assembly.GetType("Issue3093.User.Detector");
@@ -101,7 +101,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
         WithDirectory(directory =>
         {
             var assemblyPath = Compile(Source, directory);
-            Assert.Equal("3\n", Run(assemblyPath));
+            Assert.Equal($"3{Environment.NewLine}", Run(assemblyPath));
         });
     }
 
@@ -140,7 +140,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
         {
             var contractPath = CompileContract(ContractSource, directory);
             var assemblyPath = Compile(Source, directory, new[] { contractPath });
-            Assert.Equal("3\n", Run(assemblyPath));
+            Assert.Equal($"3{Environment.NewLine}", Run(assemblyPath));
         });
     }
 
@@ -179,7 +179,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
         {
             var contractPath = CompileContract(ContractSource, directory);
             var assemblyPath = Compile(Source, directory, new[] { contractPath });
-            Assert.Equal("3\n", Run(assemblyPath));
+            Assert.Equal($"3{Environment.NewLine}", Run(assemblyPath));
         });
     }
 
@@ -270,7 +270,7 @@ public sealed class Issue3093SequenceInterfaceContractTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}:{Environment.NewLine}{error}");
-        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void WithDirectory(Action<string> action)

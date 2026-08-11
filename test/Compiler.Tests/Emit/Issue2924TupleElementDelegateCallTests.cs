@@ -77,7 +77,7 @@ public class Issue2924TupleElementDelegateCallTests
         var output = CompileVerifyLoadAndRun(Source);
 
         Assert.Equal(
-            "call:1\ncall:2\ncall:9\ncall:3\n42\n41\n10\ncall:4\ncall:5\ncall:6\ncall:7\ncall:8\n42\n0.75\n",
+            $"call:1{Environment.NewLine}call:2{Environment.NewLine}call:9{Environment.NewLine}call:3{Environment.NewLine}42{Environment.NewLine}41{Environment.NewLine}10{Environment.NewLine}call:4{Environment.NewLine}call:5{Environment.NewLine}call:6{Environment.NewLine}call:7{Environment.NewLine}call:8{Environment.NewLine}42{Environment.NewLine}0.75{Environment.NewLine}",
             output);
     }
 
@@ -99,7 +99,7 @@ public class Issue2924TupleElementDelegateCallTests
 
         var output = CompileVerifyLoadAndRun(Source);
 
-        Assert.Equal("call:1\n42\n0.75\n", output);
+        Assert.Equal($"call:1{Environment.NewLine}42{Environment.NewLine}0.75{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -175,7 +175,7 @@ public class Issue2924TupleElementDelegateCallTests
 
         var output = CompileVerifyLoadAndRun(Source);
 
-        Assert.Equal("42\n42\n42\n42\n42\n1\nA ok\nB ok\nB named ok\nB asserted ok\nB repeated assertion ok\nC ok\n2\nD ok\nE ok\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}1{Environment.NewLine}A ok{Environment.NewLine}B ok{Environment.NewLine}B named ok{Environment.NewLine}B asserted ok{Environment.NewLine}B repeated assertion ok{Environment.NewLine}C ok{Environment.NewLine}2{Environment.NewLine}D ok{Environment.NewLine}E ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class Issue2924TupleElementDelegateCallTests
 
         var output = CompileVerifyLoadAndRun(Source);
 
-        Assert.Equal("5\n7\n", output);
+        Assert.Equal($"5{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -268,7 +268,7 @@ public class Issue2924TupleElementDelegateCallTests
                 Console.SetOut(previousOut);
             }
 
-            return output.ToString().Replace("\r\n", "\n");
+            return output.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

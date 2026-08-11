@@ -682,7 +682,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
             class-derived
             class-base
             derived:write
-            """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+            """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
             Run(result.OutputPath));
 
         var contracts = Assembly.LoadFrom(result.ContractsPath);
@@ -705,7 +705,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         var consumerPath = EmitCSharpConsumer(result.DirectoryPath, result.OutputPath, result.ContractsPath);
         IlVerifier.Verify(consumerPath, additionalReferences: new[] { result.OutputPath, result.ContractsPath });
         Assert.Equal(
-            "derived:consumer\nbase:consumer-base\nderived:consumer-constrained\n4\nleft-inherited:csharp\n",
+            $"derived:consumer{Environment.NewLine}base:consumer-base{Environment.NewLine}derived:consumer-constrained{Environment.NewLine}4{Environment.NewLine}left-inherited:csharp{Environment.NewLine}",
             Run(consumerPath));
     }
 
@@ -788,7 +788,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         IlVerifier.Verify(
             consumerPath,
             additionalReferences: aspNetReferences.Concat(new[] { result.OutputPath }).ToArray());
-        Assert.Equal("Bearer token\n1\n", Run(consumerPath, includeAspNetCore: true));
+        Assert.Equal($"Bearer token{Environment.NewLine}1{Environment.NewLine}", Run(consumerPath, includeAspNetCore: true));
     }
 
     private static CompilationResult Compile(
@@ -1012,7 +1012,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"dotnet exec failed ({process.ExitCode})\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string[] GetAspNetReferences()

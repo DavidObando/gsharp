@@ -39,7 +39,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(Use(Box.Make))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(Use(c.Get))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(fac.Build())
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(w.AsDelegate())
             """;
 
-        Assert.Equal("9\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(Use(Make().Get))
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(A6UseSeed(d.Seed))
             """;
 
-        Assert.Equal("33\n", CompileAndRun(source));
+        Assert.Equal($"33{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -189,7 +189,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(x.AsDelegate())
             """;
 
-        Assert.Equal("17\n", CompileAndRun(source));
+        Assert.Equal($"17{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class Adr0112UserMethodGroupEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.StartsWith("1\n3\nChecksum32\ngroup=System.Func`1[System.UInt32]\n2\n", output, StringComparison.Ordinal);
+        Assert.StartsWith($"1{Environment.NewLine}3{Environment.NewLine}Checksum32{Environment.NewLine}group=System.Func`1[System.UInt32]{Environment.NewLine}2{Environment.NewLine}", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Adr0112UserMethodGroupEmitTests
             Console.WriteLine(count.Method.Name)
             """;
 
-        Assert.Equal("2\nCount\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}Count{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -308,7 +308,7 @@ public class Adr0112UserMethodGroupEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

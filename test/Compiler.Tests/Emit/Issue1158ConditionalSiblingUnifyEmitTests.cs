@@ -40,7 +40,7 @@ public class Issue1158ConditionalSiblingUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("Co64Box\nStcoBox\n", output);
+        Assert.Equal($"Co64Box{Environment.NewLine}StcoBox{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue1158ConditionalSiblingUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("Co64Box\nStcoBox\n", output);
+        Assert.Equal($"Co64Box{Environment.NewLine}StcoBox{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -143,7 +143,7 @@ public class Issue1158ConditionalSiblingUnifyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

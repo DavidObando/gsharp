@@ -22,7 +22,7 @@ public class Issue1239CoalesceCommonTypeEmittedSessionTests
             Console.WriteLine((a ?? b).ToString())
             """;
 
-        Assert.Equal("100\n", RunSubmission(source));
+        Assert.Equal($"100{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -34,7 +34,7 @@ public class Issue1239CoalesceCommonTypeEmittedSessionTests
             Console.WriteLine((a ?? b).ToString())
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public class Issue1239CoalesceCommonTypeEmittedSessionTests
             Console.WriteLine((a ?? b).ToString())
             """;
 
-        Assert.Equal("100\n", RunSubmission(source));
+        Assert.Equal($"100{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue1239CoalesceCommonTypeEmittedSessionTests
             Console.WriteLine((a ?? b).ToString())
             """;
 
-        Assert.Equal("9000000000\n", RunSubmission(source));
+        Assert.Equal($"9000000000{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -76,6 +76,6 @@ public class Issue1239CoalesceCommonTypeEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

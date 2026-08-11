@@ -46,7 +46,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("a1\n", CompileAndRun(source));
+        Assert.Equal($"a1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("b2\n", CompileAndRun(source));
+        Assert.Equal($"b2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("50\ndone\n", CompileAndRun(source));
+        Assert.Equal($"50{Environment.NewLine}done{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("7\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("24\n28\n", CompileAndRun(source));
+        Assert.Equal($"24{Environment.NewLine}28{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -212,7 +212,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("109\n111\n", CompileAndRun(source));
+        Assert.Equal($"109{Environment.NewLine}111{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("24\nok\n", CompileAndRun(source));
+        Assert.Equal($"24{Environment.NewLine}ok{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -266,7 +266,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("1\n4\n9\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}4{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -295,7 +295,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
             }
             """;
 
-        Assert.Equal("g4\nend\n", CompileAndRun(source));
+        Assert.Equal($"g4{Environment.NewLine}end{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -372,7 +372,7 @@ public class Issue2841NullableNamedDelegateTargetEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

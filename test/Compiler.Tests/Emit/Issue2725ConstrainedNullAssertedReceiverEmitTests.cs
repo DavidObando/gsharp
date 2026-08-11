@@ -44,7 +44,7 @@ public sealed class Issue2725ConstrainedNullAssertedReceiverEmitTests
             Console.WriteLine(MutateText[List[object]](values))
             """;
 
-        Assert.Equal("2\n3:zero\n", CompileVerifyAndRun(Source));
+        Assert.Equal($"2{Environment.NewLine}3:zero{Environment.NewLine}", CompileVerifyAndRun(Source));
     }
 
     [Fact]
@@ -124,6 +124,6 @@ public sealed class Issue2725ConstrainedNullAssertedReceiverEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -27,7 +27,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\nhi\n", output);
+        Assert.Equal($"7{Environment.NewLine}hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class GenericFunctionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n42\n42\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -211,7 +211,7 @@ public class GenericFunctionEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

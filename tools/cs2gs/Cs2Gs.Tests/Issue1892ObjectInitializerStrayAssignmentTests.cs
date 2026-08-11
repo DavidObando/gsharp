@@ -186,7 +186,7 @@ namespace Demo
     private static void AssertNoStandaloneAssignmentLine(string printed, string assignmentText)
     {
         bool hasStrayLine = printed
-            .Split('\n')
+            .Split(Environment.NewLine)
             .Any(line => line.Trim() == assignmentText);
         Assert.False(hasStrayLine, $"Found stray bare assignment statement '{assignmentText}' in:\n{printed}");
     }

@@ -63,7 +63,7 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
             }
             """;
 
-        Assert.Equal("hello\n", CompileAndRun(source));
+        Assert.Equal($"hello{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
             }
             """;
 
-        Assert.Equal("world\n", CompileAndRun(source));
+        Assert.Equal($"world{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
             }
             """;
 
-        Assert.Equal("static-value\ninstance-value\n", CompileAndRun(source));
+        Assert.Equal($"static-value{Environment.NewLine}instance-value{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
             }
             """;
 
-        Assert.Equal("done\n", CompileAndRun(source));
+        Assert.Equal($"done{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -237,6 +237,6 @@ public class Issue2004SharedFieldAccessorVisibilityEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

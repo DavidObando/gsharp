@@ -199,7 +199,7 @@ public class Issue985DualGetEnumeratorEmitTests
             }
             """;
 
-        Assert.Equal("1\n2\n3\n1\n2\n3\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public class Issue985DualGetEnumeratorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -399,7 +399,7 @@ public class Issue985DualGetEnumeratorEmitTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{stdoutWriter}\nstderr:\n{stderrWriter}");
 
             var combined = stdoutWriter.ToString() + stderrWriter.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

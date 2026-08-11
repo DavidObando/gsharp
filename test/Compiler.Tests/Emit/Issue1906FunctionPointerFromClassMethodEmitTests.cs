@@ -59,7 +59,7 @@ public class Issue1906FunctionPointerFromClassMethodEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("36\n", output);
+        Assert.Equal($"36{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -138,7 +138,7 @@ public class Issue1906FunctionPointerFromClassMethodEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

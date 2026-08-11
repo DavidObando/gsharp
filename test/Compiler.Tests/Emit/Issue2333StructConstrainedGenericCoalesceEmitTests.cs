@@ -67,7 +67,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce[int32](nil, -1))
             """;
 
-        Assert.Equal("-1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce[int32](7, -1))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce[float64](2.25, -1.0))
             """;
 
-        Assert.Equal("-1\n2.25\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}2.25{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce[DateTime](present, fb).Year)
             """;
 
-        Assert.Equal("2000\n2020\n", CompileAndRun(source));
+        Assert.Equal($"2000{Environment.NewLine}2020{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce[GcPt](present, fb).x)
             """;
 
-        Assert.Equal("-1\n9\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(CoalesceInt[bool](nil, true))
             """;
 
-        Assert.Equal("0\n-1\nFalse\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}-1{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Chain[int32](3, nil, -9))
             """;
 
-        Assert.Equal("-9\n5\n3\n", CompileAndRun(source));
+        Assert.Equal($"-9{Environment.NewLine}5{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -228,7 +228,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(counter)
             """;
 
-        Assert.Equal("42\n1\n7\n1\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}1{Environment.NewLine}7{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -261,7 +261,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(KeepsPresent[int32](3, 9)!!)
             """;
 
-        Assert.Equal("9\n3\n", CompileAndRun(source));
+        Assert.Equal($"9{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(OrElse(absent, "fallback"))
             """;
 
-        Assert.Equal("value\nfallback\n", CompileAndRun(source));
+        Assert.Equal($"value{Environment.NewLine}fallback{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Get[string](n, "fb"))
             """;
 
-        Assert.Equal("hi\nfb\n", CompileAndRun(source));
+        Assert.Equal($"hi{Environment.NewLine}fb{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -329,7 +329,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce(some))
             """;
 
-        Assert.Equal("-1\n8\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -350,7 +350,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             Console.WriteLine(Coalesce(some))
             """;
 
-        Assert.Equal("fallback\npresent\n", CompileAndRun(source));
+        Assert.Equal($"fallback{Environment.NewLine}present{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -426,7 +426,7 @@ public class Issue2333StructConstrainedGenericCoalesceEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

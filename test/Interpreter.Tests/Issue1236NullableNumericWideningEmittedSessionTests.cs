@@ -22,7 +22,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((b == 11).ToString())
             """;
 
-        Assert.Equal("True\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((b == 11).ToString())
             """;
 
-        Assert.Equal("False\n", RunSubmission(source));
+        Assert.Equal($"False{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((a == b).ToString())
             """;
 
-        Assert.Equal("True\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((a == b).ToString())
             """;
 
-        Assert.Equal("False\n", RunSubmission(source));
+        Assert.Equal($"False{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((a + b).ToString())
             """;
 
-        Assert.Equal("16\n", RunSubmission(source));
+        Assert.Equal($"16{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine(((a + b) == nil).ToString())
             """;
 
-        Assert.Equal("True\n", RunSubmission(source));
+        Assert.Equal($"True{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.WriteLine((b + 11).ToString())
             """;
 
-        Assert.Equal("16\n", RunSubmission(source));
+        Assert.Equal($"16{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -117,6 +117,6 @@ public class Issue1236NullableNumericWideningEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -165,8 +165,8 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
         Console.WriteLine(explicitConstructed[0])
         """;
 
-    private const string IndexerMatrixOutput =
-        "11\n42\n17\n43\n19\n35\n44\n46\n47\n2\n1\n4\n";
+    private static readonly string IndexerMatrixOutput =
+        $"11{Environment.NewLine}42{Environment.NewLine}17{Environment.NewLine}43{Environment.NewLine}19{Environment.NewLine}35{Environment.NewLine}44{Environment.NewLine}46{Environment.NewLine}47{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}";
 
     [Fact]
     public void ChildHarness_ReportsKnownBadProgramAfterLoad()
@@ -213,7 +213,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             Console.WriteLine(value[0])
             """;
 
-        Assert.Equal("7\n9\n", CompileLoadAndRunChild("imported_base", source));
+        Assert.Equal($"7{Environment.NewLine}9{Environment.NewLine}", CompileLoadAndRunChild("imported_base", source));
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             Console.WriteLine(explicitValue[7])
             """;
 
-        Assert.Equal("12\n", CompileLoadAndRunChild("explicit_struct", source));
+        Assert.Equal($"12{Environment.NewLine}", CompileLoadAndRunChild("explicit_struct", source));
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             }
             """;
 
-        Assert.Equal("5\nnil\n", CompileLoadAndRunChild("nullable_sequence", source));
+        Assert.Equal($"5{Environment.NewLine}nil{Environment.NewLine}", CompileLoadAndRunChild("nullable_sequence", source));
     }
 
     [Fact]
@@ -285,7 +285,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             Console.WriteLine(label.Label)
             """;
 
-        Assert.Equal("hi\n", CompileLoadAndRunChild("computed_get_only", source));
+        Assert.Equal($"hi{Environment.NewLine}", CompileLoadAndRunChild("computed_get_only", source));
     }
 
     [Fact]
@@ -311,7 +311,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             Console.WriteLine(counter.Value)
             """;
 
-        Assert.Equal("42\n", CompileLoadAndRunChild("computed_get_set", source));
+        Assert.Equal($"42{Environment.NewLine}", CompileLoadAndRunChild("computed_get_set", source));
     }
 
     [Fact]
@@ -333,7 +333,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             Console.WriteLine(counter.Value)
             """;
 
-        Assert.Equal("42\n", CompileLoadAndRunChild("auto_property", source));
+        Assert.Equal($"42{Environment.NewLine}", CompileLoadAndRunChild("auto_property", source));
     }
 
     [Fact]
@@ -358,7 +358,7 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
             """;
 
         Assert.Equal(
-            "2\n1\n",
+            $"2{Environment.NewLine}1{Environment.NewLine}",
             CompileLoadAndRunChild(
                 "mismatched_indexer",
                 source,
@@ -481,5 +481,5 @@ public class Issue2915ImplicitInterfaceIndexerEmitTests
     }
 
     private static string Normalize(string value)
-        => value.Replace("\r\n", "\n", StringComparison.Ordinal);
+        => value.ReplaceLineEndings(Environment.NewLine);
 }

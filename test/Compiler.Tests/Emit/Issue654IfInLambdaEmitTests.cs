@@ -184,7 +184,7 @@ public class Issue654IfInLambdaEmitTests
             Console.SetOut(prevOut2);
         }
 
-        return (assembly, captured.ToString().Replace("\r\n", "\n"));
+        return (assembly, captured.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     #endregion

@@ -37,7 +37,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("100\n", output);
+        Assert.Equal($"100{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10,20,abc\n", output);
+        Assert.Equal($"10,20,abc{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("105\n", output);
+        Assert.Equal($"105{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Item:foo\n", output);
+        Assert.Equal($"Item:foo{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("default:7\n", output);
+        Assert.Equal($"default:7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n2\n", output);
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -265,7 +265,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42,0\n", output);
+        Assert.Equal($"42,0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -285,7 +285,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3.14\n", output);
+        Assert.Equal($"3.14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public class Issue640FieldInitializerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     // Test infrastructure — mirrors Issue524DefaultCtorEmitTests pattern.
@@ -402,7 +402,7 @@ public class Issue640FieldInitializerEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

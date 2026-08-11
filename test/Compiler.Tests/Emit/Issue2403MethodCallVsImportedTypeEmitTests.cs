@@ -47,7 +47,7 @@ public class Issue2403MethodCallVsImportedTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("user:abc\n", output);
+        Assert.Equal($"user:abc{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue2403MethodCallVsImportedTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("x-y\n", output);
+        Assert.Equal($"x-y{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue2403MethodCallVsImportedTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("tok\n", output);
+        Assert.Equal($"tok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public class Issue2403MethodCallVsImportedTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("16\n", output);
+        Assert.Equal($"16{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -204,7 +204,7 @@ public class Issue2403MethodCallVsImportedTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

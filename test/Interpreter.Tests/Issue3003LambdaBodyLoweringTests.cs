@@ -62,7 +62,7 @@ public class Issue3003LambdaBodyLoweringTests
             Console.WriteLine(countInfinite())
             """;
 
-        Assert.Equal("positive\n6\n3\n3\n", Evaluate(Source));
+        Assert.Equal($"positive{Environment.NewLine}6{Environment.NewLine}3{Environment.NewLine}3{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue3003LambdaBodyLoweringTests
             Console.WriteLine(signDelegate(0))
             """;
 
-        Assert.Equal("3\none\npositive\nzero\n", Evaluate(Source));
+        Assert.Equal($"3{Environment.NewLine}one{Environment.NewLine}positive{Environment.NewLine}zero{Environment.NewLine}", Evaluate(Source));
     }
 
     private static string Evaluate(string source)
@@ -112,6 +112,6 @@ public class Issue3003LambdaBodyLoweringTests
 
         Assert.Empty(result.Diagnostics);
 
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

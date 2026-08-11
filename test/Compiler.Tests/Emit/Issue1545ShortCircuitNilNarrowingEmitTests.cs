@@ -57,7 +57,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\nFalse\n", output);
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nTrue\nFalse\n", output);
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("False\nFalse\nTrue\n", output);
+        Assert.Equal($"False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -219,7 +219,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -278,7 +278,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n3\n", output);
+        Assert.Equal($"3{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     private static (int Exit, string Output) CompileOnly(string source)
@@ -397,7 +397,7 @@ public class Issue1545ShortCircuitNilNarrowingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -41,8 +41,8 @@ public class Issue3100FieldOffsetDriverTests
             var gsi = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
 
             var expected = layoutCase is "FullOverlap" or "PartialOverlap"
-                ? "2\n11\n22\n33\n44\n44"
-                : "1\n11\n22\n33\n33\n44";
+                ? $"2{Environment.NewLine}11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}44{Environment.NewLine}44"
+                : $"1{Environment.NewLine}11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}33{Environment.NewLine}44";
             Assert.Equal(expected, emitted);
             Assert.Equal(emitted, bare);
             Assert.Equal(emitted, gsi);
@@ -167,7 +167,7 @@ public class Issue3100FieldOffsetDriverTests
             var emitted = RunEmitted(source, CreateEmptyDirectory(root, "emit"));
             var gsi = RunGsi(source, CreateEmptyDirectory(root, "gsi"));
 
-            Assert.Equal("A\n11\nC\nD\n22\n44\nE\n55", emitted);
+            Assert.Equal($"A{Environment.NewLine}11{Environment.NewLine}C{Environment.NewLine}D{Environment.NewLine}22{Environment.NewLine}44{Environment.NewLine}E{Environment.NewLine}55", emitted);
             Assert.Equal(emitted, bare);
             Assert.Equal(emitted, gsi);
         }
@@ -358,8 +358,8 @@ public class Issue3100FieldOffsetDriverTests
     private static string NormalizeValues(string output) =>
         string.Join(
             "\n",
-            output.Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            output.ReplaceLineEndings(Environment.NewLine)
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
                 .Where(line => line != "Success."));
 
     private static string CreateEmptyDirectory(string name)

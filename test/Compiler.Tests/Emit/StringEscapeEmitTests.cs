@@ -26,7 +26,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s.Length)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s)
             """;
 
-        Assert.Equal("a\tb\n", CompileAndRun(source));
+        Assert.Equal($"a\tb{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s)
             """;
 
-        Assert.Equal("\u00e9\n", CompileAndRun(source));
+        Assert.Equal($"\u00e9{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s.Length)
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s)
             """;
 
-        Assert.Equal("say \"hi\"\n", CompileAndRun(source));
+        Assert.Equal($"say \"hi\"{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s)
             """;
 
-        Assert.Equal("A\n", CompileAndRun(source));
+        Assert.Equal($"A{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class StringEscapeEmitTests
             Console.WriteLine(s.Length)
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class StringEscapeEmitTests
             """;
 
         // "val:\t" = 5 chars + "42" = 2 chars + "\n" = 1 char = 8
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -186,7 +186,7 @@ public class StringEscapeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

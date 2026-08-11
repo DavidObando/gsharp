@@ -94,7 +94,7 @@ public sealed class Issue2976FunctionLiteralIteratorEmittedSessionTests
             Console.SetOut(previousOut);
         }
 
-        Assert.Equal(expectedOutput, writer.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(expectedOutput, writer.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     private static object[] Case(string source, string expectedOutput)

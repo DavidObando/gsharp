@@ -45,7 +45,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5000000000\n3\n", output);
+        Assert.Equal($"5000000000{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2.5\n2\n", output);
+        Assert.Equal($"2.5{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2.5\n9\n", output);
+        Assert.Equal($"2.5{Environment.NewLine}9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n42\n", output);
+        Assert.Equal($"7{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n3\n", output);
+        Assert.Equal($"11{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     // N1: reviewer-flagged combos where cs2gs emits `left ?? rightAtResultType`
@@ -144,7 +144,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2.5\n3\n", output);
+        Assert.Equal($"2.5{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5000000000\n4000000000\n", output);
+        Assert.Equal($"5000000000{Environment.NewLine}4000000000{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2.5\n7\n", output);
+        Assert.Equal($"2.5{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     // N3 / issue #914: a constant signed/unsigned mismatch (`uint? x ?? 0`) —
@@ -207,7 +207,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n5\n", output);
+        Assert.Equal($"0{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -284,7 +284,7 @@ public class Issue1725NullCoalescingNumericWideningEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

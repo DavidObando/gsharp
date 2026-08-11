@@ -46,7 +46,7 @@ public class Issue1007GenericInterfaceMethodEmitTests
             Console.WriteLine(a.Echo[string]("hi"))
             """;
 
-        Assert.Equal("42\nhi\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue1007GenericInterfaceMethodEmitTests
             Console.WriteLine(a.Pair[int32, string](1, "ok"))
             """;
 
-        Assert.Equal("ok\n", CompileAndRun(source));
+        Assert.Equal($"ok{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue1007GenericInterfaceMethodEmitTests
             Console.WriteLine(a.Make[int32](7))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue1007GenericInterfaceMethodEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -225,7 +225,7 @@ public class Issue1007GenericInterfaceMethodEmitTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

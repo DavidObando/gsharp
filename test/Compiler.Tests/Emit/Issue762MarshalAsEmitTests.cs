@@ -378,7 +378,7 @@ func native_x(@MarshalAs(UnmanagedType.LPWStr) s string) void;
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n22\n33\n44\n", output);
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}33{Environment.NewLine}44{Environment.NewLine}", output);
     }
 
     private static void VerifyMarshalAsBlob(string source, string functionName, string parameterName, byte expectedFirstBlobByte, int expectedBlobLength)
@@ -496,7 +496,7 @@ func native_x(@MarshalAs(UnmanagedType.LPWStr) s string) void;
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

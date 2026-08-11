@@ -67,7 +67,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use("hi")) }
             """;
 
-        Assert.Equal("False\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -90,7 +90,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             }
             """;
 
-        Assert.Equal("False\n", CompileAndRun(source));
+        Assert.Equal($"False{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -117,7 +117,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use()) }
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -144,7 +144,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use()) }
             """;
 
-        Assert.Equal("11\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -165,7 +165,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use(3)) }
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -189,7 +189,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use("x")) }
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -217,7 +217,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             func Main() { Console.WriteLine(Use()) }
             """;
 
-        Assert.Equal("2\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}", CompileAndRun(source));
     }
 
     /// <summary>
@@ -264,7 +264,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
             Console.WriteLine(arr.HeadOr1548(7))
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -341,7 +341,7 @@ public class Issue1548ExtensionReceiverSubtypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

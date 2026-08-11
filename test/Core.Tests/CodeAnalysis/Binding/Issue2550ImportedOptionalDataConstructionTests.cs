@@ -186,6 +186,6 @@ public class Issue2550ImportedOptionalDataConstructionTests
     }
 
     private static string[] Lines(string output) =>
-        output.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        output.ReplaceLineEndings(Environment.NewLine)
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 }

@@ -42,7 +42,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n", output);
+        Assert.Equal($"15{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n42\n", output);
+        Assert.Equal($"0{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("106\n", output);
+        Assert.Equal($"106{Environment.NewLine}", output);
     }
 
     // ADR-0101 / issue #799: generic variadic — mirrors `Sequences.Of`.
@@ -110,7 +110,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n1\n4\n", output);
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n20\n", output);
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     // ADR-0101 / issue #799 — cross-language: a C# / F# consumer must see a
@@ -300,7 +300,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("15\n60\n0\n", output);
+        Assert.Equal($"15{Environment.NewLine}60{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -329,7 +329,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n3\n20\n0\n", output);
+        Assert.Equal($"4{Environment.NewLine}3{Environment.NewLine}20{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -358,7 +358,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n10\n0\n", output);
+        Assert.Equal($"10{Environment.NewLine}10{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -386,7 +386,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n2\n0\n", output);
+        Assert.Equal($"3{Environment.NewLine}2{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -408,7 +408,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n4\n", output);
+        Assert.Equal($"3{Environment.NewLine}4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -438,7 +438,7 @@ public class VariadicEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n10\n300\n0\n", output);
+        Assert.Equal($"10{Environment.NewLine}10{Environment.NewLine}300{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     // Cross-language: assert every new site emits [ParamArrayAttribute] on
@@ -665,7 +665,7 @@ public class VariadicEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -68,7 +68,7 @@ public sealed class Issue2672DelegateCtorEmitTests
 
         Emit(source, outputPath, fixturePath);
         IlVerifier.Verify(outputPath, additionalReferences: new[] { fixturePath });
-        Assert.Equal("1\npost\n1\nsend\nString\n", Run(outputPath, fixturePath));
+        Assert.Equal($"1{Environment.NewLine}post{Environment.NewLine}1{Environment.NewLine}send{Environment.NewLine}String{Environment.NewLine}", Run(outputPath, fixturePath));
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed class Issue2672DelegateCtorEmitTests
                 Console.SetOut(previous);
             }
 
-            Assert.Equal("2\n", output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            Assert.Equal($"2{Environment.NewLine}", output.ToString().ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -249,7 +249,7 @@ public sealed class Issue2672DelegateCtorEmitTests
                 Console.SetOut(previous);
             }
 
-            return output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+            return output.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -71,7 +71,7 @@ public sealed class Issue2670PropertySetterStackEmitTests
             """;
 
         using var result = Compile(source);
-        Assert.Equal("1\n1\n", Run(result.OutputPath));
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}", Run(result.OutputPath));
 
         var loadContext = new AssemblyLoadContext("Issue2670-" + Guid.NewGuid(), isCollectible: true);
         try
@@ -176,7 +176,7 @@ public sealed class Issue2670PropertySetterStackEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<string> TrustedPlatformAssemblies()

@@ -52,7 +52,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("100\n", output);
+        Assert.Equal($"100{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue2069NamedDelegateUsageEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("50\n", output);
+        Assert.Equal($"50{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -207,7 +207,7 @@ public class Issue2069NamedDelegateUsageEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

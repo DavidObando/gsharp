@@ -40,7 +40,7 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.WriteLine(arr.MyFirst(""))
             """;
 
-        Assert.Equal("alpha\n", RunSubmission(source));
+        Assert.Equal($"alpha{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.WriteLine(arr.MyCount(""))
             """;
 
-        Assert.Equal("4\n", RunSubmission(source));
+        Assert.Equal($"4{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.WriteLine(arr.FirstOr(""))
             """;
 
-        Assert.Equal("x\n", RunSubmission(source));
+        Assert.Equal($"x{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.WriteLine(arr.Head(0))
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.WriteLine(arr.MyFirst(""))
             """;
 
-        Assert.Equal("hello\n", RunSubmission(source));
+        Assert.Equal($"hello{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -141,6 +141,6 @@ public class Issue774OpenReceiverIterationEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

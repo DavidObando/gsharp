@@ -95,7 +95,7 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
             EmitCSharpAssembly(consumer, "Issue2502Consumer", ConsumerSource, OutputKind.ConsoleApplication, library);
 
             Assert.Equal(
-                "field!?|group|int|9\ncs-prop\ncs-prop\ncs-method\ncs-group\nevent-ok\n",
+                $"field!?|group|int|9{Environment.NewLine}cs-prop{Environment.NewLine}cs-prop{Environment.NewLine}cs-method{Environment.NewLine}cs-group{Environment.NewLine}event-ok{Environment.NewLine}",
                 Run(consumer));
         }
         finally
@@ -153,7 +153,7 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
 
             var executable = CompileGSharp(directory, "Issue2502Imported", Source, "exe", importedBase);
             IlVerifier.Verify(executable, additionalReferences: new[] { importedBase });
-            Assert.Equal("field\nprop\nmethod\nevent\n12\n", Run(executable));
+            Assert.Equal($"field{Environment.NewLine}prop{Environment.NewLine}method{Environment.NewLine}event{Environment.NewLine}12{Environment.NewLine}", Run(executable));
         }
         finally
         {
@@ -215,7 +215,7 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
                 baseLibrary,
                 derivedLibrary);
             IlVerifier.Verify(executable, additionalReferences: new[] { baseLibrary, derivedLibrary });
-            Assert.Equal("True\n", Run(executable));
+            Assert.Equal($"True{Environment.NewLine}", Run(executable));
         }
         finally
         {
@@ -312,7 +312,7 @@ public sealed class Issue2502InheritedStaticMembersEmitTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string CreateTestDirectory()

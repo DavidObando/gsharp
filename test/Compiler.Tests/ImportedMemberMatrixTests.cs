@@ -87,7 +87,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "401\n402\n121\n122\n",
+            $"401{Environment.NewLine}402{Environment.NewLine}121{Environment.NewLine}122{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -115,7 +115,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "property\nfield\nobject-property\nobject-field\n",
+            $"property{Environment.NewLine}field{Environment.NewLine}object-property{Environment.NewLine}object-field{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -143,7 +143,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "501\n502\n121\n122\n",
+            $"501{Environment.NewLine}502{Environment.NewLine}121{Environment.NewLine}122{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue3076CsSource, source, "Issue3076.CSharp"));
     }
 
@@ -161,7 +161,7 @@ public class ImportedMemberMatrixTests
             var (exitCode, output) = RunCompiler(new[] { sourcePath });
 
             Assert.Equal(0, exitCode);
-            Assert.Equal(expected + "Success.\n", output.Replace("\r\n", "\n"));
+            Assert.Equal(expected + $"Success.{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -212,7 +212,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(thing.Equals(thing))
             """;
 
-        Assert.Equal("42\nok\n7\nthing\nTrue\nTrue\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
+        Assert.Equal($"42{Environment.NewLine}ok{Environment.NewLine}7{Environment.NewLine}thing{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(enumerable.OrderBy(func(i Item) int32 { return i.Rank }).Count())
             """;
 
-        Assert.Equal("False\nTrue\n2\n2\n2\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
+        Assert.Equal($"False{Environment.NewLine}True{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
     }
 
     [Fact]
@@ -289,7 +289,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(pt2.Y)
             """;
 
-        Assert.Equal("ana\n1\nana\n2\n3\n4\n3\n9\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
+        Assert.Equal($"ana{Environment.NewLine}1{Environment.NewLine}ana{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}3{Environment.NewLine}9{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedMemberMatrix.CSharp"));
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(xs.OrderBy(func(i SourceItem) string { return i.Name }).Count())
             """;
 
-        Assert.Equal("a\nb\na\n2\n2\n", CompileAndRun(source));
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}a{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -421,7 +421,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "ready\n22\nok:2:12.5:False\n123\nTrue\n2\nyes\n3:4\n3:4:set\n",
+            $"ready{Environment.NewLine}22{Environment.NewLine}ok:2:12.5:False{Environment.NewLine}123{Environment.NewLine}True{Environment.NewLine}2{Environment.NewLine}yes{Environment.NewLine}3:4{Environment.NewLine}3:4:set{Environment.NewLine}",
             CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedOptional.CSharp"));
     }
 
@@ -494,7 +494,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(Api.Invoke((in value int32) -> value == 100))
             """;
 
-        Assert.Equal("True\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedInDelegate.CSharp"));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedInDelegate.CSharp"));
     }
 
     [Fact]
@@ -568,7 +568,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(Api.Kind((value int32) -> { }))
             """;
 
-        Assert.Equal("42\n42\nref\nvalue\n", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedRefOutDelegates.CSharp"));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}ref{Environment.NewLine}value{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "ImportedRefOutDelegates.CSharp"));
     }
 
     [Fact]
@@ -628,7 +628,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(Test[int32](42))
             """;
 
-        Assert.Equal("42\n42\nTrue\n", CompileAndRunWithSiblingCs(
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileAndRunWithSiblingCs(
             csSource,
             gsSource,
             "ImportedGenericRefDelegates.CSharp"));
@@ -770,7 +770,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(genericInPredicate(in value))
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -812,7 +812,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(genericInPredicate(in value))
             """;
 
-        Assert.Equal("42\n42\nTrue\n42\n42\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -862,7 +862,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "42\n42\nTrue\n42\nref\n",
+            $"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}42{Environment.NewLine}ref{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 source,
@@ -924,7 +924,7 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            "42\n42\nTrue\n42\n42\nTrue\n42\n",
+            $"42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}True{Environment.NewLine}42{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 source,
@@ -1086,7 +1086,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(callback())
             """;
 
-        Assert.Equal("yes\n", CompileAndRun(source));
+        Assert.Equal($"yes{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -1280,7 +1280,7 @@ public class ImportedMemberMatrixTests
         var stderr = proc.StandardError.ReadToEnd();
         Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(proc.ExitCode == 0, $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static List<string> CompileExpectingErrors(string source, IReadOnlyCollection<string> references, string workDir)
@@ -1291,7 +1291,7 @@ public class ImportedMemberMatrixTests
 
         var (exitCode, diagnostics) = RunCompiler(GscArgs(outPath, "exe", references, srcPath));
         Assert.True(exitCode != 0, "expected gsc to report errors but it succeeded");
-        return diagnostics.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+        return diagnostics.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).ToList();
     }
 
     private static List<string> GetDiagnosticIds(IEnumerable<string> diagnostics)

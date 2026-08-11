@@ -59,7 +59,7 @@ public class Issue1449DelegateCtorOverTypeBuilderEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("handled\n", output);
+        Assert.Equal($"handled{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue1449DelegateCtorOverTypeBuilderEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n5\n", output);
+        Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -183,7 +183,7 @@ public class Issue1449DelegateCtorOverTypeBuilderEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

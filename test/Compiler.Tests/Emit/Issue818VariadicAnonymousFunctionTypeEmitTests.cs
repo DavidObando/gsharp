@@ -31,7 +31,7 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("4\n", output);
+        Assert.Equal($"4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n0\n", output);
+        Assert.Equal($"5{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -140,7 +140,7 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

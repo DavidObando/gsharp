@@ -79,7 +79,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n7\n19\n42\n100\n", output);
+        Assert.Equal($"3{Environment.NewLine}7{Environment.NewLine}19{Environment.NewLine}42{Environment.NewLine}100{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n3\n5\n", output);
+        Assert.Equal($"1{Environment.NewLine}3{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -361,7 +361,7 @@ public class Issue761PInvokeFunctionPointerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

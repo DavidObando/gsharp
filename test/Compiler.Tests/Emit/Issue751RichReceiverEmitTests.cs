@@ -39,7 +39,7 @@ public class Issue751RichReceiverEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\nnope\n", output);
+        Assert.Equal($"hi{Environment.NewLine}nope{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue751RichReceiverEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42:hi\n", output);
+        Assert.Equal($"42:hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue751RichReceiverEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n0\n", output);
+        Assert.Equal($"10{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue751RichReceiverEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -179,7 +179,7 @@ public class Issue751RichReceiverEmitTests
                 proc.ExitCode == 0,
                 $"sample exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

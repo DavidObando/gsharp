@@ -66,7 +66,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("example.com\n", output);
+        Assert.Equal($"example.com{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\nb\nc\n", output);
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}c{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\nb!\nc\n", output);
+        Assert.Equal($"a{Environment.NewLine}b!{Environment.NewLine}c{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("before:a\nbefore:c\n", output);
+        Assert.Equal($"before:a{Environment.NewLine}before:c{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a\nb\nfallthrough\n", output);
+        Assert.Equal($"a{Environment.NewLine}b{Environment.NewLine}fallthrough{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("one\ntwo\ndefault\n", output);
+        Assert.Equal($"one{Environment.NewLine}two{Environment.NewLine}default{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -308,7 +308,7 @@ public class Issue2283SwitchAllTerminalArmsEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

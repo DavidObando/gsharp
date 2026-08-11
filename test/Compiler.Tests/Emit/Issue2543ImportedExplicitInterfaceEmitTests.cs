@@ -84,7 +84,7 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
             """;
 
         using var artifacts = Compile(source, "exe");
-        Assert.Equal("explicit:ok\nimported\n12\n1\nvalue:generic\n", Run(artifacts.OutputPath));
+        Assert.Equal($"explicit:ok{Environment.NewLine}imported{Environment.NewLine}12{Environment.NewLine}1{Environment.NewLine}value:generic{Environment.NewLine}", Run(artifacts.OutputPath));
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: new[] { artifacts.ContractsPath });
 
         using var stream = File.OpenRead(artifacts.OutputPath);
@@ -209,7 +209,7 @@ public sealed class Issue2543ImportedExplicitInterfaceEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private sealed class CompilationArtifacts : IDisposable

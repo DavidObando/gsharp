@@ -184,7 +184,7 @@ public class Issue2392TopLevelProgramPackageHolderEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(proc.ExitCode == 0, $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            Assert.Equal("hello world\n42\n", stdout.Replace("\r\n", "\n"));
+            Assert.Equal($"hello world{Environment.NewLine}42{Environment.NewLine}", stdout.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

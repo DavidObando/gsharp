@@ -48,7 +48,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n5\nFalse\n0\n", output);
+        Assert.Equal($"True{Environment.NewLine}5{Environment.NewLine}False{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("40\n", output);
+        Assert.Equal($"40{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nhello\n5\n", output);
+        Assert.Equal($"True{Environment.NewLine}hello{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n7\n", output);
+        Assert.Equal($"True{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n42\n", output);
+        Assert.Equal($"True{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class Issue977BclOutVarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -213,7 +213,7 @@ public class Issue977BclOutVarEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

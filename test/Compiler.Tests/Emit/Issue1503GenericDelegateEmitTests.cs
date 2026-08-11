@@ -49,7 +49,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Cancellation\n", output);
+        Assert.Equal($"Cancellation{Environment.NewLine}", output);
     }
 
     // (a') construct the same generic delegate from a METHOD GROUP (not a
@@ -97,7 +97,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     // (b) a multi-type-param generic delegate (Converter[TIn, TOut]) — the type
@@ -125,7 +125,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("n=42\n5\n", output);
+        Assert.Equal($"n=42{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     // (c) the type parameter is used in a COMPOSITE parameter/return type
@@ -155,7 +155,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\na\n", output);
+        Assert.Equal($"3{Environment.NewLine}a{Environment.NewLine}", output);
     }
 
     // (d) using the generic delegate as a FIELD, PARAMETER, and LOCAL type.
@@ -200,7 +200,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n7\n42\n", output);
+        Assert.Equal($"42{Environment.NewLine}7{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     // (e) regression: a NON-generic named delegate still emits and behaves
@@ -229,7 +229,7 @@ public class Issue1503GenericDelegateEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\nTrue\n", output);
+        Assert.Equal($"42{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     // Metadata: the generic delegate emits a verifiable generic TypeDef
@@ -422,7 +422,7 @@ public class Issue1503GenericDelegateEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

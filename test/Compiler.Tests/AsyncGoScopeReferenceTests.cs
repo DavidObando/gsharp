@@ -133,8 +133,8 @@ Console.WriteLine(""done"")
                 $"sample exited {proc.ExitCode} (invalid IL would surface as InvalidProgramException)\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
             var lines = stdout
-                .Replace("\r\n", "\n")
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+.ReplaceLineEndings(Environment.NewLine)
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
             // Both spawned async tasks must have run to completion (structured join)...
             Assert.Contains("read=payload", lines);

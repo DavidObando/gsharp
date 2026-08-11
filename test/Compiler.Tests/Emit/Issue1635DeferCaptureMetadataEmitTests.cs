@@ -47,7 +47,7 @@ public class Issue1635DeferCaptureMetadataEmitTests
             """;
 
         var output = CompileVerifyAndRun(source);
-        Assert.Equal("body\ndone\n", output);
+        Assert.Equal($"body{Environment.NewLine}done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1635DeferCaptureMetadataEmitTests
             """;
 
         var output = CompileVerifyAndRun(source);
-        Assert.Equal("body\n1\n2\n3\n", output);
+        Assert.Equal($"body{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue1635DeferCaptureMetadataEmitTests
             """;
 
         var output = CompileVerifyAndRun(source);
-        Assert.Equal("body\n7\n", output);
+        Assert.Equal($"body{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     private static string CompileVerifyAndRun(string source)
@@ -157,7 +157,7 @@ public class Issue1635DeferCaptureMetadataEmitTests
             var stderr = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
             Assert.True(proc.ExitCode == 0, $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -65,7 +65,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             {{entryPointEnd}}
             """;
 
-        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Theory]
@@ -114,7 +114,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             }
             """;
 
-        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Theory]
@@ -164,7 +164,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             }
             """;
 
-        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Theory]
@@ -227,7 +227,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             }
             """;
 
-        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Theory]
@@ -271,7 +271,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             }
             """;
 
-        Assert.Equal($"{expected}\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Fact]
@@ -313,7 +313,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             }
             """;
 
-        Assert.Equal("55\n66\n", CompileAndRun(library, consumer, packageName));
+        Assert.Equal($"55{Environment.NewLine}66{Environment.NewLine}", CompileAndRun(library, consumer, packageName));
     }
 
     [Fact]
@@ -449,7 +449,7 @@ public sealed class Issue2857ExplicitGenericLambdaProjectReferenceEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

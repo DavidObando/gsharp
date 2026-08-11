@@ -29,7 +29,7 @@ public class CoverageMatrixGoldenTests
         var generated = BuildSnapshot();
         var goldenPath = LocateGolden();
         Assert.True(File.Exists(goldenPath), $"missing golden at {goldenPath}");
-        var golden = File.ReadAllText(goldenPath).Replace("\r\n", "\n");
+        var golden = File.ReadAllText(goldenPath).ReplaceLineEndings(Environment.NewLine);
 
         if (!string.Equals(generated, golden, StringComparison.Ordinal))
         {
@@ -81,7 +81,7 @@ public class CoverageMatrixGoldenTests
             sb.AppendLine(line);
         }
 
-        return sb.ToString().Replace("\r\n", "\n");
+        return sb.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string[] DescribeBinaryOperators()

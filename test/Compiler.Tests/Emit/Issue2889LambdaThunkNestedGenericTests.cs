@@ -182,8 +182,8 @@ public class Issue2889LambdaThunkNestedGenericTests
             """;
 
         Assert.Equal(
-            "10\n10\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n"
-            + "23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n",
+            $"10{Environment.NewLine}10{Environment.NewLine}12{Environment.NewLine}13{Environment.NewLine}14{Environment.NewLine}15{Environment.NewLine}16{Environment.NewLine}17{Environment.NewLine}18{Environment.NewLine}19{Environment.NewLine}20{Environment.NewLine}21{Environment.NewLine}22{Environment.NewLine}"
+            + $"23{Environment.NewLine}24{Environment.NewLine}25{Environment.NewLine}26{Environment.NewLine}27{Environment.NewLine}28{Environment.NewLine}29{Environment.NewLine}30{Environment.NewLine}31{Environment.NewLine}32{Environment.NewLine}",
             CompileAndRun(
                 source,
                 expectedSourceTypeName: "i2889imported.Src",
@@ -269,7 +269,7 @@ public class Issue2889LambdaThunkNestedGenericTests
             """;
 
         Assert.Equal(
-            "70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n",
+            $"70{Environment.NewLine}71{Environment.NewLine}72{Environment.NewLine}73{Environment.NewLine}74{Environment.NewLine}75{Environment.NewLine}76{Environment.NewLine}77{Environment.NewLine}78{Environment.NewLine}79{Environment.NewLine}",
             CompileAndRun(
                 consumer,
                 expectedSourceTypeName: "i2889nameduse.Src",
@@ -428,8 +428,8 @@ public class Issue2889LambdaThunkNestedGenericTests
             """;
 
         Assert.Equal(
-            "30\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n"
-            + "50\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n",
+            $"30{Environment.NewLine}32{Environment.NewLine}33{Environment.NewLine}34{Environment.NewLine}35{Environment.NewLine}36{Environment.NewLine}37{Environment.NewLine}38{Environment.NewLine}39{Environment.NewLine}40{Environment.NewLine}41{Environment.NewLine}42{Environment.NewLine}"
+            + $"50{Environment.NewLine}52{Environment.NewLine}53{Environment.NewLine}54{Environment.NewLine}55{Environment.NewLine}56{Environment.NewLine}57{Environment.NewLine}58{Environment.NewLine}59{Environment.NewLine}60{Environment.NewLine}61{Environment.NewLine}62{Environment.NewLine}63{Environment.NewLine}",
             CompileAndRun(source, expectedSourceTypeName: "i2889controls.Src"));
     }
 
@@ -625,7 +625,7 @@ public class Issue2889LambdaThunkNestedGenericTests
             Assert.True(
                 process.ExitCode == 0,
                 $"dotnet exec exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -60,7 +60,7 @@ public class Issue1124GenericUninferableOverloadEmitTests
             Console.WriteLine(c.runImplicit(Box()))
             """;
 
-        Assert.Equal("99\n", CompileAndRun(source));
+        Assert.Equal($"99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public class Issue1124GenericUninferableOverloadEmitTests
             Console.WriteLine(c.runExplicit(Box()))
             """;
 
-        Assert.Equal("99\n-1\n", CompileAndRun(source));
+        Assert.Equal($"99{Environment.NewLine}-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class Issue1124GenericUninferableOverloadEmitTests
             Console.WriteLine(C().Run(Formatter(), "x"))
             """;
 
-        Assert.Equal("object\n", CompileAndRun(source));
+        Assert.Equal($"object{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -198,7 +198,7 @@ public class Issue1124GenericUninferableOverloadEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

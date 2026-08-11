@@ -73,7 +73,7 @@ public class Issue3030LocalFunctionDeclarationEmittedOracleTests
 
         Assert.Empty(result.Diagnostics);
 
-        Assert.Equal(expectedOutput, result.Output.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Equal(expectedOutput, result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 
     private static object[] Case(string source, string expectedOutput)

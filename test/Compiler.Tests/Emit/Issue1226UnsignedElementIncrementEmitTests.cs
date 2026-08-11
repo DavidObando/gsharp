@@ -36,7 +36,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[1]))
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[2]))
             """;
 
-        Assert.Equal("29\n", CompileAndRun(source));
+        Assert.Equal($"29{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[0]))
             """;
 
-        Assert.Equal("11\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[3]))
             """;
 
-        Assert.Equal("39\n", CompileAndRun(source));
+        Assert.Equal($"39{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[0]))
             """;
 
-        Assert.Equal("1001\n", CompileAndRun(source));
+        Assert.Equal($"1001{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[1]))
             """;
 
-        Assert.Equal("200001\n", CompileAndRun(source));
+        Assert.Equal($"200001{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
             Console.WriteLine(int32(data[0]))
             """;
 
-        Assert.Equal("-4\n", CompileAndRun(source));
+        Assert.Equal($"-4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class Issue1226UnsignedElementIncrementEmitTests
 
         // First counter: last byte 255 -> 0 with carry into byte 14 (0 -> 1).
         // Second counter: bytes 14,15 both 255 -> both 0, carry into byte 13.
-        Assert.Equal("0\n1\n0\n0\n1\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -238,6 +238,6 @@ public class Issue1226UnsignedElementIncrementEmitTests
             proc.ExitCode == 0,
             $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

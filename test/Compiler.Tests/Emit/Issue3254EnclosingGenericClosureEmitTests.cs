@@ -225,7 +225,7 @@ public class Issue3254EnclosingGenericClosureEmitTests
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
             var stderrTask = process.StandardError.ReadToEndAsync();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
-            var stdout = stdoutTask.GetAwaiter().GetResult().Replace("\r\n", "\n", StringComparison.Ordinal);
+            var stdout = stdoutTask.GetAwaiter().GetResult().ReplaceLineEndings(Environment.NewLine);
             var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(
                 process.ExitCode == 0,

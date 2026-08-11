@@ -418,8 +418,8 @@ public class Issue3140OutParameterWriteBackDriverTests
     private static string Normalize(string output, bool stripCompilerSuccess) =>
         string.Join(
             "\n",
-            output.Replace("\r\n", "\n", StringComparison.Ordinal)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            output.ReplaceLineEndings(Environment.NewLine)
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
                 .Where(line => !stripCompilerSuccess || line != "Success."));
 
     private static string CreateEmptyDirectory(string name)
@@ -455,7 +455,7 @@ public class Issue3140OutParameterWriteBackDriverTests
         var prefix = new string(' ', spaces);
         return string.Join(
             Environment.NewLine,
-            value.Split('\n').Select(line => prefix + line));
+            value.Split(Environment.NewLine).Select(line => prefix + line));
     }
 
     private sealed record ShapeSpec(

@@ -121,7 +121,9 @@ public class Issue3119ImportedConstantCorpusTests
 
             AssertSucceeded(result, "cross-assembly gsc emit");
             CopyRuntimeDependency(fixturePath, root);
-            Assert.Equal(expectedOutput, RunAssembly(root, assemblyPath));
+            Assert.Equal(
+                expectedOutput.Replace("\n", Environment.NewLine, StringComparison.Ordinal),
+                RunAssembly(root, assemblyPath));
         }
         finally
         {
@@ -210,7 +212,10 @@ public class Issue3119ImportedConstantCorpusTests
     [MemberData(nameof(RuntimeDrivers))]
     public void RuntimeImportedConstants_PreserveExactValuesAcrossDrivers(string driver)
     {
-        const string Expected = "2147483647\n-2147483648\n3.141592653589793\n";
+    string Expected =
+        $"2147483647{Environment.NewLine}" +
+        $"-2147483648{Environment.NewLine}" +
+        $"3.141592653589793{Environment.NewLine}";
         var root = CreateEmptyTestDirectory();
         try
         {
@@ -366,10 +371,10 @@ public class Issue3119ImportedConstantCorpusTests
 
     private static string ProgramOutput(DriverResult result)
     {
-        const string Success = "Success.\n";
+        var success = $"Success.{Environment.NewLine}";
         var output = Normalize(result.StandardOutput);
-        return output.EndsWith(Success, StringComparison.Ordinal)
-            ? output[..^Success.Length]
+        return output.EndsWith(success, StringComparison.Ordinal)
+            ? output[..^success.Length]
             : output;
     }
 
@@ -415,7 +420,7 @@ public class Issue3119ImportedConstantCorpusTests
     }
 
     private static string Normalize(string text)
-        => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        => text.ReplaceLineEndings(Environment.NewLine);
 
     private sealed record DriverResult(int ExitCode, string StandardOutput, string StandardError)
     {

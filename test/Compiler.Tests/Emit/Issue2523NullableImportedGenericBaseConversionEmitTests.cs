@@ -75,7 +75,7 @@ public sealed class Issue2523NullableImportedGenericBaseConversionEmitTests
 
             var references = TrustedPlatformAssemblies().Append(fixturePath).ToArray();
             IlVerifier.Verify(outputPath, additionalReferences: references);
-            Assert.Equal("3\n2\n", Run(outputPath));
+            Assert.Equal($"3{Environment.NewLine}2{Environment.NewLine}", Run(outputPath));
 
             var fixture = Assembly.LoadFrom(fixturePath);
             var emitted = Assembly.LoadFrom(outputPath);
@@ -248,7 +248,7 @@ public sealed class Issue2523NullableImportedGenericBaseConversionEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"dotnet exec failed ({process.ExitCode}):\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string NewDirectory()

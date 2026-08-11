@@ -61,7 +61,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("21\n", output);
+        Assert.Equal($"21{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("110\n", output);
+        Assert.Equal($"110{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -228,7 +228,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("33\n", output);
+        Assert.Equal($"33{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -323,7 +323,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n22\n", output);
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -400,7 +400,7 @@ public class Issue1559GenericStaticFieldWriteEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

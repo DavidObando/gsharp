@@ -68,7 +68,7 @@ public class Issue2390NullableSameCompilationEnumBoxingEmitTests
             """;
 
         Assert.Equal(
-            "Color2390\nPoint2390\nColor2390\nColor2390\n\n0\nBlue\n",
+            $"Color2390{Environment.NewLine}Point2390{Environment.NewLine}Color2390{Environment.NewLine}Color2390{Environment.NewLine}{Environment.NewLine}0{Environment.NewLine}Blue{Environment.NewLine}",
             CompileAndRun(source));
     }
 
@@ -107,7 +107,7 @@ public class Issue2390NullableSameCompilationEnumBoxingEmitTests
         var reference = CompileCsReference(csSource, "Issue2390Ref");
         try
         {
-            Assert.Equal("Blue\n", CompileAndRun(source, reference));
+            Assert.Equal($"Blue{Environment.NewLine}", CompileAndRun(source, reference));
         }
         finally
         {
@@ -209,7 +209,7 @@ public class Issue2390NullableSameCompilationEnumBoxingEmitTests
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

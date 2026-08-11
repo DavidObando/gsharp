@@ -41,7 +41,7 @@ public class Issue568UsingLetUserIDisposableTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("inside\ndisposed\n", output);
+        Assert.Equal($"inside{Environment.NewLine}disposed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue568UsingLetUserIDisposableTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("used\nbase-dispose\n", output);
+        Assert.Equal($"used{Environment.NewLine}base-dispose{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -111,7 +111,7 @@ public class Issue568UsingLetUserIDisposableTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("used\n", output);
+        Assert.Equal($"used{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue568UsingLetUserIDisposableTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("aused\n", output);
+        Assert.Equal($"aused{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -202,7 +202,7 @@ public class Issue568UsingLetUserIDisposableTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -246,7 +246,7 @@ public class Issue568UsingLetUserIDisposableTests
 
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

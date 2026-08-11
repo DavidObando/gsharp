@@ -62,7 +62,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+B-OB\n", CompileAndRun(source));
+        Assert.Equal($"+B-OB{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+B-OB\n", CompileAndRun(source));
+        Assert.Equal($"+B-OB{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("CF\n", CompileAndRun(source));
+        Assert.Equal($"CF{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("E|+BE-\n", CompileAndRun(source));
+        Assert.Equal($"E|+BE-{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -273,7 +273,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("E|+BE-\n", CompileAndRun(source));
+        Assert.Equal($"E|+BE-{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             run().GetAwaiter().GetResult()
             """;
 
-        Assert.Equal("count=0\n", CompileAndRun(source));
+        Assert.Equal($"count=0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -348,7 +348,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("\n", CompileAndRun(source));
+        Assert.Equal(Environment.NewLine, CompileAndRun(source));
     }
 
     [Fact]
@@ -392,7 +392,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+A+B-B-A\n", CompileAndRun(source));
+        Assert.Equal($"+A+B-B-A{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -435,7 +435,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+A-A\n", CompileAndRun(source));
+        Assert.Equal($"+A-A{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -485,7 +485,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+-|+-!\n", CompileAndRun(source));
+        Assert.Equal($"+-|+-!{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -532,7 +532,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(trace)
             """;
 
-        Assert.Equal("+-\n", CompileAndRun(source));
+        Assert.Equal($"+-{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -564,7 +564,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Console.WriteLine(value().ToString() + ":" + trace)
             """;
 
-        Assert.Equal("42:+A+B-B-A\n", CompileAndRun(source));
+        Assert.Equal($"42:+A+B-B-A{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -625,7 +625,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -673,7 +673,7 @@ public class Issue2787IteratorUsingEarlyExitEmitTests
 
             Assert.NotEqual(0, exitCode);
             return (compileOut.ToString() + compileErr.ToString())
-                .Split('\n')
+                .Split(Environment.NewLine)
                 .Where(line => !string.IsNullOrWhiteSpace(line))
                 .ToList();
         }

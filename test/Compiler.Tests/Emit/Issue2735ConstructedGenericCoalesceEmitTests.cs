@@ -46,9 +46,9 @@ public sealed class Issue2735ConstructedGenericCoalesceEmitTests
 
         using var result = Compile(source, "exe");
         Assert.Equal(
-            "Microsoft.Extensions.Logging.Abstractions.NullLogger`1[Issue2735.Store]\n"
-                + "Microsoft.Extensions.Logging.Abstractions.NullLogger`1[System.String]\n"
-                + "Microsoft.Extensions.Logging.Abstractions.NullLogger`1[System.Collections.Generic.List`1[Issue2735.Store]]\n",
+            $"Microsoft.Extensions.Logging.Abstractions.NullLogger`1[Issue2735.Store]{Environment.NewLine}"
+                + $"Microsoft.Extensions.Logging.Abstractions.NullLogger`1[System.String]{Environment.NewLine}"
+                + $"Microsoft.Extensions.Logging.Abstractions.NullLogger`1[System.Collections.Generic.List`1[Issue2735.Store]]{Environment.NewLine}",
             Run(result.OutputPath));
         IlVerifier.Verify(result.OutputPath, additionalReferences: result.References);
     }
@@ -176,7 +176,7 @@ public sealed class Issue2735ConstructedGenericCoalesceEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string[] GetFrameworkReferences()

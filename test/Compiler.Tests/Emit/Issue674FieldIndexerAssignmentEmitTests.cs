@@ -62,7 +62,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("30\n10\n", output);
+        Assert.Equal($"30{Environment.NewLine}10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n99\n", output);
+        Assert.Equal($"42{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("100\n400\n", output);
+        Assert.Equal($"100{Environment.NewLine}400{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("77\n88\n", output);
+        Assert.Equal($"77{Environment.NewLine}88{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -203,7 +203,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("Alice\n87\n", output);
+        Assert.Equal($"Alice{Environment.NewLine}87{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("20\n40\n", output);
+        Assert.Equal($"20{Environment.NewLine}40{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("8\n10\n", output);
+        Assert.Equal($"8{Environment.NewLine}10{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -342,7 +342,7 @@ public class Issue674FieldIndexerAssignmentEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

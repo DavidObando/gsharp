@@ -82,7 +82,7 @@ public class Issue3081CompositeLiteralInheritedFieldTests
         });
 
         Assert.True(result.ExitCode == 0, $"{name} gsc failed:\n{result.Stdout}\n{result.Stderr}");
-        Assert.Equal(expected + "Success.\n", result.Stdout);
+        Assert.Equal(expected + $"Success.{Environment.NewLine}", result.Stdout);
         Assert.Equal(string.Empty, result.Stderr);
     }
 
@@ -182,7 +182,7 @@ public class Issue3081CompositeLiteralInheritedFieldTests
         }
     }
 
-    private static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+    private static string Normalize(string text) => text.ReplaceLineEndings(Environment.NewLine);
 
     private readonly record struct DriverResult(int ExitCode, string Stdout, string Stderr);
 }

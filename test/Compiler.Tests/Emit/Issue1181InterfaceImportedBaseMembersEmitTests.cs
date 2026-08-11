@@ -35,7 +35,7 @@ public class Issue1181InterfaceImportedBaseMembersEmitTests
             func Main() { Use(Box()) }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("disposed\n", output);
+        Assert.Equal($"disposed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class Issue1181InterfaceImportedBaseMembersEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -68,7 +68,7 @@ public class Issue708IfLetGuardLetEmittedSessionTests
         var output = RunSubmission(source);
         Assert.Contains("both:a/b", output);
         var missingCount = 0;
-        foreach (var line in output.Split('\n'))
+        foreach (var line in output.Split(Environment.NewLine))
         {
             if (line.Contains("missing"))
             {
@@ -116,7 +116,7 @@ public class Issue708IfLetGuardLetEmittedSessionTests
         var output = RunSubmission(source);
         Assert.Contains("both:a/b", output);
         var exitCount = 0;
-        foreach (var line in output.Split('\n'))
+        foreach (var line in output.Split(Environment.NewLine))
         {
             if (line.Contains("exit"))
             {

@@ -70,7 +70,7 @@ public class Issue2082LambdaLiteralNamedDelegateEventEmitTests
             c.Fire(42)
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source, invoke: true));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source, invoke: true));
     }
 
     private static string CompileAndRun(string source, bool invoke)
@@ -137,7 +137,7 @@ public class Issue2082LambdaLiteralNamedDelegateEventEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

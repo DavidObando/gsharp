@@ -34,7 +34,7 @@ public class ParamsExpansionEmitTests
 
         var output = CompileAndRun(source);
         var expected = Path.Combine("a", "b", "..", "..", "src", "lib", "out.dll");
-        Assert.Equal(expected + "\n", output);
+        Assert.Equal(expected + Environment.NewLine, output);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a b c d\n", output);
+        Assert.Equal($"a b c d{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("a-b-c-d\n", output);
+        Assert.Equal($"a-b-c-d{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("[]\n0\n", output);
+        Assert.Equal($"[]{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class ParamsExpansionEmitTests
 
         var output = CompileAndRun(source);
         var expected = Path.Combine(new[] { "a", "b", "..", "..", "src", "x.dll" });
-        Assert.Equal(expected + "\n", output);
+        Assert.Equal(expected + Environment.NewLine, output);
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello world\n", output);
+        Assert.Equal($"hello world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("done\n", output);
+        Assert.Equal($"done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n1 x\n", output);
+        Assert.Equal($"42{Environment.NewLine}1 x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("no holes\n", output);
+        Assert.Equal($"no holes{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -217,7 +217,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n10\n20\n30\n", output);
+        Assert.Equal($"3{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -248,7 +248,7 @@ public class ParamsExpansionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\nfirst\nsecond\nthird\n", output);
+        Assert.Equal($"3{Environment.NewLine}first{Environment.NewLine}second{Environment.NewLine}third{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -308,7 +308,7 @@ public class ParamsExpansionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

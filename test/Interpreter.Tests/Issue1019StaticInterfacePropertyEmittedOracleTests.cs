@@ -45,7 +45,7 @@ public class Issue1019StaticInterfacePropertyEmittedOracleTests
             Console.WriteLine(Describe(AppleData{}))
             """;
 
-        Assert.Equal("apple\n", Evaluate(source));
+        Assert.Equal($"apple{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -56,6 +56,6 @@ public class Issue1019StaticInterfacePropertyEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

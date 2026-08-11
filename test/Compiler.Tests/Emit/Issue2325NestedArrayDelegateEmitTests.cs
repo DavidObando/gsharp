@@ -61,7 +61,7 @@ public class Issue2325NestedArrayDelegateEmitTests
             Apply(PrintFirstAndTag, []int32{7, 8, 9}, "tag")
             """;
 
-        Assert.Equal("7\ntag\n", CompileAndRun(gsource));
+        Assert.Equal($"7{Environment.NewLine}tag{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue2325NestedArrayDelegateEmitTests
             Invoke2((inner ([]int32, object?) -> void, arg object?) -> inner([]int32{1, 2, 3}, arg))
             """;
 
-        Assert.Equal("1\nouter\n", CompileAndRun(gsource));
+        Assert.Equal($"1{Environment.NewLine}outer{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue2325NestedArrayDelegateEmitTests
             Console.WriteLine(result[1])
             """;
 
-        Assert.Equal("41\n42\n", CompileAndRun(gsource));
+        Assert.Equal($"41{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(gsource));
     }
 
     private static string CompileAndRun(string source)
@@ -184,7 +184,7 @@ public class Issue2325NestedArrayDelegateEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

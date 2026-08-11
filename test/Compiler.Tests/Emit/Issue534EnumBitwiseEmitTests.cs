@@ -37,7 +37,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // FileShare.ReadWrite = 3, FileShare.Delete = 4 → 3 | 4 = 7
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: CLR enum bitwise AND ───────────────────────────────
@@ -55,7 +55,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // FileAccess.Read = 1, FileAccess.ReadWrite = 3 → 1 & 3 = 1
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: CLR enum bitwise XOR ───────────────────────────────
@@ -73,7 +73,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // RegexOptions.IgnoreCase = 1, RegexOptions.Multiline = 2 → 1 ^ 2 = 3
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: CLR enum unary complement ──────────────────────────
@@ -91,7 +91,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // FileShare.None = 0 → ~0 = -1
-        Assert.Equal("-1\n", CompileAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: UnixFileMode (also int32-backed, different enum) ───
@@ -109,7 +109,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // UnixFileMode.UserRead = 256, UnixFileMode.UserWrite = 128 → 256 | 128 = 384
-        Assert.Equal("384\n", CompileAndRun(source));
+        Assert.Equal($"384{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Positive: user-defined C# probe enum with [Flags] : long ────
@@ -144,7 +144,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // Alpha = 1, Big = 1 << 40 = 1099511627776 → 1 | 1099511627776 = 1099511627777
-        Assert.Equal("1099511627777\n", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
+        Assert.Equal($"1099511627777{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // all = 7, mask = 5 → 7 & 5 = 5
-        Assert.Equal("5\n", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
     }
 
     [Fact]
@@ -212,7 +212,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // ~0L = -1
-        Assert.Equal("-1\n", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
+        Assert.Equal($"-1{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
     }
 
     // ── Positive: byte-backed enum to exercise sub-i4 truncation ─────
@@ -246,7 +246,7 @@ public class Issue534EnumBitwiseEmitTests
             """;
 
         // A = 1, C = 4 → 1 | 4 = 5
-        Assert.Equal("5\n", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRunWithSiblingCs(csSource, gsSource, "Probe534"));
     }
 
     // ── Regression: int32 | int32 still works ────────────────────────
@@ -261,7 +261,7 @@ public class Issue534EnumBitwiseEmitTests
             Console.WriteLine(3 | 4)
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Regression: bool | bool still works ──────────────────────────
@@ -278,7 +278,7 @@ public class Issue534EnumBitwiseEmitTests
             Console.WriteLine(a | b)
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ── Negative: mixed enum types → diagnostic ──────────────────────
@@ -374,7 +374,7 @@ public class Issue534EnumBitwiseEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -417,7 +417,7 @@ public class Issue534EnumBitwiseEmitTests
             Assert.True(compileExit != 0, "expected gsc to report errors but it succeeded");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -515,7 +515,7 @@ public class Issue534EnumBitwiseEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

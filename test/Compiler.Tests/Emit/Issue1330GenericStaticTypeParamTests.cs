@@ -59,7 +59,7 @@ public class Issue1330GenericStaticTypeParamTests
             Console.WriteLine(c.Compare(4, 4))
             """;
 
-        Assert.Equal("-1\n1\n0\n", CompileVerifyAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     /// <summary>
@@ -84,7 +84,7 @@ public class Issue1330GenericStaticTypeParamTests
             Console.WriteLine(c.Sign("pear", "pear"))
             """;
 
-        Assert.Equal("-1\n0\n", CompileVerifyAndRun(source));
+        Assert.Equal($"-1{Environment.NewLine}0{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     /// <summary>
@@ -107,7 +107,7 @@ public class Issue1330GenericStaticTypeParamTests
             Console.WriteLine(c.Compare(9, 2))
             """;
 
-        Assert.Equal("1\n", CompileVerifyAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileVerifyAndRun(source));
     }
 
     /// <summary>
@@ -170,7 +170,7 @@ public class Issue1330GenericStaticTypeParamTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

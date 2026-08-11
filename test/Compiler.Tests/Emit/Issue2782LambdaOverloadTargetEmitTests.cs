@@ -63,7 +63,7 @@ public class Issue2782LambdaOverloadTargetEmitTests
             """,
             "Async");
 
-        Assert.Equal("delegate:System.Threading.Tasks.Task`1[System.Object]\n", output);
+        Assert.Equal($"delegate:System.Threading.Tasks.Task`1[System.Object]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class Issue2782LambdaOverloadTargetEmitTests
             """,
             "ValueTask");
 
-        Assert.Equal("value:System.Threading.Tasks.ValueTask`1[System.Object]\n", output);
+        Assert.Equal($"value:System.Threading.Tasks.ValueTask`1[System.Object]{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -229,7 +229,7 @@ public class Issue2782LambdaOverloadTargetEmitTests
                 Console.SetOut(output);
             }
 
-            return captured.ToString().Replace("\r\n", "\n");
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

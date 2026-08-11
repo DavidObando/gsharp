@@ -44,7 +44,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("value|something|this should work\nvalue\n", output);
+        Assert.Equal($"value|something|this should work{Environment.NewLine}value{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("123\n", output);
+        Assert.Equal($"123{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3svc\n", output);
+        Assert.Equal($"3svc{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("50hi\n", output);
+        Assert.Equal($"50hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3,4\n", output);
+        Assert.Equal($"3,4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue948FieldInitializerSugarEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3,4\n", output);
+        Assert.Equal($"3,4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -381,7 +381,7 @@ public class Issue948FieldInitializerSugarEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"), compileOut.ToString());
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine), compileOut.ToString());
         }
         finally
         {

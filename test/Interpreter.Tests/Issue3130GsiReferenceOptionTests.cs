@@ -54,7 +54,7 @@ public class Issue3130GsiReferenceOptionTests
 
         Assert.Equal(string.Empty, result.StandardError);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("42\n", result.StandardOutput);
+        Assert.Equal($"42{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue3130GsiReferenceOptionTests
         var result = RunGsi(directory, PackageName, "/reference:" + libraryPath);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("42\n", result.StandardOutput);
+        Assert.Equal($"42{Environment.NewLine}", result.StandardOutput);
     }
 
     [Fact]
@@ -127,8 +127,8 @@ public class Issue3130GsiReferenceOptionTests
 
     private static (int ExitCode, string StandardOutput, string StandardError) Capture(Func<int> action)
     {
-        using var stdout = new StringWriter { NewLine = "\n" };
-        using var stderr = new StringWriter { NewLine = "\n" };
+        using var stdout = new StringWriter { NewLine = Environment.NewLine };
+        using var stderr = new StringWriter { NewLine = Environment.NewLine };
         var previousOut = Console.Out;
         var previousError = Console.Error;
         int exitCode;
@@ -146,7 +146,7 @@ public class Issue3130GsiReferenceOptionTests
 
         return (
             exitCode,
-            stdout.ToString().Replace("\r\n", "\n", StringComparison.Ordinal),
-            stderr.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            stdout.ToString().ReplaceLineEndings(Environment.NewLine),
+            stderr.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 }

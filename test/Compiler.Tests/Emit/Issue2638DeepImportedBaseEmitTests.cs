@@ -57,7 +57,7 @@ public sealed class Issue2638DeepImportedBaseEmitTests
 
         Assert.Equal(0, result.ExitCode);
         IlVerifier.Verify(result.OutputPath, additionalReferences: new[] { fixture.LibraryPath });
-        Assert.Equal("deep:2638\n", fixture.Run(result.OutputPath));
+        Assert.Equal($"deep:2638{Environment.NewLine}", fixture.Run(result.OutputPath));
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public sealed class Issue2638DeepImportedBaseEmitTests
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
 
         public void Dispose()

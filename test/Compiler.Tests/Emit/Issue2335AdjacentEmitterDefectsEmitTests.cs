@@ -107,7 +107,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Describe[int32](v))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Describe[int32](v))
             """;
 
-        Assert.Equal("99\n", CompileAndRun(source));
+        Assert.Equal($"99{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Describe[Square](v))
             """;
 
-        Assert.Equal("25\n", CompileAndRun(source));
+        Assert.Equal($"25{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Describe[DayOfWeek](holder))
             """;
 
-        Assert.Equal("Friday\n", CompileAndRun(source));
+        Assert.Equal($"Friday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -219,7 +219,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Show[string]("hi"))
             """;
 
-        Assert.Equal("7\nhi\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -245,7 +245,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Unwrap[int32](v))
             """;
 
-        Assert.Equal("123\n", CompileAndRun(source));
+        Assert.Equal($"123{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ----- Defect B: plain-function-call boxing/widening -----
@@ -267,7 +267,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Show(42))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Feed[string]("z"))
             """;
 
-        Assert.Equal("11\nz\n", CompileAndRun(source));
+        Assert.Equal($"11{Environment.NewLine}z{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Show(v))
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -325,7 +325,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Show(DayOfWeek.Tuesday))
             """;
 
-        Assert.Equal("Tuesday\n", CompileAndRun(source));
+        Assert.Equal($"Tuesday{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Combine(Trace("first", 1), Trace("second", 2)))
             """;
 
-        Assert.Equal("first\nsecond\n1,2\n", CompileAndRun(source));
+        Assert.Equal($"first{Environment.NewLine}second{Environment.NewLine}1,2{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(Describe(d))
             """;
 
-        Assert.Equal("woof\n", CompileAndRun(source));
+        Assert.Equal($"woof{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -417,7 +417,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             Console.WriteLine(RepeatIt[int32](77))
             """;
 
-        Assert.Equal("2\n5\n77\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}5{Environment.NewLine}77{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source, bool requiresFullBcl = false)
@@ -511,7 +511,7 @@ public class Issue2335AdjacentEmitterDefectsEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

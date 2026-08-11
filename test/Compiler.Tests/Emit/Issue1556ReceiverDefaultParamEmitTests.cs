@@ -49,7 +49,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("13\n", output);
+        Assert.Equal($"13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("104\n13\n", output);
+        Assert.Equal($"104{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("abab\nababab\n", output);
+        Assert.Equal($"abab{Environment.NewLine}ababab{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n0\n", output);
+        Assert.Equal($"7{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -171,7 +171,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n42\n", output);
+        Assert.Equal($"5{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("14\n103\n", output);
+        Assert.Equal($"14{Environment.NewLine}103{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("16\n13\n", output);
+        Assert.Equal($"16{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("9\n13\n", output);
+        Assert.Equal($"9{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -329,7 +329,7 @@ public class Issue1556ReceiverDefaultParamEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -136,8 +136,8 @@ public class Issue2941FlagsEnumExhaustivenessTests
         }
 
         Assert.Equal(
-            "11\n22\n31\n42\n51\n62\n",
-            output.ToString().Replace("\r\n", "\n", StringComparison.Ordinal));
+            $"11{Environment.NewLine}22{Environment.NewLine}31{Environment.NewLine}42{Environment.NewLine}51{Environment.NewLine}62{Environment.NewLine}",
+            output.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue2941FlagsEnumExhaustivenessTests
         Assert.False(result.HasError);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(
-            "caught-ioe\nafter\n",
-            result.Output.Replace("\r\n", "\n", StringComparison.Ordinal));
+            $"caught-ioe{Environment.NewLine}after{Environment.NewLine}",
+            result.Output.ReplaceLineEndings(Environment.NewLine));
     }
 }

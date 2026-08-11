@@ -69,7 +69,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(q.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(p.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(w.Frac)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(q.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(p.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(b.Value)
             """;
 
-        Assert.Equal("22050\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(h.Distance.V)
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     // --- Control cases: sibling paths that were already correct and must
@@ -220,7 +220,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(p.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(p.BitRate)
             """;
 
-        Assert.Equal("22050\n32\n", CompileAndRun(source));
+        Assert.Equal($"22050{Environment.NewLine}32{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -257,7 +257,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             Console.WriteLine(Foo(5))
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -333,7 +333,7 @@ public class Issue2364PrimaryConstructorConversionEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

@@ -41,7 +41,7 @@ public sealed class Issue3091PropertyPatternPropertiesTests
             Console.WriteLine(Classify(Message{Role: "assistant", Calls: nil}))
             """;
 
-        Assert.Equal("1\n2\n0\n", CompileAndRun(Source));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public sealed class Issue3091PropertyPatternPropertiesTests
             Console.WriteLine(MatchPayload(Holder{Child: nil, Item: nil}))
             """;
 
-        Assert.Equal("1\n1\n1\n2\n0\n2\n1\n0\n", CompileAndRun(Source));
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}0{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(Source));
     }
 
     private static string CompileAndRun(string source)
@@ -186,7 +186,7 @@ public sealed class Issue3091PropertyPatternPropertiesTests
             Assert.True(
                 process.ExitCode == 0,
                 $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

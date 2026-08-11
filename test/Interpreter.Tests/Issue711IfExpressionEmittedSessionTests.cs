@@ -23,7 +23,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("11\n", RunSubmission(source));
+        Assert.Equal($"11{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("22\n", RunSubmission(source));
+        Assert.Equal($"22{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(grade)
             """;
 
-        Assert.Equal("B\n", RunSubmission(source));
+        Assert.Equal($"B{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(grade)
             """;
 
-        Assert.Equal("C\n", RunSubmission(source));
+        Assert.Equal($"C{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(n)
             """;
 
-        Assert.Equal("2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(sink)
             """;
 
-        Assert.Equal("Admin\nside-effect\n", RunSubmission(source));
+        Assert.Equal($"Admin{Environment.NewLine}side-effect{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(if flag { "on" } else { "off" })
             """;
 
-        Assert.Equal("on\n", RunSubmission(source));
+        Assert.Equal($"on{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(Pick(false))
             """;
 
-        Assert.Equal("1\n-1\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}-1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(result)
             """;
 
-        Assert.Equal("20\n", RunSubmission(source));
+        Assert.Equal($"20{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("1\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public class Issue711IfExpressionEmittedSessionTests
             }
             """;
 
-        Assert.Equal("hi\n", RunSubmission(source));
+        Assert.Equal($"hi{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -191,7 +191,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(Run(false))
             """;
 
-        Assert.Equal("7\n", RunSubmission(source));
+        Assert.Equal($"7{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.WriteLine(x)
             """;
 
-        Assert.Equal("42\n", RunSubmission(source));
+        Assert.Equal($"42{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -225,6 +225,6 @@ public class Issue711IfExpressionEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -34,7 +34,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hi\n", output);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue532TaskGetAwaiterEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("pass\n", output);
+        Assert.Equal($"pass{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -210,7 +210,7 @@ public class Issue532TaskGetAwaiterEmitTests
             var stdout = proc.StandardOutput.ReadToEnd();
             var stderr = proc.StandardError.ReadToEnd();
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
-            return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

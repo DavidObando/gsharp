@@ -45,7 +45,7 @@ public class Issue988TypeParameterConstructionEmitTests
             Console.WriteLine(f.Make().ToString())
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class Issue988TypeParameterConstructionEmitTests
             Console.WriteLine(n.Value.ToString())
             """;
 
-        Assert.Equal("42\n", CompileAndRun(source));
+        Assert.Equal($"42{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue988TypeParameterConstructionEmitTests
             Console.WriteLine(m.Value.ToString())
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class Issue988TypeParameterConstructionEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

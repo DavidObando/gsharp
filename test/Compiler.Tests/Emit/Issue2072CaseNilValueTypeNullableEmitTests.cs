@@ -54,7 +54,7 @@ public class Issue2072CaseNilValueTypeNullableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("has value\nnone\n", output);
+        Assert.Equal($"has value{Environment.NewLine}none{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue2072CaseNilValueTypeNullableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("has point\nno point\n", output);
+        Assert.Equal($"has point{Environment.NewLine}no point{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue2072CaseNilValueTypeNullableEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("has color\nno color\n", output);
+        Assert.Equal($"has color{Environment.NewLine}no color{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -189,7 +189,7 @@ public class Issue2072CaseNilValueTypeNullableEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

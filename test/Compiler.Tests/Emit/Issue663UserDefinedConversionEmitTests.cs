@@ -36,7 +36,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ada\n", output);
+        Assert.Equal($"ada{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ada\n", output);
+        Assert.Equal($"ada{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("nil\n", output);
+        Assert.Equal($"nil{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class Issue663UserDefinedConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -217,10 +217,10 @@ public class Issue663UserDefinedConversionEmitTests
 
             if (proc.ExitCode != 0)
             {
-                return (proc.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+                return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
             }
 
-            return (0, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (0, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

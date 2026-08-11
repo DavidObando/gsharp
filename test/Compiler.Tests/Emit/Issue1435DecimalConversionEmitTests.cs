@@ -46,7 +46,7 @@ public class Issue1435DecimalConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n42\n42\n42\n42\n42\n42\n42\n42\n42\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class Issue1435DecimalConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("123\n", output);
+        Assert.Equal($"123{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public class Issue1435DecimalConversionEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -162,7 +162,7 @@ public class Issue1435DecimalConversionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

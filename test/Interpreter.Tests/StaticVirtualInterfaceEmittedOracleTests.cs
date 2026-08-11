@@ -45,7 +45,7 @@ public class StaticVirtualInterfaceEmittedOracleTests
             Console.WriteLine(Compute(Adder{}, 3, 4))
             """;
 
-        Assert.Equal("7\n", Evaluate(source));
+        Assert.Equal($"7{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class StaticVirtualInterfaceEmittedOracleTests
             Console.WriteLine(Use(Quiet{}))
             """;
 
-        Assert.Equal("default-hello\n", Evaluate(source));
+        Assert.Equal($"default-hello{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class StaticVirtualInterfaceEmittedOracleTests
             Console.WriteLine(Use(Loud{}))
             """;
 
-        Assert.Equal("LOUD-hello\n", Evaluate(source));
+        Assert.Equal($"LOUD-hello{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class StaticVirtualInterfaceEmittedOracleTests
             Console.WriteLine(Apply(Times{}, 3, 4))
             """;
 
-        Assert.Equal("7\n12\n", Evaluate(source));
+        Assert.Equal($"7{Environment.NewLine}12{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -140,6 +140,6 @@ public class StaticVirtualInterfaceEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

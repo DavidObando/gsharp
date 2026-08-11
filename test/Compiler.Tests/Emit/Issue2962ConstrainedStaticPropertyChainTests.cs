@@ -333,7 +333,7 @@ public class Issue2962ConstrainedStaticPropertyChainTests
         Assert.True(
             process.ExitCode == 0,
             $"dotnet child exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string CreateWorkDirectory()

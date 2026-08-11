@@ -90,7 +90,7 @@ public class Issue1701NullabilityConversionCracksEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class Issue1701NullabilityConversionCracksEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\n", output);
+        Assert.Equal($"11{Environment.NewLine}", output);
     }
 
     private static (int ExitCode, string Stderr) TryCompile(string source)
@@ -241,7 +241,7 @@ public class Issue1701NullabilityConversionCracksEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

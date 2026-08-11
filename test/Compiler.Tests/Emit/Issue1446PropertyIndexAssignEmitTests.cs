@@ -46,7 +46,7 @@ public class Issue1446PropertyIndexAssignEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("60\n", output);
+        Assert.Equal($"60{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1446PropertyIndexAssignEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ab\n", output);
+        Assert.Equal($"ab{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -150,7 +150,7 @@ public class Issue1446PropertyIndexAssignEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

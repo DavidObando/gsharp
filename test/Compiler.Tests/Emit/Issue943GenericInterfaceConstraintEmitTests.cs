@@ -38,7 +38,7 @@ public class Issue943GenericInterfaceConstraintEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n10\n", output);
+        Assert.Equal($"7{Environment.NewLine}10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class Issue943GenericInterfaceConstraintEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("banana\nzebra\n", output);
+        Assert.Equal($"banana{Environment.NewLine}zebra{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue943GenericInterfaceConstraintEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class Issue943GenericInterfaceConstraintEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

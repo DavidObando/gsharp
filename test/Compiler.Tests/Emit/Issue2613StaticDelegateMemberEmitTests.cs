@@ -89,7 +89,7 @@ public sealed class Issue2613StaticDelegateMemberEmitTests
             process.WaitForExit();
 
             Assert.True(process.ExitCode == 0, error);
-            Assert.Equal("12\n12\n22\n32\n", output.Replace("\r\n", "\n"));
+            Assert.Equal($"12{Environment.NewLine}12{Environment.NewLine}22{Environment.NewLine}32{Environment.NewLine}", output.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

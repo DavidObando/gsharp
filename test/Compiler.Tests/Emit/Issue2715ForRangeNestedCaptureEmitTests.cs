@@ -78,7 +78,7 @@ public class Issue2715ForRangeNestedCaptureEmitTests
             Console.Write(output.ToString())
             """;
 
-        Assert.Equal("R\tL\nb\ta\nd\tc\n", CompileVerifyAndRun(Source, "Oahu"));
+        Assert.Equal($"R\tL{Environment.NewLine}b\ta{Environment.NewLine}d\tc{Environment.NewLine}", CompileVerifyAndRun(Source, "Oahu"));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue2715ForRangeNestedCaptureEmitTests
             Console.WriteLine(readers[2]())
             """;
 
-        Assert.Equal("1\n2\n3\n", CompileVerifyAndRun(Source, "Escaping"));
+        Assert.Equal($"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}", CompileVerifyAndRun(Source, "Escaping"));
     }
 
     [Fact]
@@ -128,7 +128,7 @@ public class Issue2715ForRangeNestedCaptureEmitTests
             Console.WriteLine(readers[1]())
             """;
 
-        Assert.Equal("0a\n1b\n", CompileVerifyAndRun(Source, "KeyValue"));
+        Assert.Equal($"0a{Environment.NewLine}1b{Environment.NewLine}", CompileVerifyAndRun(Source, "KeyValue"));
     }
 
     [Fact]
@@ -204,6 +204,6 @@ public class Issue2715ForRangeNestedCaptureEmitTests
         var error = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

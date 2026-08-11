@@ -48,7 +48,7 @@ public class Issue1439NullConditionalFieldInvokeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class Issue1439NullConditionalFieldInvokeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("done\n", output);
+        Assert.Equal($"done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue1439NullConditionalFieldInvokeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n-1\n", output);
+        Assert.Equal($"42{Environment.NewLine}-1{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -178,7 +178,7 @@ public class Issue1439NullConditionalFieldInvokeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

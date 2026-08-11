@@ -62,7 +62,7 @@ public class Issue2391SymbolicInterfaceCallSubstitutionTests
             }
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRunWithContracts(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRunWithContracts(source));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue2391SymbolicInterfaceCallSubstitutionTests
             }
             """;
 
-        Assert.Equal("41\n42\n", CompileAndRunWithContracts(source));
+        Assert.Equal($"41{Environment.NewLine}42{Environment.NewLine}", CompileAndRunWithContracts(source));
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public class Issue2391SymbolicInterfaceCallSubstitutionTests
             }
             """;
 
-        Assert.Equal("True\n", CompileAndRunWithContracts(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRunWithContracts(source));
     }
 
     private static string CompileAndRunWithContracts(string source)
@@ -241,7 +241,7 @@ public class Issue2391SymbolicInterfaceCallSubstitutionTests
             var stdout = process.StandardOutput.ReadToEnd();
             var stderr = process.StandardError.ReadToEnd();
             Assert.True(process.WaitForExit(30_000), "dotnet exec timed out.");
-            return (process.ExitCode, stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"));
+            return (process.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {

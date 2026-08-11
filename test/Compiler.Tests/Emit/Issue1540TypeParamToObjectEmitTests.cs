@@ -61,7 +61,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n42\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello\nhello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("11\nz\n", output);
+        Assert.Equal($"11{Environment.NewLine}z{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("cc\n", output);
+        Assert.Equal($"cc{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("33\n33\n", output);
+        Assert.Equal($"33{Environment.NewLine}33{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n5\n5\n", output);
+        Assert.Equal($"2{Environment.NewLine}5{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n1\n", output);
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -305,7 +305,7 @@ public class Issue1540TypeParamToObjectEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n42\n42\na\na\n", output);
+        Assert.Equal($"42{Environment.NewLine}42{Environment.NewLine}42{Environment.NewLine}a{Environment.NewLine}a{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -382,7 +382,7 @@ public class Issue1540TypeParamToObjectEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

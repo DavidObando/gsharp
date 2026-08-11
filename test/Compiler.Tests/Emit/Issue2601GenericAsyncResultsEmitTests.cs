@@ -45,7 +45,7 @@ public class Issue2601GenericAsyncResultsEmitTests
             Run().Wait()
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class Issue2601GenericAsyncResultsEmitTests
             Wizard().Run().Wait()
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source, HelperSource));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source, HelperSource));
     }
 
     [Fact]
@@ -164,7 +164,7 @@ public class Issue2601GenericAsyncResultsEmitTests
             var stderr = child.StandardError.ReadToEnd();
             Assert.True(child.WaitForExit(30_000), "dotnet exec timed out");
             Assert.True(child.ExitCode == 0, $"exited {child.ExitCode}\n{stderr}");
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

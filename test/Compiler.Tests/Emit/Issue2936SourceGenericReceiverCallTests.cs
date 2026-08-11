@@ -43,7 +43,7 @@ public class Issue2936SourceGenericReceiverCallTests
             IlVerifier.Verify(assemblyPath);
             var assembly = Assembly.Load(File.ReadAllBytes(assemblyPath));
             Assert.NotEmpty(assembly.GetTypes());
-            Assert.Equal("5\n", RunBounded(assemblyPath));
+            Assert.Equal($"5{Environment.NewLine}", RunBounded(assemblyPath));
         }
         finally
         {
@@ -121,6 +121,6 @@ public class Issue2936SourceGenericReceiverCallTests
         var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(exited, "emitted program timed out");
         Assert.True(process.ExitCode == 0, $"emitted program failed:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

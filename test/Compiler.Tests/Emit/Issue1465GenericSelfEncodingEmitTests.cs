@@ -51,7 +51,7 @@ public class Issue1465GenericSelfEncodingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok\n", output);
+        Assert.Equal($"ok{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class Issue1465GenericSelfEncodingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("ok2\n", output);
+        Assert.Equal($"ok2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue1465GenericSelfEncodingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n9\nok4\n", output);
+        Assert.Equal($"5{Environment.NewLine}9{Environment.NewLine}ok4{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class Issue1465GenericSelfEncodingEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("base dispose\nok3\n", output);
+        Assert.Equal($"base dispose{Environment.NewLine}ok3{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -222,7 +222,7 @@ public class Issue1465GenericSelfEncodingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

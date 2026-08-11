@@ -33,7 +33,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n20\n30\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}20{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n10\n20\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n40\n50\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}40{Environment.NewLine}50{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[3])
             """;
 
-        Assert.Equal("4\n1\n4\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[2])
             """;
 
-        Assert.Equal("3\n10\n30\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}10{Environment.NewLine}30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(s[r])
             """;
 
-        Assert.Equal("world\n", CompileAndRun(source));
+        Assert.Equal($"world{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[1])
             """;
 
-        Assert.Equal("2\n30\n40\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}30{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(b[0])
             """;
 
-        Assert.Equal("2\n20\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}20{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public class Issue1038StandaloneRangeEmitTests
             Console.WriteLine(s[2])
             """;
 
-        Assert.Equal("3\n20\n40\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}40{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -268,7 +268,7 @@ public class Issue1038StandaloneRangeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

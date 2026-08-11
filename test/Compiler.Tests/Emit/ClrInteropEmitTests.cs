@@ -31,7 +31,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello world\n11\n", output);
+        Assert.Equal($"hello world{Environment.NewLine}11{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n1\n2\n", output);
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n10\n30\n", output);
+        Assert.Equal($"3{Environment.NewLine}10{Environment.NewLine}30{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2147483647\n64\n", output);
+        Assert.Equal($"2147483647{Environment.NewLine}64{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("45\n", output);
+        Assert.Equal($"45{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("done\n", output);
+        Assert.Equal($"done{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class ClrInteropEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n2147483647\n2147483647\n", output);
+        Assert.Equal($"0{Environment.NewLine}2147483647{Environment.NewLine}2147483647{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -240,7 +240,7 @@ public class ClrInteropEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

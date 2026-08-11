@@ -60,7 +60,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         var result = Compile(Source, target: "exe");
         try
         {
-            Assert.Equal("derived\n2486\nTrue\n", Run(result.OutputPath));
+            Assert.Equal($"derived{Environment.NewLine}2486{Environment.NewLine}True{Environment.NewLine}", Run(result.OutputPath));
             IlVerifier.Verify(result.OutputPath);
 
             var assembly = Assembly.LoadFrom(result.OutputPath);
@@ -84,7 +84,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
             AssertOverrideSlot(generic.GetMethod("ToString")!, typeof(object).GetMethod("ToString")!);
 
             var consumerPath = EmitImplicitObjectConsumer(result.DirectoryPath, result.OutputPath);
-            Assert.Equal("derived\n2486\nTrue\ngeneric\n", Run(consumerPath));
+            Assert.Equal($"derived{Environment.NewLine}2486{Environment.NewLine}True{Environment.NewLine}generic{Environment.NewLine}", Run(consumerPath));
         }
         finally
         {
@@ -293,7 +293,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
                 DataValue(Number=7)
                 Issue2896.DefaultValue
                 Issue2896.DefaultValue
-                """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n",
+                """.ReplaceLineEndings(Environment.NewLine) + Environment.NewLine,
                 Run(result.OutputPath));
 
             var assembly = Assembly.Load(File.ReadAllBytes(result.OutputPath));
@@ -466,7 +466,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         var result = Compile(Source, target: "exe");
         try
         {
-            Assert.Equal("derived\n", Run(result.OutputPath));
+            Assert.Equal($"derived{Environment.NewLine}", Run(result.OutputPath));
             IlVerifier.Verify(result.OutputPath);
 
             var assembly = Assembly.LoadFrom(result.OutputPath);
@@ -557,7 +557,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
 
             var consumerPath = EmitCSharpConsumer(result.DirectoryPath, result.OutputPath, ExternalBaseAssembly.Value);
             Assert.Equal(
-                "echo:4\nid\nMarker\n7\n13\n5\nabstract\ngeneric\ngeneric-abstract\n",
+                $"echo:4{Environment.NewLine}id{Environment.NewLine}Marker{Environment.NewLine}7{Environment.NewLine}13{Environment.NewLine}5{Environment.NewLine}abstract{Environment.NewLine}generic{Environment.NewLine}generic-abstract{Environment.NewLine}",
                 Run(consumerPath));
         }
         finally
@@ -893,7 +893,7 @@ public sealed class Issue2443ExternalClrOverrideEmitTests
         var stdout = stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static IEnumerable<MetadataReference> TrustedPlatformReferences()

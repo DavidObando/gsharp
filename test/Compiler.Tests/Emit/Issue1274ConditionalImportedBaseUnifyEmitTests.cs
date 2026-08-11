@@ -40,7 +40,7 @@ public class Issue1274ConditionalImportedBaseUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("Exception\nMyEx\n", output);
+        Assert.Equal($"Exception{Environment.NewLine}MyEx{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue1274ConditionalImportedBaseUnifyEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("MyExA\nMyExB\n", output);
+        Assert.Equal($"MyExA{Environment.NewLine}MyExB{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -142,7 +142,7 @@ public class Issue1274ConditionalImportedBaseUnifyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

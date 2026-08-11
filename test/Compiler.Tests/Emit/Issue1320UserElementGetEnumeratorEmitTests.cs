@@ -50,7 +50,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
             Console.WriteLine(Sum())
             """;
 
-        Assert.Equal("60\n", CompileAndRun(source));
+        Assert.Equal($"60{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
             Console.WriteLine(Count())
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -116,7 +116,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
             Console.WriteLine(Sum())
             """;
 
-        Assert.Equal("6\n", CompileAndRun(source));
+        Assert.Equal($"6{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -178,7 +178,7 @@ public class Issue1320UserElementGetEnumeratorEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

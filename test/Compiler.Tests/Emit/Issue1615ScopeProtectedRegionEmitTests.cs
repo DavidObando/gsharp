@@ -44,7 +44,7 @@ public class Issue1615ScopeProtectedRegionEmitTests
             """;
 
         var output = CompileAndRun(source, "1615a");
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class Issue1615ScopeProtectedRegionEmitTests
             """;
 
         var output = CompileAndRun(source, "1615b");
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class Issue1615ScopeProtectedRegionEmitTests
             """;
 
         var output = CompileAndRun(source, "1615c");
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class Issue1615ScopeProtectedRegionEmitTests
             """;
 
         var output = CompileAndRun(source, "1615d");
-        Assert.Equal("finally\n7\n", output);
+        Assert.Equal($"finally{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source, string tag)
@@ -197,7 +197,7 @@ public class Issue1615ScopeProtectedRegionEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

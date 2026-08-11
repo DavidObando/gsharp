@@ -37,7 +37,7 @@ public class Issue1174NestedTypeNameCollisionEmitTests
             }
             """);
 
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class Issue1174NestedTypeNameCollisionEmitTests
             }
             """);
 
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Issue1174NestedTypeNameCollisionEmitTests
             }
             """);
 
-        Assert.Equal("9\n", output);
+        Assert.Equal($"9{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -152,7 +152,7 @@ public class Issue1174NestedTypeNameCollisionEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

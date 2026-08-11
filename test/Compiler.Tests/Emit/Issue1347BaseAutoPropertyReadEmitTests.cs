@@ -47,7 +47,7 @@ public class Issue1347BaseAutoPropertyReadEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("17\n", output);
+        Assert.Equal($"17{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1347BaseAutoPropertyReadEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("23\n", output);
+        Assert.Equal($"23{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class Issue1347BaseAutoPropertyReadEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("100\n42\n", output);
+        Assert.Equal($"100{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -133,7 +133,7 @@ public class Issue1347BaseAutoPropertyReadEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -327,7 +327,7 @@ public class Issue1347BaseAutoPropertyReadEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

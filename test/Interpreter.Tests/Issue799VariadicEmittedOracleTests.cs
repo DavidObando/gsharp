@@ -37,7 +37,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(sum(1, 2, 3, 4, 5))
             """;
 
-        Assert.Equal("15\n", Evaluate(source));
+        Assert.Equal($"15{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(sum())
             """;
 
-        Assert.Equal("0\n", Evaluate(source));
+        Assert.Equal($"0{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(sumWithBase(100, 1, 2, 3))
             """;
 
-        Assert.Equal("106\n", Evaluate(source));
+        Assert.Equal($"106{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(xs[3])
             """;
 
-        Assert.Equal("4\n1\n4\n", Evaluate(source));
+        Assert.Equal($"4{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(xs[1])
             """;
 
-        Assert.Equal("3\n20\n", Evaluate(source));
+        Assert.Equal($"3{Environment.NewLine}20{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue799VariadicEmittedOracleTests
             Console.WriteLine(xs.Length)
             """;
 
-        Assert.Equal("0\n", Evaluate(source));
+        Assert.Equal($"0{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -138,6 +138,6 @@ public class Issue799VariadicEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 }

@@ -71,7 +71,7 @@ public sealed class Issue2538AnonymousConstructionPipelineTests
         string apiType = names[1].Groups[1].Value;
 
         Assert.Contains(
-            $"convenience init() {{\n        init({envelopeType}(2538, \"anonymous\"))",
+            $"convenience init() {{{Environment.NewLine}        init({envelopeType}(2538, \"anonymous\"))",
             printed,
             StringComparison.Ordinal);
         Assert.Contains($"Echo({apiType}(true, 2))", printed, StringComparison.Ordinal);

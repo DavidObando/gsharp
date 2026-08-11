@@ -97,7 +97,9 @@ namespace Demo
 }");
 
         Assert.Contains("SpecialFolder.ApplicationData", printed);
-        Assert.Contains(printed.Split('\n').Select(l => l.Trim()), l => l == "import System");
+        Assert.Contains(
+            printed.Split(Environment.NewLine).Select(l => l.Trim()),
+            l => l == "import System");
 
         // ponytail: skip a second real-gsc compile here — the first test
         // already proves the mechanism compiles end-to-end; running gsc as a

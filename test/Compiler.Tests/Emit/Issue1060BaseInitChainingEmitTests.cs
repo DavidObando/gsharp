@@ -39,7 +39,7 @@ public class Issue1060BaseInitChainingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("7\n", output);
+        Assert.Equal($"7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class Issue1060BaseInitChainingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("two\n", output);
+        Assert.Equal($"two{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1060BaseInitChainingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("string\n", output);
+        Assert.Equal($"string{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class Issue1060BaseInitChainingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue1060BaseInitChainingEmitTests
             }
             """;
         var output = CompileAndRun(source);
-        Assert.Equal("boom\n13\n", output);
+        Assert.Equal($"boom{Environment.NewLine}13{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -221,7 +221,7 @@ public class Issue1060BaseInitChainingEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

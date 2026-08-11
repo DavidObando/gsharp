@@ -173,7 +173,7 @@ public class ReplLayoutTests
         var footer = new Rows(new Markup("footer-a"), new Markup("footer-b"));
         var dock = new Dock(tall, footer, 20, new ScrollState());
 
-        var lines = RenderToAnsi(dock, 40).Split('\n');
+        var lines = RenderToAnsi(dock, 40).Split(Environment.NewLine);
         Assert.Equal(20, lines.Length);
 
         // Footer occupies the final two lines, pinned to the bottom.
@@ -207,7 +207,7 @@ public class ReplLayoutTests
         var modal = new Rows(new Markup("MODAL-ROW"));
         var overlay = new Overlay(baseFrame, modal, 20);
 
-        var lines = RenderToAnsi(overlay, 60).Split('\n');
+        var lines = RenderToAnsi(overlay, 60).Split(Environment.NewLine);
         Assert.Equal(20, lines.Length);
         Assert.Contains(lines, l => l.Contains("MODAL-ROW"));
 
@@ -217,7 +217,7 @@ public class ReplLayoutTests
     }
 
     private static int LineCount(Spectre.Console.Rendering.IRenderable renderable, int width)
-        => RenderToAnsi(renderable, width).Split('\n').Length;
+        => RenderToAnsi(renderable, width).Split(Environment.NewLine).Length;
 
     [Fact]
     public void Screen_MouseScroll_RevealsOlderCells()
@@ -296,7 +296,7 @@ public class ReplLayoutTests
         {
             Ansi = AnsiSupport.No,
             ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter { NewLine = "\n" }),
+            Out = new AnsiConsoleOutput(new StringWriter { NewLine = Environment.NewLine }),
             Interactive = InteractionSupport.No,
         });
         console.Profile.Width = 80;
@@ -325,7 +325,7 @@ public class ReplLayoutTests
 
     private static string RenderToAnsi(Spectre.Console.Rendering.IRenderable renderable, int width)
     {
-        var sw = new StringWriter { NewLine = "\n" };
+        var sw = new StringWriter { NewLine = Environment.NewLine };
         var console = AnsiConsole.Create(new AnsiConsoleSettings
         {
             Ansi = AnsiSupport.Yes,

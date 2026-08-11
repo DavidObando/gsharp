@@ -185,7 +185,7 @@ public class Issue615EmittedSessionEnumArithmeticTests
             "Console.WriteLine(DayOfWeek.Monday < DayOfWeek.Friday)\n" +
             "Console.WriteLine(DayOfWeek.Friday < DayOfWeek.Monday)\n");
         // First should be True, second should be False
-        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("True", lines[0].Trim());
         Assert.Equal("False", lines[1].Trim());
     }

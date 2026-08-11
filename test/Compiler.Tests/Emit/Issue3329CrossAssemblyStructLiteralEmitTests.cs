@@ -49,7 +49,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib1"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib1"));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib2"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib2"));
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib3"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib3"));
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib4"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib4"));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("4\n", CompileAndRun(source, library, "i3329lib5"));
+        Assert.Equal($"4{Environment.NewLine}", CompileAndRun(source, library, "i3329lib5"));
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("7,0\n", CompileAndRun(source, library, "i3329lib6"));
+        Assert.Equal($"7,0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib6"));
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("5\n", CompileAndRun(source, library, "i3329lib7"));
+        Assert.Equal($"5{Environment.NewLine}", CompileAndRun(source, library, "i3329lib7"));
     }
 
     [Fact]
@@ -252,7 +252,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib8"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib8"));
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source, library, "i3329lib9"));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source, library, "i3329lib9"));
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
             }
             """;
 
-        Assert.Equal("0\n", CompileAndRun(source));
+        Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -353,7 +353,7 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

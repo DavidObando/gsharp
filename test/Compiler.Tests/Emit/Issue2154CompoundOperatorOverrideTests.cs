@@ -61,7 +61,7 @@ public class Issue2154CompoundOperatorOverrideTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("6\n9\n", output);
+        Assert.Equal($"6{Environment.NewLine}9{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue2154CompoundOperatorOverrideTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n", output);
+        Assert.Equal($"12{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue2154CompoundOperatorOverrideTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("10\n", output);
+        Assert.Equal($"10{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue2154CompoundOperatorOverrideTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     /// <summary>
@@ -168,7 +168,7 @@ public class Issue2154CompoundOperatorOverrideTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("1\n", output);
+        Assert.Equal($"1{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -245,7 +245,7 @@ public class Issue2154CompoundOperatorOverrideTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

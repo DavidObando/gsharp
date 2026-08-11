@@ -34,7 +34,7 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
             Console.WriteLine(q.Peek())
             """;
 
-        Assert.Equal("2\nb\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}b{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
             Console.WriteLine(q.Peek())
             """;
 
-        Assert.Equal("1\n30\n", RunSubmission(source));
+        Assert.Equal($"1{Environment.NewLine}30{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
             Console.WriteLine(s.Peek())
             """;
 
-        Assert.Equal("2\n2\n", RunSubmission(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string text)
@@ -96,6 +96,6 @@ public class Issue832DiscardedOpenTReturnEmittedSessionTests
             Console.SetOut(prevOut);
         }
 
-        return outWriter.ToString().Replace("\r\n", "\n");
+        return outWriter.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }

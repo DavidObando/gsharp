@@ -46,7 +46,7 @@ public class Issue1188ExtensionOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("one\ntwo\n", output);
+        Assert.Equal($"one{Environment.NewLine}two{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue1188ExtensionOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("int\nstr\n", output);
+        Assert.Equal($"int{Environment.NewLine}str{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class Issue1188ExtensionOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("concrete\ngeneric\n", output);
+        Assert.Equal($"concrete{Environment.NewLine}generic{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class Issue1188ExtensionOverloadEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("string-recv\nint-recv\n", output);
+        Assert.Equal($"string-recv{Environment.NewLine}int-recv{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -175,7 +175,7 @@ public class Issue1188ExtensionOverloadEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

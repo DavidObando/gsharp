@@ -668,7 +668,7 @@ namespace Demo
         // The non-generic explicit implementation keeps its qualifier and
         // C#-faithful private visibility.
         Assert.Contains("private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()", printed);
-        Assert.DoesNotContain("\n    func GetEnumerator() IEnumerator ->", printed);
+        Assert.DoesNotContain($"{Environment.NewLine}    func GetEnumerator() IEnumerator ->", printed);
 
         // The IEnumerable<T> generator still lowers to sequence[T].
         Assert.Contains("func All() sequence[T]", printed);

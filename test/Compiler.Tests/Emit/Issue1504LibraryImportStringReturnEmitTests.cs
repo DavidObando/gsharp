@@ -57,7 +57,7 @@ public class Issue1504LibraryImportStringReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("round-trip-value\n", output);
+        Assert.Equal($"round-trip-value{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class Issue1504LibraryImportStringReturnEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -350,7 +350,7 @@ public class Issue1504LibraryImportStringReturnEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

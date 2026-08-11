@@ -34,7 +34,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
             Console.WriteLine(n.OrElse(99).ToString())
             """;
 
-        Assert.Equal("default\n99\n", Evaluate(source));
+        Assert.Equal($"default{Environment.NewLine}99{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
             Console.WriteLine(n.OrElse(99).ToString())
             """;
 
-        Assert.Equal("ada\n7\n", Evaluate(source));
+        Assert.Equal($"ada{Environment.NewLine}7{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
             Console.WriteLine(nums.FirstOrNil().OrElse(-1).ToString())
             """;
 
-        Assert.Equal("alpha\n11\n", Evaluate(source));
+        Assert.Equal($"alpha{Environment.NewLine}11{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
             Console.WriteLine(solo.SingleOrNil().OrElse(-1).ToString())
             """;
 
-        Assert.Equal("beta\n33\n42\n", Evaluate(source));
+        Assert.Equal($"beta{Environment.NewLine}33{Environment.NewLine}42{Environment.NewLine}", Evaluate(source));
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
             Console.WriteLine(first ?? "<none>")
             """;
 
-        Assert.Equal("a\n", Evaluate(source));
+        Assert.Equal($"a{Environment.NewLine}", Evaluate(source));
     }
 
     private static string Evaluate(string source)
@@ -142,7 +142,7 @@ public class Issue750ConstraintOverloadEmittedOracleTests
         Assert.True(
             errors.Count == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string LocateGsharpExtensionsAssembly()

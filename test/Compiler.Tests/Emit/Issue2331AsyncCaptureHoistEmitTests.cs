@@ -56,7 +56,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n", output);
+        Assert.Equal($"99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("14\n", output);
+        Assert.Equal($"14{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("17\n", output);
+        Assert.Equal($"17{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("101\n102\n", output);
+        Assert.Equal($"101{Environment.NewLine}102{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -234,7 +234,7 @@ public class Issue2331AsyncCaptureHoistEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

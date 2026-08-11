@@ -112,7 +112,7 @@ public class Issue3065MethodSpecRemapKeyTests
             Console.SetOut(previousOut);
         }
 
-        Assert.Equal("11\n22\n", output.ToString().Replace("\r\n", "\n"));
+        Assert.Equal($"11{Environment.NewLine}22{Environment.NewLine}", output.ToString().ReplaceLineEndings(Environment.NewLine));
     }
 
     [Fact]

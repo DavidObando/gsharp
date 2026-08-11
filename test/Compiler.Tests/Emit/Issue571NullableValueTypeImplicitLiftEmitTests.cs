@@ -66,7 +66,7 @@ public class Issue571NullableValueTypeImplicitLiftEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("True\n2\n", output);
+        Assert.Equal($"True{Environment.NewLine}2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue571NullableValueTypeImplicitLiftEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("True\n5\n", output);
+        Assert.Equal($"True{Environment.NewLine}5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -127,7 +127,7 @@ public class Issue571NullableValueTypeImplicitLiftEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
@@ -218,7 +218,7 @@ public class Issue571NullableValueTypeImplicitLiftEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

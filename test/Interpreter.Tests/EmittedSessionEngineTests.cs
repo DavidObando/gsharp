@@ -259,7 +259,7 @@ public sealed class EmittedSessionEngineTests : IDisposable
         var cell = new EmittedSessionEngine { CaptureConsole = true }.Evaluate("Console.WriteLine(\"hi\")");
         Assert.False(cell.HasError);
         Assert.Null(cell.Value);
-        Assert.Equal("hi\n", cell.Output);
+        Assert.Equal($"hi{Environment.NewLine}", cell.Output);
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public sealed class EmittedSessionEngineTests : IDisposable
         engine.CaptureConsole = true;
         var cell = engine.Evaluate("Console.WriteLine(\"line-1\")\nConsole.WriteLine(\"line-2\")");
         Assert.False(cell.HasError);
-        Assert.Equal("line-1\nline-2\n", cell.Output);
+        Assert.Equal($"line-1{Environment.NewLine}line-2{Environment.NewLine}", cell.Output);
     }
 
     [Fact]

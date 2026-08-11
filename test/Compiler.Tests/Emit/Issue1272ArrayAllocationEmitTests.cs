@@ -38,7 +38,7 @@ public class Issue1272ArrayAllocationEmitTests
             Console.WriteLine(a[3])
             """;
 
-        Assert.Equal("4\n0\n0\n0\n0\n", CompileAndRun(source));
+        Assert.Equal($"4{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class Issue1272ArrayAllocationEmitTests
             Console.WriteLine(a[0] + a[1] + a[2])
             """;
 
-        Assert.Equal("3\n0\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class Issue1272ArrayAllocationEmitTests
             Console.WriteLine(a[2])
             """;
 
-        Assert.Equal("5\n10\n20\n0\n", CompileAndRun(source));
+        Assert.Equal($"5{Environment.NewLine}10{Environment.NewLine}20{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class Issue1272ArrayAllocationEmitTests
             Console.WriteLine(a[0] + a[1])
             """;
 
-        Assert.Equal("2\n0\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -149,7 +149,7 @@ public class Issue1272ArrayAllocationEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

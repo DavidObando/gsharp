@@ -53,7 +53,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("99\n99\n", output);
+        Assert.Equal($"99{Environment.NewLine}99{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n77\n", output);
+        Assert.Equal($"3{Environment.NewLine}77{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("7\n6\n", output);
+        Assert.Equal($"7{Environment.NewLine}6{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n-3\n", output);
+        Assert.Equal($"3{Environment.NewLine}-3{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("2\n", output);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("5\n", output);
+        Assert.Equal($"5{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("42\n", output);
+        Assert.Equal($"42{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("123\n", output);
+        Assert.Equal($"123{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nTrue\nTrue\n", output);
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -279,7 +279,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("55\n", output);
+        Assert.Equal($"55{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("88\n", output);
+        Assert.Equal($"88{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -326,7 +326,7 @@ public class Issue1014UnmanagedPointerEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("100\n", output);
+        Assert.Equal($"100{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -393,7 +393,7 @@ public class Issue1014UnmanagedPointerEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

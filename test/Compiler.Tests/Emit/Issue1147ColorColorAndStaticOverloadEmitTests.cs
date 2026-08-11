@@ -57,7 +57,7 @@ public class Issue1147ColorColorAndStaticOverloadEmitTests
             Console.WriteLine(o.Title())
             """;
 
-        Assert.Equal("instance:title\n", CompileAndRun(source));
+        Assert.Equal($"instance:title{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue1147ColorColorAndStaticOverloadEmitTests
             Console.WriteLine(o.Title())
             """;
 
-        Assert.Equal("static\n", CompileAndRun(source));
+        Assert.Equal($"static{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class Issue1147ColorColorAndStaticOverloadEmitTests
             Console.WriteLine(b.GetTagString("x"))
             """;
 
-        Assert.Equal("static-overload\n", CompileAndRun(source));
+        Assert.Equal($"static-overload{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class Issue1147ColorColorAndStaticOverloadEmitTests
             Console.WriteLine(b.Probe())
             """;
 
-        Assert.Equal("instance:name\n", CompileAndRun(source));
+        Assert.Equal($"instance:name{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -202,7 +202,7 @@ public class Issue1147ColorColorAndStaticOverloadEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

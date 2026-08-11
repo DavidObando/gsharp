@@ -229,7 +229,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "1\n2\n3\n4\n8\n12\n13\n16\n17\n18\n19\n20\n",
+            $"1{Environment.NewLine}2{Environment.NewLine}3{Environment.NewLine}4{Environment.NewLine}8{Environment.NewLine}12{Environment.NewLine}13{Environment.NewLine}16{Environment.NewLine}17{Environment.NewLine}18{Environment.NewLine}19{Environment.NewLine}20{Environment.NewLine}",
             CompileVerifyLoadAndRun(source, "Issue2918Receivers.Src"));
     }
 
@@ -280,7 +280,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "7\n",
+            $"7{Environment.NewLine}",
             CompileVerifyLoadAndRun(source, "LambdaArityMatch.Src"));
     }
 
@@ -306,7 +306,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "10\n",
+            $"10{Environment.NewLine}",
             CompileVerifyLoadAndRun(source, "Issue2918Constructor.Src"));
     }
 
@@ -332,7 +332,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
         // Direct named-delegate construction retains the pre-existing #313/#939
         // IL mismatch on main; real execution is the compatibility pin here.
         Assert.Equal(
-            "pred\n",
+            $"pred{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 source,
                 "Issue2918PredicateHolder.Src",
@@ -364,7 +364,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "symbolic\nclosed\n",
+            $"symbolic{Environment.NewLine}closed{Environment.NewLine}",
             CompileVerifyLoadAndRun(source, "Issue2918ConstructorOverloads.Src"));
     }
 
@@ -416,7 +416,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "func\n",
+            $"func{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 WithExecutionScope(declarations, statements, topLevel),
                 expectedSourceTypeName: null,
@@ -452,7 +452,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "2\n",
+            $"2{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 WithExecutionScope(declarations, statements, topLevel),
                 "Issue2948CorpusJoinLet.Owner"));
@@ -487,7 +487,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "ada+tom,bea+rex\n",
+            $"ada+tom,bea+rex{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 WithExecutionScope(declarations, statements, topLevel),
                 "Issue2948CorpusJoinResult.Owner"));
@@ -523,7 +523,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "JoinClause: matched=ada+tom,bea+rex,bea+ziggy\n",
+            $"JoinClause: matched=ada+tom,bea+rex,bea+ziggy{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 WithExecutionScope(declarations, statements, topLevel),
                 "Issue2948CorpusJoinChain.Owner"));
@@ -570,7 +570,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "74\n",
+            $"74{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 WithExecutionScope(declarations, statements, topLevel),
                 "Issue2948CanonicalLinqSelectors.IEntry",
@@ -620,7 +620,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "True\n3\n14\n4\nTrue\n",
+            $"True{Environment.NewLine}3{Environment.NewLine}14{Environment.NewLine}4{Environment.NewLine}True{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 source,
                 "Issue2948NamedDelegateLists.Src",
@@ -674,7 +674,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             Issue2918Contracts.CustomPredicate`1
             True
 
-            """.Replace("\r\n", "\n", StringComparison.Ordinal),
+            """.ReplaceLineEndings(Environment.NewLine),
             CompileVerifyLoadAndRun(source, "Issue2948NamedDelegateConstructors.Src"));
     }
 
@@ -701,7 +701,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "Issue2948CollisionContracts\n42\n",
+            $"Issue2948CollisionContracts{Environment.NewLine}42{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 source,
                 "Issue2948AssemblyIdentity.Src",
@@ -731,7 +731,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "System.Predicate`1\nTrue\n",
+            $"System.Predicate`1{Environment.NewLine}True{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 source,
                 "Issue2918PredicateHoisted.Src",
@@ -918,7 +918,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
             """;
 
         Assert.Equal(
-            "5\n6\n7\n9\n11\n14\n15\n21\n22\n23\n24\n25\n",
+            $"5{Environment.NewLine}6{Environment.NewLine}7{Environment.NewLine}9{Environment.NewLine}11{Environment.NewLine}14{Environment.NewLine}15{Environment.NewLine}21{Environment.NewLine}22{Environment.NewLine}23{Environment.NewLine}24{Environment.NewLine}25{Environment.NewLine}",
             CompileVerifyLoadAndRun(source, "Issue2918Guards.Src"));
     }
 
@@ -1135,7 +1135,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
         Assert.True(
             exitCode == 0,
             $"dotnet exec exited {exitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static void Compile(string[] args)

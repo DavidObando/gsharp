@@ -69,7 +69,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("2\n2\n2\n1\n5\n7\n", CompileAndRun(source));
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}5{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("21\n", CompileAndRun(source));
+        Assert.Equal($"21{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("22\n22\n22\n22\n22\n", CompileAndRun(source));
+        Assert.Equal($"22{Environment.NewLine}22{Environment.NewLine}22{Environment.NewLine}22{Environment.NewLine}22{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("8\n", CompileAndRun(source));
+        Assert.Equal($"8{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("7\n", CompileAndRun(source));
+        Assert.Equal($"7{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -243,7 +243,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("23\n24\n", CompileAndRun(consumer, library, "i2849matrixlib"));
+        Assert.Equal($"23{Environment.NewLine}24{Environment.NewLine}", CompileAndRun(consumer, library, "i2849matrixlib"));
     }
 
     [Fact]
@@ -271,7 +271,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
             }
             """;
 
-        Assert.Equal("9\n", CompileAndRun(consumer, library, "i2849lib2"));
+        Assert.Equal($"9{Environment.NewLine}", CompileAndRun(consumer, library, "i2849lib2"));
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -348,7 +348,7 @@ public class Issue2849NarrowedNullableDelegateInvokeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

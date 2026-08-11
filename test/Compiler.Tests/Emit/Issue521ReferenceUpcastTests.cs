@@ -71,7 +71,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(GreetingSiblingCs, gSource, siblingName: "Greeting");
-        Assert.Equal("Hello, world\n", output);
+        Assert.Equal($"Hello, world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(GreetingSiblingCs, gSource, siblingName: "Greeting");
-        Assert.Equal("Hello, cast\n", output);
+        Assert.Equal($"Hello, cast{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("alpha\nbeta\n", output);
+        Assert.Equal($"alpha{Environment.NewLine}beta{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -136,7 +136,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("hello upcast\n", output);
+        Assert.Equal($"hello upcast{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(GreetingSiblingCs, gSource, siblingName: "Greeting");
-        Assert.Equal("Hello, lambda\n", output);
+        Assert.Equal($"Hello, lambda{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRunWithSiblingCs(GreetingSiblingCs, gSource, siblingName: "Greeting");
-        Assert.Equal("Hello, arg\n", output);
+        Assert.Equal($"Hello, arg{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("scribbled\n", output);
+        Assert.Equal($"scribbled{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ public class Issue521ReferenceUpcastTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("3\n", output);
+        Assert.Equal($"3{Environment.NewLine}", output);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ public class Issue521ReferenceUpcastTests
             Console.WriteLine(Object.ReferenceEquals(s, e))
             """;
 
-        Assert.Equal("True\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}", CompileAndRun(source));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -364,7 +364,7 @@ public class Issue521ReferenceUpcastTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -460,7 +460,7 @@ public class Issue521ReferenceUpcastTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -508,7 +508,7 @@ public class Issue521ReferenceUpcastTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -580,7 +580,7 @@ public class Issue521ReferenceUpcastTests
                 $"expected gsc to report errors but it succeeded\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
 
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {

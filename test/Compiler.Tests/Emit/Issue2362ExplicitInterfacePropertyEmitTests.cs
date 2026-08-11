@@ -82,7 +82,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
             Console.WriteLine(asIface.Greeting)
             """;
 
-        Assert.Equal("public-hi\nexplicit-hi\n", CompileAndRun(source));
+        Assert.Equal($"public-hi{Environment.NewLine}explicit-hi{Environment.NewLine}", CompileAndRun(source));
     }
 
     private const string GetSetReproSource = """
@@ -143,7 +143,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
         // writes straight through to Count (7) — proving both accessors
         // dispatch to the mangled property's own distinct bodies, not the
         // public sibling's.
-        Assert.Equal("50\n7\n", CompileAndRun(source));
+        Assert.Equal($"50{Environment.NewLine}7{Environment.NewLine}", CompileAndRun(source));
     }
 
     private const string GenericInterfaceReproSource = """
@@ -263,7 +263,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
             Console.WriteLine(object(asIface.Token) == object(token))
             """;
 
-        Assert.Equal("True\nTrue\n", CompileAndRun(source));
+        Assert.Equal($"True{Environment.NewLine}True{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static TypeDefinition FindType(MetadataReader reader, string name)
@@ -421,7 +421,7 @@ public class Issue2362ExplicitInterfacePropertyEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

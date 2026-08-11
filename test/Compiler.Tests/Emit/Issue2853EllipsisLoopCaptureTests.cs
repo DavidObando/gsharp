@@ -192,7 +192,7 @@ public class Issue2853EllipsisLoopCaptureTests
     }
 
     private static void AssertEmittedResult(string source, int expected, string testName)
-        => Assert.Equal($"{expected}\n", CompileAndRun(source, testName));
+        => Assert.Equal($"{expected}{Environment.NewLine}", CompileAndRun(source, testName));
 
     private static string CompileAndRun(string source, string testName)
     {
@@ -254,6 +254,6 @@ public class Issue2853EllipsisLoopCaptureTests
         var output = outputTask.GetAwaiter().GetResult();
         var error = errorTask.GetAwaiter().GetResult();
         Assert.True(process.ExitCode == 0, error);
-        return output.Replace("\r\n", "\n");
+        return output.ReplaceLineEndings(Environment.NewLine);
     }
 }

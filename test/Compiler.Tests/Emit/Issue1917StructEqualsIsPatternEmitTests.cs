@@ -46,7 +46,7 @@ public class Issue1917StructEqualsIsPatternEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("True\nFalse\nFalse\n", output);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -110,7 +110,7 @@ public class Issue1917StructEqualsIsPatternEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

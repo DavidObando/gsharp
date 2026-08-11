@@ -63,7 +63,7 @@ public class Issue1035FixedBufferEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n9\n49\n", output);
+        Assert.Equal($"0{Environment.NewLine}9{Environment.NewLine}49{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public class Issue1035FixedBufferEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

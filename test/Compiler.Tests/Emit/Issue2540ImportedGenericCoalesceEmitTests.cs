@@ -86,7 +86,7 @@ public sealed class Issue2540ImportedGenericCoalesceEmitTests
             IlVerifier.Verify(
                 outputPath,
                 additionalReferences: new[] { contractsPath, implementationsPath });
-            Assert.Equal("null\n", Run(outputPath));
+            Assert.Equal($"null{Environment.NewLine}", Run(outputPath));
 
             const string invalidSource = """
                 package Issue2540.Invalid
@@ -211,6 +211,6 @@ public sealed class Issue2540ImportedGenericCoalesceEmitTests
         Assert.True(
             process.ExitCode == 0,
             $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

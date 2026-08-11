@@ -81,7 +81,7 @@ public class Issue1506PerSegmentNestedTypeEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("12\n12\n12\n", output);
+        Assert.Equal($"12{Environment.NewLine}12{Environment.NewLine}12{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)
@@ -164,7 +164,7 @@ public class Issue1506PerSegmentNestedTypeEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -58,7 +58,7 @@ public class Issue1339PropertyDictionaryReceiverEmitTests
             Console.WriteLine(c.SumValues())
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class Issue1339PropertyDictionaryReceiverEmitTests
             Console.WriteLine(c.KeyCount())
             """;
 
-        Assert.Equal("1\n", CompileAndRun(source));
+        Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class Issue1339PropertyDictionaryReceiverEmitTests
             Console.WriteLine(c.HowMany())
             """;
 
-        Assert.Equal("3\n", CompileAndRun(source));
+        Assert.Equal($"3{Environment.NewLine}", CompileAndRun(source));
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class Issue1339PropertyDictionaryReceiverEmitTests
             Console.WriteLine(c.SumValues())
             """;
 
-        Assert.Equal("30\n", CompileAndRun(source));
+        Assert.Equal($"30{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -231,7 +231,7 @@ public class Issue1339PropertyDictionaryReceiverEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -39,7 +39,7 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "Issue3015.Identity.OrdinarySentinel\nIssue3015.Identity.OrdinarySentinel\n",
+            $"Issue3015.Identity.OrdinarySentinel{Environment.NewLine}Issue3015.Identity.OrdinarySentinel{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -59,7 +59,7 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "Issue3015.Identity.LiteralSentinel\nIssue3015.Identity.LiteralSentinel\n",
+            $"Issue3015.Identity.LiteralSentinel{Environment.NewLine}Issue3015.Identity.LiteralSentinel{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -77,7 +77,7 @@ public class Issue3015ImportedBaseIdentityTests
             Console.WriteLine(OrdinaryBuffer().CanRead)
             """;
 
-        Assert.Equal("True\n", Evaluate(Source));
+        Assert.Equal($"True{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class Issue3015ImportedBaseIdentityTests
             Console.WriteLine(LiteralBuffer{}.CanRead)
             """;
 
-        Assert.Equal("True\n", Evaluate(Source));
+        Assert.Equal($"True{Environment.NewLine}", Evaluate(Source));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "explicit-state-3015\nIssue3015.Constructor.MessageSentinel\n",
+            $"explicit-state-3015{Environment.NewLine}Issue3015.Constructor.MessageSentinel{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -142,7 +142,7 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "default-3015\nexplicit-3015\nIssue3015.Constructor.OverloadedSentinel\nTrue\n",
+            $"default-3015{Environment.NewLine}explicit-3015{Environment.NewLine}Issue3015.Constructor.OverloadedSentinel{Environment.NewLine}True{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -164,8 +164,8 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "Issue3015.Generic.OrdinaryGenericSentinel`1[System.Int32]\n"
-                + "Issue3015.Generic.LiteralGenericSentinel`1[System.String]\n",
+            $"Issue3015.Generic.OrdinaryGenericSentinel`1[System.Int32]{Environment.NewLine}"
+                + $"Issue3015.Generic.LiteralGenericSentinel`1[System.String]{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -258,8 +258,8 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "Issue3015.Nested.Outer+OrdinaryNestedSentinel\n"
-                + "Issue3015.Nested.Outer+LiteralNestedSentinel\n",
+            $"Issue3015.Nested.Outer+OrdinaryNestedSentinel{Environment.NewLine}"
+                + $"Issue3015.Nested.Outer+LiteralNestedSentinel{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -296,8 +296,8 @@ public class Issue3015ImportedBaseIdentityTests
         try
         {
             var gscScript = RunSourceDriver(Path.Combine(root, "gsc-script"), Source, Program.Main);
-            Assert.EndsWith("Success.\n", gscScript);
-            gscScript = gscScript[..^"Success.\n".Length];
+            Assert.EndsWith($"Success.{Environment.NewLine}", gscScript);
+            gscScript = gscScript[..^$"Success.{Environment.NewLine}".Length];
             var gsiScript = RunSourceDriver(Path.Combine(root, "gsi"), Source, GSharp.Repl.Program.Main);
             var emitDirectory = Path.Combine(root, "gsc-emit");
             Directory.CreateDirectory(emitDirectory);
@@ -357,7 +357,7 @@ public class Issue3015ImportedBaseIdentityTests
             """;
 
         Assert.Equal(
-            "37\nIssue3015.ProtectedConstructor.ProtectedSentinel\n",
+            $"37{Environment.NewLine}Issue3015.ProtectedConstructor.ProtectedSentinel{Environment.NewLine}",
             Evaluate(Source));
     }
 
@@ -369,7 +369,7 @@ public class Issue3015ImportedBaseIdentityTests
             errors.Length == 0,
             "evaluation failed:\n" + string.Join("\n", errors.Select(d => d.ToString())));
 
-        return result.Output.Replace("\r\n", "\n");
+        return result.Output.ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string RunSourceDriver(string directory, string source, Func<string[], int> driver)
@@ -402,7 +402,7 @@ public class Issue3015ImportedBaseIdentityTests
         Assert.True(
             exit == 0,
             $"driver failed with exit {exit}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.ToString().Replace("\r\n", "\n");
+        return stdout.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 
     private static string NormalizeGenericTypeNames(string output)

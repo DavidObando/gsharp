@@ -48,7 +48,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("disposed\n", output);
+        Assert.Equal($"disposed{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("0\n", output);
+        Assert.Equal($"0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("clone\ngone\n", output);
+        Assert.Equal($"clone{Environment.NewLine}gone{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "ProbeRef");
-        Assert.Equal("hello\n", output);
+        Assert.Equal($"hello{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRunWithSiblingCs(sibling, gsource, siblingName: "Probe.CSharp");
-        Assert.Equal("hi world\n", output);
+        Assert.Equal($"hi world{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("woof\n", output);
+        Assert.Equal($"woof{Environment.NewLine}", output);
     }
 
     private static string CompileLibrary(string source)
@@ -368,7 +368,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {
@@ -415,7 +415,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
             // gsc writes diagnostics to stdout in this repo; surface both
             // streams so a brittle test failure is easy to diagnose.
             var combined = compileOut.ToString() + compileErr.ToString();
-            return combined.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            return combined.Split(Environment.NewLine).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
         }
         finally
         {
@@ -519,7 +519,7 @@ public class Issue525ClassImplementsClrInterfaceEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

@@ -45,7 +45,7 @@ public class UserDefinedExceptionCatchEmitTests
             }
             """;
 
-        Assert.Equal("generic:caught\n", CompileAndRun(src));
+        Assert.Equal($"generic:caught{Environment.NewLine}", CompileAndRun(src));
     }
 
     [Fact]
@@ -77,7 +77,7 @@ public class UserDefinedExceptionCatchEmitTests
             }
             """;
 
-        Assert.Equal("generic\n", CompileAndRun(src));
+        Assert.Equal($"generic{Environment.NewLine}", CompileAndRun(src));
     }
 
     private static string CompileAndRun(string source)
@@ -137,7 +137,7 @@ public class UserDefinedExceptionCatchEmitTests
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

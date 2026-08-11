@@ -198,7 +198,7 @@ public class Issue2361DataToStringOverrideEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("base:n:x\nbase:n:x\n", output);
+        Assert.Equal($"base:n:x{Environment.NewLine}base:n:x{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -247,7 +247,7 @@ public class Issue2361DataToStringOverrideEmitTests
 
         var output = CompileAndRun(source);
         const string expected = "ProfileKey Id=1, Region=Us, AccountId=acct-id, AccountName=acct-name, DeviceName=device-1";
-        Assert.Equal(expected + "\n" + expected + "\n", output);
+        Assert.Equal(expected + Environment.NewLine + expected + Environment.NewLine, output);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class Issue2361DataToStringOverrideEmitTests
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal("#7\n#7\n", output);
+        Assert.Equal($"#7{Environment.NewLine}#7{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -425,7 +425,7 @@ public class Issue2361DataToStringOverrideEmitTests
                 throw new Xunit.Sdk.XunitException("exited " + proc.ExitCode + "\nstdout:\n" + stdout + "\nstderr:\n" + stderr);
             }
 
-            return stdout.Replace("\r\n", "\n");
+            return stdout.ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

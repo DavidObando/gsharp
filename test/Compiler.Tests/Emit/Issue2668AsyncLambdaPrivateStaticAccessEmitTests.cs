@@ -107,7 +107,7 @@ public class Issue2668AsyncLambdaPrivateStaticAccessEmitTests
             Assert.True(args.IsPrivate);
             Assert.True(writeSseAsync.IsPrivate);
 
-            Assert.Equal("68\n", Run(outputPath, tempDir));
+            Assert.Equal($"68{Environment.NewLine}", Run(outputPath, tempDir));
         }
         finally
         {
@@ -161,6 +161,6 @@ public class Issue2668AsyncLambdaPrivateStaticAccessEmitTests
         var stderr = process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
         Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
-        return stdout.Replace("\r\n", "\n");
+        return stdout.ReplaceLineEndings(Environment.NewLine);
     }
 }

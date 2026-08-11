@@ -57,7 +57,7 @@ public class Issue2643NamedGenericDelegateArgumentEmitTests
             """,
             nameof(OahuConvertDelegateExactSites_RunAndVerify));
 
-        Assert.Equal("book:simple:window\nbook:linked:cli\n", output);
+        Assert.Equal($"book:simple:window{Environment.NewLine}book:linked:cli{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class Issue2643NamedGenericDelegateArgumentEmitTests
             """,
             nameof(GenericMethod_InfersNamedDelegateTypeArgumentFromStructuralFunction_RunAndVerify));
 
-        Assert.Equal("SimpleCancellation\n", output);
+        Assert.Equal($"SimpleCancellation{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class Issue2643NamedGenericDelegateArgumentEmitTests
             """,
             nameof(NamedDelegateValue_PreservesIdentityAcrossGenericCall_RunAndVerify));
 
-        Assert.Equal("True\n", output);
+        Assert.Equal($"True{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class Issue2643NamedGenericDelegateArgumentEmitTests
                 Console.SetOut(output);
             }
 
-            return captured.ToString().Replace("\r\n", "\n");
+            return captured.ToString().ReplaceLineEndings(Environment.NewLine);
         }
         finally
         {

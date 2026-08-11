@@ -58,7 +58,7 @@ public sealed class Issue2786AsyncIteratorClassificationEmittedSessionTests
             Console.WriteLine(instanceCount.ToString() + ":" + emptyCount.ToString() + ":" + sum.ToString())
             """;
 
-        Assert.Equal("0:0:42\n", RunSubmission(source));
+        Assert.Equal($"0:0:42{Environment.NewLine}", RunSubmission(source));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public sealed class Issue2786AsyncIteratorClassificationEmittedSessionTests
             Console.WriteLine(emptyCount.ToString() + ":" + sum.ToString())
             """;
 
-        Assert.Equal("0:42\n", RunSubmission(source));
+        Assert.Equal($"0:42{Environment.NewLine}", RunSubmission(source));
     }
 
     private static string RunSubmission(string source)
@@ -124,6 +124,6 @@ public sealed class Issue2786AsyncIteratorClassificationEmittedSessionTests
             Console.SetOut(previous);
         }
 
-        return output.ToString().Replace("\r\n", "\n");
+        return output.ToString().ReplaceLineEndings(Environment.NewLine);
     }
 }
