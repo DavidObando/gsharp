@@ -178,6 +178,32 @@ public sealed partial class CSharpToGSharpTranslator
                     yield break;
                 }
 
+                // Issue #3348: a query CLAUSE's expression is translated inside the
+                // lambda that clause lowers to (see <see cref="BuildScopeLambda"/> /
+                // <see cref="LowerLetClause"/>) — its own evaluation scope, exactly
+                // like an explicit lambda's, even though it is not an
+                // `AnonymousFunctionExpressionSyntax` syntactically. Hoisting an
+                // assignment out of one would move the write into the ENCLOSING
+                // statement, where the range variable it reads is not in scope at
+                // all, and would run it once for the whole query instead of once per
+                // element. Only the sub-expressions a query evaluates EAGERLY, in the
+                // enclosing scope, are scanned here: the source of the first `from`,
+                // and each `join`'s `in` source (C# forbids either from referencing a
+                // range variable, so neither can capture one). Every clause body is
+                // left to its own lambda's seam, which hoists into the lambda.
+                if (node is QueryExpressionSyntax query)
+                {
+                    foreach (ExpressionSyntax eager in EagerQuerySources(query))
+                    {
+                        foreach (AssignmentExpressionSyntax found in Scan(eager))
+                        {
+                            yield return found;
+                        }
+                    }
+
+                    yield break;
+                }
+
                 if (node is AssignmentExpressionSyntax assignment)
                 {
                     if (IsInitializerMember(assignment))
@@ -230,6 +256,28 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return safe;
+        }
+
+        // Issue #3348: the sub-expressions of `query` that are evaluated EAGERLY, in
+        // the scope enclosing the query, rather than inside one of the lambdas its
+        // clauses lower to — the first `from`'s source, and every `join`'s `in`
+        // source (including those in an `into` continuation's body). C# forbids both
+        // from referencing a range variable, so a hoist out of either is safe.
+        // Everything else in a query is a clause body and belongs to its own lambda.
+        private static IEnumerable<ExpressionSyntax> EagerQuerySources(QueryExpressionSyntax query)
+        {
+            yield return query.FromClause.Expression;
+
+            for (QueryBodySyntax body = query.Body; body != null; body = body.Continuation?.Body)
+            {
+                foreach (QueryClauseSyntax clause in body.Clauses)
+                {
+                    if (clause is JoinClauseSyntax join)
+                    {
+                        yield return join.InExpression;
+                    }
+                }
+            }
         }
 
         // A `?:` arm owns a native G# block-expression seam. An enclosing seam

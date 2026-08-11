@@ -1812,7 +1812,11 @@ public sealed partial class CSharpToGSharpTranslator
             var prologue = new List<GStatement>();
             Parameter param = this.BuildScopeParameter(scope, prologue);
             this.ReportIfIndexOrRangeTypedRangeVariable(let, let.Identifier, this.context.GetTypeInfo(let.Expression).Type);
-            GExpression letValue = this.TranslateExpression(let.Expression);
+
+            // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
+            // inside this Select lambda — hoist into its own prologue, not the
+            // enclosing statement's.
+            GExpression letValue = this.TranslateQueryLambdaBody(let.Expression, prologue);
             GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
                 ? this.typeMapper.Map(t, this.context, let.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
@@ -1964,16 +1968,34 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var prologue = new List<GStatement>();
             Parameter param = this.BuildScopeParameter(scope, prologue);
+
+            // Issue #3348: translate the clause body INSIDE this lambda's own seam.
+            // Anything it hoists — a single-evaluation spill (issue #1731) or an
+            // embedded value-position assignment (issue #1723) — lands in `prologue`,
+            // after the scope-parameter deconstruction it may read from, and so runs
+            // once per element inside the lambda. Left on the enclosing statement's
+            // ambient seam it would instead be emitted before the whole query, where
+            // the range variable it references is not in scope.
+            GExpression body = this.TranslateQueryLambdaBody(lambdaBody, prologue);
             if (prologue.Count == 0)
             {
-                return new LambdaExpression(
-                    new List<Parameter> { param },
-                    expressionBody: this.TranslateExpression(lambdaBody));
+                return new LambdaExpression(new List<Parameter> { param }, expressionBody: body);
             }
 
-            prologue.Add(new ReturnStatement(this.TranslateExpression(lambdaBody)));
+            prologue.Add(new ReturnStatement(body));
             return new LambdaExpression(new List<Parameter> { param }, blockBody: new BlockStatement(prologue));
         }
+
+        // Issue #3348: translates a query-clause expression as the body of the lambda
+        // that clause lowers to, redirecting every hoist into that lambda's own
+        // `prologue`. <see cref="TranslateConditionWithHoist"/> already implements
+        // exactly this contract for loop/if conditions — redirect the spill seam AND
+        // hoist embedded assignments into a caller-supplied statement list — so it is
+        // reused verbatim rather than duplicated. `CollectEmbeddedAssignments` no
+        // longer descends into a query clause (see <see cref="EagerQuerySources"/>),
+        // so the enclosing statement leaves these assignments for this call to hoist.
+        private GExpression TranslateQueryLambdaBody(ExpressionSyntax lambdaBody, List<GStatement> prologue) =>
+            this.TranslateConditionWithHoist(lambdaBody, prologue);
 
         // Builds the `(x1, x2) => new{x1, x2}` result-selector shape shared by
         // SelectMany/Join/GroupJoin (spec §12.19.3.3/.7/.8): one parameter for
