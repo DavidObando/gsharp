@@ -571,33 +571,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translated = new NonNullAssertionExpression(translated);
             }
-            else if (!this.IsWithinExpressionTreeLambda(recv) && IsReferenceConversionAs(translated))
-            {
-                // ADR-0160: a C# hard cast used as a receiver (`((IProfile)p).X`)
-                // renders as `p as IProfile`, because G# has no conversion-call form
-                // for a reference downcast (see `TranslateCast`, issue #914). `as`
-                // yields `T?`, so the member access needs `!!` — GS0158 otherwise.
-                // This is a RENDERING obligation, not a flow fact: Roslyn proves the
-                // cast result non-null (a failing hard cast throws), which is exactly
-                // why the predicates above decline to assert. Before ADR-0160 gsc
-                // typed `as` as non-nullable and the gap was invisible.
-                translated = new NonNullAssertionExpression(translated);
-            }
 
             return ParenthesizeIfBareNumericLiteral(translated);
         }
-
-        // ADR-0160: true when `expr` is a reference-conversion `as` — the form
-        // `TranslateCast` emits for a C# hard cast between reference types — possibly
-        // wrapped in the parentheses `CoerceOperandTo` adds. Such an expression is
-        // `T?` in G#, so any position needing the non-null `T` must assert it.
-        private static bool IsReferenceConversionAs(GExpression expr) =>
-            expr switch
-            {
-                ParenthesizedExpression parenthesized => IsReferenceConversionAs(parenthesized.Inner),
-                BinaryExpression { Operator: "as" } => true,
-                _ => false,
-            };
 
         // ADR-0054: G#'s parser never chains postfix member/index/call access
         // directly onto a numeric-literal token (`42.ToString()`, `7.Squared()`)
