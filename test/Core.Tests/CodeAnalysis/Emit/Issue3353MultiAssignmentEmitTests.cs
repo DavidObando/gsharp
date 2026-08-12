@@ -480,6 +480,93 @@ public sealed class Issue3353MultiAssignmentEmitTests
         Assert.Equal(new[] { "0" }, lines);
     }
 
+    [Fact]
+    public void AsyncConstrainedPropertyRead_AddressableFieldReceiver_Runs()
+    {
+        var lines = Run("""
+            import System
+            import System.Threading.Tasks
+
+            interface IValue { prop Value int32 { get; set; } }
+
+            struct ValueBox : IValue {
+                var Raw int32
+                prop Value int32 {
+                    get { return Raw }
+                    set(v) { Raw = v }
+                }
+            }
+
+            async func Read[T IValue](value T) int32 {
+                await Task.Yield()
+                return value.Value
+            }
+
+            var task = Read[ValueBox](ValueBox{Raw: 7})
+            task.Wait()
+            Console.WriteLine(task.Result)
+            """);
+
+        Assert.Equal(new[] { "7" }, lines);
+    }
+
+    [Fact]
+    public void MultiAssignment_ConstrainedPropertyFieldReceiver_PreservesStorage()
+    {
+        var lines = Run("""
+            import System
+
+            interface IValue { prop Value int32 { get; set; } }
+
+            struct ValueBox : IValue {
+                var Raw int32
+                prop Value int32 {
+                    get { return Raw }
+                    set(v) { Raw = v }
+                }
+            }
+
+            class Holder[T IValue] {
+                var Stored T
+
+                func Replace(value int32) int32 {
+                    var old = 0
+                    old, Stored.Value = Stored.Value, value
+                    return (old * 10) + Stored.Value
+                }
+            }
+
+            let holder = Holder[ValueBox]{Stored: ValueBox{Raw: 3}}
+            Console.WriteLine(holder.Replace(7))
+            """);
+
+        Assert.Equal(new[] { "37" }, lines);
+    }
+
+    [Fact]
+    public void ConstrainedImportedCall_AddressableFieldReceiver_MutatesStorage()
+    {
+        var lines = Run("""
+            import System
+            import System.Collections.Generic
+
+            class Holder[T IEnumerator[int32]] {
+                var Value T
+
+                func MoveNext() bool {
+                    return Value.MoveNext()
+                }
+            }
+
+            let values = List[int32]{4, 5}
+            let holder = Holder[List[int32].Enumerator]{Value: values.GetEnumerator()}
+            Console.WriteLine(holder.MoveNext())
+            Console.WriteLine(holder.Value.Current)
+            """);
+
+        Assert.Equal(new[] { "True", "4" }, lines);
+    }
+
     private static string[] Run(string source)
     {
         var result = EmittedOracle.Evaluate(source);

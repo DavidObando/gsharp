@@ -1092,13 +1092,13 @@ internal sealed class SlotPlanner
 
         protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
         {
-            this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterCall);
+            this.AddIfNeeded(node.Receiver);
             base.VisitImportedInstanceCallExpression(node);
         }
 
         protected override void VisitUserInstanceCallExpression(BoundUserInstanceCallExpression node)
         {
-            this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterCall);
+            this.AddIfNeeded(node.Receiver);
             base.VisitUserInstanceCallExpression(node);
         }
 
@@ -1106,7 +1106,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
+                this.AddIfNeeded(node.Receiver);
             }
 
             base.VisitClrPropertyAccessExpression(node);
@@ -1116,7 +1116,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
+                this.AddIfNeeded(node.Receiver);
                 this.AddIfCompoundReused(node.Receiver, node.Value);
             }
 
@@ -1169,7 +1169,7 @@ internal sealed class SlotPlanner
         {
             if (node.Receiver != null)
             {
-                this.AddReceiver(node.Receiver, node.IsConstrainedTypeParameterAccess);
+                this.AddIfNeeded(node.Receiver);
             }
 
             base.VisitClrEventSubscriptionExpression(node);
@@ -1187,7 +1187,7 @@ internal sealed class SlotPlanner
 
         protected override void VisitClrIndexExpression(BoundClrIndexExpression node)
         {
-            this.AddReceiver(node.Target, node.IsConstrainedTypeParameterAccess);
+            this.AddIfNeeded(node.Target);
             base.VisitClrIndexExpression(node);
         }
 
@@ -1195,7 +1195,7 @@ internal sealed class SlotPlanner
         {
             if (node.TargetExpression != null)
             {
-                this.AddReceiver(node.TargetExpression, node.IsConstrainedTypeParameterAccess);
+                this.AddIfNeeded(node.TargetExpression);
             }
 
             base.VisitClrIndexAssignmentExpression(node);
@@ -1236,18 +1236,6 @@ internal sealed class SlotPlanner
             {
                 this.sink.Add(receiver);
             }
-        }
-
-        private void AddReceiver(BoundExpression receiver, bool isConstrained)
-        {
-            if (isConstrained
-                && (receiver is not BoundVariableExpression bve || bve.NarrowedType != null))
-            {
-                this.sink.Add(receiver);
-                return;
-            }
-
-            this.AddIfNeeded(receiver);
         }
 
         // Issue #1688: a compound member assignment (`getObj().F += x` /

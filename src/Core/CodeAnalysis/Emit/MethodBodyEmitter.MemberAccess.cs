@@ -1635,13 +1635,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Slot planning deliberately skips receivers whose field address can be
+        // loaded directly; mirror that decision instead of demanding a spill.
+        if (receiver is BoundFieldAccessExpression fieldAccess
+            && this.outer.cache.StructFieldDefs.ContainsKey(fieldAccess.Field)
+            && this.IsAddressableFieldAccess(fieldAccess))
+        {
+            this.EmitFieldAddress(fieldAccess);
+            return;
+        }
+
         this.EmitExpression(receiver);
         if (!this.receiverSpillSlots.TryGetValue(receiver, out var slot))
         {
             throw new InvalidOperationException(
                 $"No slot populated for constrained type-parameter receiver of kind "
                 + $"'{receiver.Kind}' — walker pre-pass missed this child? "
-                + "Check ReceiverSpillCollector.VisitImportedInstanceCallExpression.");
+                + "Check ReceiverSpillCollector and constrained receiver addressability.");
         }
 
         this.il.StoreLocal(slot);
