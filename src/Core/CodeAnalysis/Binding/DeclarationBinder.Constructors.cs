@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -109,49 +110,58 @@ internal sealed partial class DeclarationBinder
         ImmutableArray<BoundExpression>.Builder boundArguments;
         BaseConstructorInitializer? clrInit = null;
         BaseConstructorInitializer? gsharpInit = null;
-        using (PushStaticMemberScope(structSymbol))
+        var savedFunction = getCurrentFunction();
+        setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol));
+        try
         {
-            var staticScope = scope;
-            scope = new BoundScope(staticScope);
-            if (!primaryCtorParameters.IsDefaultOrEmpty)
+            using (PushStaticMemberScope(structSymbol))
             {
-                foreach (var p in primaryCtorParameters)
+                var staticScope = scope;
+                scope = new BoundScope(staticScope);
+                if (!primaryCtorParameters.IsDefaultOrEmpty)
                 {
-                    scope.TryDeclareVariable(p);
+                    foreach (var p in primaryCtorParameters)
+                    {
+                        scope.TryDeclareVariable(p);
+                    }
                 }
-            }
 
-            var baseArguments = syntax.BaseConstructorArguments
-                ?? throw new InvalidOperationException(
-                    "Invariant violated: a base-constructor argument list has an opening parenthesis.");
-            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(baseArguments.Count);
-            for (var i = 0; i < baseArguments.Count; i++)
-            {
-                boundArguments.Add(bindExpression(baseArguments[i]));
-            }
+                var baseArguments = syntax.BaseConstructorArguments
+                    ?? throw new InvalidOperationException(
+                        "Invariant violated: a base-constructor argument list has an opening parenthesis.");
+                boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(baseArguments.Count);
+                for (var i = 0; i < baseArguments.Count; i++)
+                {
+                    boundArguments.Add(BindConstructorInitializerArgument(baseArguments[i]));
+                }
 
-            // Issue #1812: resolve (and, when needed, interpolation-rebind)
-            // while the primary-ctor-parameter scope set up above is still
-            // active — this must happen before the `using` block below tears
-            // the parameter scope back down (`PushStaticMemberScope`'s
-            // `Dispose` hard-resets `binderCtx.RootScope`, discarding the
-            // child scope created above regardless of any assignment here).
-            // See the matching comment in BindConstructorBaseInitializerCore.
-            if (importedBaseType?.ClrType is System.Type clrBase)
-            {
-                clrInit = ResolveClrBaseConstructor(i => baseArguments[i].Location, clrBase, boundArguments, location, i => baseArguments[i]);
-            }
-            else
-            {
-                gsharpInit = ResolveGSharpBaseConstructor(
-                    i => baseArguments[i].Location,
-                    structSymbol.Name,
-                    Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
-                    boundArguments,
-                    location);
-            }
+                // Issue #1812: resolve (and, when needed, interpolation-rebind)
+                // while the primary-ctor-parameter scope set up above is still
+                // active — this must happen before the `using` block below tears
+                // the parameter scope back down (`PushStaticMemberScope`'s
+                // `Dispose` hard-resets `binderCtx.RootScope`, discarding the
+                // child scope created above regardless of any assignment here).
+                // See the matching comment in BindConstructorBaseInitializerCore.
+                if (importedBaseType?.ClrType is System.Type clrBase)
+                {
+                    clrInit = ResolveClrBaseConstructor(i => baseArguments[i].Location, clrBase, boundArguments, location, i => baseArguments[i]);
+                }
+                else
+                {
+                    gsharpInit = ResolveGSharpBaseConstructor(
+                        i => baseArguments[i].Location,
+                        structSymbol.Name,
+                        Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
+                        boundArguments,
+                        location);
+                }
 
-            scope = staticScope;
+                scope = staticScope;
+            }
+        }
+        finally
+        {
+            setCurrentFunction(savedFunction);
         }
 
         if (clrInit != null)
@@ -178,6 +188,8 @@ internal sealed partial class DeclarationBinder
         var ctors = ClrTypeUtilities.SafeGetConstructors(clrBase, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
             .Where(c => c.IsPublic || c.IsFamily || c.IsFamilyOrAssembly)
             .ToArray();
+
+        RebindDeferredArgumentsWithCommonClrTargets(ctors, boundArguments);
 
         var argTypes = new System.Type?[boundArguments.Count];
         var argsAllTyped = true;
@@ -358,6 +370,106 @@ internal sealed partial class DeclarationBinder
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), bestCtor, refKindsBuilder.ToImmutable());
     }
 
+    private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)
+    {
+        if (ExpressionBinder.IsTargetDependentBlockArgumentSyntax(syntax))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (!ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(syntax))
+        {
+            return bindExpression(syntax);
+        }
+
+        var previous = binderCtx.DeferTargetlessConditional;
+        binderCtx.DeferTargetlessConditional = true;
+        try
+        {
+            return bindExpression(syntax);
+        }
+        finally
+        {
+            binderCtx.DeferTargetlessConditional = previous;
+        }
+    }
+
+    private void RebindDeferredArgumentsWithCommonClrTargets(
+        ConstructorInfo[] constructors,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
+    {
+        var deferred = Enumerable.Range(0, boundArguments.Count)
+            .Where(index => ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out _))
+            .ToArray();
+        if (deferred.Length == 0)
+        {
+            return;
+        }
+
+        var deferredSet = deferred.ToHashSet();
+        var applicabilityArgumentTypes = new System.Type?[boundArguments.Count];
+        for (var i = 0; i < boundArguments.Count; i++)
+        {
+            if (deferredSet.Contains(i))
+            {
+                applicabilityArgumentTypes[i] = ClrOverloadResolution.DefaultLiteralArgumentType;
+                continue;
+            }
+
+            var argumentType = getEffectiveArgumentClrType(boundArguments[i].Type);
+            if (argumentType == null && boundArguments[i].Type != TypeSymbol.Null)
+            {
+                return;
+            }
+
+            applicabilityArgumentTypes[i] = argumentType;
+        }
+
+        var delegateRefKindCheck = ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments);
+        var compatible = constructors
+            .Select(constructor => (Constructor: constructor, Parameters: constructor.GetParameters()))
+            .Where(candidate => candidate.Parameters.Length == boundArguments.Count)
+            .Where(candidate => deferred.All(index =>
+            {
+                var targetClrType = candidate.Parameters[index].ParameterType;
+                if (targetClrType.IsByRef)
+                {
+                    targetClrType = targetClrType.GetElementType() ?? targetClrType;
+                }
+
+                return ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax)
+                    && ExpressionBinder.CanTargetDependentBlockArgument(syntax, TypeSymbol.FromClrType(targetClrType));
+            }))
+            .Where(candidate => ClrOverloadResolution.Resolve(
+                [candidate.Constructor],
+                applicabilityArgumentTypes,
+                constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
+                structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
+                delegateRefKindArgumentCheck: (index, targetType) =>
+                    deferredSet.Contains(index) ? true : delegateRefKindCheck?.Invoke(index, targetType)).Outcome
+                == ClrOverloadResolution.ResolutionOutcome.Resolved)
+            .ToArray();
+
+        foreach (var index in deferred)
+        {
+            var targetTypes = compatible
+                .Select(candidate => candidate.Parameters[index].ParameterType)
+                .Select(type => type.IsByRef ? type.GetElementType() ?? type : type)
+                .Distinct()
+                .ToArray();
+            if (targetTypes.Length != 1)
+            {
+                continue;
+            }
+
+            var targetType = TypeSymbol.FromClrType(targetTypes[0]);
+            boundArguments[index] = conversions.BindConversion(
+                boundArguments[index].Syntax?.Location ?? default,
+                boundArguments[index],
+                targetType);
+        }
+    }
+
     /// <summary>
     /// Issue #1812 (ADR-0055 Tier 4 / #369 companion): produces the per-argument
     /// flags marking which positional `: base(...)` arguments are
@@ -431,6 +543,25 @@ internal sealed partial class DeclarationBinder
         {
             var argument = boundArguments[i];
             var parameter = baseParams[i];
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
+            {
+                argument = conversions.BindConversion(argLocation(i), argument, parameter.Type);
+                boundArguments[i] = argument;
+            }
+
+            if (parameter.RefKind != RefKind.None)
+            {
+                if (!TryGetAddressedArgumentType(argument, out var addressedType)
+                    || addressedType != parameter.Type)
+                {
+                    Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count);
+                    return null;
+                }
+
+                convertedArgs.Add(argument);
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit
                 && !ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameter.Type))
@@ -495,6 +626,27 @@ internal sealed partial class DeclarationBinder
             {
                 var argType = boundArguments[i].Type;
                 var paramType = paramTypes[i];
+                var parameter = candidate.Parameters[i];
+                if (parameter.RefKind != RefKind.None)
+                {
+                    if (!TryGetAddressedArgumentType(boundArguments[i], out var addressedType)
+                        || addressedType != paramType)
+                    {
+                        applicable = false;
+                        break;
+                    }
+
+                    exactMatches++;
+                    continue;
+                }
+
+                if (boundArguments[i] is BoundAddressOfExpression { IsUnmanaged: false }
+                    or BoundConditionalAddressExpression)
+                {
+                    applicable = false;
+                    break;
+                }
+
                 if (argType == paramType)
                 {
                     exactMatches++;
@@ -505,6 +657,13 @@ internal sealed partial class DeclarationBinder
                 // diagnostic already explains the bad argument.
                 if (argType == TypeSymbol.Error)
                 {
+                    if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[i], out var deferredSyntax)
+                        && !ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, paramType))
+                    {
+                        applicable = false;
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -557,10 +716,30 @@ internal sealed partial class DeclarationBinder
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
         for (var i = 0; i < boundArguments.Count; i++)
         {
-            convertedArgs.Add(conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
+            convertedArgs.Add(best.Parameters[i].RefKind != RefKind.None
+                ? boundArguments[i]
+                : conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best);
+    }
+
+    private static bool TryGetAddressedArgumentType(
+        BoundExpression argument,
+        [NotNullWhen(true)] out TypeSymbol? addressedType)
+    {
+        switch (argument)
+        {
+            case BoundAddressOfExpression { IsUnmanaged: false } address:
+                addressedType = address.Operand.Type;
+                return true;
+            case BoundConditionalAddressExpression conditionalAddress:
+                addressedType = conditionalAddress.PointeeType;
+                return true;
+            default:
+                addressedType = null;
+                return false;
+        }
     }
 
     /// <summary>
@@ -892,53 +1071,67 @@ internal sealed partial class DeclarationBinder
 
         ImmutableArray<BoundExpression>.Builder boundArguments;
         BaseConstructorInitializer? init = null;
-        using (PushStaticMemberScope(structSymbol))
+        var savedFunction = getCurrentFunction();
+        var savedInitializerContext = ctorFunction.IsExpressionInitializer;
+        ctorFunction.IsExpressionInitializer = true;
+        setCurrentFunction(ctorFunction);
+        try
         {
-            var staticScope = scope;
-            scope = new BoundScope(staticScope);
-            foreach (var p in ctorFunction.Parameters)
-            {
-                scope.TryDeclareVariable(p);
-            }
+            using var initializerContext = binderCtx.PushConstructorInitializerContext();
 
-            boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
-            for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+            using (PushStaticMemberScope(structSymbol))
             {
-                boundArguments.Add(bindExpression(ctorSyntax.BaseArguments[i]));
-            }
+                var staticScope = scope;
+                scope = new BoundScope(staticScope);
+                foreach (var p in ctorFunction.Parameters)
+                {
+                    scope.TryDeclareVariable(p);
+                }
 
-            // Issue #1812: resolve (and, when needed, interpolation-rebind)
-            // while the ctor-parameter scope set up above is still active, so
-            // a `: base($"...{n}...")` argument referencing an explicit ctor
-            // parameter (`n`) can be re-bound against the chosen
-            // FormattableString parameter — this must happen before the
-            // `using` block below tears the parameter scope back down
-            // (`PushStaticMemberScope`'s `Dispose` hard-resets
-            // `binderCtx.RootScope`, discarding the child scope created above
-            // regardless of any assignment here), otherwise the rebind would
-            // fail to resolve `n` (issue #377/#1638's
-            // RebindFormattableInterpolationArguments does not have this
-            // problem because ExpressionBinder never tears its scope down
-            // mid-call the way this deferred base-initializer pass does).
-            if (baseClassSymbol == null && importedBaseType == null)
-            {
-                Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
-            }
-            else if (importedBaseType?.ClrType is System.Type clrBase)
-            {
-                init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location, i => ctorSyntax.BaseArguments[i]);
-            }
-            else
-            {
-                init = ResolveGSharpBaseConstructor(
-                    i => ctorSyntax.BaseArguments[i].Location,
-                    structSymbol.Name,
-                    Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
-                    boundArguments,
-                    location);
-            }
+                boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
+                for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+                {
+                    boundArguments.Add(BindConstructorInitializerArgument(ctorSyntax.BaseArguments[i]));
+                }
 
-            scope = staticScope;
+                // Issue #1812: resolve (and, when needed, interpolation-rebind)
+                // while the ctor-parameter scope set up above is still active, so
+                // a `: base($"...{n}...")` argument referencing an explicit ctor
+                // parameter (`n`) can be re-bound against the chosen
+                // FormattableString parameter — this must happen before the
+                // `using` block below tears the parameter scope back down
+                // (`PushStaticMemberScope`'s `Dispose` hard-resets
+                // `binderCtx.RootScope`, discarding the child scope created above
+                // regardless of any assignment here), otherwise the rebind would
+                // fail to resolve `n` (issue #377/#1638's
+                // RebindFormattableInterpolationArguments does not have this
+                // problem because ExpressionBinder never tears its scope down
+                // mid-call the way this deferred base-initializer pass does).
+                if (baseClassSymbol == null && importedBaseType == null)
+                {
+                    Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
+                }
+                else if (importedBaseType?.ClrType is System.Type clrBase)
+                {
+                    init = ResolveClrBaseConstructor(i => ctorSyntax.BaseArguments[i].Location, clrBase, boundArguments, location, i => ctorSyntax.BaseArguments[i]);
+                }
+                else
+                {
+                    init = ResolveGSharpBaseConstructor(
+                        i => ctorSyntax.BaseArguments[i].Location,
+                        structSymbol.Name,
+                        Invariant.Required(baseClassSymbol, "a non-CLR base constructor has a declared GSharp base class"),
+                        boundArguments,
+                        location);
+                }
+
+                scope = staticScope;
+            }
+        }
+        finally
+        {
+            ctorFunction.IsExpressionInitializer = savedInitializerContext;
+            setCurrentFunction(savedFunction);
         }
 
         if (init != null)

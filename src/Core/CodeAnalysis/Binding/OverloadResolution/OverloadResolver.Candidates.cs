@@ -998,6 +998,16 @@ internal sealed partial class OverloadResolver
                 paramType = Binder.SubstituteType(paramType, substitution);
             }
 
+            if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[i], out var deferredSyntax))
+            {
+                if (!ExpressionBinder.CanTargetDependentBlockArgument(deferredSyntax, paramType))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
             // Unknown argument or parameter type — be conservative, do not reject.
             if (argType == null || paramType == null)
             {

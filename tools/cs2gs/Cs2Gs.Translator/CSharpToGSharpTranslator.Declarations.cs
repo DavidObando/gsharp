@@ -729,7 +729,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 result.Add((
                     SanitizeIdentifier(prop.Identifier.Text),
-                    this.TranslateNullSeamExpression(prop.Initializer.Value, symbol?.ContainingType)));
+                    this.TranslateNullSeamExpression(prop.Initializer.Value)));
             }
 
             return result;
@@ -997,26 +997,17 @@ public sealed partial class CSharpToGSharpTranslator
                 otherParts = parts.Skip(1).ToList();
             }
 
-            // Issue #1849: this aggregate gets its own null-seam synthetic-helper
-            // collection/counter, saved/restored around the whole method so a
-            // nested type declaration's recursive `VisitAggregate` call (below,
-            // via `TranslateMember`) never leaks its helpers into this
-            // (enclosing) type, and vice versa.
-            List<MethodDeclaration> outerSynthHelpers = this.state.PendingSynthHelpers;
+            // Synthetic instance helpers are scoped to their owning aggregate;
+            // nested type translation must not leak them outward.
             List<MethodDeclaration> outerInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers;
-            int outerSynthHelperCounter = this.state.SynthHelperCounter;
-            this.state.PendingSynthHelpers = new List<MethodDeclaration>();
             this.state.PendingInstanceSynthHelpers = new List<MethodDeclaration>();
-            this.state.SynthHelperCounter = 0;
             try
             {
                 return this.VisitAggregateCore(node, kind.Value, symbol, otherParts);
             }
             finally
             {
-                this.state.PendingSynthHelpers = outerSynthHelpers;
                 this.state.PendingInstanceSynthHelpers = outerInstanceSynthHelpers;
-                this.state.SynthHelperCounter = outerSynthHelperCounter;
             }
         }
 
@@ -1264,12 +1255,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            // Issue #1849: fold in any synthetic null-seam helper methods
-            // synthesized while translating this aggregate's fields/properties/
-            // constructors above (see `pendingSynthHelpers`) — always private
-            // static, so they join the `shared { }` block alongside the type's
-            // other static members.
-            sharedMembers.AddRange(this.state.PendingSynthHelpers);
             instanceMembers.AddRange(this.state.PendingInstanceSynthHelpers);
 
             // OD-T1: if get-only auto-property initializers needed to move into a

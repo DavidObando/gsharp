@@ -346,6 +346,7 @@ internal sealed partial class StatementBinder
                     || syntax.Expression is IfExpressionSyntax
                     || syntax.Expression is IfLetExpressionSyntax
                     || syntax.Expression is ConditionalExpressionSyntax
+                    || syntax.Expression is BlockExpressionSyntax
                     || IsNullCoalescingExpression(syntax.Expression))
                 && function != null
                 && !function.IsReturnTypeInferred
@@ -366,7 +367,7 @@ internal sealed partial class StatementBinder
         // against the function's declared return ref-kind. Then, for ref returns, wrap
         // the operand in a BoundAddressOfExpression and run lvalue + escape-scope checks.
         var isRefReturn = false;
-        if (function != null)
+        if (function != null && !function.IsExpressionInitializer)
         {
             var fnIsRefReturning = function.ReturnRefKind == RefKind.Ref;
 
@@ -389,7 +390,20 @@ internal sealed partial class StatementBinder
             }
         }
 
-        if (function == null)
+        if (function?.IsExpressionInitializer == true)
+        {
+            if (syntax.Expression == null)
+            {
+                Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location);
+            }
+            else
+            {
+                Diagnostics.ReportInvalidReturnExpression(
+                    syntax.Expression.Location,
+                    function.Name);
+            }
+        }
+        else if (function == null)
         {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location);
         }

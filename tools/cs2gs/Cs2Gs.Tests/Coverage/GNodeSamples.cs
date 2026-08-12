@@ -51,6 +51,9 @@ public static class GNodeSamples
                 body: Block(new ReturnStatement(new BinaryExpression(Id("v"), "*", Int("2")))))),
 
             // Expressions.
+            [typeof(BlockExpression)] = () => Expr(new BlockExpression(
+                List<GStatement>(new LocalDeclarationStatement(BindingKind.Let, "y", initializer: Int("1"))),
+                Id("y"))),
             [typeof(LiteralExpression)] = () => Expr(Int("42")),
             [typeof(IdentifierExpression)] = () => Expr(Id("y")),
             [typeof(ThisExpression)] = () => Unit(new TypeDeclaration(

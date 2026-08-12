@@ -78,7 +78,9 @@ internal sealed partial class ExpressionBinder
                 }
 
                 hasDefault = true;
-                var result = BindExpression(armSyntax.Result);
+                var result = targetType == null
+                    ? BindExpression(armSyntax.Result)
+                    : BindExpression(armSyntax.Result, targetType);
                 boundArmBuilders.Add((armSyntax, pattern, null, result));
                 continue;
             }
@@ -113,7 +115,7 @@ internal sealed partial class ExpressionBinder
                     frame);
             }
 
-            var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame);
+            var armResult = BindExpressionWithNarrowing(armSyntax.Result, frame, targetType);
 
             scope = scope.Pop();
             boundArmBuilders.Add((armSyntax, pattern, guard, armResult));

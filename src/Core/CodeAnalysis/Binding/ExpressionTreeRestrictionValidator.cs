@@ -505,6 +505,7 @@ internal static class ExpressionTreeRestrictionValidator
         if (block.Expression is not BoundVariableExpression result
             || block.Statements.IsDefaultOrEmpty
             || block.Statements[0] is not BoundVariableDeclaration declaration
+            || declaration.Syntax is VariableDeclarationSyntax
             || !ReferenceEquals(declaration.Variable, result.Variable))
         {
             return false;

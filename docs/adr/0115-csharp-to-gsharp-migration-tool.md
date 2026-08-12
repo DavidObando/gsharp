@@ -531,6 +531,17 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   is rewritten to a member access on the subject). The switch-context pattern set
   (§B switch mapping) keeps the native `case` pattern forms. This is now a
   translator implementation choice rather than a gsc language limitation.
+- **Expression-position spills → native block expressions (issue #3355).**
+  When preserving C# left-to-right evaluation requires temporary receiver,
+  index, argument, field/property-initializer, or constructor-initializer
+  statements, cs2gs emits `{ spillStatements trailingValue }` at the original
+  expression site. This supersedes issue #1849's synthesized
+  `__initN(__pN)` helpers and the N2 fallback that could evaluate an expression
+  twice. Ref/out keeps the address operator outside the block
+  (`&{ spills lvalue }`), so side effects run once before the final storage
+  location is addressed. Fallback remains only for constructs with no faithful
+  G# representation; unresolved Roslyn expression type alone is not a fallback
+  reason.
 - **Range index `a[i..j]` / `a[i..]` / `a[..j]` → `.Slice(start, length)`.** G#
   has **no range operator** (gsc gap, §G OD-1); a `RangeExpression` index over a
   `Span`/`Memory`/`ReadOnlySpan` lowers to a `.Slice` call: `s[i..j]` →

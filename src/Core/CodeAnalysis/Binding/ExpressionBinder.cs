@@ -153,6 +153,11 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private ParameterSymbol? GetEffectiveThisParameter()
     {
+        if (binderCtx.InConstructorInitializer)
+        {
+            return null;
+        }
+
         var current = getCurrentFunction();
         if (current?.ThisParameter != null)
         {
@@ -160,6 +165,35 @@ internal sealed partial class ExpressionBinder
         }
 
         return scope.TryLookupSymbol("this") as ParameterSymbol;
+    }
+
+    private StructSymbol? GetConstructorInitializerReceiverType()
+    {
+        return (function?.ReceiverType as StructSymbol)
+            ?? ((scope.TryLookupSymbol("this") as ParameterSymbol)?.Type as StructSymbol);
+    }
+
+    private bool IsConstructorInitializerInstanceDataMember(string name)
+    {
+        var receiverType = GetConstructorInitializerReceiverType();
+        return receiverType != null
+            && (TypeMemberModel.TryGetFieldIncludingInherited(
+                    receiverType,
+                    name,
+                    MemberQuery.Instance(MemberKinds.Field),
+                    out _,
+                    out _)
+                || TypeMemberModel.TryGetProperty(receiverType, name, out _));
+    }
+
+    private bool IsConstructorInitializerInstanceMethod(string name)
+    {
+        var receiverType = GetConstructorInitializerReceiverType();
+        return receiverType != null
+            && !TypeMemberModel.GetMethods(
+                receiverType,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty;
     }
 
     /// <summary>
@@ -182,17 +216,24 @@ internal sealed partial class ExpressionBinder
             && ReferenceEquals(bve.Variable, effThis);
     }
 
-    private BoundExpression BindExpressionWithNarrowing(ExpressionSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
+    private BoundExpression BindExpressionWithNarrowing(
+        ExpressionSyntax syntax,
+        Dictionary<AccessPath, TypeSymbol>? frame,
+        TypeSymbol? targetType = null)
     {
         if (frame == null)
         {
-            return BindExpression(syntax);
+            return targetType == null
+                ? BindExpression(syntax)
+                : BindExpression(syntax, targetType);
         }
 
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
-            return BindExpression(syntax);
+            return targetType == null
+                ? BindExpression(syntax)
+                : BindExpression(syntax, targetType);
         }
         finally
         {
@@ -224,6 +265,13 @@ internal sealed partial class ExpressionBinder
 
     internal BoundExpression BindExpression(ExpressionSyntax syntax, TypeSymbol targetType)
     {
+        // Issue #3355: parentheses do not erase the expected type of a
+        // general block expression or its trailing value.
+        if (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            return BindExpression(parenthesized.Expression, targetType);
+        }
+
         // ADR-0124 / issue #1024: a `stackalloc [n]T` initialising an
         // unmanaged-pointer target (`*T`, only spellable in an unsafe context)
         // yields the raw `T*` pointer rather than the default `Span<T>`. The
@@ -233,6 +281,22 @@ internal sealed partial class ExpressionBinder
         if (syntax is StackAllocExpressionSyntax stackAlloc && targetType is PointerTypeSymbol)
         {
             return BindStackAllocExpression(stackAlloc, targetType);
+        }
+
+        if (TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda))
+        {
+            return conversions.BindConversion(syntax.Location, targetTypedLambda, targetType);
+        }
+
+        // Issue #3355: prefix statements bind normally; the expected type
+        // flows into the trailing expression.
+        if (syntax is BlockExpressionSyntax blockExpression)
+        {
+            return BindBlockExpressionValue(
+                blockExpression,
+                canBeVoid: false,
+                targetType,
+                preserveEmptyBlock: true);
         }
 
         // Issue #1112: a switch-expression honors the target type (C#-style
@@ -436,6 +500,13 @@ internal sealed partial class ExpressionBinder
             case SyntaxKind.IfLetExpression:
                 // ADR-0151: value-producing `if let` — see ExpressionBinder.IfLet.cs.
                 return BindIfLetExpression((IfLetExpressionSyntax)syntax, targetType: null, canBeVoid: canBeVoid);
+            case SyntaxKind.BlockExpression:
+                // Issue #3355: block-with-trailing-expression in any value
+                // position. Lambda and if branches reuse this binder.
+                return BindBlockExpressionValue(
+                    (BlockExpressionSyntax)syntax,
+                    canBeVoid,
+                    preserveEmptyBlock: true);
             case SyntaxKind.ThrowExpression:
                 return BindThrowExpression((ThrowExpressionSyntax)syntax);
             case SyntaxKind.IndirectAssignmentExpression:
@@ -498,9 +569,32 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (binderCtx.InConstructorInitializer && name == "this")
+        {
+            Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
+                syntax.IdentifierToken.Location,
+                name);
+            return new BoundErrorExpression(syntax);
+        }
+
         var variable = BindVariableReference(name, syntax.IdentifierToken.Location, suppressNotAVariable: true, suppressUndefinedVariable: true);
         if (variable == null)
         {
+            if (binderCtx.InConstructorInitializer
+                && scope.TryLookupSymbol(name) is ImplicitFieldVariableSymbol or ImplicitPropertyVariableSymbol)
+            {
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (binderCtx.InConstructorInitializer
+                && IsConstructorInitializerInstanceDataMember(name))
+            {
+                Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
+                    syntax.IdentifierToken.Location,
+                    name);
+                return new BoundErrorExpression(syntax);
+            }
+
             // Issue #324: a bare identifier naming a free (package-level)
             // function is a method group. In a value context — e.g. assigning
             // to a `func(...)` or `Func[...]` slot — it converts to a delegate
@@ -544,6 +638,15 @@ internal sealed partial class ExpressionBinder
             if (TryBindInheritedClrInstanceMemberByBareName(syntax.IdentifierToken.Text, out var inheritedClrMember))
             {
                 return inheritedClrMember;
+            }
+
+            if (binderCtx.InConstructorInitializer
+                && IsConstructorInitializerInstanceMethod(name))
+            {
+                Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
+                    syntax.IdentifierToken.Location,
+                    name);
+                return new BoundErrorExpression(syntax);
             }
 
             // Not a method group: surface the suppressed diagnostics.
@@ -1056,10 +1159,37 @@ internal sealed partial class ExpressionBinder
             return IsLvalue(block.Expression);
         }
 
+        if (expression is BoundConditionalExpression conditional)
+        {
+            return IsLvalue(conditional.WhenTrue)
+                && IsLvalue(conditional.WhenFalse)
+                && conditional.WhenTrue.Type == conditional.WhenFalse.Type;
+        }
+
         return expression is BoundVariableExpression
             or BoundFieldAccessExpression
             or BoundIndexExpression
             or BoundDereferenceExpression;
+    }
+
+    internal static bool TryGetReadOnlyAddressTarget(
+        BoundExpression expression,
+        [NotNullWhen(true)] out VariableSymbol? variable)
+    {
+        switch (expression)
+        {
+            case BoundBlockExpression block:
+                return TryGetReadOnlyAddressTarget(block.Expression, out variable);
+            case BoundConditionalExpression conditional:
+                return TryGetReadOnlyAddressTarget(conditional.WhenTrue, out variable)
+                    || TryGetReadOnlyAddressTarget(conditional.WhenFalse, out variable);
+            case BoundVariableExpression { Variable.IsReadOnly: true } readOnly:
+                variable = readOnly.Variable;
+                return true;
+            default:
+                variable = null;
+                return false;
+        }
     }
 
     /// <summary>
@@ -1082,8 +1212,136 @@ internal sealed partial class ExpressionBinder
             or IfLetExpressionSyntax
             or ConditionalExpressionSyntax
             or SwitchExpressionSyntax
+            or BlockExpressionSyntax
             || (syntax is BinaryExpressionSyntax binary
                 && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken);
+    }
+
+    /// <summary>
+    /// Issue #3355: returns true when a block argument's trailing value cannot
+    /// be bound before overload resolution supplies a parameter target type.
+    /// Prefix statements do not affect that decision.
+    /// </summary>
+    internal static bool IsTargetDependentBlockArgumentSyntax(ExpressionSyntax syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        if (syntax is not BlockExpressionSyntax block || block.Expression == null)
+        {
+            return false;
+        }
+
+        return IsTargetDependentExpressionSyntax(block.Expression);
+    }
+
+    private static bool IsTargetDependentExpressionSyntax(ExpressionSyntax syntax)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesizedTail)
+        {
+            syntax = parenthesizedTail.Expression;
+        }
+
+        switch (syntax)
+        {
+            case BlockExpressionSyntax { Expression: { } nestedTail }:
+                return IsTargetDependentExpressionSyntax(nestedTail);
+            case DefaultExpressionSyntax { TypeClause: null }:
+                return true;
+            case LambdaExpressionSyntax lambda:
+                return lambda.Parameters.Any(parameter => parameter.Type == null);
+            case ConditionalExpressionSyntax conditional:
+                return IsTargetDependentExpressionSyntax(conditional.WhenTrue)
+                    || IsTargetDependentExpressionSyntax(conditional.WhenFalse);
+            case IfExpressionSyntax ifExpression:
+                return IsTargetDependentExpressionSyntax(ifExpression.ThenBlock)
+                    || (ifExpression.ElseExpression != null
+                        && IsTargetDependentExpressionSyntax(ifExpression.ElseExpression));
+            case IfLetExpressionSyntax ifLetExpression:
+                return IsTargetDependentExpressionSyntax(ifLetExpression.ThenBlock)
+                    || (ifLetExpression.ElseExpression != null
+                        && IsTargetDependentExpressionSyntax(ifLetExpression.ElseExpression));
+            case SwitchExpressionSyntax switchExpression:
+                return switchExpression.Arms.Any(arm =>
+                    IsTargetDependentExpressionSyntax(arm.Result));
+            case BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken:
+                return IsTargetDependentExpressionSyntax(binary.Left)
+                    || IsTargetDependentExpressionSyntax(binary.Right);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #3355: checks whether a target-dependent block argument can use
+    /// the supplied parameter type without binding it speculatively.
+    /// </summary>
+    internal static bool CanTargetDependentBlockArgument(ExpressionSyntax syntax, TypeSymbol targetType)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesized)
+        {
+            syntax = parenthesized.Expression;
+        }
+
+        if (syntax is not BlockExpressionSyntax { Expression: { } tail })
+        {
+            return CanTargetDependentExpression(syntax, targetType);
+        }
+
+        return CanTargetDependentExpression(tail, targetType);
+    }
+
+    private static bool CanTargetDependentExpression(ExpressionSyntax syntax, TypeSymbol targetType)
+    {
+        while (syntax is ParenthesizedExpressionSyntax parenthesizedTail)
+        {
+            syntax = parenthesizedTail.Expression;
+        }
+
+        switch (syntax)
+        {
+            case BlockExpressionSyntax { Expression: { } nestedTail }:
+                return CanTargetDependentExpression(nestedTail, targetType);
+            case DefaultExpressionSyntax { TypeClause: null }:
+                return targetType != TypeSymbol.Error && targetType != TypeSymbol.Void;
+            case LambdaExpressionSyntax lambda:
+                if (lambda.Parameters.All(parameter => parameter.Type != null))
+                {
+                    return true;
+                }
+
+                return MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var functionType)
+                    && functionType != null
+                    && functionType.Arity == lambda.Parameters.Count
+                    && lambda.Parameters
+                        .Select((parameter, index) =>
+                            parameter.IsVariadic
+                            == (!functionType.IsVariadic.IsDefaultOrEmpty && functionType.IsVariadic[index]))
+                        .All(matches => matches);
+            case ConditionalExpressionSyntax conditional:
+                return CanTargetDependentExpression(conditional.WhenTrue, targetType)
+                    && CanTargetDependentExpression(conditional.WhenFalse, targetType);
+            case IfExpressionSyntax ifExpression:
+                return CanTargetDependentExpression(ifExpression.ThenBlock, targetType)
+                    && (ifExpression.ElseExpression == null
+                        || CanTargetDependentExpression(ifExpression.ElseExpression, targetType));
+            case IfLetExpressionSyntax ifLetExpression:
+                return CanTargetDependentExpression(ifLetExpression.ThenBlock, targetType)
+                    && (ifLetExpression.ElseExpression == null
+                        || CanTargetDependentExpression(ifLetExpression.ElseExpression, targetType));
+            case SwitchExpressionSyntax switchExpression:
+                return switchExpression.Arms.All(arm =>
+                    CanTargetDependentExpression(arm.Result, targetType));
+            case BinaryExpressionSyntax binary
+                when binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken:
+                return CanTargetDependentExpression(binary.Left, targetType)
+                    && CanTargetDependentExpression(binary.Right, targetType);
+            default:
+                return true;
+        }
     }
 
     /// <summary>
@@ -1115,6 +1373,11 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     internal BoundExpression BindArgumentDeferringBranchy(ExpressionSyntax inner)
     {
+        if (IsTargetDependentBlockArgumentSyntax(inner))
+        {
+            return new BoundErrorExpression(inner);
+        }
+
         if (!IsTargetTypedBranchyArgumentSyntax(inner))
         {
             return BindExpression(inner);
@@ -1210,6 +1473,15 @@ internal sealed partial class ExpressionBinder
         switch (scope.TryLookupSymbol(name))
         {
             case VariableSymbol variable:
+                if (binderCtx.InConstructorInitializer
+                    && (name == "this"
+                        || variable is ImplicitFieldVariableSymbol
+                        || variable is ImplicitPropertyVariableSymbol))
+                {
+                    Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(location, name);
+                    return null;
+                }
+
                 // Issue #2060 (follow-up to #2044): a bare identifier resolving
                 // to an inherited field's ImplicitFieldVariableSymbol bypassed
                 // AccessibilityChecker entirely (unlike the qualified

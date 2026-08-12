@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -408,17 +409,18 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> tracked,
         BoundLabel? methodExitLabel)
     {
+        var flowContext = new ExpressionFlowContext(outParams, function, methodExitLabel);
         switch (statement)
         {
             case BoundExpressionStatement es:
-                ProcessExpression(es.Expression, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(es.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
             case BoundVariableDeclaration vd:
             {
                 var definitelyAssigned = false;
                 if (vd.Initializer != null)
                 {
-                    ProcessExpression(vd.Initializer, assigned, diagnostics, pointerAliases, tracked);
+                    ProcessExpression(vd.Initializer, assigned, diagnostics, pointerAliases, tracked, flowContext);
 
                     // Synthesised default expressions (BoundDefaultExpression)
                     // emitted for `var x T` without an explicit initializer
@@ -456,15 +458,15 @@ internal static class DefiniteAssignmentAnalyzer
             case BoundReturnStatement rs:
                 if (rs.Expression != null)
                 {
-                    ProcessExpression(rs.Expression, assigned, diagnostics, pointerAliases, tracked);
+                    ProcessExpression(rs.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 }
 
                 break;
             case BoundThrowStatement th:
-                ProcessExpression(th.Expression, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(th.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
             case BoundConditionalGotoStatement cgs:
-                ProcessExpression(cgs.Condition, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(cgs.Condition, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
             case BoundLabelStatement:
             case BoundGotoStatement:
@@ -510,7 +512,7 @@ internal static class DefiniteAssignmentAnalyzer
                 // loop back edge cannot shrink the body's entry set below the
                 // pre-loop state — ignoring it is exact, not just
                 // conservative.
-                ProcessExpression(awaitForRange.Stream, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(awaitForRange.Stream, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 AnalyzeRegion(awaitForRange.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
                 break;
             default:
@@ -520,11 +522,12 @@ internal static class DefiniteAssignmentAnalyzer
                 // report-only walker visits their expression operands — value
                 // reads of tracked no-zero-value locals (GS0522) — and any
                 // nested function literals, which require their own analysis.
-                if (diagnostics != null)
-                {
-                    new FunctionLiteralAndUseWalker(assigned, tracked, diagnostics).VisitStatement(statement);
-                }
-
+                new FunctionLiteralAndUseWalker(
+                    assigned,
+                    tracked,
+                    diagnostics,
+                    pointerAliases,
+                    flowContext).VisitStatement(statement);
                 break;
         }
     }
@@ -619,6 +622,7 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> tracked,
         BoundLabel? methodExitLabel)
     {
+        var flowContext = new ExpressionFlowContext(outParams, function, methodExitLabel);
         HashSet<VariableSymbol>? meet = null;
         var any = false;
 
@@ -626,12 +630,12 @@ internal static class DefiniteAssignmentAnalyzer
         {
             if (c.Channel != null)
             {
-                ProcessExpression(c.Channel, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(c.Channel, assigned, diagnostics, pointerAliases, tracked, flowContext);
             }
 
             if (c.Value != null)
             {
-                ProcessExpression(c.Value, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(c.Value, assigned, diagnostics, pointerAliases, tracked, flowContext);
             }
 
             var caseEntry = new HashSet<VariableSymbol>(assigned);
@@ -670,7 +674,8 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> tracked,
         BoundLabel? methodExitLabel)
     {
-        ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases, tracked);
+        var flowContext = new ExpressionFlowContext(outParams, function, methodExitLabel);
+        ProcessExpression(fixedStmt.PinnedSource, assigned, diagnostics, pointerAliases, tracked, flowContext);
 
         var entry = new HashSet<VariableSymbol>(assigned)
         {
@@ -706,7 +711,8 @@ internal static class DefiniteAssignmentAnalyzer
         HashSet<VariableSymbol> tracked,
         BoundLabel? methodExitLabel)
     {
-        ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases, tracked);
+        var flowContext = new ExpressionFlowContext(outParams, function, methodExitLabel);
+        ProcessExpression(switchStmt.Discriminant, assigned, diagnostics, pointerAliases, tracked, flowContext);
 
         HashSet<VariableSymbol>? meet = null;
         var any = false;
@@ -721,7 +727,7 @@ internal static class DefiniteAssignmentAnalyzer
 
             if (arm.Guard != null)
             {
-                ProcessExpression(arm.Guard, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(arm.Guard, assigned, diagnostics, pointerAliases, tracked, flowContext);
             }
 
             var armExit = AnalyzeRegion(arm.Body, new HashSet<VariableSymbol>(assigned), outParams, function, diagnostics, pointerAliases, tracked, methodExitLabel);
@@ -818,7 +824,13 @@ internal static class DefiniteAssignmentAnalyzer
             read.Variable.Type.Name);
     }
 
-    private static void ProcessExpression(BoundExpression? expression, HashSet<VariableSymbol> assigned, DiagnosticBag? diagnostics, Dictionary<VariableSymbol, VariableSymbol> pointerAliases, HashSet<VariableSymbol> tracked)
+    private static void ProcessExpression(
+        BoundExpression? expression,
+        HashSet<VariableSymbol> assigned,
+        DiagnosticBag? diagnostics,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
+        ExpressionFlowContext? flowContext = null)
     {
         if (expression == null)
         {
@@ -827,6 +839,35 @@ internal static class DefiniteAssignmentAnalyzer
 
         switch (expression)
         {
+            case BoundBlockExpression block when flowContext is { } context:
+            {
+                var statements = block.Statements.Add(
+                    new BoundExpressionStatement(block.Expression.Syntax, block.Expression));
+                var exit = AnalyzeRegion(
+                    new BoundBlockStatement(block.Syntax, statements),
+                    new HashSet<VariableSymbol>(assigned),
+                    context.OutParams,
+                    context.Function,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    context.MethodExitLabel);
+                assigned.Clear();
+                if (exit != null)
+                {
+                    assigned.UnionWith(exit);
+                }
+                else
+                {
+                    // No normal completion: unreachable is top for this
+                    // forward must analysis.
+                    assigned.UnionWith(context.OutParams);
+                    assigned.UnionWith(tracked);
+                }
+
+                break;
+            }
+
             case BoundVariableExpression read:
                 // Issue #3316: a direct value read of a tracked no-zero-value
                 // local. (Reads nested inside expression kinds without an
@@ -835,37 +876,37 @@ internal static class DefiniteAssignmentAnalyzer
                 CheckTrackedUse(read, assigned, tracked, diagnostics);
                 break;
             case BoundCallExpression call:
-                ProcessCallArguments(call.Arguments, call.Function.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.Function.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundImportedCallExpression call:
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundImportedInstanceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundConstrainedStaticCallExpression call:
-                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.InterfaceMethod.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundConstructorCallExpression call:
                 var constructorParameters = call.SelectedConstructor != null
                     ? call.SelectedConstructor.Parameters
                     : call.StructType.PrimaryConstructorParameters;
-                ProcessCallArguments(call.Arguments, constructorParameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, constructorParameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundConstructorChainingExpression call:
-                ProcessCallArguments(call.Arguments, call.SelectedConstructor.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.SelectedConstructor.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundUserInstanceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
-                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundBaseInterfaceCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
-                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessCallArguments(call.Arguments, call.Method.Parameters, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundBaseClassCallExpression call:
-                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(call.Receiver, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 ProcessCallArguments(
                     call.Arguments,
                     call.Method?.Parameters ?? ImmutableArray<ParameterSymbol>.Empty,
@@ -873,26 +914,27 @@ internal static class DefiniteAssignmentAnalyzer
                     diagnostics,
                     pointerAliases,
                     tracked,
-                    call.Syntax);
+                    call.Syntax,
+                    flowContext);
                 break;
             case BoundIndirectCallExpression call:
-                ProcessExpression(call.Target, assigned, diagnostics, pointerAliases, tracked);
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessExpression(call.Target, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundClrConstructorCallExpression call:
-                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax);
+                ProcessCallArguments(call.Arguments, call.ArgumentRefKinds, assigned, diagnostics, pointerAliases, tracked, call.Syntax, flowContext);
                 break;
             case BoundClrConversionCallExpression call:
-                ProcessExpression(call.Source, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(call.Source, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
             case BoundAssignmentExpression assign:
-                ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(assign.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 assigned.Add(assign.Variable);
                 TrackPointerAlias(assign.Variable, assign.Expression, pointerAliases);
                 break;
             case BoundIndirectAssignmentExpression indirect:
-                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases, tracked);
-                ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(indirect.Value, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessExpression(indirect.Pointer, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 if (TryResolvePointerTarget(indirect.Pointer, pointerAliases, out var indirectTarget))
                 {
                     if (indirectTarget is not null)
@@ -902,29 +944,193 @@ internal static class DefiniteAssignmentAnalyzer
                 }
 
                 break;
+            case BoundBinaryExpression bin
+                when bin.Op.Kind is BoundBinaryOperatorKind.LogicalAnd
+                    or BoundBinaryOperatorKind.LogicalOr
+                    or BoundBinaryOperatorKind.NullCoalesce:
+            {
+                ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                var rightAssigned = new HashSet<VariableSymbol>(assigned);
+                var rightAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(bin.Right, rightAssigned, diagnostics, rightAliases, tracked, flowContext);
+                break;
+            }
+
             case BoundBinaryExpression bin:
-                ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases, tracked);
-                ProcessExpression(bin.Right, assigned, diagnostics, pointerAliases, tracked);
+                ProcessExpression(bin.Left, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                ProcessExpression(bin.Right, assigned, diagnostics, pointerAliases, tracked, flowContext);
                 break;
-            case BoundUnaryExpression un:
-                ProcessExpression(un.Operand, assigned, diagnostics, pointerAliases, tracked);
+            case BoundConditionalExpression conditional:
+            {
+                ProcessExpression(conditional.Condition, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                var whenTrueAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenTrueAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(
+                    conditional.WhenTrue,
+                    whenTrueAssigned,
+                    diagnostics,
+                    whenTrueAliases,
+                    tracked,
+                    flowContext);
+                var whenFalseAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenFalseAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(
+                    conditional.WhenFalse,
+                    whenFalseAssigned,
+                    diagnostics,
+                    whenFalseAliases,
+                    tracked,
+                    flowContext);
+                MergeConditionalFlow(
+                    assigned,
+                    pointerAliases,
+                    [whenTrueAssigned, whenFalseAssigned],
+                    [whenTrueAliases, whenFalseAliases]);
                 break;
-            case BoundAddressOfExpression aof:
-                ProcessExpression(aof.Operand, assigned, diagnostics, pointerAliases, tracked);
+            }
+
+            case BoundConditionalAddressExpression conditionalAddress:
+            {
+                ProcessExpression(
+                    conditionalAddress.Condition,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    flowContext);
+                var whenTrueAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenTrueAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(
+                    conditionalAddress.WhenTrueOperand,
+                    whenTrueAssigned,
+                    diagnostics,
+                    whenTrueAliases,
+                    tracked,
+                    flowContext);
+                var whenFalseAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenFalseAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(
+                    conditionalAddress.WhenFalseOperand,
+                    whenFalseAssigned,
+                    diagnostics,
+                    whenFalseAliases,
+                    tracked,
+                    flowContext);
+                MergeConditionalFlow(
+                    assigned,
+                    pointerAliases,
+                    [whenTrueAssigned, whenFalseAssigned],
+                    [whenTrueAliases, whenFalseAliases]);
                 break;
-            case BoundDereferenceExpression deref:
-                ProcessExpression(deref.Operand, assigned, diagnostics, pointerAliases, tracked);
-                break;
-            case BoundConversionExpression conv:
-                ProcessExpression(conv.Expression, assigned, diagnostics, pointerAliases, tracked);
-                break;
-            default:
-                if (diagnostics != null)
+            }
+
+            case BoundSwitchExpression switchExpression:
+            {
+                ProcessExpression(
+                    switchExpression.Discriminant,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    flowContext);
+                var armAssigned = new List<HashSet<VariableSymbol>>(switchExpression.Arms.Length);
+                var armAliases = new List<Dictionary<VariableSymbol, VariableSymbol>>(switchExpression.Arms.Length);
+                foreach (var arm in switchExpression.Arms)
                 {
-                    new FunctionLiteralAndUseWalker(assigned, tracked, diagnostics).VisitExpression(expression);
+                    var currentAssigned = new HashSet<VariableSymbol>(assigned);
+                    var currentAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                    ProcessExpression(
+                        arm.Guard,
+                        currentAssigned,
+                        diagnostics,
+                        currentAliases,
+                        tracked,
+                        flowContext);
+                    ProcessExpression(
+                        arm.Result,
+                        currentAssigned,
+                        diagnostics,
+                        currentAliases,
+                        tracked,
+                        flowContext);
+                    armAssigned.Add(currentAssigned);
+                    armAliases.Add(currentAliases);
+                }
+
+                if (armAssigned.Count > 0)
+                {
+                    MergeConditionalFlow(assigned, pointerAliases, armAssigned, armAliases);
                 }
 
                 break;
+            }
+
+            case BoundNullConditionalAccessExpression nullConditional:
+            {
+                ProcessExpression(
+                    nullConditional.Receiver,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    flowContext);
+                var whenNotNullAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenNotNullAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessExpression(
+                    nullConditional.WhenNotNull,
+                    whenNotNullAssigned,
+                    diagnostics,
+                    whenNotNullAliases,
+                    tracked,
+                    flowContext);
+                break;
+            }
+
+            case BoundUnaryExpression un:
+                ProcessExpression(un.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                break;
+            case BoundAddressOfExpression aof:
+                ProcessExpression(aof.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                break;
+            case BoundDereferenceExpression deref:
+                ProcessExpression(deref.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                break;
+            case BoundConversionExpression conv:
+                ProcessExpression(conv.Expression, assigned, diagnostics, pointerAliases, tracked, flowContext);
+                break;
+            default:
+                new FunctionLiteralAndUseWalker(
+                    assigned,
+                    tracked,
+                    diagnostics,
+                    pointerAliases,
+                    flowContext).VisitExpression(expression);
+                break;
+        }
+    }
+
+    private static void MergeConditionalFlow(
+        HashSet<VariableSymbol> assigned,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        IReadOnlyList<HashSet<VariableSymbol>> branchAssigned,
+        IReadOnlyList<Dictionary<VariableSymbol, VariableSymbol>> branchAliases)
+    {
+        assigned.Clear();
+        assigned.UnionWith(branchAssigned[0]);
+        for (var i = 1; i < branchAssigned.Count; i++)
+        {
+            assigned.IntersectWith(branchAssigned[i]);
+        }
+
+        pointerAliases.Clear();
+        foreach (var pair in branchAliases[0])
+        {
+            if (branchAliases.Skip(1).All(aliases =>
+                aliases.TryGetValue(pair.Key, out var target)
+                && ReferenceEquals(target, pair.Value)))
+            {
+                pointerAliases.Add(pair.Key, pair.Value);
+            }
         }
     }
 
@@ -935,12 +1141,13 @@ internal static class DefiniteAssignmentAnalyzer
         DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode? callSyntax)
+        SyntaxNode? callSyntax,
+        ExpressionFlowContext? flowContext)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
             var refKind = i < parameters.Length ? parameters[i].RefKind : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax);
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext);
         }
     }
 
@@ -951,12 +1158,13 @@ internal static class DefiniteAssignmentAnalyzer
         DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode? callSyntax)
+        SyntaxNode? callSyntax,
+        ExpressionFlowContext? flowContext)
     {
         for (var i = 0; i < arguments.Length; i++)
         {
             var refKind = !refKinds.IsDefault && i < refKinds.Length ? refKinds[i] : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax);
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext);
         }
     }
 
@@ -967,35 +1175,159 @@ internal static class DefiniteAssignmentAnalyzer
         DiagnosticBag? diagnostics,
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
-        SyntaxNode? callSyntax)
+        SyntaxNode? callSyntax,
+        ExpressionFlowContext? flowContext)
     {
         if (refKind != RefKind.None
-            && argument is BoundAddressOfExpression { Operand: BoundVariableExpression variable })
+            && argument is BoundAddressOfExpression address
+            && TryGetSingleAddressedVariable(address.Operand, out var variable))
         {
-            if (refKind == RefKind.Ref && !assigned.Contains(variable.Variable))
+            ProcessAddressEvaluation(
+                address.Operand,
+                assigned,
+                diagnostics,
+                pointerAliases,
+                tracked,
+                flowContext);
+
+            if (refKind == RefKind.Ref && !assigned.Contains(variable))
             {
                 diagnostics?.ReportVariableNotAssignedBeforeRef(
                     argument.Syntax?.Location ?? callSyntax?.Location ?? default(TextLocation),
-                    variable.Variable.Name);
+                    variable.Name);
             }
 
             if (refKind == RefKind.Ref || refKind == RefKind.Out)
             {
-                assigned.Add(variable.Variable);
+                assigned.Add(variable);
             }
 
             return;
         }
 
-        ProcessExpression(argument, assigned, diagnostics, pointerAliases, tracked);
+        ProcessExpression(argument, assigned, diagnostics, pointerAliases, tracked, flowContext);
+    }
+
+    private static bool TryGetSingleAddressedVariable(
+        BoundExpression expression,
+        [NotNullWhen(true)] out VariableSymbol? variable)
+    {
+        switch (expression)
+        {
+            case BoundBlockExpression block:
+                return TryGetSingleAddressedVariable(block.Expression, out variable);
+            case BoundVariableExpression variableExpression:
+                variable = variableExpression.Variable;
+                return true;
+            case BoundConditionalExpression conditional
+                when TryGetSingleAddressedVariable(conditional.WhenTrue, out var whenTrue)
+                    && TryGetSingleAddressedVariable(conditional.WhenFalse, out var whenFalse)
+                    && ReferenceEquals(whenTrue, whenFalse):
+                variable = whenTrue;
+                return true;
+            default:
+                variable = null;
+                return false;
+        }
+    }
+
+    private static void ProcessAddressEvaluation(
+        BoundExpression expression,
+        HashSet<VariableSymbol> assigned,
+        DiagnosticBag? diagnostics,
+        Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+        HashSet<VariableSymbol> tracked,
+        ExpressionFlowContext? flowContext)
+    {
+        switch (expression)
+        {
+            case BoundBlockExpression block when flowContext is { } context:
+            {
+                var exit = AnalyzeRegion(
+                    new BoundBlockStatement(block.Syntax, block.Statements),
+                    new HashSet<VariableSymbol>(assigned),
+                    context.OutParams,
+                    context.Function,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    context.MethodExitLabel);
+                assigned.Clear();
+                if (exit != null)
+                {
+                    assigned.UnionWith(exit);
+                    ProcessAddressEvaluation(
+                        block.Expression,
+                        assigned,
+                        diagnostics,
+                        pointerAliases,
+                        tracked,
+                        flowContext);
+                }
+                else
+                {
+                    assigned.UnionWith(context.OutParams);
+                    assigned.UnionWith(tracked);
+                }
+
+                break;
+            }
+
+            case BoundConditionalExpression conditional:
+            {
+                ProcessExpression(
+                    conditional.Condition,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    flowContext);
+                var whenTrueAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenTrueAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessAddressEvaluation(
+                    conditional.WhenTrue,
+                    whenTrueAssigned,
+                    diagnostics,
+                    whenTrueAliases,
+                    tracked,
+                    flowContext);
+                var whenFalseAssigned = new HashSet<VariableSymbol>(assigned);
+                var whenFalseAliases = new Dictionary<VariableSymbol, VariableSymbol>(pointerAliases);
+                ProcessAddressEvaluation(
+                    conditional.WhenFalse,
+                    whenFalseAssigned,
+                    diagnostics,
+                    whenFalseAliases,
+                    tracked,
+                    flowContext);
+                MergeConditionalFlow(
+                    assigned,
+                    pointerAliases,
+                    [whenTrueAssigned, whenFalseAssigned],
+                    [whenTrueAliases, whenFalseAliases]);
+                break;
+            }
+
+            case BoundVariableExpression:
+                break;
+
+            default:
+                ProcessExpression(
+                    expression,
+                    assigned,
+                    diagnostics,
+                    pointerAliases,
+                    tracked,
+                    flowContext);
+                break;
+        }
     }
 
     /// <summary>
-    /// Report-only walker for expression/statement kinds the linear
-    /// simulation has no explicit case for (channel receive/send/close,
-    /// index and member access, interpolated strings, …). It never mutates
-    /// the assignment set — so it cannot desynchronize the fixpoint phase,
-    /// which does not run it — and does three things:
+    /// Fallback walker for expression/statement kinds the linear simulation
+    /// has no explicit case for (channel receive/send/close, index and member
+    /// access, interpolated strings, …). It routes nested flow-sensitive block
+    /// and branch expressions back through <see cref="ProcessExpression"/> and:
     /// <list type="bullet">
     ///   <item>recursively analyzes nested function literals against the
     ///     assignment state at their capture point (the C# model: a use of a
@@ -1010,17 +1342,31 @@ internal static class DefiniteAssignmentAnalyzer
     ///     would double-report against the ref-kind checks.</item>
     /// </list>
     /// </summary>
+    private readonly record struct ExpressionFlowContext(
+        ImmutableArray<ParameterSymbol> OutParams,
+        FunctionSymbol Function,
+        BoundLabel? MethodExitLabel);
+
     private sealed class FunctionLiteralAndUseWalker : BoundTreeWalker
     {
         private readonly HashSet<VariableSymbol> assigned;
         private readonly HashSet<VariableSymbol> tracked;
         private readonly DiagnosticBag? diagnostics;
+        private readonly Dictionary<VariableSymbol, VariableSymbol> pointerAliases;
+        private readonly ExpressionFlowContext? flowContext;
 
-        public FunctionLiteralAndUseWalker(HashSet<VariableSymbol> assigned, HashSet<VariableSymbol> tracked, DiagnosticBag? diagnostics)
+        public FunctionLiteralAndUseWalker(
+            HashSet<VariableSymbol> assigned,
+            HashSet<VariableSymbol> tracked,
+            DiagnosticBag? diagnostics,
+            Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
+            ExpressionFlowContext? flowContext)
         {
             this.assigned = assigned;
             this.tracked = tracked;
             this.diagnostics = diagnostics;
+            this.pointerAliases = pointerAliases;
+            this.flowContext = flowContext;
         }
 
         public override void VisitExpression(BoundExpression node)
@@ -1029,6 +1375,11 @@ internal static class DefiniteAssignmentAnalyzer
             {
                 case BoundFunctionLiteralExpression literal:
                 {
+                    if (diagnostics == null)
+                    {
+                        return;
+                    }
+
                     var lowered = (BoundBlockStatement)Lowerer.Lower(literal.Body);
                     AnalyzeWithCaptured(
                         lowered.PreEmitAnalysisBody ?? lowered,
@@ -1043,6 +1394,20 @@ internal static class DefiniteAssignmentAnalyzer
                     CheckTrackedUse(read, assigned, tracked, diagnostics);
                     return;
                 case BoundAddressOfExpression:
+                    return;
+                case BoundBlockExpression:
+                case BoundBinaryExpression:
+                case BoundConditionalExpression:
+                case BoundConditionalAddressExpression:
+                case BoundSwitchExpression:
+                case BoundNullConditionalAccessExpression:
+                    ProcessExpression(
+                        node,
+                        assigned,
+                        diagnostics,
+                        pointerAliases,
+                        tracked,
+                        flowContext);
                     return;
                 default:
                     base.VisitExpression(node);

@@ -92,6 +92,25 @@ let title = if user.IsAdmin {
 
 Missing the terminal `else` in value position reports `GS0276`. A block with no trailing expression in value position reports `GS0277`. Branches with no common type report `GS0263` (shared with the ternary). The existing if-statement form (`if cond { … }` with optional `else`, optional simple-statement initializer) is unchanged.
 
+## Block expressions
+
+`{ statements... trailingExpression }` is a value anywhere an expression is
+accepted. Prefix statements run in order and the tail runs once. The block
+creates a lexical scope and receives the surrounding expected type:
+
+```gsharp
+let answer = {
+    let left = readLeft()
+    let right = readRight()
+    left + right
+}
+```
+
+Missing the tail reports `GS0277`. Statement bodies and literal/pattern brace
+forms keep their existing meanings. Field/property initializers and
+`base(...)`/delegating-`init(...)` arguments reject `return`; nested lambdas
+inside those expressions keep their normal return rules.
+
 ## Loops
 
 G# has infinite `for`, condition `for`, three-part `for`, `for in`, ellipsis range loops, `while`, and `do`-`while`. Use `for in` for collection iteration.

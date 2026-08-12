@@ -814,15 +814,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return new IdentifierExpression(temp);
             }
 
-            if (this.state.PendingHelperCaptures != null)
-            {
-                string name = $"__p{this.state.PendingHelperCaptures.Count}";
-                GTypeReference type = this.ResolveExpressionType(receiverSyntax)
-                    ?? new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
-                this.state.PendingHelperCaptures.Add((name, receiver, type));
-                return new IdentifierExpression(name);
-            }
-
             this.context.ReportUnsupported(
                 receiverSyntax,
                 "a static-helper extension method group here has no enclosing evaluation seam to capture its receiver once.");

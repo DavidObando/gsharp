@@ -1,4 +1,4 @@
-// <copyright file="Issue1849NullSeamHelperLoweringTests.cs" company="GSharp">
+// <copyright file="Issue3355NullSeamBlockExpressionLoweringTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -9,348 +9,319 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Regression tests for issue #1849: a follow-up to issue #1731 N1
-/// (<see cref="Issue1731DoubleEvaluationTranslationTests"/>). A non-trivial
-/// <c>is</c>-pattern scrutinee or range-slice start operand at a "null-seam"
-/// expression context — a field/property initializer or a
-/// <c>base(...)</c>/<c>this(...)</c> constructor-initializer argument — used
-/// to have no G# lowering: G#'s grammar has no expression-only way to host a
-/// spill <c>let</c> at those positions, so #1731 N1 settled for a LOUD
-/// <c>Unsupported</c> diagnostic instead of silently double-evaluating the
-/// operand.
-/// <para>
-/// The real fix sidesteps the grammar gap entirely: the whole null-seam
-/// initializer/argument is lowered to a call to a synthesized <c>private
-/// static</c> helper method — <c>__init0</c>, <c>__initN</c>, ... — added to
-/// the declaring type's <c>shared {{ }}</c> block. The non-trivial operand(s)
-/// become the helper's parameters, evaluated exactly once by the CALLER
-/// (the null-seam site itself, which is a perfectly fine place to evaluate an
-/// argument expression) and passed in; the pattern-match/range-slice logic
-/// runs inside the helper body against the parameter, which is an ordinary
-/// method body with a normal statement seam. No parser/grammar change is
-/// needed, and the shape is no longer reported <c>Unsupported</c>.
-/// </para>
-/// <para>
-/// Issue #1896 update: a range-slice's start/end bounds are no longer
-/// desugared to a double-embedding <c>.Slice(start, end - start)</c> call —
-/// gsc's own native <c>recv[start..end]</c> range-index form embeds each
-/// bound exactly once, in any context, with no spill needed at all. A
-/// range-slice operand is therefore no longer a null-seam site by itself;
-/// the helper lowering below remains reachable only via a non-trivial
-/// <c>is</c>-pattern scrutinee (a range-slice nested inside one is simply
-/// embedded once, as part of the scrutinee capture — see
-/// <see cref="FieldInitializer_NestedNullSeamOperand_LowersCleanlyWithNoDanglingHelperCall"/>).
-/// </para>
+/// Issue #3355 replaces issue #1849's synthesized <c>__initN(__pN)</c>
+/// helpers and issue #1731's double-evaluation fallback with native G# block
+/// expressions at field/property and constructor-initializer seams.
 /// </summary>
-public class Issue1849NullSeamHelperLoweringTests
+public class Issue3355NullSeamBlockExpressionLoweringTests
 {
     [Fact]
-    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_LowersToHelper()
+    public void FieldInitializer_PatternScrutinee_UsesNativeBlock()
     {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class A
-    {
-        public int X;
-        public int Y;
-    }
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                    public int Y;
+                }
 
-    public sealed class C
-    {
-        private static A GetA() => new A();
+                public sealed class C
+                {
+                    private static A GetA() => new A { X = 1, Y = 2 };
 
-        private bool flag = GetA() is { X: 1, Y: 2 };
-    }
-}");
+                    private bool flag = GetA() is { X: 1, Y: 2 };
+                }
+            }
+            """);
 
-        // The non-trivial receiver is evaluated exactly once: once as the
-        // helper-call argument at the field initializer, and never again
-        // inside the synthesized helper body (which reads its parameter
-        // instead).
-        Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains("__init0(", printed);
-        Assert.Contains("private func __init0(", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal(2, CountOccurrences(printed, "GetA()"));
+        Assert.Contains("private var flag bool = {", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
     }
 
     [Fact]
-    public void FieldInitializer_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
+    public void GetOnlyPropertyInitializer_PatternScrutinee_UsesNativeBlock()
     {
-        // Issue #1896 follow-up: a range-slice's native `recv[start..end]`
-        // form embeds each bound exactly once regardless of context, so a
-        // field initializer never needs the #1849 helper lowering for a
-        // range-slice operand — that helper machinery only remains reachable
-        // for a non-trivial `is`-pattern scrutinee (see the sibling
-        // `PatternScrutineeSideEffectingReceiver` tests above).
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private static int counter;
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                }
 
-        private static int Next() => counter++;
+                public sealed class C
+                {
+                    private static int calls;
 
-        private static int[] Data = new int[] { 1, 2, 3, 4 };
+                    private static A GetA()
+                    {
+                        calls++;
+                        return new A { X = 1 };
+                    }
 
-        private int[] r = Data[Next()..2];
-    }
-}");
+                    public bool P { get; } = GetA() is { X: > 0 };
 
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains("Data[C.Next()..2]", printed);
-        Assert.DoesNotContain(".Slice(", printed);
-        Assert.DoesNotContain("__init0", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-    }
+                    public int Run() => (P ? 100 : 0) + calls;
+                }
+            }
+            """);
 
-    [Fact]
-    public void GetOnlyPropertyInitializer_PatternScrutineeSideEffectingReceiver_LowersToHelper()
-    {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class A
-    {
-        public int X;
-    }
+        Assert.Equal(2, CountOccurrences(printed, "GetA()"));
+        Assert.Contains("P = {", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
 
-    public sealed class C
-    {
-        private static A GetA() => new A();
-
-        public bool P { get; } = GetA() is { X: > 0 };
-    }
-}");
-
-        Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains("__init0(", printed);
-        Assert.Contains("private func __init0(", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C().Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(101, result.Value);
     }
 
     [Fact]
-    public void StaticPropertyInitializer_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
+    public void StaticFieldAndPropertyInitializers_KeepStaticContext()
     {
-        // Issue #1896 follow-up: same as the field-initializer case above —
-        // the native range-index form needs no helper here either.
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private static int counter;
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                }
 
-        private static int Next() => counter++;
+                public sealed class C
+                {
+                    private static int calls;
 
-        private static int[] Data = new int[] { 1, 2, 3, 4 };
+                    private static A GetA()
+                    {
+                        calls++;
+                        return new A { X = 1 };
+                    }
 
-        public static int[] R { get; } = Data[Next()..2];
-    }
-}");
+                    private static bool flag = GetA() is { X: 1 };
+                    public static bool P { get; } = GetA() is { X: > 0 };
 
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains("Data[C.Next()..2]", printed);
-        Assert.DoesNotContain(".Slice(", printed);
-        Assert.DoesNotContain("__init0", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-    }
+                    public static int Run() =>
+                        (flag ? 100 : 0) + (P ? 100 : 0) + calls;
+                }
+            }
+            """);
 
-    [Fact]
-    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_LowersToHelper()
-    {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class A
-    {
-        public int X;
-        public int Y;
-    }
+        Assert.Equal(3, CountOccurrences(printed, "GetA()"));
+        Assert.True(CountOccurrences(printed, "let __spill") >= 2, printed);
+        AssertNoHelperOrGap(printed, context);
 
-    public class Base
-    {
-        public Base(bool flag) { }
-    }
-
-    public sealed class Derived : Base
-    {
-        private static A GetA() => new A();
-
-        public Derived() : base(GetA() is { X: 1, Y: 2 }) { }
-    }
-}");
-
-        Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use (was N-per-embed before the fix)
-        Assert.Contains(": base(__init0(", printed);
-        Assert.Contains("private func __init0(", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C.Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(202, result.Value);
     }
 
     [Fact]
-    public void ThisConstructorArgument_RangeSliceSideEffectingOperand_LowersToNativeRangeIndex()
+    public void BaseConstructorNamedArgument_UsesNativeBlock()
     {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private static int counter;
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                    public int Y;
+                }
 
-        private static int Next() => counter++;
+                public class Base
+                {
+                    public Base(bool flag) { }
+                }
 
-        public C(int[] r) { }
+                public sealed class Derived : Base
+                {
+                    private static A GetA() => new A { X = 1, Y = 2 };
 
-        public C(int[] s, int j) : this(s[Next()..j]) { }
-    }
-}");
+                    public Derived() : base(flag: GetA() is { X: 1, Y: 2 }) { }
+                }
+            }
+            """);
 
-        // Issue #1896 follow-up: the delegating constructor's own parameters
-        // (`s`, `j`) are already in scope at the `this(...)` argument list —
-        // no helper is needed to thread them through, since the native
-        // range-index form needs no helper at all here.
-        Assert.Equal(2, CountOccurrences(printed, "Next()")); // 1 declaration + 1 call-site use
-        Assert.Contains("init(s[C.Next()..j])", printed);
-        Assert.DoesNotContain(".Slice(", printed);
-        Assert.DoesNotContain("__init0", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-    }
-
-    [Fact]
-    public void MultipleNullSeamSitesInOneType_HelperNamesAreUnique()
-    {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class A
-    {
-        public int X;
-    }
-
-    public sealed class C
-    {
-        private static A GetA() => new A();
-
-        private bool flag1 = GetA() is { X: 1 };
-        private bool flag2 = GetA() is { X: 2 };
-    }
-}");
-
-        Assert.Contains("__init0(", printed);
-        Assert.Contains("__init1(", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal(2, CountOccurrences(printed, "GetA()"));
+        Assert.Contains(": base(flag: {", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
     }
 
     [Fact]
-    public void HelperName_UniquifiedAgainstExistingMember()
+    public void ThisConstructorArgument_UsesNativeBlockAndKeepsParametersInScope()
     {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class A
-    {
-        public int X;
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                    public int Y;
+                }
+
+                public sealed class C
+                {
+                    public C(bool flag) { }
+
+                    private static A GetA() => new A { X = 1, Y = 2 };
+
+                    public C(int expected)
+                        : this(GetA() is { X: > 0, Y: var y } && y == expected)
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("init({", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.Contains("expected", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
     }
 
-    public sealed class C
-    {
-        private static A GetA() => new A();
-
-        private static void __init0() { }
-
-        private bool flag = GetA() is { X: 1 };
-    }
-}");
-
-        // The existing `__init0` member is left alone; the synthesized helper
-        // picks the next free name instead of colliding with it.
-        Assert.Contains("private func __init0()", printed);
-        Assert.Contains("__init1(", printed);
-        Assert.Contains("private func __init1(", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-    }
-
-    /// <summary>
-    /// A trivial scrutinee/operand (a bare literal) needs no spill — and so no
-    /// helper — regardless of the null-seam site; only a non-trivial (method-
-    /// call/indexer/etc.) operand does. A qualified static-member read (e.g.
-    /// <c>C.SharedA</c>) is NOT considered trivial by <c>IsTrivialOperand</c>
-    /// (pre-existing #1731 behavior, unrelated to this fix) and so is still
-    /// helper-lowered like any other non-trivial operand — a bare literal is
-    /// used here to exercise the genuinely-no-spill-needed path instead.
-    /// </summary>
     [Fact]
-    public void FieldInitializer_TrivialPatternScrutinee_NoHelperSynthesized()
+    public void RefConstructorArgument_KeepsAddressOutsideNativeBlock()
     {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private bool flag = 5 is > 0;
-    }
-}");
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                    public int Y;
+                }
 
-        Assert.DoesNotContain("__init0", printed);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+                public class Base
+                {
+                    public Base(ref bool value)
+                    {
+                        value = true;
+                    }
+                }
+
+                public sealed class Derived : Base
+                {
+                    private static int calls;
+                    private static bool whenTrue;
+                    private static bool whenFalse;
+
+                    private static A GetA()
+                    {
+                        calls++;
+                        return new A { X = 1, Y = 2 };
+                    }
+
+                    public Derived()
+                        : base(ref (GetA() is { X: 1, Y: 2 } ? ref whenTrue : ref whenFalse))
+                    {
+                    }
+
+                    public int Run() =>
+                        calls * 100 + (whenTrue ? 10 : 0) + (whenFalse ? 1 : 0);
+                }
+            }
+            """);
+
+        Assert.Equal(2, CountOccurrences(printed, "GetA()"));
+        Assert.Contains(": base(&{", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Derived().Run()");
+        Assert.False(
+            result.Diagnostics.Any(diagnostic => diagnostic.IsError),
+            string.Join(Environment.NewLine, result.Diagnostics) + Environment.NewLine + printed);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(110, result.Value);
     }
 
-    /// <summary>
-    /// Reviewer follow-up, re-verified after #1896: a null-seam operand
-    /// nested inside another null-seam operand — here, the is-pattern
-    /// scrutinee <c>Y[Z()..a]</c> is a range-slice whose start <c>Z()</c> is
-    /// non-trivial. Before #1896, the range-slice's <c>.Slice</c> desugaring
-    /// ALSO needed a single-evaluation spill of <c>Z()</c>, so this was two
-    /// nested null-seam lowerings sharing one synthesized helper — and the
-    /// inner spill's parameter name (<c>__p0</c>) leaking into the outer
-    /// capture's own call-site argument was a genuine dangling-identifier
-    /// hazard, guarded by bailing to the loud <c>Unsupported</c> diagnostic.
-    /// #1896's native <c>recv[start..end]</c> range-index form embeds
-    /// <c>Z()</c> exactly once with no spill of its own — the range-slice is
-    /// no longer a null-seam site at all, only the outer <c>is</c>-pattern
-    /// scrutinee is. So there is only ONE capture now (the whole
-    /// <c>Y[Z()..a]</c> expression, captured as-is by the pattern-match
-    /// helper), the dangling-<c>__p0</c> hazard this test guarded no longer
-    /// exists, and the correct current behavior is a clean helper lowering
-    /// with no <c>Unsupported</c> diagnostic.
-    /// </summary>
     [Fact]
-    public void FieldInitializer_NestedNullSeamOperand_LowersCleanlyWithNoDanglingHelperCall()
+    public void NestedNullSeamOperand_UsesOnlyInScopeSpillLocals()
     {
-        (string printed, TranslationContext context) = TranslateUnitWithContext(@"
-namespace Demo
-{
-    public sealed class C
-    {
-        private static int[] Y = new int[] { 1, 2, 3, 4, 5 };
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class C
+                {
+                    private static int[] Y = new int[] { 1, 2, 3, 4, 5 };
+                    private static int Z() => 1;
+                    private const int a = 3;
 
-        private static int Z() => 1;
+                    private bool flag = Y[Z()..a] is [1, 2];
+                }
+            }
+            """);
 
-        private const int a = 3;
-
-        private bool flag = Y[Z()..a] is [1, 2];
+        Assert.Contains("let __spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__p", printed, StringComparison.Ordinal);
+        AssertNoHelperOrGap(printed, context);
     }
-}");
 
-        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        // The whole range-slice `Y[Z()..a]` is the single (only) capture, at
-        // the call site, exactly once — no dangling `__p0` leaks into the
-        // argument list itself (a `__p0` parameter name is fine INSIDE the
-        // synthesized helper's own body/signature, since it is in scope
-        // there).
-        Assert.Contains("__init0(C.Y[C.Z()..C.a])", printed);
+    [Fact]
+    public void TranslatedFieldInitializer_BindsEmitsAndRunsOnce()
+    {
+        (string printed, TranslationContext context) = TranslateUnitWithContext("""
+            namespace Demo
+            {
+                public sealed class A
+                {
+                    public int X;
+                    public int Y;
+                }
+
+                public sealed class C
+                {
+                    private static int calls;
+
+                    private static A GetA()
+                    {
+                        calls++;
+                        return new A { X = 1, Y = 2 };
+                    }
+
+                    private bool flag = GetA() is { X: 1, Y: 2 };
+
+                    public int Run() => (flag ? 100 : 0) + calls;
+                }
+            }
+            """);
+
+        AssertNoHelperOrGap(printed, context);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "C().Run()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(101, result.Value);
+    }
+
+    private static void AssertNoHelperOrGap(string printed, TranslationContext context)
+    {
+        Assert.DoesNotContain("__init", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__p", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
     }
 
     private static int CountOccurrences(string haystack, string needle)
     {
-        int count = 0;
-        for (int index = haystack.IndexOf(needle, StringComparison.Ordinal);
+        var count = 0;
+        for (var index = haystack.IndexOf(needle, StringComparison.Ordinal);
             index >= 0;
             index = haystack.IndexOf(needle, index + needle.Length, StringComparison.Ordinal))
         {

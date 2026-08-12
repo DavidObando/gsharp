@@ -661,15 +661,15 @@ internal sealed partial class ExpressionBinder
         bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
         if (requiresWritable)
         {
-            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
+            if (TryGetReadOnlyAddressTarget(whenTrue, out var whenTrueReadOnly))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, whenTrueReadOnly.Name);
                 return new BoundErrorExpression(null);
             }
 
-            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
+            if (TryGetReadOnlyAddressTarget(whenFalse, out var whenFalseReadOnly))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, whenFalseReadOnly.Name);
                 return new BoundErrorExpression(null);
             }
         }

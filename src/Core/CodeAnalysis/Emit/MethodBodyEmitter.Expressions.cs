@@ -1950,6 +1950,23 @@ internal sealed partial class MethodBodyEmitter
     {
         switch (node.Operand)
         {
+            case BoundBlockExpression block:
+                // Issue #3355: execute prefix statements, then take the
+                // address of the trailing lvalue. Keeping address-of as the
+                // outer bound shape preserves ref/out call classification.
+                this.EmitBlockExpressionPrefix(block);
+                this.EmitAddressOf(new BoundAddressOfExpression(node.Syntax, block.Expression, node.IsUnmanaged));
+                break;
+
+            case BoundConditionalExpression conditional:
+                this.EmitConditionalAddress(new BoundConditionalAddressExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    conditional.WhenTrue,
+                    conditional.WhenFalse,
+                    conditional.Type));
+                break;
+
             case BoundVariableExpression bve:
                 // Issue #1988 (follow-up to #1917/#1982): route through the
                 // narrowing-aware helper so `&narrowedStructLocal` (a

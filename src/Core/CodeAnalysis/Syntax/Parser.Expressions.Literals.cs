@@ -854,6 +854,19 @@ public partial class Parser
     // an if-expression (when followed by the block-expression shape).
     private StatementSyntax ParseBlockExpressionItem(bool valueRequired = false)
     {
+        // Issue #3355: a final nested brace block in a value-required block is
+        // itself the trailing expression, not a standalone statement block.
+        // A brace followed by a postfix/binary continuation is likewise
+        // unambiguously expression-shaped. Lambda bodies pass
+        // valueRequired:false, preserving their existing final nested
+        // statement-block interpretation.
+        if (Current.Kind == SyntaxKind.OpenBraceToken
+            && (valueRequired || NestedBraceStartsContinuedExpression())
+            && NestedBraceCanBeTrailingExpression())
+        {
+            return new ExpressionStatementSyntax(syntaxTree, ParseExpression());
+        }
+
         // If the current token is `if` and this could be an if-expression
         // (value-producing), parse it as an expression statement wrapping
         // an IfExpressionSyntax. This handles nested `if` in block position.
@@ -880,6 +893,136 @@ public partial class Parser
 
         return ParseStatement();
     }
+
+    private bool NestedBraceCanBeTrailingExpression()
+    {
+        var depth = 0;
+        for (var offset = 0; offset <= LookaheadMaxScan; offset++)
+        {
+            var kind = Peek(offset).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenBraceToken)
+            {
+                depth++;
+                continue;
+            }
+
+            if (kind != SyntaxKind.CloseBraceToken)
+            {
+                continue;
+            }
+
+            depth--;
+            if (depth != 0)
+            {
+                continue;
+            }
+
+            var nextOffset = offset + 1;
+            var next = Peek(nextOffset).Kind;
+            return next == SyntaxKind.CloseBraceToken
+                || IsExpressionContinuationAfterBraceAt(nextOffset, Peek(offset));
+        }
+
+        return false;
+    }
+
+    private bool NestedBraceStartsContinuedExpression()
+    {
+        var depth = 0;
+        for (var offset = 0; offset <= LookaheadMaxScan; offset++)
+        {
+            var kind = Peek(offset).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenBraceToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseBraceToken && --depth == 0)
+            {
+                return IsExpressionContinuationAfterBraceAt(offset + 1, Peek(offset));
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsExpressionContinuationAfterBraceAt(int offset, SyntaxToken closeBrace)
+    {
+        var continuation = Peek(offset);
+        if ((continuation.Kind == SyntaxKind.PlusPlusToken || continuation.Kind == SyntaxKind.MinusMinusToken)
+            && IsTokenOnNewLineAfter(continuation, closeBrace))
+        {
+            return false;
+        }
+
+        return IsExpressionContinuationAt(offset);
+    }
+
+    private bool IsExpressionContinuationAt(int offset)
+        => IsExpressionContinuation(Peek(offset).Kind)
+            || (Peek(offset).Kind == SyntaxKind.IdentifierToken
+                && Peek(offset).Text == "with"
+                && Peek(offset + 1).Kind == SyntaxKind.OpenBraceToken);
+
+    private static bool IsExpressionContinuation(SyntaxKind kind)
+        => kind is SyntaxKind.DotToken
+            or SyntaxKind.QuestionDotToken
+            or SyntaxKind.RightArrowToken
+            or SyntaxKind.LeftArrowToken
+            or SyntaxKind.OpenSquareBracketToken
+            or SyntaxKind.QuestionOpenBracketToken
+            or SyntaxKind.OpenParenthesisToken
+            or SyntaxKind.BangBangToken
+            or SyntaxKind.PlusPlusToken
+            or SyntaxKind.MinusMinusToken
+            or SyntaxKind.PlusToken
+            or SyntaxKind.PlusEqualsToken
+            or SyntaxKind.MinusToken
+            or SyntaxKind.MinusEqualsToken
+            or SyntaxKind.StarToken
+            or SyntaxKind.StarEqualsToken
+            or SyntaxKind.SlashToken
+            or SyntaxKind.SlashEqualsToken
+            or SyntaxKind.PercentToken
+            or SyntaxKind.PercentEqualsToken
+            or SyntaxKind.AmpersandToken
+            or SyntaxKind.AmpersandAmpersandToken
+            or SyntaxKind.AmpersandEqualsToken
+            or SyntaxKind.AmpersandHatToken
+            or SyntaxKind.AmpersandHatEqualsToken
+            or SyntaxKind.PipeToken
+            or SyntaxKind.PipePipeToken
+            or SyntaxKind.PipeEqualsToken
+            or SyntaxKind.HatToken
+            or SyntaxKind.HatEqualsToken
+            or SyntaxKind.EqualsEqualsToken
+            or SyntaxKind.EqualsToken
+            or SyntaxKind.BangEqualsToken
+            or SyntaxKind.LessToken
+            or SyntaxKind.LessOrEqualsToken
+            or SyntaxKind.ShiftLeftToken
+            or SyntaxKind.ShiftLeftEqualsToken
+            or SyntaxKind.GreaterToken
+            or SyntaxKind.GreaterOrEqualsToken
+            or SyntaxKind.ShiftRightToken
+            or SyntaxKind.ShiftRightEqualsToken
+            or SyntaxKind.UnsignedShiftRightToken
+            or SyntaxKind.UnsignedShiftRightEqualsToken
+            or SyntaxKind.QuestionToken
+            or SyntaxKind.QuestionQuestionToken
+            or SyntaxKind.QuestionQuestionEqualsToken
+            or SyntaxKind.DotDotToken
+            or SyntaxKind.IsKeyword
+            or SyntaxKind.AsKeyword;
 
     // Issue #669 / ADR-0128 / issue #1172 / issue #2349: lookahead to
     // determine whether an `if` at the current position is a value-producing

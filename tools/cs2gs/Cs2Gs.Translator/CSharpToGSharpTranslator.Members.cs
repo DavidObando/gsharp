@@ -1045,7 +1045,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     initializer = this.CoerceConstantToUnsigned(
                         declarator.Initializer.Value,
-                        this.TranslateNullSeamExpression(declarator.Initializer.Value, symbol?.ContainingType));
+                        this.TranslateNullSeamExpression(declarator.Initializer.Value));
                     initializer = this.ForgiveNullableReferenceValue(
                         declarator.Initializer.Value,
                         initializer,
@@ -1973,7 +1973,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression initializer = this.CoerceConstantToUnsigned(
                 node.Initializer.Value,
-                this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType));
+                this.TranslateNullSeamExpression(node.Initializer.Value));
             initializer = this.ForgiveNullableReferenceValue(
                 node.Initializer.Value,
                 initializer,
@@ -2161,7 +2161,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression backingInitializer = fieldKeywordBackingName != null && node.Initializer != null
                 ? this.CoerceConstantToUnsigned(
                     node.Initializer.Value,
-                    this.TranslateNullSeamExpression(node.Initializer.Value, symbol?.ContainingType))
+                    this.TranslateNullSeamExpression(node.Initializer.Value))
                 : null;
             GMember backingField = fieldKeywordBackingName != null
                 ? new FieldDeclaration(BindingKind.Var, fieldKeywordBackingName, backingType, initializer: backingInitializer, visibility: Visibility.Private)

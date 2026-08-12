@@ -504,6 +504,12 @@ declaration order; `const` fields fold to compile-time literal fields; static
 | GS0376 | Error | A `const` field initializer must be a compile-time constant expression. |
 | GS0377 | Error | A field initializer cannot reference the instance member or constructor parameter `{name}` (field initializers run before the constructor body, so `this` is not available). Assign it in an `init(...)` constructor instead. |
 
+## Constructor initializer instance access (GS0531)
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0531 | Error | `Constructor initializer arguments cannot reference instance member '<name>' before the delegated or base constructor has run.` | `init() : base({ let self = this 1 }) { }` |
+
 
 ## `protected` accessibility diagnostics (GS0379–GS0380)
 
@@ -554,12 +560,12 @@ Cause/fix:
 | Code | Severity | Message |
 |------|----------|---------|
 | GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. |
-| GS0277 | Error | A block in an if-expression value position must end with a value-producing expression. |
+| GS0277 | Error | A block expression in value position must end with a value-producing expression. |
 
 Cause/fix examples:
 
 - **GS0276** — `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). The same rule applies to chained `else if` shapes: every chain must end in a terminal `else`.
-- **GS0277** — `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out.
+- **GS0277** — `let x = { let y = 1 }` or `let x = if cond { } else { 1 }` has no tail value. Add one, such as `{ let y = 1 y }`.
 - **GS0263** also covers if-expression branches with no common result type (e.g. `if cond { true } else { "no" }`). Mirrors the ternary diagnostic since both forms share `ComputeConditionalCommonType`.
 
 ## Null-coalescing compound assignment diagnostics (GS0298–GS0299)
@@ -1669,4 +1675,3 @@ quick-fixes can patch the whole construct in one edit. Mixed-form
 files produce one `GS0366` per legacy occurrence with **no cascade
 errors** — the parser binds the recovered shape to the same
 `MapTypeSymbol` so downstream binding proceeds unchanged.
-

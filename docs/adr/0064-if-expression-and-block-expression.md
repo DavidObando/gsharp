@@ -5,7 +5,7 @@
 - **Implemented**: 2026-06-10 (PR [#680](https://github.com/DavidObando/gsharp/pull/680), issue [#669](https://github.com/DavidObando/gsharp/issues/669))
 - **Finalized**: 2026-06-11 (issue [#711](https://github.com/DavidObando/gsharp/issues/711))
 - **Phase**: Phase 8 — language ergonomics / expression surface
-- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711
+- **Related**: ADR-0062 (generalized ternary), ADR-0009 (switch semantics), issues #669, #706, #711, #3355
 
 ## Context
 
@@ -117,3 +117,40 @@ original ADR and are now pinned down:
 - **Coverage parity.** The compiler emit path and the interpreter both lower
   through `BoundConditionalExpression` / `BoundBlockExpression`, so no
   backend-specific work was required; tests cover both paths.
+
+## Addendum (issue #3355): general block expressions
+
+`BlockExpressionSyntax` is now a general primary expression rather than a form
+reserved for `if` branches and arrow-lambda bodies:
+
+```gsharp
+let value = {
+    let left = computeLeft()
+    let right = computeRight()
+    left + right
+}
+
+consume({ let item = next() item })
+return 2 * { let item = next() item }
+```
+
+- The final expression is mandatory in expression position (`GS0277`); prefix
+  statements execute in order, then the tail executes exactly once.
+- The block owns a lexical scope. Locals can shadow outer names, remain visible
+  to the tail and nested closures, and do not escape after `}`.
+- Expected types flow into the tail in typed locals, assignments, returns,
+  fields, collection elements, and call/constructor arguments.
+- `return`, loop jumps, `yield`, exceptions, and `await` keep their enclosing
+  control context. Lowering lifts suspension/control-flow-bearing blocks before
+  emission so no path abandons a partially populated IL evaluation stack.
+- Field/property initializers and `base(...)`/delegating-`init(...)` arguments
+  are pre-body initialization contexts, so `return` is rejected there. A nested
+  lambda still owns its normal function control context.
+- An address-of block (`&{ statements; lvalue }`) executes its prefix before
+  taking the tail lvalue's address; ordinary ref/out escape rules still apply.
+- Statement blocks, object/collection literals, property patterns, lambda
+  bodies, and switch/if statement bodies retain their contextual brace parsers.
+- Statement-bearing blocks are not representable in CLR expression trees and
+  report the existing precise `GS0473` unsupported-expression diagnostic.
+- cs2gs uses this native form for expression-position spills, replacing the
+  synthesized `__pN`/`__initN` helper path and its double-evaluation fallback.

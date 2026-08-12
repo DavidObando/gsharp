@@ -453,6 +453,11 @@ internal sealed partial class OverloadResolver
     /// branchy argument could not unify without a target).</returns>
     private BoundExpression BindOverloadArgumentValue(ExpressionSyntax inner)
     {
+        if (ExpressionBinder.IsTargetDependentBlockArgumentSyntax(inner))
+        {
+            return new BoundErrorExpression(inner);
+        }
+
         if (!ExpressionBinder.IsTargetTypedBranchyArgumentSyntax(inner))
         {
             return bindExpression(inner);

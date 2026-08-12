@@ -921,7 +921,8 @@ internal sealed class LambdaBinder
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         var bodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-        if (boundBody is BoundBlockExpression blockExpr)
+        if (boundBody is BoundBlockExpression blockExpr
+            && syntax.Body is BlockExpressionSyntax)
         {
             // Block body — emit the prefix statements, then either a return-
             // statement on the trailing expression (when the lambda returns a

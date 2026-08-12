@@ -1565,7 +1565,12 @@ internal sealed partial class ExpressionBinder
             }
 
             boundArguments.Add(BindCallArgumentWithDelegateTargetTyping(
-                syntax.Arguments[i], ctorParameterLists, sourceArgIndex: i, argName: argName, paramOffset: 0));
+                syntax.Arguments[i],
+                ctorParameterLists,
+                sourceArgumentCount: syntax.Arguments.Count,
+                sourceArgIndex: i,
+                argName: argName,
+                paramOffset: 0));
         }
 
         // Phase A (overload resolution): pick a constructor via the shared
@@ -1790,11 +1795,25 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindCallArgumentWithDelegateTargetTyping(
         ExpressionSyntax argumentSyntax,
         IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int sourceArgumentCount,
         int sourceArgIndex,
         string? argName,
         int paramOffset)
     {
         var inner = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax);
+        if (IsTargetDependentBlockArgumentSyntax(inner)
+            && TryResolveTargetDependentBlockTarget(
+                candidateParameterLists,
+                paramOffset,
+                sourceArgumentCount,
+                sourceArgIndex,
+                argName,
+                inner,
+                out var blockTarget))
+        {
+            return BindExpression(inner, blockTarget);
+        }
+
         if (inner is LambdaExpressionSyntax lambdaSyntax
             && TryResolveDelegateTargetFromCandidates(
                 candidateParameterLists,

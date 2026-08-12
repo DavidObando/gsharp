@@ -81,6 +81,118 @@ public static class SpillSequenceSpiller
         return result;
     }
 
+    /// <summary>
+    /// Issue #3355: lifts block expressions containing <c>yield</c> statements
+    /// to statement level before iterator state-machine rewriting. This keeps
+    /// suspension points from branching out while a parent expression has
+    /// partially populated the IL evaluation stack.
+    /// </summary>
+    /// <param name="body">Lowered iterator body.</param>
+    /// <returns>Body with yield-bearing block expressions lifted to statement level.</returns>
+    public static BoundBlockStatement RewriteIteratorBlocks(BoundBlockStatement body)
+    {
+        if (!HasYieldInBlockExpression(body))
+        {
+            return body;
+        }
+
+        return new Spiller(includeYieldInBlockExpressions: true).RewriteBlock(body);
+    }
+
+    /// <summary>
+    /// Issue #3355: lifts block expressions containing non-local control flow
+    /// before emission so return/goto paths never abandon a partially-filled
+    /// parent-expression evaluation stack.
+    /// </summary>
+    /// <param name="body">Lowered function body.</param>
+    /// <returns>Body with control-flow-bearing block expressions lifted to statement level.</returns>
+    public static BoundBlockStatement RewriteControlFlowBlocks(BoundBlockStatement body)
+    {
+        if (!HasControlFlowInBlockExpression(body))
+        {
+            return body;
+        }
+
+        return new Spiller(includeControlFlowInBlockExpressions: true).RewriteBlock(body);
+    }
+
+    private static bool HasYieldInBlockExpression(BoundNode node, Dictionary<BoundNode, bool>? memo = null)
+    {
+        if (memo != null && memo.TryGetValue(node, out var cached))
+        {
+            return cached;
+        }
+
+        var walker = new YieldInBlockExpressionWalker();
+        walker.Visit(node);
+        memo?.Add(node, walker.Found);
+        return walker.Found;
+    }
+
+    private static bool HasControlFlowInBlockExpression(BoundNode node, Dictionary<BoundNode, bool>? memo = null)
+    {
+        if (memo != null && memo.TryGetValue(node, out var cached))
+        {
+            return cached;
+        }
+
+        var walker = new ControlFlowInBlockExpressionWalker();
+        walker.Visit(node);
+        memo?.Add(node, walker.Found);
+        return walker.Found;
+    }
+
+    private sealed class YieldInBlockExpressionWalker : BoundTreeWalker
+    {
+        private int blockExpressionDepth;
+
+        public bool Found { get; private set; }
+
+        protected override void VisitBlockExpression(BoundBlockExpression node)
+        {
+            blockExpressionDepth++;
+            base.VisitBlockExpression(node);
+            blockExpressionDepth--;
+        }
+
+        protected override void VisitYieldStatement(BoundYieldStatement node)
+        {
+            if (blockExpressionDepth > 0)
+            {
+                Found = true;
+            }
+        }
+    }
+
+    private sealed class ControlFlowInBlockExpressionWalker : BoundTreeWalker
+    {
+        private int blockExpressionDepth;
+
+        public bool Found { get; private set; }
+
+        public override void VisitStatement(BoundStatement node)
+        {
+            if (blockExpressionDepth > 0
+                && node.Kind is BoundNodeKind.GotoStatement
+                    or BoundNodeKind.ConditionalGotoStatement
+                    or BoundNodeKind.ReturnStatement
+                    or BoundNodeKind.ThrowStatement
+                    or BoundNodeKind.YieldStatement)
+            {
+                Found = true;
+            }
+
+            base.VisitStatement(node);
+        }
+
+        protected override void VisitBlockExpression(BoundBlockExpression node)
+        {
+            blockExpressionDepth++;
+            base.VisitBlockExpression(node);
+            blockExpressionDepth--;
+        }
+    }
+
     private sealed class Spiller
     {
         // Reference-keyed "does this subtree contain an await" cache shared by every
@@ -90,8 +202,20 @@ public static class SpillSequenceSpiller
         // Safe across the whole pass because rewriting always produces new node instances
         // (see BoundTreeRewriter) — a memoized entry is never observed for a mutated node.
         private readonly Dictionary<BoundNode, bool> awaitMemo = AsyncBoundTreeQueries.CreateHasAwaitMemo();
+        private readonly Dictionary<BoundNode, bool> yieldInBlockMemo = [];
+        private readonly Dictionary<BoundNode, bool> controlFlowInBlockMemo = [];
+        private readonly bool includeYieldInBlockExpressions;
+        private readonly bool includeControlFlowInBlockExpressions;
 
         private int spillOrdinal;
+
+        public Spiller(
+            bool includeYieldInBlockExpressions = false,
+            bool includeControlFlowInBlockExpressions = false)
+        {
+            this.includeYieldInBlockExpressions = includeYieldInBlockExpressions;
+            this.includeControlFlowInBlockExpressions = includeControlFlowInBlockExpressions;
+        }
 
         public BoundBlockStatement RewriteBlock(BoundBlockStatement block)
         {
@@ -132,6 +256,27 @@ public static class SpillSequenceSpiller
                 case BoundReturnStatement ret:
                     return RewriteReturnStatement(ret, builder);
 
+                case BoundThrowStatement throwStatement:
+                    return RewriteThrowStatement(throwStatement, builder);
+
+                case BoundYieldStatement yieldStatement:
+                    return RewriteYieldStatement(yieldStatement, builder);
+
+                case BoundChannelSendStatement channelSend:
+                    return RewriteChannelSendStatement(channelSend, builder);
+
+                case BoundGoStatement goStatement:
+                    return RewriteGoStatement(goStatement, builder);
+
+                case BoundSelectStatement selectStatement:
+                    return RewriteSelectStatement(selectStatement, builder);
+
+                case BoundPatternSwitchStatement patternSwitchStatement:
+                    return RewritePatternSwitchStatement(patternSwitchStatement, builder);
+
+                case BoundScopeStatement scopeStatement:
+                    return RewriteScopeStatement(scopeStatement, builder);
+
                 case BoundIfStatement ifStmt:
                     return RewriteIfStatement(ifStmt, builder);
 
@@ -147,25 +292,7 @@ public static class SpillSequenceSpiller
                     return rewritten != nested;
 
                 case BoundFixedStatement fixedStmt:
-                    // ADR-0125 / issue #1026: rewrite the pinned body (its
-                    // statements may carry await-spillable expressions) and
-                    // rebuild the fixed statement; the pin prologue/epilogue are
-                    // re-emitted around the rewritten body at emit time.
-                    var fixedBody = fixedStmt.Body is BoundBlockStatement fixedBlock
-                        ? RewriteBlock(fixedBlock)
-                        : fixedStmt.Body;
-                    var rebuilt = fixedBody == fixedStmt.Body
-                        ? fixedStmt
-                        : new BoundFixedStatement(
-                            fixedStmt.Syntax,
-                            fixedStmt.PinKind,
-                            fixedStmt.PinnedVariable,
-                            fixedStmt.PointerVariable,
-                            fixedStmt.PinnedSource,
-                            fixedBody,
-                            fixedStmt.SourceVariable);
-                    builder.Add(rebuilt);
-                    return rebuilt != fixedStmt;
+                    return RewriteFixedStatement(fixedStmt, builder);
 
                 // Statements that are await-free leaves at this point in the pipeline.
                 // Each is either structurally unable to contain a BoundExpression child,
@@ -173,14 +300,7 @@ public static class SpillSequenceSpiller
                 // (AsyncExceptionHandlerRewriter, Lowerer, iterator rewriter).
                 case BoundLabelStatement:
                 case BoundGotoStatement:
-                case BoundThrowStatement:
-                case BoundScopeStatement:
-                case BoundChannelSendStatement:
-                case BoundGoStatement:
-                case BoundSelectStatement:
-                case BoundPatternSwitchStatement:
                 case BoundAwaitSequencePoint:
-                case BoundYieldStatement:
                 case BoundLocalFunctionDeclaration:
                     // Issue #1886: a generic local function's literal body is a
                     // separate lexical scope (mirrors BoundTreeRewriter's
@@ -195,6 +315,24 @@ public static class SpillSequenceSpiller
                         $"SpillSequenceSpiller: unhandled BoundStatement kind '{statement.Kind}'.");
                     return false; // unreachable
             }
+        }
+
+        private bool RewriteScopeStatement(
+            BoundScopeStatement scopeStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
+            if (!RewriteStatementToList(scopeStatement.Body, bodyBuilder))
+            {
+                builder.Add(scopeStatement);
+                return false;
+            }
+
+            var body = bodyBuilder.Count == 1
+                ? bodyBuilder[0]
+                : new BoundBlockStatement(null, bodyBuilder.ToImmutable());
+            builder.Add(new BoundScopeStatement(scopeStatement.Syntax, body));
+            return true;
         }
 
         private bool RewriteVariableDeclaration(BoundVariableDeclaration decl, ImmutableArray<BoundStatement>.Builder builder)
@@ -266,6 +404,256 @@ public static class SpillSequenceSpiller
             FlushSideEffects(spilled, builder);
             builder.Add(new BoundReturnStatement(null, spilled.Value));
             return true;
+        }
+
+        private bool RewriteThrowStatement(
+            BoundThrowStatement throwStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            if (!HasAwait(throwStatement.Expression))
+            {
+                builder.Add(throwStatement);
+                return false;
+            }
+
+            var spilled = SpillExpression(throwStatement.Expression);
+            FlushSideEffects(spilled, builder);
+            builder.Add(new BoundThrowStatement(
+                null,
+                spilled.Value,
+                throwStatement.DiagnosticDescriptor));
+            return true;
+        }
+
+        private bool RewriteYieldStatement(
+            BoundYieldStatement yieldStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            if (!HasAwait(yieldStatement.Expression))
+            {
+                builder.Add(yieldStatement);
+                return false;
+            }
+
+            var spilled = SpillExpression(yieldStatement.Expression);
+            FlushSideEffects(spilled, builder);
+            builder.Add(new BoundYieldStatement(null, spilled.Value));
+            return true;
+        }
+
+        private bool RewritePatternSwitchStatement(
+            BoundPatternSwitchStatement switchStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var changed = false;
+            var discriminant = switchStatement.Discriminant;
+            if (HasAwait(discriminant))
+            {
+                var spilled = SpillExpression(discriminant);
+                FlushSideEffects(spilled, builder);
+                discriminant = spilled.Value;
+                changed = true;
+            }
+
+            var arms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(switchStatement.Arms.Length);
+            foreach (var arm in switchStatement.Arms)
+            {
+                var guard = arm.Guard;
+                if (guard != null && HasAwait(guard))
+                {
+                    guard = SpillSwitchGuard(guard, "switch-statement");
+                    changed = true;
+                }
+
+                var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
+                var bodyChanged = RewriteStatementToList(arm.Body, bodyBuilder);
+                var body = bodyChanged
+                    ? bodyBuilder.Count == 1
+                        ? bodyBuilder[0]
+                        : new BoundBlockStatement(null, bodyBuilder.ToImmutable())
+                    : arm.Body;
+                changed |= bodyChanged;
+                arms.Add(new BoundPatternSwitchArm(arm.Syntax, arm.Pattern, guard, body));
+            }
+
+            if (!changed)
+            {
+                builder.Add(switchStatement);
+                return false;
+            }
+
+            builder.Add(new BoundPatternSwitchStatement(
+                switchStatement.Syntax,
+                discriminant,
+                arms.MoveToImmutable(),
+                switchStatement.IsExhaustive));
+            return true;
+        }
+
+        private BoundExpression SpillSwitchGuard(BoundExpression guard, string switchKind)
+        {
+            if (AsyncBoundTreeQueries.HasAwait(guard, awaitMemo))
+            {
+                var anchor = guard.Syntax ?? AsyncBoundTreeQueries.FindFirstAwaitSyntax(guard);
+                EmitDiagnosticException.Throw(
+                    anchor,
+                    $"'await' inside a {switchKind} 'when' guard is not yet supported across a suspension point.");
+            }
+
+            var spilled = SpillExpression(guard);
+            return new BoundBlockExpression(null, spilled.SideEffects, spilled.Value);
+        }
+
+        private bool RewriteSelectStatement(
+            BoundSelectStatement selectStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var spillHeader = selectStatement.Cases.Any(selectCase =>
+                (selectCase.Channel != null && HasAwait(selectCase.Channel))
+                || (selectCase.Value != null && HasAwait(selectCase.Value)));
+            var changed = spillHeader;
+            var cases = ImmutableArray.CreateBuilder<BoundSelectCase>(selectStatement.Cases.Length);
+
+            foreach (var selectCase in selectStatement.Cases)
+            {
+                var channel = selectCase.Channel;
+                if (spillHeader && channel != null)
+                {
+                    channel = SpillAndCaptureSelectOperand(channel, builder);
+                }
+
+                var value = selectCase.Value;
+                if (spillHeader && value != null)
+                {
+                    value = SpillAndCaptureSelectOperand(value, builder);
+                }
+
+                var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
+                var bodyChanged = RewriteStatementToList(selectCase.Body, bodyBuilder);
+                var body = bodyChanged
+                    ? bodyBuilder.Count == 1
+                        ? bodyBuilder[0]
+                        : new BoundBlockStatement(null, bodyBuilder.ToImmutable())
+                    : selectCase.Body;
+                changed |= bodyChanged;
+                cases.Add(new BoundSelectCase(
+                    selectCase.CaseKind,
+                    channel,
+                    value,
+                    selectCase.Variable,
+                    body));
+            }
+
+            if (!changed)
+            {
+                builder.Add(selectStatement);
+                return false;
+            }
+
+            builder.Add(new BoundSelectStatement(selectStatement.Syntax, cases.MoveToImmutable()));
+            return true;
+        }
+
+        private BoundExpression SpillAndCaptureSelectOperand(
+            BoundExpression expression,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            if (HasAwait(expression))
+            {
+                var spilled = SpillExpression(expression);
+                FlushSideEffects(spilled, builder);
+                expression = spilled.Value;
+            }
+
+            var temp = MakeSpillTemp(expression.Type);
+            builder.Add(new BoundVariableDeclaration(null, temp, expression));
+            return new BoundVariableExpression(null, temp);
+        }
+
+        private bool RewriteChannelSendStatement(
+            BoundChannelSendStatement channelSend,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var channelNeedsSpill = HasAwait(channelSend.Channel);
+            var valueNeedsSpill = HasAwait(channelSend.Value);
+            if (!channelNeedsSpill && !valueNeedsSpill)
+            {
+                builder.Add(channelSend);
+                return false;
+            }
+
+            var channel = channelSend.Channel;
+            if (channelNeedsSpill)
+            {
+                var spilledChannel = SpillExpression(channel);
+                FlushSideEffects(spilledChannel, builder);
+                channel = spilledChannel.Value;
+            }
+
+            if (valueNeedsSpill && !CanDeferAcrossLift(channel))
+            {
+                var channelTemp = MakeSpillTemp(channel.Type);
+                builder.Add(new BoundVariableDeclaration(null, channelTemp, channel));
+                channel = new BoundVariableExpression(null, channelTemp);
+            }
+
+            var value = channelSend.Value;
+            if (valueNeedsSpill)
+            {
+                var spilledValue = SpillExpression(value);
+                FlushSideEffects(spilledValue, builder);
+                value = spilledValue.Value;
+            }
+
+            builder.Add(new BoundChannelSendStatement(null, channel, value));
+            return true;
+        }
+
+        private bool RewriteGoStatement(
+            BoundGoStatement goStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            if (!HasAwait(goStatement.Expression))
+            {
+                builder.Add(goStatement);
+                return false;
+            }
+
+            var spilled = SpillExpression(goStatement.Expression);
+            FlushSideEffects(spilled, builder);
+            builder.Add(new BoundGoStatement(null, spilled.Value));
+            return true;
+        }
+
+        private bool RewriteFixedStatement(
+            BoundFixedStatement fixedStatement,
+            ImmutableArray<BoundStatement>.Builder builder)
+        {
+            var pinnedSource = fixedStatement.PinnedSource;
+            var sourceChanged = false;
+            if (HasAwait(pinnedSource))
+            {
+                var spilledSource = SpillExpression(pinnedSource);
+                FlushSideEffects(spilledSource, builder);
+                pinnedSource = spilledSource.Value;
+                sourceChanged = true;
+            }
+
+            var fixedBody = fixedStatement.Body is BoundBlockStatement fixedBlock
+                ? RewriteBlock(fixedBlock)
+                : fixedStatement.Body;
+            var rebuilt = !sourceChanged && fixedBody == fixedStatement.Body
+                ? fixedStatement
+                : new BoundFixedStatement(
+                    fixedStatement.Syntax,
+                    fixedStatement.PinKind,
+                    fixedStatement.PinnedVariable,
+                    fixedStatement.PointerVariable,
+                    pinnedSource,
+                    fixedBody,
+                    fixedStatement.SourceVariable);
+            builder.Add(rebuilt);
+            return rebuilt != fixedStatement;
         }
 
         private bool RewriteIfStatement(BoundIfStatement ifStmt, ImmutableArray<BoundStatement>.Builder builder)
@@ -872,7 +1260,7 @@ public static class SpillSequenceSpiller
 
             // If right has await, the left must be spilled to a temp
             // (unless it's a pure constant or simple variable read).
-            if (rightHasAwait && !IsPureOrConstant(left))
+            if (rightHasAwait && !CanDeferAcrossLift(left))
             {
                 var leftTemp = MakeSpillTemp(left.Type);
                 locals.Add(leftTemp);
@@ -1108,7 +1496,7 @@ public static class SpillSequenceSpiller
                 receiver = spilledReceiver.Value;
             }
 
-            if (argsHaveAwait && !IsPureOrConstant(receiver))
+            if (argsHaveAwait && !CanDeferAcrossLift(receiver))
             {
                 var recvTemp = MakeSpillTemp(receiver.Type);
                 locals.Add(recvTemp);
@@ -1428,24 +1816,24 @@ public static class SpillSequenceSpiller
         private BoundSpillSequenceExpression SpillSwitch(BoundSwitchExpression switchExpr)
         {
             var discriminantHasAwait = HasAwait(switchExpr.Discriminant);
-
-            // Set on exactly the arms that set the bool below, so testing it
-            // directly is equivalent and keeps its non-nullness visible.
-            BoundExpression? firstGuardAwaitSyntaxHolder = null;
             var anyGuardHasAwait = false;
             var anyResultHasAwait = false;
+            var rewrittenArms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(switchExpr.Arms.Length);
             foreach (var arm in switchExpr.Arms)
             {
-                if (arm.Guard != null && HasAwait(arm.Guard))
+                var guard = arm.Guard;
+                if (guard != null && HasAwait(guard))
                 {
                     anyGuardHasAwait = true;
-                    firstGuardAwaitSyntaxHolder ??= arm.Guard;
+                    guard = SpillSwitchGuard(guard, "switch-expression");
                 }
 
                 if (HasAwait(arm.Result))
                 {
                     anyResultHasAwait = true;
                 }
+
+                rewrittenArms.Add(new BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, guard, arm.Result));
             }
 
             if (!discriminantHasAwait && !anyGuardHasAwait && !anyResultHasAwait)
@@ -1453,14 +1841,7 @@ public static class SpillSequenceSpiller
                 return Trivial(switchExpr);
             }
 
-            if (firstGuardAwaitSyntaxHolder != null)
-            {
-                var anchor = firstGuardAwaitSyntaxHolder.Syntax
-                    ?? AsyncBoundTreeQueries.FindFirstAwaitSyntax(firstGuardAwaitSyntaxHolder);
-                EmitDiagnosticException.Throw(
-                    anchor,
-                    "'await' inside a switch-expression 'when' guard is not yet supported across a suspension point.");
-            }
+            var arms = rewrittenArms.MoveToImmutable();
 
             var locals = ImmutableArray.CreateBuilder<LocalVariableSymbol>();
             var sideEffects = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -1479,7 +1860,7 @@ public static class SpillSequenceSpiller
                 // Only the discriminant needed spilling — no arm result has an
                 // await, so the existing opaque pattern-dispatch emission can
                 // still own arm selection and result evaluation unmodified.
-                var rebuiltSwitch = new BoundSwitchExpression(null, discriminant, switchExpr.Arms, switchExpr.Type);
+                var rebuiltSwitch = new BoundSwitchExpression(null, discriminant, arms, switchExpr.Type);
                 return new BoundSpillSequenceExpression(null, locals.ToImmutable(), sideEffects.ToImmutable(), rebuiltSwitch);
             }
 
@@ -1487,10 +1868,10 @@ public static class SpillSequenceSpiller
             // which arm matched, via a synthetic switch expression whose arms
             // return their own ordinal (an await-free int) instead of the real
             // (possibly awaiting) result.
-            var indexArms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(switchExpr.Arms.Length);
-            for (var i = 0; i < switchExpr.Arms.Length; i++)
+            var indexArms = ImmutableArray.CreateBuilder<BoundSwitchExpressionArm>(arms.Length);
+            for (var i = 0; i < arms.Length; i++)
             {
-                var arm = switchExpr.Arms[i];
+                var arm = arms[i];
                 indexArms.Add(new BoundSwitchExpressionArm(null, arm.Pattern, arm.Guard, new BoundLiteralExpression(null, i)));
             }
 
@@ -1508,9 +1889,9 @@ public static class SpillSequenceSpiller
                 "int32 equality operator exists for spill dispatch");
             var firstArmResultDeclared = false;
 
-            for (var i = 0; i < switchExpr.Arms.Length; i++)
+            for (var i = 0; i < arms.Length; i++)
             {
-                var arm = switchExpr.Arms[i];
+                var arm = arms[i];
                 var nextArmLabel = MakeLabel();
 
                 var isSelected = new BoundBinaryExpression(
@@ -1792,7 +2173,7 @@ public static class SpillSequenceSpiller
             // re-evaluates. If it isn't already side-effect-free, materialize
             // it into a spill temp exactly once here so a side effect in the
             // condition (e.g. a method call) can't fire more than once.
-            if (!IsPureOrConstant(condition))
+            if (!CanDeferAcrossLift(condition))
             {
                 var condTemp = MakeSpillTemp(condition.Type);
                 locals.Add(condTemp);
@@ -2346,7 +2727,7 @@ public static class SpillSequenceSpiller
                 left = spilledA.Value;
             }
 
-            if (bHasAwait && !IsPureOrConstant(left))
+            if (bHasAwait && !CanDeferAcrossLift(left))
             {
                 var temp = MakeSpillTemp(left.Type);
                 locals.Add(temp);
@@ -2421,7 +2802,7 @@ public static class SpillSequenceSpiller
                     locals.AddRange(spilledArg.Locals);
                     sideEffects.AddRange(spilledArg.SideEffects);
                     if (awaitIndices.Any(awaitIndex => awaitIndex > i)
-                        && !IsPureOrConstant(spilledArg.Value))
+                        && !CanDeferAcrossLift(spilledArg.Value))
                     {
                         var temp = MakeSpillTemp(arg.Type);
                         locals.Add(temp);
@@ -2434,7 +2815,7 @@ public static class SpillSequenceSpiller
                     }
                 }
                 else if (i < firstAwaitIdx
-                    && (spillEveryPreAwaitOperand || !IsPureOrConstant(arg)))
+                    && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)))
                 {
                     // This arg precedes an await — spill to temp.
                     var temp = MakeSpillTemp(arg.Type);
@@ -2443,7 +2824,7 @@ public static class SpillSequenceSpiller
                     args.Add(new BoundVariableExpression(null, temp));
                 }
                 else if (i > firstAwaitIdx
-                    && (spillEveryPreAwaitOperand || !IsPureOrConstant(arg)))
+                    && (spillEveryPreAwaitOperand || !CanDeferAcrossLift(arg)))
                 {
                     // Between awaits, we also need to check if there's a
                     // later await that would require this to be spilled.
@@ -2493,11 +2874,8 @@ public static class SpillSequenceSpiller
             return new BoundLabel($"<>spill_label{spillOrdinal++}");
         }
 
-        private static bool IsPureOrConstant(BoundExpression expression)
-        {
-            return expression is BoundLiteralExpression
-                || expression is BoundVariableExpression;
-        }
+        private static bool CanDeferAcrossLift(BoundExpression expression)
+            => expression is BoundLiteralExpression or BoundDefaultExpression;
 
         private static BoundSpillSequenceExpression Trivial(BoundExpression value)
         {
@@ -2537,8 +2915,14 @@ public static class SpillSequenceSpiller
             }
         }
 
-        private bool HasAwait(BoundStatement statement) => AsyncBoundTreeQueries.HasAwait(statement, awaitMemo);
+        private bool HasAwait(BoundStatement statement)
+            => AsyncBoundTreeQueries.HasAwait(statement, awaitMemo)
+                || (includeYieldInBlockExpressions && HasYieldInBlockExpression(statement, yieldInBlockMemo))
+                || (includeControlFlowInBlockExpressions && HasControlFlowInBlockExpression(statement, controlFlowInBlockMemo));
 
-        private bool HasAwait(BoundExpression expression) => AsyncBoundTreeQueries.HasAwait(expression, awaitMemo);
+        private bool HasAwait(BoundExpression expression)
+            => AsyncBoundTreeQueries.HasAwait(expression, awaitMemo)
+                || (includeYieldInBlockExpressions && HasYieldInBlockExpression(expression, yieldInBlockMemo))
+                || (includeControlFlowInBlockExpressions && HasControlFlowInBlockExpression(expression, controlFlowInBlockMemo));
     }
 }

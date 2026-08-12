@@ -136,6 +136,31 @@ internal sealed class SlotPlanner
             {
                 collector.Visit(statement);
             }
+
+            // Issue #3355: base-constructor arguments can now contain native
+            // block expressions whose tail is a lambda. These arguments live
+            // on constructor symbols rather than in Program.Functions, so they
+            // must participate in MethodDef planning explicitly.
+            if (type.BaseConstructorInitializer is { } primaryBaseInitializer)
+            {
+                foreach (var argument in primaryBaseInitializer.Arguments)
+                {
+                    collector.Visit(argument);
+                }
+            }
+
+            foreach (var constructor in type.ExplicitConstructors)
+            {
+                if (constructor.BaseInitializer is not { } baseInitializer)
+                {
+                    continue;
+                }
+
+                foreach (var argument in baseInitializer.Arguments)
+                {
+                    collector.Visit(argument);
+                }
+            }
         }
 
         foreach (var type in this.emitCtx.Program.Interfaces

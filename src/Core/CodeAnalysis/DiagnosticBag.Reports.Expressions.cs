@@ -700,7 +700,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.IfExpressionMissingElse);
 
     /// <summary>
-    /// GS0277: A block in an if-expression value position has no trailing
+    /// GS0277: A block expression in value position has no trailing
     /// value-producing expression.
     /// </summary>
     /// <param name="location">The source location of the block's closing brace.</param>

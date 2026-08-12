@@ -14,6 +14,29 @@ public abstract class GExpression : GNode
 }
 
 /// <summary>
+/// A general block expression <c>{ statements; value }</c>.
+/// </summary>
+public sealed class BlockExpression : GExpression
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="BlockExpression"/> class.
+    /// </summary>
+    /// <param name="statements">Statements evaluated before the value.</param>
+    /// <param name="value">The trailing value expression.</param>
+    public BlockExpression(IReadOnlyList<GStatement> statements, GExpression value)
+    {
+        Statements = statements ?? new List<GStatement>();
+        Value = value;
+    }
+
+    /// <summary>Gets the prefix statements.</summary>
+    public IReadOnlyList<GStatement> Statements { get; }
+
+    /// <summary>Gets the trailing value expression.</summary>
+    public GExpression Value { get; }
+}
+
+/// <summary>
 /// A literal expression. The width of a numeric value is conveyed by the type
 /// clause, not the literal text (ADR-0115 §B.12).
 /// </summary>

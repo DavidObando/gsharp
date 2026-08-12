@@ -146,6 +146,16 @@ public partial class Parser
         switch (Current.Kind)
         {
             case SyntaxKind.OpenBraceToken:
+                // Issue #3355: a leading brace remains an ordinary statement
+                // block unless its matching close brace is followed by an
+                // expression continuation. Shapes such as `{ ... } + value`,
+                // `{ ... } with { ... }`, and `{ ... } <- value` are
+                // unambiguously expression-led statements.
+                if (NestedBraceStartsContinuedExpression())
+                {
+                    return ParseExpressionOrChannelSendStatement();
+                }
+
                 return ParseBlockStatement();
             case SyntaxKind.ConstKeyword:
             case SyntaxKind.LetKeyword:

@@ -65,7 +65,8 @@ public static class IteratorRewriter
             return false;
         }
 
-        plan = BuildPlan(function, body, elementType);
+        var spilledBody = SpillSequenceSpiller.RewriteIteratorBlocks(body);
+        plan = BuildPlan(function, spilledBody, elementType);
         return true;
     }
 

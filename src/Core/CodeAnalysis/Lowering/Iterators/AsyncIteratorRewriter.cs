@@ -70,6 +70,7 @@ public static class AsyncIteratorRewriter
                 loweredBody,
                 preserveFinallyAcrossSuspension: true);
             var spilledBody = SpillSequenceSpiller.Rewrite(exhRewritten);
+            spilledBody = SpillSequenceSpiller.RewriteIteratorBlocks(spilledBody);
             var refHoisted = RefInitializationHoister.Rewrite(spilledBody);
 
             // Collect yields (for state assignment) and awaits.

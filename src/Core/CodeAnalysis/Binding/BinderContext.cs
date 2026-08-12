@@ -105,6 +105,12 @@ internal sealed class BinderContext
     /// </summary>
     public int UnsafeDepth;
 
+    /// <summary>
+    /// Nesting depth while binding base or delegating-constructor arguments.
+    /// Instance access is unavailable until the selected constructor has run.
+    /// </summary>
+    public int ConstructorInitializerDepth;
+
 #pragma warning restore SA1401
 
     /// <summary>
@@ -158,6 +164,9 @@ internal sealed class BinderContext
     /// permitted.
     /// </summary>
     public bool InUnsafeContext => UnsafeDepth > 0;
+
+    /// <summary>Gets a value indicating whether constructor-initializer arguments are being bound.</summary>
+    public bool InConstructorInitializer => ConstructorInitializerDepth > 0;
 
     /// <summary>Gets or sets the iterator return clause allowed to carry an unconstrained nullable sequence element.</summary>
     public TypeClauseSyntax? UnconstrainedNullableSequenceElementReturn { get; set; }
@@ -517,6 +526,14 @@ internal sealed class BinderContext
         return new UnsafeContextScope(this, active);
     }
 
+    /// <summary>Enters a base or delegating-constructor argument context.</summary>
+    /// <returns>A token that leaves the context when disposed.</returns>
+    public ConstructorInitializerContextScope PushConstructorInitializerContext()
+    {
+        ConstructorInitializerDepth++;
+        return new ConstructorInitializerContextScope(this);
+    }
+
     /// <summary>
     /// Issue #1881. Enters a `checked`/`unchecked` arithmetic context for the
     /// lifetime of the returned token; disposing the token restores the
@@ -552,6 +569,26 @@ internal sealed class BinderContext
             if (active)
             {
                 owner.UnsafeDepth--;
+            }
+        }
+    }
+
+    /// <summary>Disposable token returned by <see cref="PushConstructorInitializerContext"/>.</summary>
+    public readonly struct ConstructorInitializerContextScope : IDisposable
+    {
+        private readonly BinderContext owner;
+
+        internal ConstructorInitializerContextScope(BinderContext owner)
+        {
+            this.owner = owner;
+        }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            if (owner != null)
+            {
+                owner.ConstructorInitializerDepth--;
             }
         }
     }

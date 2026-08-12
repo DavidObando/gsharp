@@ -185,6 +185,12 @@ public sealed partial class DiagnosticBag
     public void ReportFieldInitializerCannotReferenceInstanceMember(TextLocation location, string memberName)
     => Report(location, DiagnosticDescriptors.FieldInitializerCannotReferenceInstanceMember, memberName);
 
+    /// <summary>Reports instance access before a base or delegating constructor has run.</summary>
+    /// <param name="location">The offending reference location.</param>
+    /// <param name="memberName">The referenced instance member name.</param>
+    public void ReportConstructorInitializerCannotReferenceInstanceMember(TextLocation location, string memberName)
+    => Report(location, DiagnosticDescriptors.ConstructorInitializerCannotReferenceInstanceMember, memberName);
+
     /// <summary>
     /// ADR-0068 / issue #698: reports a <c>deinit</c> destructor declaration
     /// on a non-class type. <c>deinit</c> lowers to a CLR finalizer, which

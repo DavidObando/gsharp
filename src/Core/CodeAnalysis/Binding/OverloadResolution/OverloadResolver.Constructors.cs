@@ -1293,6 +1293,8 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression BindConstructorChainingExpression(CallExpressionSyntax syntax, StructSymbol owningClass, FunctionSymbol currentCtorFunction)
     {
+        using var initializerContext = binderCtx.PushConstructorInitializerContext();
+
         // Resolve the current ConstructorSymbol so we know whether the caller
         // is convenience or designated, and so we can exclude it from the
         // candidate set (recursion would loop indefinitely).
@@ -1343,26 +1345,35 @@ internal sealed partial class OverloadResolver
         }
 
         var boundArgsBuilder = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
-        for (var i = 0; i < syntax.Arguments.Count; i++)
+        var savedInitializerContext = currentCtorFunction.IsExpressionInitializer;
+        currentCtorFunction.IsExpressionInitializer = true;
+        try
         {
-            var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
-            ParameterSymbol? parameterForArg = null;
-            if (siblingBuilder.Count == 1 && i < siblingBuilder[0].Parameters.Length)
+            for (var i = 0; i < syntax.Arguments.Count; i++)
             {
-                parameterForArg = siblingBuilder[0].Parameters[i];
-            }
+                var argument = UnwrapNamedArgumentValue(syntax.Arguments[i]);
+                ParameterSymbol? parameterForArg = null;
+                if (siblingBuilder.Count == 1 && i < siblingBuilder[0].Parameters.Length)
+                {
+                    parameterForArg = siblingBuilder[0].Parameters[i];
+                }
 
-            if (argument is RefArgumentExpressionSyntax refArg)
-            {
-                // The callback uses null to mean that overload resolution has
-                // not identified the ref parameter yet; its legacy non-null
-                // annotation predates that two-pass binding contract.
-                boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!));
+                if (argument is RefArgumentExpressionSyntax refArg)
+                {
+                    // The callback uses null to mean that overload resolution has
+                    // not identified the ref parameter yet; its legacy non-null
+                    // annotation predates that two-pass binding contract.
+                    boundArgsBuilder.Add(bindRefArgumentExpression(refArg, parameterForArg!));
+                }
+                else
+                {
+                    boundArgsBuilder.Add(BindOverloadArgumentValue(argument));
+                }
             }
-            else
-            {
-                boundArgsBuilder.Add(bindExpression(argument));
-            }
+        }
+        finally
+        {
+            currentCtorFunction.IsExpressionInitializer = savedInitializerContext;
         }
 
         ConstructorSymbol? selectedCtor;

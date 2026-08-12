@@ -154,6 +154,20 @@ public class HoverHandlerTests
         Assert.Contains(expected, hover.Contents.ToString(), System.StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ComputeHover_ResolvesLocalDeclaredInsideGeneralBlockExpression()
+    {
+        const string source = "func run() int32 {\nlet answer = { let inner = 42\ninner }\nreturn answer\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var hover = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "inner", 1));
+
+        Assert.NotNull(hover);
+        Assert.Contains("(local variable) inner int32", hover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("package P\nclass Person {\n    prop Name string\n}\n", "Name")]
     [InlineData("package P\nimport sys = System\n", "sys")]
