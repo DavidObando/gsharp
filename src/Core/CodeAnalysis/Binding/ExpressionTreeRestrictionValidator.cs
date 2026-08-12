@@ -287,6 +287,14 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundIsExpression isExpression:
+                if (!isExpression.IsSimpleTypeTest)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(
+                        LocationOf(expression.Syntax),
+                        "a general pattern 'is' expression");
+                    return;
+                }
+
                 ValidateExpression(isExpression.Expression, diagnostics);
                 return;
 

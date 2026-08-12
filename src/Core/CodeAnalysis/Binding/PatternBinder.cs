@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -11,6 +12,18 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
+
+internal enum PatternBindingContext
+{
+    /// <summary>Bindings are permitted and declared in the current pattern scope.</summary>
+    Allowed,
+
+    /// <summary>Bindings are rejected because an <c>or</c> or <c>not</c> cannot definitely assign them.</summary>
+    OrOrNot,
+
+    /// <summary>Bindings are rejected because boolean <c>is</c> expressions introduce no scope.</summary>
+    IsExpression,
+}
 
 /// <summary>
 /// PR-B-5: the binder-side facade that owns the per-pattern-kind
@@ -115,31 +128,90 @@ internal sealed class PatternBinder
     /// <returns>The bound pattern.</returns>
     public BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType)
     {
-        return BindPattern(syntax, discriminantType, allowBindings: true);
+        return BindPattern(
+            syntax,
+            discriminantType,
+            PatternBindingContext.Allowed,
+            preferTypeNames: false);
     }
 
-    private BoundPattern BindPattern(PatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
+    /// <summary>
+    /// Binds a pattern with an explicit binding policy and bare-name preference.
+    /// </summary>
+    /// <param name="syntax">The pattern syntax.</param>
+    /// <param name="discriminantType">The tested value type.</param>
+    /// <param name="allowBindings">Whether source-visible pattern bindings are allowed.</param>
+    /// <param name="preferTypeNames">Whether an ambiguous bare name resolves as a type before a value.</param>
+    /// <returns>The bound pattern.</returns>
+    public BoundPattern BindPattern(
+        PatternSyntax syntax,
+        TypeSymbol discriminantType,
+        bool allowBindings,
+        bool preferTypeNames)
+    {
+        return BindPattern(
+            syntax,
+            discriminantType,
+            allowBindings ? PatternBindingContext.Allowed : PatternBindingContext.IsExpression,
+            preferTypeNames);
+    }
+
+    private BoundPattern BindPattern(
+        PatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
         switch (syntax.Kind)
         {
             case SyntaxKind.ConstantPattern:
                 return BindConstantPattern((ConstantPatternSyntax)syntax, discriminantType);
+            case SyntaxKind.TypeOrConstantPattern:
+                return BindTypeOrConstantPattern(
+                    (TypeOrConstantPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.DiscardPattern:
                 return new BoundDiscardPattern(syntax, discriminantType);
             case SyntaxKind.TypePattern:
-                return BindTypePattern((TypePatternSyntax)syntax, discriminantType, allowBindings);
+                return BindTypePattern(
+                    (TypePatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.PropertyPattern:
-                return BindPropertyPattern((PropertyPatternSyntax)syntax, discriminantType);
+                return BindPropertyPattern(
+                    (PropertyPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.RelationalPattern:
                 return BindRelationalPattern((RelationalPatternSyntax)syntax, discriminantType);
             case SyntaxKind.ListPattern:
-                return BindListPattern((ListPatternSyntax)syntax, discriminantType);
+                return BindListPattern(
+                    (ListPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.BinaryPattern:
-                return BindBinaryPattern((BinaryPatternSyntax)syntax, discriminantType, allowBindings);
+                return BindBinaryPattern(
+                    (BinaryPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.NotPattern:
-                return BindNotPattern((NotPatternSyntax)syntax, discriminantType);
+                return BindNotPattern(
+                    (NotPatternSyntax)syntax,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             case SyntaxKind.ParenthesizedPattern:
-                return BindPattern(((ParenthesizedPatternSyntax)syntax).Pattern, discriminantType, allowBindings);
+                return BindPattern(
+                    ((ParenthesizedPatternSyntax)syntax).Pattern,
+                    discriminantType,
+                    bindingContext,
+                    preferTypeNames);
             default:
                 throw new Exception($"Unexpected pattern syntax {syntax.Kind}");
         }
@@ -148,26 +220,119 @@ internal sealed class PatternBinder
     // Issue #992: a conjunction (`and`) keeps bindings (both sub-patterns must
     // match, so a variable bound on either side is definitely assigned). A
     // disjunction (`or`) forbids bindings on both sides.
-    private BoundPattern BindBinaryPattern(BinaryPatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
+    private BoundPattern BindBinaryPattern(
+        BinaryPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
         var isConjunction = syntax.OperatorToken.Text == "and";
-        var childAllowBindings = allowBindings && isConjunction;
-        var left = BindPattern(syntax.Left, discriminantType, childAllowBindings);
-        var right = BindPattern(syntax.Right, discriminantType, childAllowBindings);
-        return new BoundBinaryPattern(syntax, discriminantType, isConjunction, left, right);
+        var childBindingContext = bindingContext == PatternBindingContext.Allowed && !isConjunction
+            ? PatternBindingContext.OrOrNot
+            : bindingContext;
+        var left = BindPattern(
+            syntax.Left,
+            discriminantType,
+            childBindingContext,
+            preferTypeNames);
+
+        var rightInputType = discriminantType;
+        LocalVariableSymbol? rightInputVariable = null;
+        if (isConjunction
+            && TryGetGuaranteedNarrowingValue(left, out var narrowedVariable))
+        {
+            rightInputVariable = narrowedVariable;
+            rightInputType = narrowedVariable.Type;
+        }
+
+        var right = BindPattern(
+            syntax.Right,
+            rightInputType,
+            childBindingContext,
+            preferTypeNames);
+        return new BoundBinaryPattern(
+            syntax,
+            discriminantType,
+            isConjunction,
+            left,
+            right,
+            rightInputVariable);
+    }
+
+    private static bool TryGetGuaranteedNarrowingValue(
+        BoundPattern pattern,
+        [NotNullWhen(true)] out LocalVariableSymbol? variable)
+    {
+        switch (pattern)
+        {
+            case BoundTypePattern typePattern:
+                variable = typePattern.Variable;
+                return true;
+            case BoundBinaryPattern { IsConjunction: true } binary:
+                if (TryGetGuaranteedNarrowingValue(binary.Right, out variable))
+                {
+                    return true;
+                }
+
+                return TryGetGuaranteedNarrowingValue(binary.Left, out variable);
+            default:
+                variable = null;
+                return false;
+        }
     }
 
     // Issue #992: `not` forbids bindings in its operand — a variable bound by a
     // pattern that did NOT match cannot be definitely assigned.
-    private BoundPattern BindNotPattern(NotPatternSyntax syntax, TypeSymbol discriminantType)
+    private BoundPattern BindNotPattern(
+        NotPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
-        var operand = BindPattern(syntax.Pattern, discriminantType, allowBindings: false);
+        // Non-nullable CLR values cannot match nil, so `not nil` is a total
+        // boolean pattern. Keep switch diagnostics unchanged.
+        if (bindingContext == PatternBindingContext.IsExpression
+            && Binder.IsNonNullableValueTypeForConstraint(discriminantType)
+            && IsNilPattern(syntax.Pattern))
+        {
+            return new BoundDiscardPattern(syntax, discriminantType);
+        }
+
+        var childBindingContext = bindingContext == PatternBindingContext.Allowed
+            ? PatternBindingContext.OrOrNot
+            : bindingContext;
+        var operand = BindPattern(
+            syntax.Pattern,
+            discriminantType,
+            childBindingContext,
+            preferTypeNames);
         return new BoundNotPattern(syntax, discriminantType, operand);
     }
 
+    private static bool IsNilPattern(PatternSyntax syntax)
+    {
+        while (syntax is ParenthesizedPatternSyntax parenthesized)
+        {
+            syntax = parenthesized.Pattern;
+        }
+
+        return syntax is ConstantPatternSyntax
+        {
+            Expression: LiteralExpressionSyntax { Value: null },
+        };
+    }
+
     private BoundPattern BindConstantPattern(ConstantPatternSyntax syntax, TypeSymbol discriminantType)
+        => BindConstantPatternWithResolution(syntax, discriminantType, out _);
+
+    private BoundPattern BindConstantPatternWithResolution(
+        ConstantPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        out bool expressionResolved)
     {
         var expression = bindExpression(syntax.Expression);
+        expressionResolved = expression is not BoundErrorExpression
+            && expression.Type != TypeSymbol.Error;
 
         // Issue #1157: adapt a constant integer LITERAL case label that fits the
         // discriminant's integer type to that type, mirroring the constant
@@ -185,6 +350,15 @@ internal sealed class PatternBinder
             && ExpressionBinder.TryAdaptIntegerLiteral(literalValue, adaptTarget, out var adaptedValue))
         {
             expression = new BoundLiteralExpression(syntax.Expression, adaptedValue);
+        }
+
+        // A successful type pattern can narrow `object` to a non-nullable
+        // reference type before the right side of `and` is bound. Keep
+        // `T and not nil` legal in that narrowed context: nil can still be
+        // tested at runtime even though the static annotation is non-nullable.
+        if (isNilLiteral(expression) && IsNonNullableReferencePatternInput(discriminantType))
+        {
+            return new BoundConstantPattern(syntax, discriminantType, expression);
         }
 
         var conversion = Conversion.Classify(expression.Type, discriminantType);
@@ -222,6 +396,26 @@ internal sealed class PatternBinder
         }
 
         return new BoundConstantPattern(syntax, discriminantType, value);
+    }
+
+    private static bool IsNonNullableReferencePatternInput(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (type is StructSymbol structType)
+        {
+            return structType.IsClass;
+        }
+
+        if (type is InterfaceSymbol)
+        {
+            return true;
+        }
+
+        return type.ClrType is { IsValueType: false };
     }
 
     // Issue #1157: extract a compile-time constant INTEGER literal value from a
@@ -295,31 +489,195 @@ internal sealed class PatternBinder
         };
     }
 
-    private BoundPattern BindTypePattern(TypePatternSyntax syntax, TypeSymbol discriminantType, bool allowBindings)
+    private BoundPattern BindTypeOrConstantPattern(
+        TypeOrConstantPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
-        var targetType = bindTypeClause(syntax.Type) ?? TypeSymbol.Error;
-        var isDiscard = syntax.Identifier.Text == "_";
-        var variable = new LocalVariableSymbol(syntax.Identifier.Text, isReadOnly: true, targetType, declaringSyntax: syntax.Identifier);
-
-        if (allowBindings)
+        if (syntax.PropertyPattern != null)
         {
-            if (!Scope.TryDeclareVariable(variable))
+            return BindBareTypePattern(
+                syntax,
+                syntax.CandidateType,
+                syntax.PropertyPattern,
+                discriminantType,
+                bindingContext,
+                preferTypeNames);
+        }
+
+        var diagnosticMark = Diagnostics.Count;
+        if (preferTypeNames)
+        {
+            var typePattern = BindBareTypePattern(
+                syntax,
+                syntax.CandidateType,
+                propertyPattern: null,
+                discriminantType,
+                bindingContext,
+                preferTypeNames);
+            if (typePattern.TargetType != TypeSymbol.Error)
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+                return typePattern;
             }
-        }
-        else if (!isDiscard)
-        {
-            // Issue #992: a type pattern that introduces a binding variable is
-            // not allowed under `or` / `not` — the variable would not be
-            // definitely assigned. The discard identifier `_` is permitted.
-            Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(syntax.Identifier.Location, syntax.Identifier.Text);
+
+            Diagnostics.TruncateTo(diagnosticMark);
+            var constantPattern = BindConstantPatternWithResolution(
+                new ConstantPatternSyntax(syntax.SyntaxTree, syntax.Expression),
+                discriminantType,
+                out var valueResolved);
+            if (valueResolved)
+            {
+                return constantPattern;
+            }
+
+            Diagnostics.TruncateTo(diagnosticMark);
+
+            // Both interpretations failed. Prefer the value-resolution error
+            // over a misleading "missing type/import" diagnostic.
+            return BindConstantPattern(
+                new ConstantPatternSyntax(syntax.SyntaxTree, syntax.Expression),
+                discriminantType);
         }
 
-        return new BoundTypePattern(syntax, discriminantType, targetType, variable);
+        var valuePattern = BindConstantPatternWithResolution(
+            new ConstantPatternSyntax(syntax.SyntaxTree, syntax.Expression),
+            discriminantType,
+            out var resolved);
+        if (resolved)
+        {
+            return valuePattern;
+        }
+
+        Diagnostics.TruncateTo(diagnosticMark);
+        var fallbackTypePattern = BindBareTypePattern(
+            syntax,
+            syntax.CandidateType,
+            propertyPattern: null,
+            discriminantType,
+            bindingContext,
+            preferTypeNames);
+        if (fallbackTypePattern.TargetType != TypeSymbol.Error)
+        {
+            return fallbackTypePattern;
+        }
+
+        Diagnostics.TruncateTo(diagnosticMark);
+        return BindConstantPattern(
+            new ConstantPatternSyntax(syntax.SyntaxTree, syntax.Expression),
+            discriminantType);
     }
 
-    private BoundPattern BindPropertyPattern(PropertyPatternSyntax syntax, TypeSymbol discriminantType)
+    private BoundTypePattern BindTypePattern(
+        TypePatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
+    {
+        return BindTypePatternCore(
+            syntax,
+            syntax.Identifier,
+            syntax.Type,
+            syntax.PropertyPattern,
+            discriminantType,
+            bindingContext,
+            preferTypeNames);
+    }
+
+    private BoundTypePattern BindBareTypePattern(
+        SyntaxNode syntax,
+        TypeClauseSyntax type,
+        PropertyPatternSyntax? propertyPattern,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
+    {
+        return BindTypePatternCore(
+            syntax,
+            identifier: null,
+            type,
+            propertyPattern,
+            discriminantType,
+            bindingContext,
+            preferTypeNames);
+    }
+
+    private BoundTypePattern BindTypePatternCore(
+        SyntaxNode syntax,
+        SyntaxToken? identifier,
+        TypeClauseSyntax type,
+        PropertyPatternSyntax? propertyPattern,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
+    {
+        var targetType = bindTypeClause(type) ?? TypeSymbol.Error;
+        if (bindingContext == PatternBindingContext.IsExpression
+            && targetType is NullableTypeSymbol nullableTarget)
+        {
+            targetType = nullableTarget.UnderlyingType;
+        }
+
+        var bindingIdentifier = identifier != null && identifier.Text != "_"
+            ? identifier
+            : null;
+        var hasBinding = bindingIdentifier != null;
+        var variableName = bindingIdentifier?.Text ?? "<type-pattern-value>";
+        var variable = new LocalVariableSymbol(
+            variableName,
+            isReadOnly: true,
+            targetType,
+            declaringSyntax: identifier);
+
+        if (bindingIdentifier != null)
+        {
+            if (bindingContext == PatternBindingContext.Allowed)
+            {
+                if (!Scope.TryDeclareVariable(variable))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(
+                        bindingIdentifier.Location,
+                        bindingIdentifier.Text);
+                }
+            }
+            else if (bindingContext == PatternBindingContext.OrOrNot)
+            {
+                // Issue #992: a type pattern that introduces a binding variable is
+                // not allowed under `or` / `not` — the variable would not be
+                // definitely assigned. The discard identifier `_` is permitted.
+                Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
+                    bindingIdentifier.Location,
+                    bindingIdentifier.Text);
+            }
+            else
+            {
+                Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
+                    bindingIdentifier.Location,
+                    bindingIdentifier.Text);
+            }
+        }
+
+        var boundProperty = propertyPattern == null
+            ? null
+            : BindPropertyPattern(
+                propertyPattern,
+                targetType,
+                bindingContext,
+                preferTypeNames);
+        return new BoundTypePattern(
+            syntax,
+            discriminantType,
+            targetType,
+            variable,
+            hasBinding,
+            boundProperty);
+    }
+
+    private BoundPropertyPattern BindPropertyPattern(
+        PropertyPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
         var fields = ImmutableArray.CreateBuilder<BoundPropertyPatternField>();
 
@@ -343,11 +701,25 @@ internal sealed class PatternBinder
                     || tupleField is null)
                 {
                     Diagnostics.ReportUndefinedFieldOnType(tupleFieldSyntax.Identifier.Location, tupleFieldSyntax.Identifier.Text, discriminantType);
-                    fields.Add(new BoundPropertyPatternField(syntax, new FieldSymbol(tupleFieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public), BindPattern(tupleFieldSyntax.Pattern, TypeSymbol.Error)));
+                    fields.Add(new BoundPropertyPatternField(
+                        syntax,
+                        new FieldSymbol(tupleFieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public),
+                        BindPattern(
+                            tupleFieldSyntax.Pattern,
+                            TypeSymbol.Error,
+                            bindingContext,
+                            preferTypeNames)));
                     continue;
                 }
 
-                fields.Add(new BoundPropertyPatternField(syntax, tupleField, BindPattern(tupleFieldSyntax.Pattern, tupleField.Type)));
+                fields.Add(new BoundPropertyPatternField(
+                    syntax,
+                    tupleField,
+                    BindPattern(
+                        tupleFieldSyntax.Pattern,
+                        tupleField.Type,
+                        bindingContext,
+                        preferTypeNames)));
             }
 
             return new BoundPropertyPattern(syntax, discriminantType, fields.ToImmutable());
@@ -361,14 +733,23 @@ internal sealed class PatternBinder
 
         foreach (var fieldSyntax in syntax.Fields)
         {
-            if (!TryBindPropertyPatternMember(lookupType, fieldSyntax, out var field)
+            if (!TryBindPropertyPatternMember(
+                    lookupType,
+                    fieldSyntax,
+                    bindingContext,
+                    preferTypeNames,
+                    out var field)
                 || field is null)
             {
                 Diagnostics.ReportUndefinedFieldOnType(fieldSyntax.Identifier.Location, fieldSyntax.Identifier.Text, discriminantType);
                 fields.Add(new BoundPropertyPatternField(
                     syntax,
                     new FieldSymbol(fieldSyntax.Identifier.Text, TypeSymbol.Error, Accessibility.Public),
-                    BindPattern(fieldSyntax.Pattern, TypeSymbol.Error)));
+                    BindPattern(
+                        fieldSyntax.Pattern,
+                        TypeSymbol.Error,
+                        bindingContext,
+                        preferTypeNames)));
                 continue;
             }
 
@@ -381,6 +762,8 @@ internal sealed class PatternBinder
     private bool TryBindPropertyPatternMember(
         TypeSymbol lookupType,
         PropertyPatternFieldSyntax syntax,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames,
         out BoundPropertyPatternField? boundField)
     {
         var name = syntax.Identifier.Text;
@@ -396,7 +779,11 @@ internal sealed class PatternBinder
                             syntax,
                             field,
                             current,
-                            BindPattern(syntax.Pattern, field.Type));
+                            BindPattern(
+                                syntax.Pattern,
+                                field.Type,
+                                bindingContext,
+                                preferTypeNames));
                         return true;
                     }
                 }
@@ -418,14 +805,24 @@ internal sealed class PatternBinder
                         syntax,
                         property,
                         current,
-                        BindPattern(syntax.Pattern, property.Type));
+                        BindPattern(
+                            syntax.Pattern,
+                            property.Type,
+                            bindingContext,
+                            preferTypeNames));
                     return true;
                 }
             }
 
             var importedBase = TypeMemberModel.GetNearestImportedBase(structType);
             if (importedBase?.ClrType != null
-                && TryBindClrPropertyPatternMember(importedBase, importedBase.ClrType, syntax, out boundField))
+                && TryBindClrPropertyPatternMember(
+                    importedBase,
+                    importedBase.ClrType,
+                    syntax,
+                    bindingContext,
+                    preferTypeNames,
+                    out boundField))
             {
                 return true;
             }
@@ -452,7 +849,11 @@ internal sealed class PatternBinder
                         syntax,
                         property,
                         current,
-                        BindPattern(syntax.Pattern, property.Type));
+                        BindPattern(
+                            syntax.Pattern,
+                            property.Type,
+                            bindingContext,
+                            preferTypeNames));
                     return true;
                 }
             }
@@ -460,14 +861,26 @@ internal sealed class PatternBinder
             foreach (var importedBase in MemberLookup.GetTransitiveClrBaseInterfaces(interfaceType))
             {
                 var importedBaseType = ImportedTypeSymbol.Get(importedBase);
-                if (TryBindClrPropertyPatternMember(importedBaseType, importedBase, syntax, out boundField))
+                if (TryBindClrPropertyPatternMember(
+                    importedBaseType,
+                    importedBase,
+                    syntax,
+                    bindingContext,
+                    preferTypeNames,
+                    out boundField))
                 {
                     return true;
                 }
             }
         }
         else if (lookupType.ClrType is Type clrType
-            && TryBindClrPropertyPatternMember(lookupType, clrType, syntax, out boundField))
+            && TryBindClrPropertyPatternMember(
+                lookupType,
+                clrType,
+                syntax,
+                bindingContext,
+                preferTypeNames,
+                out boundField))
         {
             return true;
         }
@@ -480,6 +893,8 @@ internal sealed class PatternBinder
         TypeSymbol receiverType,
         Type clrType,
         PropertyPatternFieldSyntax syntax,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames,
         out BoundPropertyPatternField? boundField)
     {
         var name = syntax.Identifier.Text;
@@ -501,7 +916,11 @@ internal sealed class PatternBinder
                 syntax,
                 property,
                 propertyType,
-                BindPattern(syntax.Pattern, propertyType));
+                BindPattern(
+                    syntax.Pattern,
+                    propertyType,
+                    bindingContext,
+                    preferTypeNames));
             return true;
         }
 
@@ -516,7 +935,11 @@ internal sealed class PatternBinder
                 syntax,
                 field,
                 fieldType,
-                BindPattern(syntax.Pattern, fieldType));
+                BindPattern(
+                    syntax.Pattern,
+                    fieldType,
+                    bindingContext,
+                    preferTypeNames));
             return true;
         }
 
@@ -571,7 +994,11 @@ internal sealed class PatternBinder
             value);
     }
 
-    private BoundPattern BindListPattern(ListPatternSyntax syntax, TypeSymbol discriminantType)
+    private BoundPattern BindListPattern(
+        ListPatternSyntax syntax,
+        TypeSymbol discriminantType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
         // Issue #1951: accept any array-shaped discriminant, not just the
         // in-compilation ArrayTypeSymbol/SliceTypeSymbol — a metadata/CLR
@@ -597,11 +1024,20 @@ internal sealed class PatternBinder
                     Diagnostics.ReportMultipleSlicePatternsInListPattern(slice.DotDotToken.Location);
                 }
 
-                elements.Add(BindSlicePattern(slice, discriminantType, elementType));
+                elements.Add(BindSlicePattern(
+                    slice,
+                    discriminantType,
+                    elementType,
+                    bindingContext,
+                    preferTypeNames));
             }
             else
             {
-                elements.Add(BindPattern(elementSyntax, elementType));
+                elements.Add(BindPattern(
+                    elementSyntax,
+                    elementType,
+                    bindingContext,
+                    preferTypeNames));
             }
         }
 
@@ -612,7 +1048,12 @@ internal sealed class PatternBinder
     // declares a `[]T` variable bound to the middle slice. A sub-pattern
     // (`..[> 0]`) is materialized into a synthesized `[]T` local and matched
     // against the slice value. A pure discard (`..`) materializes nothing.
-    private BoundPattern BindSlicePattern(SlicePatternSyntax syntax, TypeSymbol discriminantType, TypeSymbol elementType)
+    private BoundPattern BindSlicePattern(
+        SlicePatternSyntax syntax,
+        TypeSymbol discriminantType,
+        TypeSymbol elementType,
+        PatternBindingContext bindingContext,
+        bool preferTypeNames)
     {
         var sliceType = elementType == TypeSymbol.Error
             ? (TypeSymbol)TypeSymbol.Error
@@ -621,16 +1062,35 @@ internal sealed class PatternBinder
         BoundPattern? subPattern = null;
         if (syntax.Pattern != null)
         {
-            subPattern = BindPattern(syntax.Pattern, sliceType);
+            subPattern = BindPattern(
+                syntax.Pattern,
+                sliceType,
+                bindingContext,
+                preferTypeNames);
         }
 
         LocalVariableSymbol? variable = null;
         if (syntax.CaptureIdentifier != null)
         {
             variable = new LocalVariableSymbol(syntax.CaptureIdentifier.Text, isReadOnly: true, sliceType, declaringSyntax: syntax.CaptureIdentifier);
-            if (!Scope.TryDeclareVariable(variable))
+            if (bindingContext == PatternBindingContext.Allowed)
             {
-                Diagnostics.ReportSymbolAlreadyDeclared(syntax.CaptureIdentifier.Location, syntax.CaptureIdentifier.Text);
+                if (!Scope.TryDeclareVariable(variable))
+                {
+                    Diagnostics.ReportSymbolAlreadyDeclared(syntax.CaptureIdentifier.Location, syntax.CaptureIdentifier.Text);
+                }
+            }
+            else if (bindingContext == PatternBindingContext.OrOrNot)
+            {
+                Diagnostics.ReportPatternVariableNotAllowedUnderOrNot(
+                    syntax.CaptureIdentifier.Location,
+                    syntax.CaptureIdentifier.Text);
+            }
+            else
+            {
+                Diagnostics.ReportPatternBindingNotAllowedInIsExpression(
+                    syntax.CaptureIdentifier.Location,
+                    syntax.CaptureIdentifier.Text);
             }
         }
         else if (subPattern != null)

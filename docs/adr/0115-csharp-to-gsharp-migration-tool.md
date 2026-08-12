@@ -522,13 +522,15 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   `=> throw e` maps directly to a G# `throw` **statement**.
 - **`is`-pattern combinators (constant / relational / not / and / or /
   recursive) → boolean lowering.** G# `is` in **expression** position supports
-  only `expr is Type`; all other patterns are switch-only. So an `is`-pattern is
-  lowered to a boolean: `x is 0` → `x == 0`; `x is 1 or 2` → `x == 1 || x == 2`;
+  the full native pattern grammar as of ADR-0162 / issue #3351. The translator
+  still uses its established boolean lowering until parent #3347 removes those
+  spills and substitutions: `x is 0` → `x == 0`; `x is 1 or 2` → `x == 1 || x == 2`;
   `x is not T` → `!(x is T)`; `x is >= 0 and < n` → `x >= 0 && x < n` (C#
   precedence `not` > `and` > `or` preserved, parenthesized where needed); a
   recursive/property pattern `x is { }` → `x != nil` (the property-binder local
   is rewritten to a member access on the subject). The switch-context pattern set
-  (§B switch mapping) keeps the native `case` pattern forms.
+  (§B switch mapping) keeps the native `case` pattern forms. This is now a
+  translator implementation choice rather than a gsc language limitation.
 - **Range index `a[i..j]` / `a[i..]` / `a[..j]` → `.Slice(start, length)`.** G#
   has **no range operator** (gsc gap, §G OD-1); a `RangeExpression` index over a
   `Span`/`Memory`/`ReadOnlySpan` lowers to a `.Slice` call: `s[i..j]` →

@@ -374,7 +374,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     TypeSymbol.FromClrType(typeof(System.Linq.Expressions.TypeBinaryExpression)),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(isExpression.Expression, parameterMap)),
-                        CreateTypeOf(isExpression.TargetType)));
+                        CreateTypeOf(Invariant.Required(
+                            isExpression.TargetType,
+                            "a simple is-expression has a target type"))));
             case BoundAsExpression asExpression:
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,

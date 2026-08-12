@@ -367,7 +367,9 @@ public abstract class BoundTreeWalker
         switch (node.Kind)
         {
             case BoundNodeKind.DiscardPattern:
+                break;
             case BoundNodeKind.TypePattern:
+                VisitTypePattern((BoundTypePattern)node);
                 break;
             case BoundNodeKind.ConstantPattern:
                 VisitConstantPattern((BoundConstantPattern)node);
@@ -1010,6 +1012,14 @@ public abstract class BoundTreeWalker
         VisitExpression(node.Value);
     }
 
+    protected virtual void VisitTypePattern(BoundTypePattern node)
+    {
+        if (node.PropertyPattern != null)
+        {
+            VisitPropertyPattern(node.PropertyPattern);
+        }
+    }
+
     protected virtual void VisitPropertyPattern(BoundPropertyPattern node)
     {
         foreach (var field in node.Fields)
@@ -1063,6 +1073,7 @@ public abstract class BoundTreeWalker
     private void VisitIsExpression(BoundIsExpression node)
     {
         VisitExpression(node.Expression);
+        VisitPattern(node.Pattern);
     }
 
     private void VisitAsExpression(BoundAsExpression node)

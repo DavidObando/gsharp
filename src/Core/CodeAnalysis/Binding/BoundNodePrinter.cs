@@ -781,11 +781,28 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.TypePattern:
                 var typePattern = (BoundTypePattern)pattern;
-                writer.WriteIdentifier(typePattern.Variable.Name);
-                writer.WriteSpace();
-                writer.WriteKeyword(SyntaxKind.IsKeyword);
-                writer.WriteSpace();
+                if (typePattern.HasBinding)
+                {
+                    writer.WriteIdentifier(typePattern.Variable.Name);
+                    writer.WriteSpace();
+                    writer.WriteKeyword(SyntaxKind.IsKeyword);
+                    writer.WriteSpace();
+                }
+                else if (typePattern.Syntax is TypePatternSyntax { Identifier.Text: "_" })
+                {
+                    writer.WriteIdentifier("_");
+                    writer.WriteSpace();
+                    writer.WriteKeyword(SyntaxKind.IsKeyword);
+                    writer.WriteSpace();
+                }
+
                 writer.WriteIdentifier(typePattern.TargetType.Name);
+                if (typePattern.PropertyPattern != null)
+                {
+                    writer.WriteSpace();
+                    WritePattern(typePattern.PropertyPattern, writer);
+                }
+
                 break;
             case BoundNodeKind.RelationalPattern:
                 var relational = (BoundRelationalPattern)pattern;
@@ -2021,7 +2038,7 @@ public static class BoundNodePrinter
     {
         node.Expression.WriteTo(writer);
         writer.Write(" is ");
-        writer.Write(node.TargetType?.Name ?? "?");
+        WritePattern(node.Pattern, writer);
     }
 
     private static void WriteAsExpression(BoundAsExpression node, IndentedTextWriter writer)

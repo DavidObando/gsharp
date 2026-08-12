@@ -434,7 +434,7 @@ public partial class Parser
         }
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
-        var value = ParsePattern();
+        var value = ParsePattern(PatternParseContext.SwitchExpression);
         var (whenKeyword, guard) = ParseOptionalWhenGuard();
         var arrow = MatchSwitchExpressionArmSeparator();
         var result = ParseExpression();

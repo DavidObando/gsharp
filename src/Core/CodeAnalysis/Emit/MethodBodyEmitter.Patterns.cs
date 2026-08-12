@@ -379,6 +379,16 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.EmitStoreVariable(tp.Variable);
+
+        if (tp.PropertyPattern != null)
+        {
+            var variableSlot = this.locals[tp.Variable];
+            this.EmitPropertyPattern(
+                tp.PropertyPattern,
+                loadValue: () => this.il.LoadLocal(variableSlot),
+                valueType: tp.TargetType,
+                failLabel);
+        }
     }
 
     private void EmitPropertyPattern(BoundPropertyPattern pp, Action loadValue, TypeSymbol valueType, LabelHandle failLabel)
@@ -834,7 +844,20 @@ internal sealed partial class MethodBodyEmitter
         if (bp.IsConjunction)
         {
             this.EmitPattern(bp.Left, loadValue, valueType, failLabel);
-            this.EmitPattern(bp.Right, loadValue, valueType, failLabel);
+            if (bp.RightInputVariable != null)
+            {
+                var rightInputSlot = this.locals[bp.RightInputVariable];
+                this.EmitPattern(
+                    bp.Right,
+                    loadValue: () => this.il.LoadLocal(rightInputSlot),
+                    valueType: bp.RightInputVariable.Type,
+                    failLabel);
+            }
+            else
+            {
+                this.EmitPattern(bp.Right, loadValue, valueType, failLabel);
+            }
+
             return;
         }
 

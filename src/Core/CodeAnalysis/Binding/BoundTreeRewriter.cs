@@ -806,8 +806,21 @@ public abstract class BoundTreeRewriter
                 var value = RewriteExpression(constant.Value);
                 return value == constant.Value ? node : new BoundConstantPattern(null, node.Type, value);
             case BoundNodeKind.DiscardPattern:
-            case BoundNodeKind.TypePattern:
                 return node;
+            case BoundNodeKind.TypePattern:
+                var type = (BoundTypePattern)node;
+                var typeProperty = type.PropertyPattern == null
+                    ? null
+                    : (BoundPropertyPattern)RewritePattern(type.PropertyPattern);
+                return typeProperty == type.PropertyPattern
+                    ? node
+                    : new BoundTypePattern(
+                        null,
+                        node.Type,
+                        type.TargetType,
+                        type.Variable,
+                        type.HasBinding,
+                        typeProperty);
             case BoundNodeKind.RelationalPattern:
                 var relational = (BoundRelationalPattern)node;
                 var relValue = RewriteExpression(relational.Value);
@@ -867,7 +880,13 @@ public abstract class BoundTreeRewriter
                 var newRight = RewritePattern(binary.Right);
                 return newLeft == binary.Left && newRight == binary.Right
                     ? node
-                    : new BoundBinaryPattern(null, node.Type, binary.IsConjunction, newLeft, newRight);
+                    : new BoundBinaryPattern(
+                        null,
+                        node.Type,
+                        binary.IsConjunction,
+                        newLeft,
+                        newRight,
+                        binary.RightInputVariable);
             case BoundNodeKind.NotPattern:
                 var not = (BoundNotPattern)node;
                 var newInner = RewritePattern(not.Pattern);
@@ -2287,18 +2306,19 @@ public abstract class BoundTreeRewriter
         return node.Update(builder?.ToImmutable() ?? node.Parts, handler);
     }
 
-    /// <summary>Rewrites an expression-level <c>is</c> type-test.</summary>
+    /// <summary>Rewrites an expression-level <c>is</c> pattern test.</summary>
     /// <param name="node">The bound is-expression.</param>
     /// <returns>The rewritten expression.</returns>
     protected virtual BoundExpression RewriteIsExpression(BoundIsExpression node)
     {
         var expression = RewriteExpression(node.Expression);
-        if (expression == node.Expression)
+        var pattern = RewritePattern(node.Pattern);
+        if (expression == node.Expression && pattern == node.Pattern)
         {
             return node;
         }
 
-        return new BoundIsExpression(node.Syntax, expression, node.TargetType);
+        return new BoundIsExpression(node.Syntax, expression, pattern);
     }
 
     /// <summary>Rewrites an expression-level <c>as</c> safe-cast.</summary>

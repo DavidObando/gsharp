@@ -2851,7 +2851,11 @@ internal sealed class LambdaBinder
                     CheckNullableTypeArguments(importedInstanceCall.TypeArgumentSymbols);
                     break;
                 case BoundIsExpression isExpression:
-                    CheckType(isExpression.TargetType);
+                    if (isExpression.TargetType != null)
+                    {
+                        CheckType(isExpression.TargetType);
+                    }
+
                     break;
 
                 // Issue #1940: TypeOf/SizeOf are opaque leaves in BoundTreeWalker

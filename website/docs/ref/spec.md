@@ -719,9 +719,20 @@ The right operand may be a [throw-expression](#throw-expressions) — `a ?? thro
 
 ### Type-test and safe-cast operators
 
-`expr is T` evaluates to `bool` — `true` when the runtime type of `expr` is assignable to `T`, `false` otherwise (including when `expr` is `nil`). `expr as T` performs a safe downcast: it returns the value typed as `T` when the cast succeeds, or `nil` when it fails. For reference types the result type is `T`; for value types, the target must be written as the nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as` with a non-nullable value type target produces diagnostic `GS0269`. Both operators use the CLR `isinst` instruction and sit at precedence level 4 (same as equality and comparison), so `x is String == true` and `a is T && b is U` parse as expected without extra parentheses. The existing pattern-level `identifier is Type` syntax inside `switch`/`case` arms is unaffected.
+`expr is pattern` evaluates the expression once and returns `bool`. A bare type
+pattern (`expr is T`) tests runtime assignability; constants, relational/list/
+property patterns, parentheses, and `not` / `and` / `or` use the same semantics
+as switch patterns. `expr as T` performs a safe downcast: it returns the value
+typed as `T` when the cast succeeds, or `nil` when it fails. For reference types
+the result type is `T`; for value types, the target must be written as the
+nullable form `T?` (e.g. `x as int32?`) and the result type is `T?`. Using `as`
+with a non-nullable value type target produces diagnostic `GS0269`. Both
+operators sit at the comparison precedence level. Pattern matching reuses the
+switch pattern binder/emitter; a plain type test lowers to CLR `isinst`.
 
-A successful `is` (or `!is`) test against a local, parameter, or read-only top-level `let` flow-narrows the receiver to the tested type for the rest of the enclosing flow region — see *Smart casts (flow narrowing)* below.
+A successful type-bearing `is` (or `!is`) pattern against a local, parameter, or
+read-only top-level `let` flow-narrows the receiver to the proven type for the
+rest of the enclosing flow region — see *Smart casts (flow narrowing)* below.
 
 Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional indexing `?[`, indexing, calls, and generic instantiation are parsed greedily on primary expressions. This applies to **any** primary, including a parenthesized expression — for example `(a + b).GetType()`, `(nums)[0]`, and `("s").Length` are all valid. The sole exception is a bare numeric literal: `42.Member` is not accepted because it is ambiguous with float-literal lexing; wrap it as `(42).Member` instead.
 
@@ -872,7 +883,30 @@ default: "many"
 }
 ```
 
-Patterns include list-like patterns, property patterns, type tests with `is`, wildcard `_`, relational patterns, and expression patterns.
+Patterns include list-like patterns, property patterns, bare type patterns,
+binding type patterns with `is`, wildcard `_`, relational patterns, and
+expression patterns. A type pattern can compose directly with a property
+pattern: `string { Length: > 0 }`.
+
+Boolean `is` accepts the same full pattern grammar and produces `bool`:
+
+```gsharp
+if kind is "a" or "b" { ... }
+if code is > 100 and < 200 { ... }
+if values is [1, .., 3] { ... }
+if value is string { Length: > 0 } { ... }
+```
+
+Bare name patterns are resolved semantically. Switch arms preserve their
+historical value-first meaning (so enum members and constants remain value
+patterns), then fall back to a type. Boolean `is` preserves its historical
+type-first meaning, then falls back to a value. A property suffix forces the
+type interpretation. Use `== name` to force a value interpretation after
+boolean `is`.
+
+Boolean `is` patterns cannot introduce names. A binding type pattern or slice
+capture reports `GS0525`; use `if let` / `guard let` when a matched value needs a
+name.
 
 A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern**: a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
 
@@ -1105,7 +1139,13 @@ SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
 SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
 ```
 
-When an arm pattern is a type-pattern `<ident> is T` (or any pattern that proves the discriminator's runtime type), the discriminator expression is flow-narrowed to `T` inside the arm body in addition to the bound arm variable — see *Smart casts (flow narrowing)* below.
+When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
+any combined pattern that proves the discriminator's runtime type, the
+discriminator expression is flow-narrowed to `T` inside the arm body in
+addition to any bound arm variable. The right side of `and` binds against the
+left side's proven type, so `case string and { Length: > 0 }` is valid even
+when the original discriminator is `object` — see *Smart casts (flow
+narrowing)* below.
 
 ### Smart casts (flow narrowing)
 
@@ -1661,11 +1701,13 @@ AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
 UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
 PrimaryPattern    ::= '(' Pattern ')'
                     | '[' ListPatternElement (',' ListPatternElement)* ']'
-                    | '{' identifier ':' Pattern (',' identifier ':' Pattern)* '}'
-                    | identifier 'is' TypeClause
+                    | PropertyPattern
+                    | TypeClause PropertyPattern?             (* bare type pattern; name-shaped forms are semantically disambiguated from value patterns *)
+                    | identifier 'is' TypeClause PropertyPattern?
                     | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
                     | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression
                     | Expression
+PropertyPattern   ::= '{' (identifier ':' Pattern (',' identifier ':' Pattern)*)? '}'
 ListPatternElement ::= Pattern | SlicePattern
 SlicePattern      ::= '..' (identifier | Pattern)?           (* slice ("rest") subpattern, : bare '..' discards the middle slice; '..name' captures it into a '[]T' binding; '..pattern' matches it against a nested pattern *)
 
@@ -1703,7 +1745,8 @@ WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* 
 CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '>>>=' | '??='   (* '>>>=' unsigned right shift assign,  *)
 BinaryExpression  ::= PrefixExpression BinaryTail*
 BinaryTail        ::= BinaryOperator PrefixExpression
-                    | ('is' | 'as' | '!' 'is') TypeClause                (* type test / cast,  *)
+                    | ('is' | '!' 'is') Pattern                          (* boolean pattern test, ADR-0162 *)
+                    | 'as' TypeClause                                    (* safe cast,  *)
 BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
                       (* '>>>' unsigned (logical) right shift, : discards the sign bit instead of replicating it *)
                     | '+' | '-' | '|' | '^'

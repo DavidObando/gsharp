@@ -255,6 +255,7 @@ TypeArgumentList
 TypeClause
 TypeKeyword
 TypeOfExpression
+TypeOrConstantPattern
 TypeParameter
 TypeParameterList
 TypePattern

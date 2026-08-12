@@ -300,6 +300,22 @@ internal sealed class SlotPlanner
             this.currentScope = currentScope;
         }
 
+        public override void VisitExpression(BoundExpression node)
+        {
+            if (node is BoundIsExpression isExpression
+                && !isExpression.IsSimpleTypeTest)
+            {
+                AllocatePatternLocal(isExpression.InputVariable, this.locals, this.localTypes);
+                AllocatePatternBindings(
+                    isExpression.Pattern,
+                    this.locals,
+                    this.localTypes,
+                    this.typePatternScratchSlots);
+            }
+
+            base.VisitExpression(node);
+        }
+
         protected override void VisitPatternSwitchStatement(BoundPatternSwitchStatement node)
         {
             if (!this.patternSwitchSlots.ContainsKey(node))
@@ -655,6 +671,15 @@ internal sealed class SlotPlanner
                     {
                         locals[tp.Variable] = localTypes.Count;
                         localTypes.Add(tp.Variable.Type);
+                    }
+
+                    if (tp.PropertyPattern != null)
+                    {
+                        AllocatePatternBindings(
+                            tp.PropertyPattern,
+                            locals,
+                            localTypes,
+                            typePatternScratchSlots);
                     }
 
                     break;

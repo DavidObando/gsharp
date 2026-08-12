@@ -403,49 +403,10 @@ internal sealed partial class StatementBinder
         switch (condition)
         {
             case BoundIsExpression isExpr:
-                {
-                    AccessPath targetPath;
-                    TypeSymbol currentType;
-                    if (IsNarrowableVariable(isExpr.Expression, out var target))
-                    {
-                        target = Invariant.Required(target, "a successful variable narrowing identifies its target");
-                        targetPath = target;
-                        currentType = target.Type;
-                    }
-                    else
-                    {
-                        AccessPath? stablePath;
-                        TypeSymbol? stableType;
-                        if (!SmartCastStability.TryGetStableMemberPath(isExpr.Expression, out stablePath, out stableType))
-                        {
-                            return (null, null);
-                        }
-
-                        targetPath = Invariant.Required(stablePath, "a successful stable-member lookup identifies its path");
-                        currentType = Invariant.Required(stableType, "a successful stable-member lookup identifies its type");
-
-                        // ADR-0069 addendum / issue #1180: a stable immutable
-                        // member path (`x.shape`, `this.box.lid`) narrows just
-                        // like a local. Unstable members never reach here.
-                    }
-
-                    var targetType = isExpr.TargetType;
-                    if (targetType == null || targetType == TypeSymbol.Error)
-                    {
-                        return (null, null);
-                    }
-
-                    // `x is T` narrows `x` to `T` in the then-branch. The
-                    // else-branch carries no narrowing: failing the type test
-                    // tells us nothing more about the variable's type.
-                    var narrowed = StripNullable(targetType);
-                    if (!IsStrictlyNarrower(currentType, narrowed))
-                    {
-                        return (null, null);
-                    }
-
-                    return (new Dictionary<AccessPath, TypeSymbol> { [targetPath] = narrowed }, null);
-                }
+                return (TryClassifyPatternNarrowing(
+                    isExpr.Expression,
+                    isExpr.Pattern,
+                    allowReadOnlyGlobals: false), null);
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
                 {
@@ -862,7 +823,10 @@ internal sealed partial class StatementBinder
         return expr is BoundLiteralExpression lit && lit.Type == TypeSymbol.Null;
     }
 
-    internal static Dictionary<AccessPath, TypeSymbol>? TryClassifyPatternNarrowing(BoundExpression discriminant, BoundPattern? pattern)
+    internal static Dictionary<AccessPath, TypeSymbol>? TryClassifyPatternNarrowing(
+        BoundExpression discriminant,
+        BoundPattern? pattern,
+        bool allowReadOnlyGlobals = true)
     {
         if (pattern == null)
         {
@@ -876,7 +840,9 @@ internal sealed partial class StatementBinder
         // be reassigned or mutated between the test and the use.
         AccessPath discriminantPath;
         if (discriminant is BoundVariableExpression variableExpression
-            && IsStableNarrowableVariable(variableExpression.Variable))
+            && (allowReadOnlyGlobals
+                ? IsStableNarrowableVariable(variableExpression.Variable)
+                : variableExpression.Variable is LocalVariableSymbol or ParameterSymbol))
         {
             discriminantPath = variableExpression.Variable;
         }
@@ -896,7 +862,12 @@ internal sealed partial class StatementBinder
         switch (pattern)
         {
             case BoundTypePattern typePattern:
-                narrowedType = typePattern.TargetType;
+                var targetType = StripNullable(typePattern.TargetType);
+                if (SmartCastStability.IsTypeTestNarrowing(discriminantType, targetType))
+                {
+                    narrowedType = targetType;
+                }
+
                 break;
             case BoundConstantPattern constantPattern when discriminantType is NullableTypeSymbol nullable && !IsNilLiteral(constantPattern.Value):
                 narrowedType = nullable.UnderlyingType;
@@ -907,8 +878,14 @@ internal sealed partial class StatementBinder
                 // Issue #992: `and` — both sub-patterns hold, so the union of
                 // their narrowings is sound.
                 {
-                    var left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left);
-                    var right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right);
+                    var left = TryClassifyPatternNarrowing(
+                        discriminant,
+                        binaryPattern.Left,
+                        allowReadOnlyGlobals);
+                    var right = TryClassifyPatternNarrowing(
+                        discriminant,
+                        binaryPattern.Right,
+                        allowReadOnlyGlobals);
                     return MergeNarrowingFrames(left, right);
                 }
 
@@ -917,8 +894,14 @@ internal sealed partial class StatementBinder
                 // (same variable, same type) survive. This keeps the smart-cast
                 // sound: `x is Cat or x is Dog` narrows nothing.
                 {
-                    var left = TryClassifyPatternNarrowing(discriminant, binaryPattern.Left);
-                    var right = TryClassifyPatternNarrowing(discriminant, binaryPattern.Right);
+                    var left = TryClassifyPatternNarrowing(
+                        discriminant,
+                        binaryPattern.Left,
+                        allowReadOnlyGlobals);
+                    var right = TryClassifyPatternNarrowing(
+                        discriminant,
+                        binaryPattern.Right,
+                        allowReadOnlyGlobals);
                     return IntersectNarrowingFrames(left, right);
                 }
 
