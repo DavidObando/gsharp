@@ -336,7 +336,7 @@ public class Issue2885NullableDelegateReceiverTests
     }
 
     [Fact]
-    public void DiagnosticAdvice_MatchesReceiverSyntax()
+    public void DiagnosticAdvice_UsesGeneralNullConditionalInvocation()
     {
         const string named = """
             package Issue2885AdviceNamed
@@ -387,10 +387,10 @@ public class Issue2885NullableDelegateReceiverTests
         AssertNameAdvice(member);
         AssertNameAdvice(namedInvoke);
         AssertNameAdvice(memberInvoke);
-        AssertIndexedAdvice(indexed);
-        AssertIndexedAdvice(result);
-        AssertIndexedAdvice(indexedInvoke);
-        AssertIndexedAdvice(resultInvoke);
+        AssertNameAdvice(indexed);
+        AssertNameAdvice(result);
+        AssertNameAdvice(indexedInvoke);
+        AssertNameAdvice(resultInvoke);
 
         static void AssertNameAdvice(string source)
         {
@@ -399,12 +399,6 @@ public class Issue2885NullableDelegateReceiverTests
             Assert.DoesNotContain("'?.Invoke(...)'", message, StringComparison.Ordinal);
         }
 
-        static void AssertIndexedAdvice(string source)
-        {
-            var message = GetGs0503(source).Message;
-            Assert.Contains("'?.Invoke(...)'", message, StringComparison.Ordinal);
-            Assert.DoesNotContain("'?(...)'", message, StringComparison.Ordinal);
-        }
     }
 
     [Fact]
@@ -420,8 +414,8 @@ public class Issue2885NullableDelegateReceiverTests
                 let write System.Action[int32] = (value int32) -> Console.WriteLine(value)
                 var values = [1]System.Action[int32]?
                 values[0] = write
-                values[0]?.Invoke(1)
-                Get(write)?.Invoke(2)
+                values[0]?(1)
+                Get(write)?(2)
             }
             """;
 

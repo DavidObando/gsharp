@@ -1136,9 +1136,8 @@ properties cannot declare `init` accessors.
 |----|----------|-------------|-----------------|
 | GS0503 | Error | A nullable delegate receiver cannot be called directly without a valid non-null narrowing. | `func Run(d System.Action[int32]?) { d(1) }` |
 
-Use `?(...)` for null-safe invocation of a name or member receiver. For an
-indexed or call-result receiver, use `?.Invoke(...)`. Alternatively, bind the
-delegate with `if let`, or assert non-null with `!!` before calling.
+Use `?(...)` for null-safe invocation of any delegate receiver. Alternatively,
+bind the delegate with `if let`, or assert non-null with `!!` before calling.
 
 ## Interface property type mismatch (GS0504)
 

@@ -216,7 +216,7 @@ spill-based `IfExpression` translation when any of the following holds:
 - the C# binder is reassigned anywhere in scope (G# `let` is immutable);
 - the guard or the true arm contains a construct that needs a hoisted spill
   (another `is` pattern, an assignment, `++`/`--`, `out var`, a range, a
-  `switch` expression, a null-conditional delegate invoke) — such a spill would
+  `switch` expression) — such a spill would
   have to be hoisted *outside* the `if let`, where it would run
   unconditionally and could not see the binding.
 

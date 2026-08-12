@@ -246,11 +246,6 @@ public sealed partial class CSharpToGSharpTranslator
                         return enumExtResult;
                     }
 
-                    if (this.TryTranslateNullConditionalDelegateInvoke(conditionalAccess, out GExpression delegateInvokeResult))
-                    {
-                        return delegateInvokeResult;
-                    }
-
                     if (DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression)
                         && FindLeadingElementBinding(conditionalAccess.WhenNotNull)
                             is ElementBindingExpressionSyntax conditionalIndexBinding

@@ -23,7 +23,7 @@ namespace Cs2Gs.Tests;
 /// <item>an explicit constructor parameter receives ordinary
 /// oblivious-nullability promotion,</item>
 /// <item>a null-conditional delegate invoke on a non-simple (call / <c>??</c>)
-/// receiver must spill the receiver into a local and invoke it directly,</item>
+/// receiver emits directly without a translator spill,</item>
 /// <item>a promoted-nullable function value subscribed to a CLR event must be
 /// forgiven with <c>!!</c> at the subscription sink,</item>
 /// <item>a CLR reference cast <c>(T)expr</c> must emit the <c>expr as T</c>
@@ -90,12 +90,10 @@ namespace Demo
     }
 
     [Fact]
-    public void Oblivious_NullConditionalDelegateInvokeOnCallReceiver_SpillsAndInvokesDirectly()
+    public void Oblivious_NullConditionalDelegateInvokeOnCallReceiver_InvokesDirectly()
     {
-        // `ToStringFunc<T>()?.Invoke(val)` — a null-conditional invoke whose
-        // receiver is a generic call — cannot use `.Invoke` (gsc can't resolve it
-        // on a type-parameter function type) nor `recv?(args)` (ternary collision),
-        // so the receiver spills into a local invoked directly as `local?(val)`.
+        // Issue #3356: both generic `.Invoke` lookup and direct `recv?(args)`
+        // parsing now work, so no translator spill is needed.
         string printed = TranslateOblivious(@"
 using System;
 namespace Demo
@@ -108,8 +106,8 @@ namespace Demo
 }");
 
         Assert.DoesNotContain(".Invoke", printed);
-        Assert.Contains("__spill", printed);
-        Assert.Contains("?(val)", printed);
+        Assert.Contains("ToStringFunc[T]()?(val)", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     [Fact]

@@ -721,9 +721,13 @@ public partial class Parser
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.QuestionToken
-            && Peek(2).Kind == SyntaxKind.OpenParenthesisToken)
+            && Peek(2).Kind == SyntaxKind.OpenParenthesisToken
+            && Peek(1).Position == Current.Span.End
+            && Peek(2).Position == Peek(1).Span.End)
         {
             // Issue #663: `string?(expr)` — nullable-type conversion call.
+            // The binder also treats this syntax as a null-conditional delegate
+            // invocation when the identifier resolves to a callable value.
             current = ParseNullableTypeCallExpression();
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken

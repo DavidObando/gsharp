@@ -561,12 +561,6 @@ public sealed partial class CSharpToGSharpTranslator
                         when postfix.IsKind(SyntaxKind.PostIncrementExpression)
                             || postfix.IsKind(SyntaxKind.PostDecrementExpression):
                         return true;
-
-                    // `recv?.Invoke(a)` spills the receiver so it is evaluated
-                    // exactly once (TryTranslateNullConditionalDelegateInvoke).
-                    case InvocationExpressionSyntax { Expression: MemberBindingExpressionSyntax binding }
-                        when binding.Name.Identifier.Text == "Invoke":
-                        return true;
                 }
             }
 

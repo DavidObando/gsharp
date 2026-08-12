@@ -2286,11 +2286,31 @@ internal sealed partial class ExpressionBinder
             var receiverName = effectiveReceiverSyntax == null
                 ? methodName
                 : effectiveReceiverSyntax.SyntaxTree.Text.ToString(effectiveReceiverSyntax.Span);
+
+            if (receiver != null
+                && receiver.Type is FunctionTypeSymbol
+                    or NullableTypeSymbol { UnderlyingType: FunctionTypeSymbol }
+                && ce.TypeArgumentList == null)
+            {
+                return ce.NullableQuestionToken != null
+                    ? overloads.BindNullConditionalIndirectCallExpression(
+                        ce,
+                        receiver,
+                        receiverName,
+                        receiverLocation)
+                    : overloads.BindIndirectCallExpression(
+                        ce,
+                        receiver,
+                        receiverName,
+                        receiverLocation,
+                        nullSafeInvocation: "?(...)");
+            }
+
             if (overloads.TryReportNullableDelegateReceiver(
                 receiver?.Type,
                 receiverLocation,
                 receiverName,
-                OverloadResolver.GetNullableDelegateNullSafeInvocation(effectiveReceiverSyntax as ExpressionSyntax)))
+                OverloadResolver.GetNullableDelegateNullSafeInvocation()))
             {
                 return new BoundErrorExpression(null);
             }
