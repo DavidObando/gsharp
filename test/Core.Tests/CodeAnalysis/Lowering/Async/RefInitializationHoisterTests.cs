@@ -210,14 +210,17 @@ y, new BoundBinaryExpression(
         var result = RefInitializationHoister.Rewrite(body);
         var stmts = result.Statements;
 
-        // Statement 0: prelude block declaring two temps (one for arrCall, one for idxCall).
+        // Statement 0: two component temps, then an address probe preserving
+        // pre-await bounds/null exceptions.
         var prelude = Assert.IsType<BoundBlockStatement>(stmts[0]);
-        Assert.Equal(2, prelude.Statements.Length);
+        Assert.Equal(3, prelude.Statements.Length);
 
         var t0Decl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
         var t1Decl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[1]);
         Assert.Same(arrCall, t0Decl.Initializer);
         Assert.Same(idxCall, t1Decl.Initializer);
+        var probe = Assert.IsType<BoundExpressionStatement>(prelude.Statements[2]);
+        Assert.IsType<BoundAddressOfExpression>(probe.Expression);
 
         // Statements 1 and 2: each use is `temp0[temp1]` — same temp symbols, not the original calls.
         BoundIndexExpression ReadUse(BoundStatement s)
@@ -313,11 +316,13 @@ y, new BoundBinaryExpression(
 
         var result = RefInitializationHoister.Rewrite(body);
 
-        // Prelude: one temp local holding the receiver call result.
+        // Prelude: receiver temp followed by the original address probe.
         var prelude = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
-        Assert.Single(prelude.Statements);
+        Assert.Equal(2, prelude.Statements.Length);
         var tempDecl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
         Assert.Same(receiverCall, tempDecl.Initializer);
+        var probe = Assert.IsType<BoundExpressionStatement>(prelude.Statements[1]);
+        Assert.IsType<BoundAddressOfExpression>(probe.Expression);
 
         // Each use reads `temp.value` — same temp, never the original call.
         for (int i = 1; i <= 2; i++)
@@ -353,11 +358,14 @@ y, new BoundBinaryExpression(
         var body = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(declSlot, bareUse1, bareUse2));
         var result = RefInitializationHoister.Rewrite(body);
 
-        // Prelude: one temp (for arrCall). `i` is a trivially repeatable BoundVariableExpression.
+        // Prelude: one receiver temp plus the original address probe. `i` is a
+        // trivially repeatable BoundVariableExpression.
         var prelude = Assert.IsType<BoundBlockStatement>(result.Statements[0]);
-        Assert.Single(prelude.Statements);
+        Assert.Equal(2, prelude.Statements.Length);
         var tempDecl = Assert.IsType<BoundVariableDeclaration>(prelude.Statements[0]);
         Assert.Same(arrCall, tempDecl.Initializer);
+        var probe = Assert.IsType<BoundExpressionStatement>(prelude.Statements[1]);
+        Assert.IsType<BoundAddressOfExpression>(probe.Expression);
 
         // Each bare use should be &temp[i].
         for (int k = 1; k <= 2; k++)

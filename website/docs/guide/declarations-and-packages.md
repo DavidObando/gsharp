@@ -52,12 +52,15 @@ var count int32
 var total = 0
 ```
 
-Deconstruction is available in `let` forms, and multi-target assignment supports identifier lists.
+Deconstruction is available in `let` forms. Multi-target assignment accepts
+writable storage targets and either one value per target or one matching tuple.
 
 ```gsharp
 let (x, y) = pair
 let { Name = n, Age = a } = person
 left, right = right, left
+values[i], box.Value = 1, 2
+left, right = Pair()
 ```
 
 

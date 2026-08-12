@@ -32,6 +32,10 @@ namespace GSharp.Core.CodeAnalysis.Lowering.Async;
 /// parameters, literals), making it safe to inline at every use site. The
 /// constituent variables are themselves later hoisted into state-machine
 /// fields by <see cref="AsyncCaptureWalker"/> if they cross an await.</para>
+/// <para>A reconstructed field or element address is also probed once at the
+/// original declaration site. This preserves null and bounds exceptions before
+/// a later suspension while still avoiding an illegal managed-pointer
+/// state-machine field.</para>
 /// <para>This pass runs after <see cref="SpillSequenceSpiller"/> and before
 /// <see cref="AsyncStateMachineTypeBuilder"/> in the async pipeline.</para>
 /// </remarks>
@@ -134,18 +138,24 @@ public static class RefInitializationHoister
 
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
-            // Replace ref local declarations with a block containing the
-            // hoisting prelude (one variable declaration per side-effecting
-            // sub-expression). The rewritten template — referencing only the
-            // hoisted temps and trivially repeatable leaves — is recorded in
-            // refLocals so that use-site rewrites read it back instead of
-            // duplicating the original operand.
+            // Replace ref local declarations with component captures plus any
+            // required field/element address probe. The rewritten template —
+            // referencing only captured temps and repeatable storage — is
+            // recorded for use-site reconstruction.
             if (node.Variable is LocalVariableSymbol local
                 && local.Type is ByRefTypeSymbol
                 && node.Initializer is BoundAddressOfExpression addressOf)
             {
                 var prelude = ImmutableArray.CreateBuilder<BoundStatement>();
                 var template = HoistOperand(addressOf.Operand, prelude);
+                if (template is BoundIndexExpression
+                    or BoundFieldAccessExpression { Receiver: not null })
+                {
+                    prelude.Add(new BoundExpressionStatement(
+                        node.Syntax,
+                        new BoundAddressOfExpression(addressOf.Syntax, template)));
+                }
+
                 refLocals[local] = template;
                 return new BoundBlockStatement(null, prelude.ToImmutable());
             }
@@ -234,7 +244,10 @@ public static class RefInitializationHoister
                             return field;
                         }
 
-                        var receiver = HoistIfNeeded(field.Receiver, prelude);
+                        var receiver = Binder.IsReferenceTypeForConstraint(field.Receiver.Type)
+                            || !IsReconstructableStorage(field.Receiver)
+                            ? HoistIfNeeded(field.Receiver, prelude)
+                            : HoistOperand(field.Receiver, prelude);
                         return new BoundFieldAccessExpression(field.Syntax, receiver, BoundNodeForm.DeclaringType(field), field.Field, field.NarrowedType);
                     }
 
@@ -256,10 +269,14 @@ public static class RefInitializationHoister
                         return new BoundClrPropertyAccessExpression(clrProp.Syntax, receiver, clrProp.Member, clrProp.Type);
                     }
 
+                case BoundDereferenceExpression dereference:
+                    return new BoundDereferenceExpression(
+                        dereference.Syntax,
+                        HoistIfNeeded(dereference.Operand, prelude));
+
                 default:
-                    // Any other operand form (e.g., a bare BoundVariableExpression
-                    // for `ref x = ref y`, or a BoundDereferenceExpression for
-                    // `ref x = ref *p`): trivially repeatable or already in a
+                    // Any other operand form (e.g., a bare variable for
+                    // `ref x = ref y`) is trivially repeatable or already in a
                     // hoist-safe shape after spilling. Inline directly.
                     return operand;
             }
@@ -283,6 +300,21 @@ public static class RefInitializationHoister
                 expression.Type);
             prelude.Add(new BoundVariableDeclaration(null, temp, expression));
             return new BoundVariableExpression(null, temp);
+        }
+
+        private static bool IsReconstructableStorage(BoundExpression expression)
+        {
+            return expression switch
+            {
+                BoundVariableExpression => true,
+                BoundDereferenceExpression => true,
+                BoundIndexExpression => true,
+                BoundFieldAccessExpression { Receiver: null } => true,
+                BoundFieldAccessExpression { Receiver: { } receiver } =>
+                    Binder.IsReferenceTypeForConstraint(receiver.Type)
+                    || IsReconstructableStorage(receiver),
+                _ => false,
+            };
         }
     }
 }

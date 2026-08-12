@@ -625,6 +625,12 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | --- | --- | --- | --- |
 | GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let`, or `while let` for a loop condition. | `if value is text is string { }`, `if values is [..rest] { }` |
 
+## Invalid multi-assignment target (GS0526)
+
+| ID | Severity | Summary | Example |
+| --- | --- | --- | --- |
+| GS0526 | Error | A multi-assignment target is not writable storage. Use a variable, field, property, array element, indexer, or pointer dereference. | `GetValue(), x = 1, 2` |
+
 ## Default-interface-method diagnostics (GS0318–GS0321)
 
 See [ADR-0085](adr/0085-default-interface-methods-implementation.md) (which supersedes the deferral in ADR-0018). Interfaces may now expose default-method bodies; classes that implement the interface inherit the default unless they declare their own override. The four diagnostics below cover the conflict, dropped-default, missing-implementer, and deferred-modifier cases.

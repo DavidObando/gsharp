@@ -5,8 +5,8 @@
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
-/// Represents a multi-target assignment or short-variable declaration statement,
-/// e.g. <c>a, b = b, a</c> or <c>a, b := 1, 2</c>.
+/// Represents a multi-target assignment statement, e.g.
+/// <c>a, obj.Field, values[i] = b, 1, 2</c>.
 /// </summary>
 public sealed class MultiAssignmentStatementSyntax : StatementSyntax
 {
@@ -14,7 +14,7 @@ public sealed class MultiAssignmentStatementSyntax : StatementSyntax
     /// Initializes a new instance of the <see cref="MultiAssignmentStatementSyntax"/> class.
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="targets">The comma-separated target identifiers (each a <see cref="NameExpressionSyntax"/>).</param>
+    /// <param name="targets">The comma-separated assignment targets.</param>
     /// <param name="operatorToken">The operator token (<c>=</c> or <c>:=</c>).</param>
     /// <param name="values">The comma-separated right-hand side expressions.</param>
     public MultiAssignmentStatementSyntax(
@@ -33,7 +33,7 @@ public sealed class MultiAssignmentStatementSyntax : StatementSyntax
     public override SyntaxKind Kind => SyntaxKind.MultiAssignmentStatement;
 
     /// <summary>
-    /// Gets the comma-separated target identifiers.
+    /// Gets the comma-separated assignment targets.
     /// </summary>
     public SeparatedSyntaxList<ExpressionSyntax> Targets { get; }
 

@@ -53,11 +53,21 @@ Console.WriteLine("padded=[${label,5}]")
 
 ## Declarations, assignment, and deconstruction
 
-Use declaration statements for new bindings and assignment for existing variables. Multi-target assignment is implemented for identifier lists. Tuple and named deconstruction use `let` forms. The null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a` currently reads as `nil` — the right-hand side is short-circuited otherwise. Prefix and postfix `++` / `--` are value-producing expressions on assignable numeric lvalues: `++i` yields the new value, `i++` yields the old value.
+Use declaration statements for new bindings and assignment for existing
+storage. Multi-target assignment accepts locals, fields, properties, arrays,
+maps, indexers, nested members, and pointer dereferences. Target components run
+before RHS values, then writes run left-to-right; one matching tuple-valued RHS
+is evaluated once. Tuple and named declarations use `let` forms. The
+null-coalescing compound assignment `a ??= b` writes `b` into `a` only when `a`
+currently reads as `nil` — the right-hand side is short-circuited otherwise.
+Prefix and postfix `++` / `--` are value-producing expressions on assignable
+numeric lvalues: `++i` yields the new value, `i++` yields the old value.
 
 ```gsharp
 let (x, y) = pair
 left, right = right, left
+items[i], box.Value = 1, 2
+left, right = Pair()
 count += 1
 let before = count++
 let after = ++count

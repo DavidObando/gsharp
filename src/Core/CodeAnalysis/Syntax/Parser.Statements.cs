@@ -371,7 +371,7 @@ public partial class Parser
             new LiteralExpressionSyntax(syntaxTree, new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1);
 
         ExpressionSyntax write;
-        if (TryLiftTrailingIndexer(operand, out var indexed))
+        if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
         {
             // Array element / indexer: route through the single-evaluating
             // compound-index assignment so the receiver chain is computed once.
@@ -388,7 +388,11 @@ public partial class Parser
             {
                 write = new AssignmentExpressionSyntax(syntaxTree, name.IdentifierToken, equalsToken, newValue);
             }
-            else if (TryLiftTrailingMemberAccess(operand, out var receiver, out var dotToken, out var fieldIdentifier))
+            else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
+                operand,
+                out var receiver,
+                out var dotToken,
+                out var fieldIdentifier))
             {
                 // Prefer the simple `id.field = value` form when the receiver is
                 // a bare name: it binds through the field-assignment path that
@@ -433,32 +437,32 @@ public partial class Parser
 
     private bool LooksLikeMultiAssignment()
     {
-        // Pattern: ident, ident (, ident)* (= | :=) ...
-        if (Current.Kind != SyntaxKind.IdentifierToken ||
-            Peek(1).Kind != SyntaxKind.CommaToken)
+        var savedPosition = position;
+        var savedTokens = tokens;
+        var savedDiagnosticCount = Diagnostics.Count;
+        try
         {
-            return false;
-        }
-
-        int i = 2;
-        while (i < 256)
-        {
-            if (Peek(i).Kind != SyntaxKind.IdentifierToken)
+            _ = ParseRangeExpression();
+            if (Current.Kind != SyntaxKind.CommaToken)
             {
                 return false;
             }
 
-            var next = Peek(i + 1).Kind;
-            if (next == SyntaxKind.CommaToken)
+            do
             {
-                i += 2;
-                continue;
+                _ = MatchToken(SyntaxKind.CommaToken);
+                _ = ParseRangeExpression();
             }
+            while (Current.Kind == SyntaxKind.CommaToken);
 
-            return next == SyntaxKind.EqualsToken || next == SyntaxKind.ColonEqualsToken;
+            return Current.Kind is SyntaxKind.EqualsToken or SyntaxKind.ColonEqualsToken;
         }
-
-        return false;
+        finally
+        {
+            position = savedPosition;
+            tokens = savedTokens;
+            Diagnostics.TruncateTo(savedDiagnosticCount);
+        }
     }
 
     private StatementSyntax ParseMultiAssignmentStatement()
@@ -511,8 +515,7 @@ public partial class Parser
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         while (true)
         {
-            var identifier = MatchToken(SyntaxKind.IdentifierToken);
-            nodesAndSeparators.Add(new NameExpressionSyntax(syntaxTree, identifier));
+            nodesAndSeparators.Add(ParseRangeExpression());
 
             if (Current.Kind == SyntaxKind.CommaToken)
             {

@@ -26,23 +26,9 @@ namespace Cs2Gs.Tests;
 /// evaluation order for any target with a pre-existing storage location to
 /// evaluate (an indexer's receiver/index, a member access's receiver).
 ///
-/// The fix generalizes #1895/#1974: before the RHS is spilled, every
-/// indexer/member-access target's receiver (and index, for an indexer) is
-/// captured into its own temp via <c>MakeDuplicationSafeTarget</c> — the SAME
-/// machinery chained assignment (<c>a[F()] = b[G()] = c</c>, issue #1731)
-/// already uses to make a target safe to write to without re-evaluating its
-/// receiver/index. Only after every target is captured does the RHS get
-/// spilled, and only then are the (now single-evaluation-safe) targets
-/// written to, in left-to-right order — matching C#'s own evaluation order
-/// exactly, including for a self-referential swap.
-///
-/// No gsc language change was needed for this: cs2gs already fully lowers a
-/// deconstruction assignment to a flat sequence of gsc's EXISTING primitives
-/// — a native <c>let (...) = rhs</c> tuple-deconstruction-declaration and
-/// ordinary <c>target = value</c> assignment statements, which gsc already
-/// accepts for any assignable target shape (identifier, indexer, member
-/// access) outside of tuple deconstruction. The gap was purely in cs2gs's
-/// translation-time evaluation-order handling, not in gsc's grammar.
+/// Issue #3353 moved that ordering guarantee into G#'s native multi-target
+/// assignment. cs2gs can now emit storage targets directly without D2 spills
+/// or <c>__deconN</c> temps; runtime tests below pin same C# order.
 /// </summary>
 public class Issue2234IndexerMemberDeconstructAssignTranslationTests
 {
@@ -148,6 +134,9 @@ namespace Corpus.Issue2234
 }");
 
         Assert.DoesNotContain("(entries[idx], entries[target]) =", printed);
+        Assert.Contains("entries[idx], entries[target] = entries[target], entries[idx]", printed);
+        Assert.DoesNotContain("__decon", printed);
+        Assert.DoesNotContain("__spill", printed);
 
         string output = CompileAndRunCapturingOutput(
             printed,
@@ -210,6 +199,8 @@ namespace Corpus.Issue2234
         Assert.Equal("10", lines[0]);
         Assert.Equal("20", lines[1]);
         Assert.Equal("L0,L1,R0,R1", lines[2]);
+        Assert.DoesNotContain("__decon", printed);
+        Assert.DoesNotContain("__spill", printed);
     }
 
     private static string Render(string source)
@@ -305,6 +296,13 @@ namespace Corpus.Issue2234
 
     private static string FindCompiler()
     {
+        string sibling = Path.GetFullPath(
+            Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"));
+        if (File.Exists(sibling))
+        {
+            return sibling;
+        }
+
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {

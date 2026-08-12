@@ -637,10 +637,9 @@ public sealed partial class CSharpToGSharpTranslator
             TupleExpressionSyntax leftTuple,
             ExpressionSyntax right)
         {
-            // Issue #3358: G# has a native multi-target assignment (`a, b = b, a`,
-            // ADR-0015) whose evaluate-all-then-write order is exactly C#'s, so the
-            // common shape needs no temps at all. Tried first; the helper declines
-            // every shape gsc cannot express.
+            // Issues #3353/#3358: G#'s native multi-target assignment now
+            // accepts storage targets and a tuple-valued single RHS while
+            // preserving C#'s targets-then-RHS-then-writes order.
             if (this.TryLowerNativeMultiAssignment(leftTuple, right, out IReadOnlyList<GStatement> native))
             {
                 return native;
@@ -661,14 +660,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// <remarks>
         /// ADR-0015 evaluates every right-hand expression left-to-right into
         /// temporaries before any write, then assigns left-to-right — exactly the
-        /// order C# specifies, so an aliasing swap stays correct.
+        /// order C# specifies, so aliasing swaps and storage targets stay correct.
         /// <para>
-        /// Declines whenever `gsc` cannot express the shape: a storage target
-        /// (<c>arr[i], o.F = …</c>) or a mixed declaration (<c>a, let y = …</c>)
-        /// is GS0005, and a single tuple-valued right-hand side will not unify
-        /// across N targets (<c>a, b = Pair()</c>) — GS0167. A nested target
-        /// tuple has no flat form either. All of those keep the existing
-        /// lowering.
+        /// Mixed declarations and nested target tuples have no flat assignment
+        /// form and keep the existing lowering. Non-tuple deconstruction sources
+        /// also keep it because native multi-assignment unifies tuple values only.
         /// </para>
         /// </remarks>
         /// <param name="leftTuple">The C# deconstruction target tuple.</param>
@@ -682,50 +678,36 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            // The right-hand side must be a tuple LITERAL so it can be split into
-            // one value per target; gsc will not spread a tuple-valued call.
+            if (this.context.GetTypeInfo(right).Type is not INamedTypeSymbol { IsTupleType: true } rightType
+                || rightType.TupleElements.Length != leftTuple.Arguments.Count)
+            {
+                return false;
+            }
+
+            // Declarations and nested target tuples still need recursive lowering.
+            foreach (ArgumentSyntax argument in leftTuple.Arguments)
+            {
+                if (argument.Expression is DeclarationExpressionSyntax or TupleExpressionSyntax)
+                {
+                    return false;
+                }
+            }
+
+            var targets = new List<GExpression>(leftTuple.Arguments.Count);
+            foreach (ArgumentSyntax argument in leftTuple.Arguments)
+            {
+                targets.Add(this.TranslateExpression(argument.Expression));
+            }
+
             ExpressionSyntax unwrappedRight = right;
             while (unwrappedRight is ParenthesizedExpressionSyntax parenthesized)
             {
                 unwrappedRight = parenthesized.Expression;
             }
 
-            if (unwrappedRight is not TupleExpressionSyntax rightTuple
-                || rightTuple.Arguments.Count != leftTuple.Arguments.Count)
-            {
-                return false;
-            }
-
-            // Every target must be a plain identifier or a discard.
-            foreach (ArgumentSyntax argument in leftTuple.Arguments)
-            {
-                ExpressionSyntax target = argument.Expression;
-                if (target is IdentifierNameSyntax identifier)
-                {
-                    if (identifier.Identifier.Text == "_")
-                    {
-                        continue;
-                    }
-
-                    // A write to a FIELD or property — even when spelled as a bare
-                    // identifier — is a storage target, not a local.
-                    if (this.context.GetSymbolInfo(target).Symbol is ILocalSymbol or IParameterSymbol)
-                    {
-                        continue;
-                    }
-                }
-
-                return false;
-            }
-
-            var targets = new List<GExpression>(leftTuple.Arguments.Count);
-            var values = new List<GExpression>(rightTuple.Arguments.Count);
-            for (int i = 0; i < leftTuple.Arguments.Count; i++)
-            {
-                targets.Add(this.TranslateExpression(leftTuple.Arguments[i].Expression));
-                values.Add(this.TranslateExpression(rightTuple.Arguments[i].Expression));
-            }
-
+            IReadOnlyList<GExpression> values = unwrappedRight is TupleExpressionSyntax rightTuple
+                ? rightTuple.Arguments.Select(argument => this.TranslateExpression(argument.Expression)).ToList()
+                : new[] { this.TranslateExpression(right) };
             result = new GStatement[] { new MultiAssignmentStatement(targets, values) };
             return true;
         }

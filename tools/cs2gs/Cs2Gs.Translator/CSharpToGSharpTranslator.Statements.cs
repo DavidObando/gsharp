@@ -2033,11 +2033,12 @@ public sealed partial class CSharpToGSharpTranslator
                     };
                 }
 
-                // `(a, b) = (x, y)` deconstruction *assignment* to existing
-                // variables. G# has no tuple-assignment form, so lower to
-                // element-wise assignments (or, for a MIXED target such as
-                // `(x, var y) = ...`, a mix of assignments and new bindings).
-                // The whole RHS is captured ONCE via G#'s native
+                // `(a, b) = (x, y)` deconstruction *assignment*. Flat existing
+                // targets now use G# native multi-assignment (issues #3353/#3358),
+                // including storage targets and tuple-valued calls. Mixed
+                // declarations, nested targets, expression-position forms, and
+                // non-tuple Deconstruct sources use the recursive fallback below.
+                // That fallback captures the whole RHS ONCE via G#'s native
                 // `let (t0, t1, ...) = rhs` deconstruction-declaration form —
                 // this already handles every RHS shape the declaration path
                 // does (a tuple literal, a tuple-returning call, a
@@ -2050,13 +2051,8 @@ public sealed partial class CSharpToGSharpTranslator
                 // deconstructed by a SECOND `let (...) = temp` statement
                 // (issue #1974) — G#'s grammar only needs a flat name list per
                 // statement, and nothing stops chaining several of them. A
-                // non-identifier target (`arr[i]`, `obj.F`, ...) anywhere in the
-                // (possibly nested) target shape is handled by
-                // `LowerTupleAssignment` capturing its receiver/index FIRST
-                // (via `MakeDuplicationSafeTarget`, the same machinery chained
-                // assignment already uses), before the RHS is spilled —
-                // preserving C#'s left-to-right, targets-then-value evaluation
-                // order (issue #2234, generalizing #1895).
+                // storage target inside a fallback shape is captured before the
+                // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
                     return this.LowerTupleAssignment(leftTuple, assignment.Right);

@@ -895,17 +895,12 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Issue #1235: a property read on a receiver whose static type is a type
-        // parameter constrained to a class or interface (`t.P` with `t : T`,
-        // `T : Base`). A reference-type-constrained `!!T` value is boxed (a
-        // runtime no-op yielding the object reference typed as the constraint)
-        // and the getter dispatched with `callvirt get_P` — the same verifiable
-        // shape the C# compiler emits for a property read through a type
-        // parameter.
+        // Issue #1235: constrained dispatch handles both reference- and
+        // value-type substitutions without boxing a value-type receiver.
         if (access.Receiver.Type is TypeParameterSymbol tpReceiver)
         {
-            this.EmitExpression(access.Receiver);
-            this.il.OpCode(ILOpCode.Box);
+            this.EmitConstrainedTypeParameterReceiver(access.Receiver);
+            this.il.OpCode(ILOpCode.Constrained);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
@@ -986,18 +981,16 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        // Issue #1235 (write side): a property write on a receiver whose
-        // static type is a type parameter constrained to a class or interface
-        // (`t.P = v` with `t : T`). Mirrors EmitPropertyAccess's read-side
-        // `box !!T; callvirt get_P` with `box !!T; callvirt set_P(value)`.
+        // Issue #1235 (write side): constrained dispatch preserves writes when
+        // T is a value type and avoids boxing when T is a reference type.
         if (assn.Receiver.Type is TypeParameterSymbol tpAssnReceiver)
         {
-            this.EmitExpression(assn.Receiver);
-            this.il.OpCode(ILOpCode.Box);
-            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpAssnReceiver));
+            this.EmitConstrainedTypeParameterReceiver(assn.Receiver);
             this.EmitExpression(assn.Value);
             this.il.OpCode(ILOpCode.Dup);
             this.il.StoreLocal(valueSlot);
+            this.il.OpCode(ILOpCode.Constrained);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpAssnReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(setterHandle);
             this.il.LoadLocal(valueSlot);
@@ -1459,6 +1452,12 @@ internal sealed partial class MethodBodyEmitter
         // these symbol-only value types alongside enums and built-ins.
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type))
         {
+            if (receiver is BoundDereferenceExpression dereference)
+            {
+                this.EmitExpression(dereference.Operand);
+                return;
+            }
+
             if (receiver is BoundVariableExpression bve
                 && this.TryLoadStructVariableAddress(bve))
             {
@@ -1623,10 +1622,26 @@ internal sealed partial class MethodBodyEmitter
     /// <param name="receiver">The constrained type-parameter receiver expression.</param>
     private void EmitConstrainedTypeParameterReceiver(BoundExpression receiver)
     {
+        if (receiver is BoundDereferenceExpression dereference)
+        {
+            this.EmitExpression(dereference.Operand);
+            return;
+        }
+
         if (receiver is BoundVariableExpression bve
             && bve.NarrowedType == null
             && this.TryLoadVariableAddress(bve.Variable))
         {
+            return;
+        }
+
+        // Slot planning deliberately skips receivers whose field address can be
+        // loaded directly; mirror that decision instead of demanding a spill.
+        if (receiver is BoundFieldAccessExpression fieldAccess
+            && this.outer.cache.StructFieldDefs.ContainsKey(fieldAccess.Field)
+            && this.IsAddressableFieldAccess(fieldAccess))
+        {
+            this.EmitFieldAddress(fieldAccess);
             return;
         }
 
@@ -1636,7 +1651,7 @@ internal sealed partial class MethodBodyEmitter
             throw new InvalidOperationException(
                 $"No slot populated for constrained type-parameter receiver of kind "
                 + $"'{receiver.Kind}' — walker pre-pass missed this child? "
-                + "Check ReceiverSpillCollector.VisitImportedInstanceCallExpression.");
+                + "Check ReceiverSpillCollector and constrained receiver addressability.");
         }
 
         this.il.StoreLocal(slot);

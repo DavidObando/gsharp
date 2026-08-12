@@ -206,16 +206,13 @@ public sealed class IfLetStatement : GStatement
 /// </summary>
 /// <remarks>
 /// The native G# rendering of a C# deconstruction assignment into existing
-/// variables (issue #3358). ADR-0015 evaluates every right-hand expression
-/// left-to-right into temporaries BEFORE any write, then assigns left-to-right —
-/// exactly C#'s evaluate-then-assign order, so an aliasing swap
-/// (<c>(a, b) = (b, a)</c>) is correct.
+/// variables or storage locations (issues #3353/#3358). ADR-0015 evaluates
+/// every target's receiver/index first, then every right-hand value, then writes
+/// left-to-right — exactly C#'s deconstruction-assignment order.
 /// <para>
-/// Only plain identifier targets and <c>_</c> discards are representable: `gsc`
-/// rejects a storage target (<c>arr[i], o.F = …</c>, GS0005) and a mixed
-/// declaration (<c>a, let y = …</c>, GS0005), and will not unify a single
-/// tuple-valued right-hand side across N targets (<c>a, b = Pair()</c>,
-/// GS0167). Those shapes keep the <c>let (__deconN, …)</c> lowering.
+/// A tuple-valued single right-hand expression is supported. Mixed declarations
+/// and nested target tuples keep the <c>let (__deconN, …)</c> lowering because
+/// they have no flat assignment form.
 /// </para>
 /// </remarks>
 public sealed class MultiAssignmentStatement : GStatement
@@ -224,7 +221,7 @@ public sealed class MultiAssignmentStatement : GStatement
     /// Initializes a new instance of the <see cref="MultiAssignmentStatement"/> class.
     /// </summary>
     /// <param name="targets">The assignment targets, in source order.</param>
-    /// <param name="values">The assigned values, one per target, in source order.</param>
+    /// <param name="values">One value per target, or one tuple-valued expression.</param>
     public MultiAssignmentStatement(IReadOnlyList<GExpression> targets, IReadOnlyList<GExpression> values)
     {
         Targets = targets;
@@ -234,7 +231,7 @@ public sealed class MultiAssignmentStatement : GStatement
     /// <summary>Gets the assignment targets, in source order.</summary>
     public IReadOnlyList<GExpression> Targets { get; }
 
-    /// <summary>Gets the assigned values, one per target, in source order.</summary>
+    /// <summary>Gets the assigned values or single tuple-valued expression.</summary>
     public IReadOnlyList<GExpression> Values { get; }
 }
 

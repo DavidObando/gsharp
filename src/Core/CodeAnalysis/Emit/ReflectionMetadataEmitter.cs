@@ -4558,6 +4558,11 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
+        if (receiver is BoundDereferenceExpression)
+        {
+            return false;
+        }
+
         if (receiver is BoundVariableExpression bve
             && bve.NarrowedType == null
             && this.CanLoadVariableAddressForReceiverSpill(bve.Variable, function, locals))
