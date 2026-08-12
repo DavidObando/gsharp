@@ -59,7 +59,7 @@ public sealed class Issue2506PromotedCallReceiverForgivenessPipelineTests
 
         Assert.Contains("Repro.Find(false)!!.Name", emitted, StringComparison.Ordinal);
         Assert.Contains(
-            "Locale.FromCountryCode(region)!!.Domain",
+            "region.FromCountryCode()!!.Domain",
             emitted,
             StringComparison.Ordinal);
         Assert.Contains("Repro.FindFactory()!!().Name", emitted, StringComparison.Ordinal);
