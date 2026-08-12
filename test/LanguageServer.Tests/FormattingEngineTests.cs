@@ -145,4 +145,14 @@ public class FormattingEngineTests
 
         Assert.Equal(once, twice);
     }
+
+    [Fact]
+    public void Format_WhileLetHeaderAndBody()
+    {
+        const string input = "func run(maybe string?){\nwhile let value=maybe{\nvar length=value.Length\n}\n}\n";
+        var result = FormattingEngine.Format(input);
+
+        Assert.Contains("while let value = maybe {", result);
+        Assert.Contains("    var length = value.Length", result);
+    }
 }

@@ -2111,6 +2111,26 @@ internal sealed partial class DeclarationBinder
 
                 return ifLet.ElseClause != null &&
                     TryFindInstanceMemberReference(ifLet.ElseClause, forbiddenNames, shadowedNames, out offendingName, out offendingLocation);
+
+            // `while let` bindings are visible in the loop body only.
+            case WhileLetStatementSyntax whileLet:
+                var whileLetNames = new List<string>();
+                foreach (var binding in whileLet.Bindings)
+                {
+                    if (TryFindInstanceMemberReference(binding.Initializer, forbiddenNames, shadowedNames, out offendingName, out offendingLocation))
+                    {
+                        return true;
+                    }
+
+                    whileLetNames.Add(binding.Identifier.Text);
+                }
+
+                return TryFindInstanceMemberReference(
+                    whileLet.Body,
+                    forbiddenNames,
+                    WithShadowed(shadowedNames, whileLetNames),
+                    out offendingName,
+                    out offendingLocation);
         }
 
         // Generic default: sequentially walk this node's children, growing a

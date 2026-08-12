@@ -906,7 +906,7 @@ boolean `is`.
 
 Boolean `is` patterns cannot introduce names. A binding type pattern or slice
 capture reports `GS0525`; use `if let` / `guard let` when a matched value needs a
-name.
+name, or `while let` when the binding controls a loop.
 
 A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern**: a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
 
@@ -1009,7 +1009,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -1030,14 +1030,15 @@ RefLocalDecl = ( "let" | "var" ) "ref" identifier "=" Expression .
 IfStmt = "if" ( SimpleStmt ";" )? Expression Statement ( "else" Statement )? .
 ```
 
-### `if let` and `guard let` binding statements
+### `if let`, `guard let`, and `while let` binding statements
 
-`if let` and `guard let` strip the nullable layer from a value and bind a fresh
-identifier to the underlying non-null view:
+`if let`, `guard let`, and `while let` strip the nullable layer from a value
+and bind a fresh identifier to the underlying non-null view:
 
 ```ebnf
 IfLetStmt        = "if" LetBindingList Statement ( "else" Statement )? .
 GuardLetStmt     = "guard" LetBindingList "else" Block .
+WhileLetStmt     = "while" LetBindingList Statement .
 LetBindingList   = LetBindingClause ( "," LetBindingClause )* .
 LetBindingClause = "let" identifier TypeClause? "=" Expression .
 ```
@@ -1046,12 +1047,18 @@ The initializer expression of each `let` clause must have a nullable type
 (`T?`); otherwise the binder reports `GS0296`. Inside the then-block of
 `if let` (or in the remainder of the enclosing block after `guard let`), the
 binding is observable at the underlying non-null type `T` via the smart-cast
-machinery of .
+machinery of . A `while let` binding has the same non-null view inside
+the loop body and is out of scope after the loop.
 Multiple comma-separated bindings narrow all-or-nothing — the then-block runs
-only when every clause is non-nil. The else-block of `guard let` MUST exit
-the enclosing scope (`return`, `throw`, `break`, `continue`, or a block whose
-last statement does); otherwise the binder reports `GS0297`. `guard` is a
-reserved keyword.
+only when every clause is non-nil. Statement-form `if let` and `while let`
+evaluate all clause initializers left to right before that combined test.
+`while let` performs this evaluation before the first iteration and again
+after every body iteration; `continue` targets that re-evaluation point,
+whereas `break` exits directly. Its bindings are never visible outside the
+body or in another initializer in the same header. The else-block of
+`guard let` MUST exit the enclosing scope (`return`, `throw`, `break`,
+`continue`, or a block whose last statement does); otherwise the binder
+reports `GS0297`. `guard` is a reserved keyword.
 
 ### `if let` expressions
 
@@ -1088,8 +1095,8 @@ let first = if let copyright = GetCopyrights() && copyright.Length > 0 {
   then-block only — never in the `else` branch.
 - The `else` branch may chain into another `if`/`if let` expression
   (`else if let name = expr { … } else { … }`).
-- Statement-form `if let` and `guard let` are unaffected: `if let` only parses
-  as an expression in a value position.
+- Statement-form `if let`, `guard let`, and `while let` are unaffected:
+  `if let` only parses as an expression in a value position.
 
 ### Null-coalescing compound assignment
 
@@ -1151,7 +1158,7 @@ narrowing)* below.
 
 Ref:  and its  addenda.
 
-A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path*: a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let`, and the early-exit lift.
+A successful `is` (or `!is`) test against a *stable narrowable receiver* flow-narrows that receiver to the tested type for the rest of the enclosing flow region. A stable receiver is either a *local root* — a local, a parameter, or a read-only top-level `let` binding — **or** a *stable member-access path*: a chain of immutable members read through a stable receiver chain, such as `b.Pet` or `o.Box.Pet`. The narrowing applies to member lookup, overload resolution, conversion, and emit. The same machinery composes through `!`, `&&`, `||`, `if`/`else`, `switch` arms, `if let` / `guard let` / `while let`, and the early-exit lift.
 
 ```gsharp
 if a is Dog {
@@ -1234,6 +1241,7 @@ modified"); updating the value of an existing key is permitted.
 
 ```ebnf
 WhileStmt    = "while" Expression Statement .
+WhileLetStmt = "while" LetBindingList Statement .
 DoWhileStmt  = "do" Block "while" Expression .
 ```
 
@@ -1646,7 +1654,7 @@ TypeClauseList    ::= TypeClause (',' TypeClause)*
 Block             ::= '{' Statement* '}'
 Statement         ::= Block
                     | Annotation* VariableDecl
-                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | ForTupleRangeStmt | WhileStmt | DoWhileStmt | LabeledStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
+                    | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | ForTupleRangeStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt
                     | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt | LockStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | GotoStmt | CheckedStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
@@ -1665,6 +1673,7 @@ FallthroughStmt   ::= 'fallthrough'                       (* recognised then rep
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
 IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?
 GuardLetStmt      ::= 'guard' LetBindingList 'else' Statement
+WhileLetStmt      ::= 'while' LetBindingList Statement
 LetBindingList    ::= LetBindingClause (',' LetBindingClause)*
 LetBindingClause  ::= 'let' identifier TypeClause? '=' Expression
 ForStmt           ::= 'for' Block

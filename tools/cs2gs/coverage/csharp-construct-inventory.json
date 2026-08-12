@@ -2453,7 +2453,9 @@
     "status": "Translated",
     "rule": "ADR-0115 \u00A7B",
     "rationale": "None",
-    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs"
+    "fixture": "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/3352",
+    "notes": "Positive single-binder declaration/type patterns now emit native G# \u0060while let\u0060 when the receiver and trailing guards are spill-free; reassigned binders, complex patterns, and spill-requiring conditions retain the general L1 body-hoist fallback."
   },
   {
     "kind": "WithElement",

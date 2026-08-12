@@ -469,18 +469,19 @@ Cause/fix examples:
 - **GS0266** — `Greet("ada")` when both `Greet(string)` and `Greet(name string)` are visible via different paths. Fix: rename one, change one signature, or use a named argument that only one overload accepts.
 - **GS0267** — `Greet(42)` when only `Greet(string)` is declared. Fix: pass a value of the expected type, or add an overload covering the new argument shape.
 
-## `if let` and `guard let` binding diagnostics (GS0296–GS0297)
+## `if let`, `guard let`, and `while let` binding diagnostics (GS0296–GS0297)
 
-The `if let` and `guard let` binding forms. The diagnostics below cover the two misuse paths that the binder rejects up front.
+The nullable-binding forms share GS0296. `guard let` additionally requires its
+failure branch to exit.
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0296 | Error | The right-hand side of an `if let` / `guard let` binding must be of nullable type; non-nullable initializers have nothing to strip. |
+| GS0296 | Error | The right-hand side of an `if let` / `guard let` / `while let` binding must be of nullable type; non-nullable initializers have nothing to strip. |
 | GS0297 | Error | A `guard let` else block can fall through instead of unconditionally exiting with `return`, `throw`, `break`, or `continue`. |
 
 Cause/fix examples:
 
-- **GS0296** — `let s = "hi"; if let v = s { ... }`. Fix: either use a plain `let v = s` (no narrowing) or pass a nullable value. The binding only makes sense when the RHS has type `T?`.
+- **GS0296** — `let s = "hi"; while let v = s { ... }`. Fix: either use a plain boolean loop condition or pass a nullable value. Binding only makes sense when the RHS has type `T?`; the same rule applies to `if let` and `guard let`.
 - **GS0297** — `guard let v = s else { var x = 1 }`. Fix: make the else block exit the enclosing scope — `return`, `throw`, `break`, or `continue`. The binding is only in scope after the guard precisely because the else cannot fall through.
 
 ## Top-level-statement diagnostics (GS0285–GS0287)
@@ -766,7 +767,7 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 
 | ID | Severity | Summary | Example |
 | --- | --- | --- | --- |
-| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let` for binding. | `if value is text is string { }`, `if values is [..rest] { }` |
+| GS0525 | Error | A boolean `is` pattern introduces a binding, but expression position has no scope in which that name is definitely assigned. Use `if let` or `guard let`, or `while let` for a loop condition. | `if value is text is string { }`, `if values is [..rest] { }` |
 
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 

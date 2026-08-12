@@ -250,7 +250,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | VariableDeclaration | VariableDeclarationSyntax | ADR-0115 §B.3 |  |  |  |  |
 | VariableDeclarator | VariableDeclaratorSyntax | ADR-0115 §B.3 |  |  |  |  |
 | WhenClause | WhenClauseSyntax | ADR-0115 §B.22 |  |  |  | Pattern guards (issue #991, resolved). |
-| WhileStatement | WhileStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs |  |  |
+| WhileStatement | WhileStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/WhileStatement.cs | https://github.com/DavidObando/gsharp/issues/3352 | Positive single-binder declaration/type patterns now emit native G# `while let` when the receiver and trailing guards are spill-free; reassigned binders, complex patterns, and spill-requiring conditions retain the general L1 body-hoist fallback. |
 | WithExpression | WithExpressionSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  |  |
 | WithInitializerExpression | InitializerExpressionSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  |  |
 | YieldBreakStatement | YieldStatementSyntax | ADR-0115 §B.34 |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/YieldBreakStatement.cs |  | Issue #994 (resolved). |

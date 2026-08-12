@@ -12,11 +12,11 @@ using GSharp.Core.CodeAnalysis.Text;
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <content>
-/// ADR-0071 / issue #708 and ADR-0151: the shared <c>let</c>-binding header
-/// grammar used by the <c>if let</c> / <c>guard let</c> STATEMENT forms and by
-/// the <c>if let</c> EXPRESSION form, plus the expression form itself. Keeping
-/// the binding-list/clause helpers in one part means the two surfaces cannot
-/// drift apart.
+/// ADR-0071 / issue #708, ADR-0151, and ADR-0163 / issue #3352: the shared
+/// <c>let</c>-binding header grammar used by the <c>if let</c>,
+/// <c>guard let</c>, and <c>while let</c> statement forms and by the
+/// <c>if let</c> expression form, plus the expression form itself. Keeping
+/// the binding-list/clause helpers in one part means the surfaces cannot drift.
 /// </content>
 public partial class Parser
 {
@@ -25,8 +25,9 @@ public partial class Parser
     // ──────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Parses the comma-separated binding list shared by <c>if let</c> /
-    /// <c>guard let</c> statements and the <c>if let</c> expression.
+    /// Parses the comma-separated binding list shared by <c>if let</c>,
+    /// <c>guard let</c>, and <c>while let</c> statements and the
+    /// <c>if let</c> expression.
     /// </summary>
     /// <param name="stopAtTopLevelLogicalAnd">
     /// When <see langword="true"/> (the ADR-0151 expression form) a top-level
@@ -70,7 +71,7 @@ public partial class Parser
 
         // Suppress both trailing object initializers (`Foo() { X = 1 }`) AND
         // bare struct literals (`Ident { }`) so the enclosing `{` is the body
-        // of the `if let` / `guard let`, not the initializer's shape.
+        // of the `if let` / `guard let` / `while let`, not the initializer's shape.
         suppressTrailingObjectInitializer++;
         suppressStructLiteral++;
         ExpressionSyntax initializer;

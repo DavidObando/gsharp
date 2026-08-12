@@ -12,10 +12,11 @@ using GSharp.Core.CodeAnalysis.Syntax;
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0071 / issue #708 and ADR-0151: the nullable-binding rules shared by
-/// the <c>if let</c> / <c>guard let</c> STATEMENT forms (bound by
-/// <see cref="StatementBinder"/>) and the <c>if let</c> EXPRESSION form
-/// (bound by <see cref="ExpressionBinder"/>). Both surfaces must strip
+/// ADR-0071 / issue #708, ADR-0151, and ADR-0163 / issue #3352: the
+/// nullable-binding rules shared by the <c>if let</c>, <c>guard let</c>, and
+/// <c>while let</c> statement forms (bound by <see cref="StatementBinder"/>)
+/// and the <c>if let</c> expression form (bound by
+/// <see cref="ExpressionBinder"/>). All surfaces must strip
 /// exactly one nullable layer, honour the optional explicit underlying type
 /// clause, and report <c>GS0296</c> identically, so the logic lives here
 /// once and is invoked through collaborator callbacks (ADR-0150 wiring
@@ -46,10 +47,10 @@ internal static class IfLetBindingSupport
 
     /// <summary>
     /// Binds a single <c>let name [T] = expr</c> binding clause. The variable
-    /// is declared through <paramref name="declareLocal"/> in whatever scope
-    /// the caller has pushed, so the caller controls the binding's lifetime
-    /// (then-block only for <c>if let</c>, enclosing block for
-    /// <c>guard let</c>).
+    /// is declared through <paramref name="declareLocal"/>, so the caller
+    /// controls the binding's lifetime (then-block only for <c>if let</c>,
+    /// enclosing block for <c>guard let</c>, or loop body for
+    /// <c>while let</c>).
     /// </summary>
     /// <param name="binding">The clause syntax.</param>
     /// <param name="diagnostics">The diagnostic bag GS0296 is reported into.</param>

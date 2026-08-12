@@ -330,6 +330,46 @@ public class Issue1641FieldInitializerShadowingTests
     }
 
     [Fact]
+    public void FieldInitializer_WhileLetBindingShadowsMemberNameOnlyInBody()
+    {
+        const string source =
+            "package p\n" +
+            "class C {\n" +
+            "    let value string? = nil\n" +
+            "    let F (string?) -> int32 = (s string?) -> {\n" +
+            "        while let value = s {\n" +
+            "            return value.Length\n" +
+            "        }\n" +
+            "        return 0\n" +
+            "    }\n" +
+            "}\n";
+
+        var diagnostics = GetDiagnostics(source);
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0377");
+    }
+
+    [Fact]
+    public void FieldInitializer_WhileLetBody_GenuineMemberReferenceStillReportsGS0377()
+    {
+        const string source =
+            "package p\n" +
+            "class C {\n" +
+            "    let value int32 = 5\n" +
+            "    let F (string?) -> int32 = (s string?) -> {\n" +
+            "        while let text = s {\n" +
+            "            return value\n" +
+            "        }\n" +
+            "        return 0\n" +
+            "    }\n" +
+            "}\n";
+
+        var diagnostics = GetDiagnostics(source);
+
+        Assert.Contains(diagnostics, d => d.Id == "GS0377");
+    }
+
+    [Fact]
     public void FieldInitializer_GuardLetBindingShadowsMemberName_NoGS0377()
     {
         const string source =

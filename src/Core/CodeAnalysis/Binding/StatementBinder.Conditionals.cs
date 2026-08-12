@@ -188,7 +188,9 @@ internal sealed partial class StatementBinder
             // is duplicated zero times in the bound tree.
             //
             // var __ifLet_matched_<pos> = false
-            // let a = e0; if a != nil { let b = e1; if b != nil { ... if zN != nil { __matched = true; <then> } } }
+            // let a = e0
+            // let b = e1
+            // if a != nil && b != nil { __matched = true; <then> }
             // if !__matched { <else> }
             var flagName = $"<ifLetMatched{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var flagVar = new LocalVariableSymbol(flagName, isReadOnly: false, TypeSymbol.Bool);
@@ -226,15 +228,15 @@ internal sealed partial class StatementBinder
     }
 
     /// <summary>
-    /// ADR-0071 / issue #708: bind a single <c>let name [T] = expr</c>
+    /// ADR-0071: bind a single <c>let name [T] = expr</c>
     /// binding clause inside an <c>if let</c> or <c>guard let</c> header.
     /// Returns the synthesized variable (or <c>null</c> when the clause is
     /// erroneous), its underlying non-null type, and the resulting decl.
     /// The variable is declared in the binder's current scope; callers
-    /// control that scope to scope the binding to a then-block or to the
-    /// enclosing block as appropriate. The nullable-stripping rules
+    /// control that scope to scope the binding to a then-block or enclosing
+    /// block as appropriate. The nullable-stripping rules
     /// themselves live in <see cref="IfLetBindingSupport"/>, shared with the
-    /// ADR-0151 <c>if let</c> EXPRESSION form.
+    /// ADR-0151 <c>if let</c> expression and ADR-0163 <c>while let</c>.
     /// </summary>
     private (VariableSymbol? Variable, TypeSymbol? Underlying, BoundStatement Declaration) BindIfLetBindingClause(IfLetBindingClauseSyntax binding)
     {

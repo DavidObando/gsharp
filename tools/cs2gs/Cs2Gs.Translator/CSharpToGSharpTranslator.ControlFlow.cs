@@ -32,9 +32,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>child</c>/<c>n</c> for the loop body. G# has no <c>and</c>/<c>not</c>
         /// pattern combinators (only <c>&amp;&amp;</c>/<c>!</c>), so the combinator
         /// lowering re-emits the scrutinee per sub-test — re-running the call and
-        /// re-declaring <c>out var n</c> (→ GS0102). Pattern/out-var bindings in a
-        /// <c>while</c> condition are also invisible in the body (GS0125), and G#
-        /// narrows locals in <c>if</c> bodies but not <c>while</c> bodies.
+        /// re-declaring <c>out var n</c> (→ GS0102). Pattern/out-var bindings
+        /// that cannot use native <c>while let</c> are also invisible in an
+        /// ordinary G# <c>while</c> body (GS0125).
         /// </para>
         /// <para>
         /// The condition is split on its top-level <c>&amp;&amp;</c> clauses. The
@@ -63,6 +63,13 @@ public sealed partial class CSharpToGSharpTranslator
             out IReadOnlyList<GStatement> result)
         {
             result = null;
+
+            if (!isDoWhile &&
+                this.TryBuildWhileLetLoop(condition, bodyStatement, out IReadOnlyList<GStatement> whileLet))
+            {
+                result = whileLet;
+                return true;
+            }
 
             if (!this.TryBuildHoistedLoopCondition(condition, out GExpression loopCondition, out List<GStatement> hoisted, out bool hoistsAssignment))
             {
@@ -1230,6 +1237,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // Boundaries: a nested loop's own continue seam, or a nested
                 // local function (its own statement seam) — never counts.
                 case WhileStatement:
+                case WhileLetStatement:
                 case ForStatement:
                 case DoWhileStatement:
                 case ForInStatement:
@@ -1319,6 +1327,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // Boundaries: a nested loop's own continue seam, or a nested
                 // local function (its own statement seam) — never descend.
                 case WhileStatement:
+                case WhileLetStatement:
                 case ForStatement:
                 case DoWhileStatement:
                 case ForInStatement:

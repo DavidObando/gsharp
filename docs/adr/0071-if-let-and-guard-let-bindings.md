@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-06-11
 - **Phase**: Phase 9 — language depth / flow analysis ergonomics
-- **Related**: ADR-0001 (nullable reference types), ADR-0069 (Kotlin-style smart cast), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#708](https://github.com/DavidObando/gsharp/issues/708), superseded [#696](https://github.com/DavidObando/gsharp/issues/696)
+- **Related**: ADR-0001 (nullable reference types), ADR-0069 (Kotlin-style smart cast), ADR-0163 (`while let`), parent [#706](https://github.com/DavidObando/gsharp/issues/706) (control-flow polish), this ADR [#708](https://github.com/DavidObando/gsharp/issues/708), superseded [#696](https://github.com/DavidObando/gsharp/issues/696)
 
 ## Context
 
@@ -59,8 +59,10 @@ LetBinding    ::= 'let' identifier TypeClause? '=' Expression
 Each `LetBinding`'s right-hand side must bind to a **nullable type** `T?`. The
 new local introduced on the left-hand side is bound at the underlying type `T`
 (non-null) in the region where the binding is in scope. Both shapes accept
-multiple comma-separated bindings; later bindings are evaluated only when
-prior bindings produced a non-nil value (Swift-style short-circuit).
+multiple comma-separated bindings. Statement-form `if let` evaluates every
+initializer left to right before one combined nil test. `guard let` interleaves
+each initializer with its exiting nil test, so a later initializer runs only
+after every earlier binding produced a non-nil value.
 
 ### `if let`
 
@@ -87,17 +89,16 @@ inside the then-branch. No new bound node is introduced — the lowering is
 expressed purely in terms of `BoundVariableDeclaration`, `BoundIfStatement`,
 and `BoundBlockStatement`.
 
-Multiple bindings without an `else` arm nest:
+Multiple bindings without an `else` arm are evaluated before one combined
+test:
 
 ```
 if let a = e1, let b = e2 { body }
 =>
 {
     let a T1? = e1
-    if a != nil {
-        let b T2? = e2
-        if b != nil { body }
-    }
+    let b T2? = e2
+    if a != nil && b != nil { body }
 }
 ```
 
@@ -108,12 +109,10 @@ else-block appears in the bound tree exactly once:
 {
     var __ifLet_matched_<pos> = false
     let a T1? = e1
-    if a != nil {
-        let b T2? = e2
-        if b != nil {
-            __ifLet_matched_<pos> = true
-            body
-        }
+    let b T2? = e2
+    if a != nil && b != nil {
+        __ifLet_matched_<pos> = true
+        body
     }
     if !__ifLet_matched_<pos> { else }
 }
@@ -290,7 +289,8 @@ Both forms:
 The nullable-stripping rules themselves live in a single shared helper
 (`IfLetBindingSupport`) invoked by both binders, and the binding-list grammar
 lives in a single parser partial (`Parser.IfLet.cs`) used by `if let`,
-`guard let`, and the expression form, so the two surfaces cannot drift.
+`guard let`, `while let` (ADR-0163), and the expression form, so the surfaces
+cannot drift.
 
 One deliberate difference: the expression form evaluates its bindings with a
 true left-to-right short circuit (a later initializer is only evaluated when
@@ -299,3 +299,15 @@ narrowed types), because in value position the difference is observable through
 side effects. The statement form's existing lowering, which sequences the
 binding declarations before the nil test, is preserved as-is for source
 compatibility.
+
+## Addendum (ADR-0163): `while let`
+
+ADR-0163 adds
+`while let name = expr [, let name2 = expr2]* { body }`. It reuses this ADR's
+binding grammar, explicit-underlying-type rule, GS0296 diagnostic, and
+smart-cast narrowing. Its bindings are scoped to the loop body and every
+initializer is re-evaluated at the condition check, including after
+`continue`. Like statement-form `if let`, multiple initializers are sequenced
+before the combined nil test. Unlike the ADR-0151 expression chain, header
+bindings are not in scope for later initializers; the short-circuiting
+expression form remains distinct.

@@ -170,6 +170,11 @@ public partial class Parser
             case SyntaxKind.ForKeyword:
                 return ParseForStatement();
             case SyntaxKind.WhileKeyword:
+                if (Peek(1).Kind == SyntaxKind.LetKeyword)
+                {
+                    return ParseWhileLetStatement();
+                }
+
                 return ParseWhileStatement();
             case SyntaxKind.DoKeyword:
                 return ParseDoWhileStatement();
@@ -1250,6 +1255,17 @@ public partial class Parser
         var condition = ParseExpressionInBodyHeader();
         var body = ParseStatement();
         return new WhileStatementSyntax(syntaxTree, keyword, condition, body);
+    }
+
+    private WhileLetStatementSyntax ParseWhileLetStatement()
+    {
+        // ADR-0163 / issue #3352: the binding header reuses ADR-0071's
+        // clause grammar so typing, recovery, and body-brace disambiguation
+        // stay identical across if/guard/while let.
+        var keyword = MatchToken(SyntaxKind.WhileKeyword);
+        var bindings = ParseIfLetBindingList();
+        var body = ParseStatement();
+        return new WhileLetStatementSyntax(syntaxTree, keyword, bindings, body);
     }
 
     private StatementSyntax ParseLockStatement()

@@ -345,6 +345,32 @@ public sealed class WhileStatement : GStatement
 }
 
 /// <summary>
+/// A nullable-binding <c>while let</c> loop:
+/// <c>while let a = e [, let b = e2]* { … }</c> (ADR-0163).
+/// </summary>
+public sealed class WhileLetStatement : GStatement
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="WhileLetStatement"/> class.
+    /// </summary>
+    /// <param name="bindings">The <c>let</c> binding clauses.</param>
+    /// <param name="body">The loop body.</param>
+    public WhileLetStatement(
+        IReadOnlyList<IfLetBinding> bindings,
+        BlockStatement body)
+    {
+        Bindings = bindings;
+        Body = body;
+    }
+
+    /// <summary>Gets the binding clauses evaluated before each iteration.</summary>
+    public IReadOnlyList<IfLetBinding> Bindings { get; }
+
+    /// <summary>Gets the loop body.</summary>
+    public BlockStatement Body { get; }
+}
+
+/// <summary>
 /// A <c>lock target { body }</c> statement (issue #1885). G# has a first-class
 /// <c>lock</c> keyword mirroring C#'s mutual-exclusion statement, so the
 /// translator emits it directly rather than lowering to the
