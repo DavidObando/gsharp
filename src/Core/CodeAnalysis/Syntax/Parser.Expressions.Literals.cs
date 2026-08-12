@@ -925,7 +925,7 @@ public partial class Parser
             var nextOffset = offset + 1;
             var next = Peek(nextOffset).Kind;
             return next == SyntaxKind.CloseBraceToken
-                || IsExpressionContinuationAt(nextOffset);
+                || IsExpressionContinuationAfterBraceAt(nextOffset, Peek(offset));
         }
 
         return false;
@@ -948,11 +948,23 @@ public partial class Parser
             }
             else if (kind == SyntaxKind.CloseBraceToken && --depth == 0)
             {
-                return IsExpressionContinuationAt(offset + 1);
+                return IsExpressionContinuationAfterBraceAt(offset + 1, Peek(offset));
             }
         }
 
         return false;
+    }
+
+    private bool IsExpressionContinuationAfterBraceAt(int offset, SyntaxToken closeBrace)
+    {
+        var continuation = Peek(offset);
+        if ((continuation.Kind == SyntaxKind.PlusPlusToken || continuation.Kind == SyntaxKind.MinusMinusToken)
+            && IsTokenOnNewLineAfter(continuation, closeBrace))
+        {
+            return false;
+        }
+
+        return IsExpressionContinuationAt(offset);
     }
 
     private bool IsExpressionContinuationAt(int offset)

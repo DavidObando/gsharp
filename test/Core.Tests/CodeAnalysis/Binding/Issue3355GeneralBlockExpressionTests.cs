@@ -15,6 +15,47 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public class Issue3355GeneralBlockExpressionTests
 {
     [Fact]
+    public void StatementBlocksFollowedByPrefixIncrementDecrement_RemainSeparateStatements()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func run() int32 {
+                var x = 10
+                { let a = 1 }
+                ++x
+                let incremented = x
+                { let b = 2 }
+                --x
+                return incremented * 100 + x
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1110, result.Value);
+    }
+
+    [Fact]
+    public void SameLinePostfixIncrementDecrement_RemainValueExpressions()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func run() int32 {
+                var x = 10
+                let beforeIncrement = x++
+                let beforeDecrement = x--
+                return beforeIncrement * 100 + beforeDecrement * 10 + x
+            }
+
+            run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1120, result.Value);
+    }
+
+    [Fact]
     public void Expressions_RunInInitializersArgumentsOperandsCollectionsAndReturns()
     {
         var result = EmittedOracle.Evaluate("""

@@ -453,7 +453,8 @@ public partial class Parser
         // value positions (`var j = i--`, `while i-- > 0`) and complex targets
         // (`a[i]++`, `obj.f--`). Only a single trailing operator is accepted
         // (C# likewise rejects `i++++`).
-        if (Current.Kind == SyntaxKind.PlusPlusToken || Current.Kind == SyntaxKind.MinusMinusToken)
+        if ((Current.Kind == SyntaxKind.PlusPlusToken || Current.Kind == SyntaxKind.MinusMinusToken)
+            && !IsCurrentOnNewLineAfter(left))
         {
             var postfixOp = NextToken();
             left = BuildIncrementDecrementExpression(left, postfixOp, isPrefix: false);
