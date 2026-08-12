@@ -105,6 +105,9 @@ public class Issue1675SyntaxNodeChildEnumerationTests
 
         // ADR-0151: value-producing if-let expression with an optional guard
         "package p\nfunc F(s string?) int32 {\n  return if let v = s && v.Length > 0 { v.Length } else { 0 }\n}\n",
+
+        // ADR-0163: body-scoped while-let binding
+        "package p\nfunc F(s string?) {\n  while let v = s {\n    break\n  }\n}\n",
     };
 
     /// <summary>
