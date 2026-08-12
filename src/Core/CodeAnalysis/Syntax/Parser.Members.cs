@@ -1131,7 +1131,7 @@ public partial class Parser
         if (allowExplicitExtension &&
             Current.Kind == SyntaxKind.IdentifierToken &&
             Current.Text == "extension" &&
-            LooksLikeReceiverClause(offset: 1))
+            LooksLikeExplicitExtensionReceiverClause())
         {
             explicitExtensionModifier = NextToken();
         }
@@ -1722,7 +1722,27 @@ public partial class Parser
         return (openParen, type, closeParen);
     }
 
-    private bool LooksLikeReceiverClause(int offset = 0)
+    private bool LooksLikeExplicitExtensionReceiverClause()
+    {
+        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken ||
+            Peek(2).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var ahead = 3;
+        if (!TryScanTypeClause(ref ahead) ||
+            Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken ||
+            Peek(ahead + 1).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        var afterName = Peek(ahead + 2).Kind;
+        return afterName is SyntaxKind.OpenParenthesisToken or SyntaxKind.OpenSquareBracketToken;
+    }
+
+    private bool LooksLikeReceiverClause()
     {
         // Issue #751 (ADR-0084 L2): a receiver clause has the shape
         //   '(' ident <type-clause> ')' (ident | operator) ( '(' | '[' )
@@ -1740,19 +1760,19 @@ public partial class Parser
         // grammar is validated when the receiver is parsed for real by
         // `ParseParameter` → `ParseTypeClause` — keeping the type grammar
         // in one place.
-        if (Peek(offset).Kind != SyntaxKind.OpenParenthesisToken)
+        if (Peek(0).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
         }
 
-        if (Peek(offset + 1).Kind != SyntaxKind.IdentifierToken)
+        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
         }
 
         var parenDepth = 1;
         var bracketDepth = 0;
-        var ahead = offset + 2;
+        var ahead = 2;
         var closeParenAhead = -1;
         while (true)
         {
