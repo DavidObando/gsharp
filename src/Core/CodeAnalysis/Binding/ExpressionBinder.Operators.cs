@@ -226,19 +226,20 @@ internal sealed partial class ExpressionBinder
             return new BoundFunctionPointerFromMethodExpression(null, target, fpType);
         }
 
-        // GS9005: cannot take address of a constant binding.
-        if (operand is BoundVariableExpression bve && bve.Variable.IsReadOnly)
+        // GS9005: cannot take address of a constant binding. General block
+        // expressions preserve the trailing lvalue's mutability contract.
+        if (TryGetReadOnlyAddressTarget(operand, out var readOnlyVariable))
         {
             // ADR-0060: address-of an `in` parameter would let callers write
             // through the pointer, defeating the read-only contract. Report
             // GS0237 instead of the generic "cannot take address of constant".
-            if (bve.Variable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
+            if (readOnlyVariable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
             {
                 Diagnostics.ReportCannotAssignToInParameter(syntax.OperatorToken.Location, inParam.Name);
             }
             else
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, bve.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, readOnlyVariable.Name);
             }
 
             return new BoundErrorExpression(null);
@@ -250,14 +251,6 @@ internal sealed partial class ExpressionBinder
             var exprText = syntax.Operand.ToString();
             Diagnostics.ReportCannotTakeAddressOfNonLvalue(syntax.OperatorToken.Location, exprText);
             return new BoundErrorExpression(null);
-        }
-
-        if (operand is BoundBlockExpression block)
-        {
-            return new BoundBlockExpression(
-                null,
-                block.Statements,
-                new BoundAddressOfExpression(null, block.Expression, unmanaged: binderCtx.InUnsafeContext));
         }
 
         return new BoundAddressOfExpression(null, operand, unmanaged: binderCtx.InUnsafeContext);
@@ -721,7 +714,12 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression whenTrue;
         BoundExpression whenFalse;
-        if (trueIsBareDefault && falseIsBareDefault)
+        if (targetType != null)
+        {
+            whenTrue = BindExpression(syntax.WhenTrue, targetType);
+            whenFalse = BindExpression(syntax.WhenFalse, targetType);
+        }
+        else if (trueIsBareDefault && falseIsBareDefault)
         {
             Diagnostics.ReportBareDefaultNoTargetType(((DefaultExpressionSyntax)syntax.WhenTrue).DefaultKeyword.Location);
             return new BoundErrorExpression(null);
@@ -851,10 +849,10 @@ internal sealed partial class ExpressionBinder
 
         var whenTrue = BindWithNarrowing(
             whenTrueNarrowing,
-            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid));
+            () => BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType));
         var whenFalse = BindWithNarrowing(
             whenFalseNarrowing,
-            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid));
+            () => BindIfExpressionElseBranch(syntax.ElseExpression, canBeVoid, targetType));
 
         if (condition is BoundErrorExpression || whenTrue is BoundErrorExpression || whenFalse is BoundErrorExpression)
         {
@@ -899,11 +897,14 @@ internal sealed partial class ExpressionBinder
     /// Binds the else branch of an if-expression: either a nested if-expression
     /// (<c>else if</c> chain) or a block expression.
     /// </summary>
-    private BoundExpression BindIfExpressionElseBranch(ExpressionSyntax elseSyntax, bool canBeVoid = false)
+    private BoundExpression BindIfExpressionElseBranch(
+        ExpressionSyntax elseSyntax,
+        bool canBeVoid = false,
+        TypeSymbol? targetType = null)
     {
         if (elseSyntax is IfExpressionSyntax nestedIf)
         {
-            return BindIfExpression(nestedIf, targetType: null, canBeVoid: canBeVoid);
+            return BindIfExpression(nestedIf, targetType, canBeVoid);
         }
 
         // ADR-0151: `… else if let a = e { … } else { … }` chains a plain
@@ -911,12 +912,12 @@ internal sealed partial class ExpressionBinder
         // BindIfLetElseBranch), so both else-branch binders accept both kinds.
         if (elseSyntax is IfLetExpressionSyntax nestedIfLet)
         {
-            return BindIfLetExpression(nestedIfLet, targetType: null, canBeVoid: canBeVoid);
+            return BindIfLetExpression(nestedIfLet, targetType, canBeVoid);
         }
 
         if (elseSyntax is BlockExpressionSyntax block)
         {
-            return BindBlockExpressionValue(block, canBeVoid);
+            return BindBlockExpressionValue(block, canBeVoid, targetType);
         }
 
         // Should not happen from well-formed parse trees.
@@ -953,14 +954,42 @@ internal sealed partial class ExpressionBinder
     private (ImmutableArray<BoundStatement> Statements, BoundExpression Expression) BindBlockExpressionParts(
         ImmutableArray<StatementSyntax> statements,
         ExpressionSyntax expression,
-        bool canBeVoid)
+        bool canBeVoid,
+        TypeSymbol? targetType = null)
     {
+        BoundExpression BindTrailingExpression()
+            => targetType == null
+                ? BindExpression(expression, canBeVoid)
+                : BindExpression(expression, targetType);
+
         if (!statements.Any(statement =>
             statement is UsingStatementSyntax
                 or AwaitUsingStatementSyntax
                 or DeferStatementSyntax))
         {
-            return (bindStatementList(statements, null), BindExpression(expression, canBeVoid));
+            BoundExpression? fastBoundExpression = null;
+            BoundStatement? sentinel = null;
+            var fastBoundStatements = bindStatementList(
+                statements,
+                () =>
+                {
+                    fastBoundExpression = BindTrailingExpression();
+                    sentinel = new BoundExpressionStatement(
+                        null,
+                        new BoundLiteralExpression(null, value: 0, TypeSymbol.Void));
+                    return sentinel;
+                });
+
+            if (sentinel != null
+                && fastBoundStatements.Length > 0
+                && ReferenceEquals(fastBoundStatements[^1], sentinel))
+            {
+                fastBoundStatements = fastBoundStatements.RemoveAt(fastBoundStatements.Length - 1);
+            }
+
+            return (
+                fastBoundStatements,
+                Invariant.Required(fastBoundExpression, "a block trailing expression was bound by the statement-list callback"));
         }
 
         BoundExpression? boundExpression = null;
@@ -969,7 +998,7 @@ internal sealed partial class ExpressionBinder
             statements,
             () =>
             {
-                boundExpression = BindExpression(expression, canBeVoid);
+                boundExpression = BindTrailingExpression();
                 if (boundExpression is BoundErrorExpression || boundExpression.Type == TypeSymbol.Void)
                 {
                     return new BoundExpressionStatement(expression, boundExpression);
@@ -990,7 +1019,22 @@ internal sealed partial class ExpressionBinder
         return (boundStatements, resultExpression);
     }
 
-    private BoundExpression BindBlockExpressionValue(BlockExpressionSyntax syntax, bool canBeVoid = false)
+    private BoundExpression BindBlockExpressionValue(
+        BlockExpressionSyntax syntax,
+        bool canBeVoid = false,
+        TypeSymbol? targetType = null,
+        bool preserveEmptyBlock = false)
+        => BindInBlockExpressionScope(() => BindBlockExpressionValueCore(
+            syntax,
+            canBeVoid,
+            targetType,
+            preserveEmptyBlock));
+
+    private BoundExpression BindBlockExpressionValueCore(
+        BlockExpressionSyntax syntax,
+        bool canBeVoid,
+        TypeSymbol? targetType,
+        bool preserveEmptyBlock)
     {
         if (syntax.Expression == null)
         {
@@ -1001,18 +1045,41 @@ internal sealed partial class ExpressionBinder
         // If there are no prefix statements, just bind the expression directly.
         if (syntax.Statements.IsDefaultOrEmpty)
         {
-            return BindExpression(syntax.Expression, canBeVoid);
+            var expression = targetType == null
+                ? BindExpression(syntax.Expression, canBeVoid)
+                : BindExpression(syntax.Expression, targetType);
+            return preserveEmptyBlock && expression is not BoundErrorExpression
+                ? new BoundBlockExpression(syntax, ImmutableArray<BoundStatement>.Empty, expression)
+                : expression;
         }
 
         // Bind prefix statements.
         var (boundStatements, boundExpression) =
-            BindBlockExpressionParts(syntax.Statements, syntax.Expression, canBeVoid);
+            BindBlockExpressionParts(syntax.Statements, syntax.Expression, canBeVoid, targetType);
+        if (IsDeferredBranchyArgumentPlaceholder(boundExpression, out _))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
         if (boundExpression is BoundErrorExpression)
         {
             return boundExpression;
         }
 
-        return new BoundBlockExpression(null, boundStatements, boundExpression);
+        return new BoundBlockExpression(syntax, boundStatements, boundExpression);
+    }
+
+    private T BindInBlockExpressionScope<T>(Func<T> bind)
+    {
+        scope = new BoundScope(scope);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            scope = scope.Pop();
+        }
     }
 
     /// <summary>
@@ -1033,54 +1100,42 @@ internal sealed partial class ExpressionBinder
     {
         if (bodySyntax is BlockExpressionSyntax block)
         {
-            // Lambda body block: a missing trailing expression means a void
-            // lambda. Bind any prefix statements; if there is a trailing
-            // expression, use it as the value; otherwise the value is void.
-            if (block.Expression == null)
-            {
-                var voidStatements = block.Statements.IsDefaultOrEmpty
-                    ? ImmutableArray<BoundStatement>.Empty
-                    : bindStatementList(block.Statements, null);
-
-                // No trailing expression — surface as a void-returning body.
-                // Re-package the prefix statements via a BoundBlockExpression
-                // wrapping a synthetic void placeholder; the LambdaBinder
-                // treats void bodies by emitting an ExpressionStatement +
-                // void return.
-                if (voidStatements.Length == 0)
-                {
-                    // Empty body `{ }` — synthesize a no-op void expression.
-                    return new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void);
-                }
-
-                return new BoundBlockExpression(
-                    bodySyntax,
-                    voidStatements,
-                    new BoundLiteralExpression(bodySyntax, value: 0, TypeSymbol.Void));
-            }
-
-            ImmutableArray<BoundStatement> boundStatements;
-            BoundExpression trailing;
-            if (block.Statements.IsDefaultOrEmpty)
-            {
-                boundStatements = ImmutableArray<BoundStatement>.Empty;
-                trailing = BindExpression(block.Expression, canBeVoid: true);
-            }
-            else
-            {
-                (boundStatements, trailing) =
-                    BindBlockExpressionParts(block.Statements, block.Expression, canBeVoid: true);
-            }
-
-            if (boundStatements.Length == 0)
-            {
-                return trailing;
-            }
-
-            return new BoundBlockExpression(bodySyntax, boundStatements, trailing);
+            return BindInBlockExpressionScope(() => BindLambdaBlockBodyExpression(block));
         }
 
         return BindExpression(bodySyntax, canBeVoid: true);
+    }
+
+    private BoundExpression BindLambdaBlockBodyExpression(BlockExpressionSyntax block)
+    {
+        // Lambda body block: a missing trailing expression means a void
+        // lambda. Bind any prefix statements; if there is a trailing
+        // expression, use it as the value; otherwise the value is void.
+        if (block.Expression == null)
+        {
+            var voidStatements = block.Statements.IsDefaultOrEmpty
+                ? ImmutableArray<BoundStatement>.Empty
+                : bindStatementList(block.Statements, null);
+
+            if (voidStatements.Length == 0)
+            {
+                return new BoundLiteralExpression(block, value: 0, TypeSymbol.Void);
+            }
+
+            return new BoundBlockExpression(
+                block,
+                voidStatements,
+                new BoundLiteralExpression(block, value: 0, TypeSymbol.Void));
+        }
+
+        var (boundStatements, trailing) =
+            BindBlockExpressionParts(block.Statements, block.Expression, canBeVoid: true);
+        if (boundStatements.Length == 0)
+        {
+            return trailing;
+        }
+
+        return new BoundBlockExpression(block, boundStatements, trailing);
     }
 
     /// <summary>

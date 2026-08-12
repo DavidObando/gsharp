@@ -4845,14 +4845,31 @@ public sealed class Binder
         var location = ctor.Declaration.InitKeyword.Location;
 
         var firstNonNoOp = FindFirstSignificantStatement(boundBody);
-        if (firstNonNoOp is BoundExpressionStatement exprStmt
-            && exprStmt.Expression is BoundConstructorChainingExpression)
+        if ((firstNonNoOp is BoundExpressionStatement exprStmt
+            && IsConstructorChainingExpression(exprStmt.Expression))
+            || StartsWithConstructorDelegationSyntax(ctor.Declaration.Body))
         {
             return;
         }
 
         diagnostics.ReportConvenienceInitMustDelegate(location, ctor.DeclaringType?.Name ?? "?");
     }
+
+    private static bool StartsWithConstructorDelegationSyntax(BlockStatementSyntax body)
+    {
+        return body.Statements.Length > 0
+            && body.Statements[0] is ExpressionStatementSyntax { Expression: CallExpressionSyntax call }
+            && call.Identifier.Text == "init";
+    }
+
+    private static bool IsConstructorChainingExpression(BoundExpression expression)
+        => expression is BoundConstructorChainingExpression
+            || (expression is BoundBlockExpression block
+                && IsConstructorChainingExpression(block.Expression))
+            || (expression is BoundConversionExpression conversion
+                && IsConstructorChainingExpression(conversion.Expression))
+            || (expression is BoundSpillSequenceExpression spill
+                && IsConstructorChainingExpression(spill.Value));
 
     /// <summary>
     /// ADR-0065 §2: recursively descends into a single-statement block to find

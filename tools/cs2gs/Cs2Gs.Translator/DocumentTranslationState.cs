@@ -159,12 +159,12 @@ internal sealed class DocumentTranslationState
     // node would print — and so re-evaluate — it once per embed. `SpillOperand`
     // hoists such an operand into a fresh `let` appended here, evaluated
     // exactly once immediately before the statement currently being
-    // translated (see <see cref="WithSpillSeam"/>). Null outside any
-    // statement seam and across a lambda/local-function boundary (its body is
-    // a distinct evaluation scope; see <see cref="TranslateLambda"/> and
+    // translated (see <see cref="WithSpillSeam"/>). Expression-only callers
+    // open an equivalent native block-expression seam. The value remains null
+    // across a lambda/local-function boundary (its body is a distinct
+    // evaluation scope; see <see cref="TranslateLambda"/> and
     // <see cref="TranslateLocalFunction"/>) so a hoist can never leak into an
-    // unrelated enclosing scope — in that case `SpillOperand` conservatively
-    // leaves the operand embedded as-is.
+    // unrelated enclosing scope.
     public List<GStatement> PendingSpillPrologue { get; set; }
 
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
@@ -195,38 +195,8 @@ internal sealed class DocumentTranslationState
     // `BuildScopeParameter`.
     public QueryExpressionSyntax CurrentQueryNode { get; set; }
 
-    // Issue #1849: when non-null, `SpillOperand` is inside a "null-seam"
-    // expression context — a field/property initializer or a
-    // base(...)/this(...) constructor argument (issue #1731 N1) — that has
-    // no statement to host a spill `let`. `TranslateNullSeamExpression`/
-    // `TranslateNullSeamArgument` open this capture list instead: a
-    // non-trivial operand is recorded here as a would-be synthetic helper
-    // parameter (name + translated operand + resolved type) and replaced
-    // with a bare reference to that parameter, so the surrounding
-    // pattern lowering is unaffected — it just ends up reading a
-    // parameter instead of a spilled local. The caller then synthesizes a
-    // private static helper method taking these captures as parameters and
-    // rewrites the null-seam expression into a call to it, passing the
-    // captured operands as arguments (evaluated once, by the caller, in
-    // source order). Null outside a null-seam capture session, in which case
-    // `SpillOperand` falls back to the loud `Unsupported` diagnostic.
-    public List<(string Name, GExpression Operand, GTypeReference Type)> PendingHelperCaptures { get; set; }
-
-    // Issue #1849: synthetic helper methods (see `PendingHelperCaptures`)
-    // collected while translating the CURRENT aggregate's members, added to
-    // that aggregate's `shared { }` block once the member loop completes
-    // (see `VisitAggregate`). Saved/restored around a nested type
-    // declaration's own recursive `VisitAggregate` call so a nested type's
-    // helpers never leak into its enclosing type.
-    public List<MethodDeclaration> PendingSynthHelpers { get; set; }
-
     // Instance helpers synthesized while translating the current aggregate.
-    // Unlike PendingSynthHelpers, these remain ordinary class members.
     public List<MethodDeclaration> PendingInstanceSynthHelpers { get; set; }
-
-    // Monotonic counter for synthesizing null-seam helper method names
-    // (issue #1849), reset per aggregate alongside `PendingSynthHelpers`.
-    public int SynthHelperCounter { get; set; }
 
     // The exception variable bound by the innermost enclosing `catch` clause,
     // used to translate a C# re-throw (`throw;`) — which has no bare G# form —

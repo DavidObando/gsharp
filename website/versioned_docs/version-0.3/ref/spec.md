@@ -725,7 +725,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, switch expressions, if expressions, tuple literals, anonymous-object literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
 
 - **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The canonical separator is `:`; the legacy `Foo(timeout = 30)` spelling is deprecated and emits the `GS0315` warning. Both spellings parse for one release; the `=` form is removed in a later release. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names; `GS0315` covers the deprecated `=` separator.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)`. The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
@@ -940,6 +940,30 @@ let title = if user.IsAdmin {
 
 The existing if-statement form (`if cond { stmt }` with optional `else`, optional simple-statement initializer) is unchanged; the expression form is purely additive and never reached when `if` heads a statement.
 
+### General block expressions
+
+A brace block with a trailing expression is a primary expression anywhere a
+value is accepted:
+
+```ebnf
+BlockExpression = "{" Statement* Expression "}" .
+```
+
+Prefix statements execute in source order, then the trailing expression is
+evaluated exactly once and supplies the block's value. A missing tail reports
+`GS0277`. The block owns a lexical scope and receives contextual target types
+through its tail. It is valid in initializers, arguments (including
+`base(...)`/`this(...)`), returns, operands, and collection elements.
+
+Control transfer and suspension retain their enclosing context and are spilled
+before emission to preserve evaluation order and valid IL. Address-of blocks
+take the trailing lvalue's address after executing the prefix. Ordinary
+field-initializer, ref/out, async/iterator, and expression-tree restrictions
+still apply; field/property initializers and `base(...)`/delegating-`init(...)`
+arguments reject `return`, while nested lambdas retain normal return rules.
+Statement-bearing expression-tree blocks report `GS0473`. Statement bodies and
+literal/pattern brace forms remain contextually distinct.
+
 ### Expression grammar
 
 ```ebnf
@@ -956,7 +980,7 @@ PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" 
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`.. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .

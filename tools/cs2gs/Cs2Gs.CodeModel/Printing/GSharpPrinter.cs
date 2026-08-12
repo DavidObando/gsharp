@@ -471,6 +471,9 @@ public static class GSharpPrinter
     {
         switch (expression)
         {
+            case BlockExpression block:
+                return RenderBranch(block.Statements, block.Value, indent);
+
             case LiteralExpression literal:
                 return RenderLiteral(literal);
 

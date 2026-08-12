@@ -58,6 +58,32 @@ let expr Expression[Func[int32, int32]] = (x int32) -> outer = x
     }
 
     [Fact]
+    public void StatementBearingGeneralBlockExpression_IsRejectedPrecisely()
+    {
+        var diagnostics = GetDiagnostics(@"
+import System
+import System.Linq.Expressions
+
+let expr Expression[Func[int32, int32]] = (x int32) -> 2 * { let value = x + 1 value }
+");
+
+        Assert.Contains(diagnostics, d => d.Id == "GS0473" && d.Message.Contains("block expression"));
+    }
+
+    [Fact]
+    public void GeneralBlockExpressionWithoutPrefixStatements_IsRejectedPrecisely()
+    {
+        var diagnostics = GetDiagnostics(@"
+import System
+import System.Linq.Expressions
+
+let expr Expression[Func[int32, int32]] = (x int32) -> ({ x + 1 })
+");
+
+        Assert.Contains(diagnostics, d => d.Id == "GS0473" && d.Message.Contains("block expression"));
+    }
+
+    [Fact]
     public void TupleLiteral_IsRejected()
     {
         var diagnostics = GetDiagnostics(@"

@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -55,7 +56,8 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer();
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return lowerer.RewriteProtectedRegionEntries(result);
+        var protectedResult = lowerer.RewriteProtectedRegionEntries(result);
+        return SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult);
     }
 
     /// <summary>
@@ -72,7 +74,8 @@ public sealed class Lowerer : BoundTreeRewriter
         var lowerer = new Lowerer(declaringType);
         var result = lowerer.RewriteStatement(statement);
         result = lowerer.WrapWithMethodExitEpilogue(result);
-        return lowerer.RewriteProtectedRegionEntries(result);
+        var protectedResult = lowerer.RewriteProtectedRegionEntries(result);
+        return SpillSequenceSpiller.RewriteControlFlowBlocks(protectedResult);
     }
 
     /// <inheritdoc/>

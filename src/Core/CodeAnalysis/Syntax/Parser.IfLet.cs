@@ -77,9 +77,21 @@ public partial class Parser
         ExpressionSyntax initializer;
         try
         {
-            initializer = stopAtTopLevelLogicalAnd
-                ? ParseIfLetGuardedInitializer()
-                : ParseExpression();
+            // An empty brace pair cannot produce a block-expression value.
+            // Keep it available as the enclosing if/guard/while-let body so
+            // a missing initializer reports once and recovery does not absorb
+            // the following statement as the body.
+            if (Current.Kind == SyntaxKind.OpenBraceToken
+                && Peek(1).Kind == SyntaxKind.CloseBraceToken)
+            {
+                initializer = ParseNameOrCallExpression();
+            }
+            else
+            {
+                initializer = stopAtTopLevelLogicalAnd
+                    ? ParseIfLetGuardedInitializer()
+                    : ParseExpression();
+            }
         }
         finally
         {

@@ -300,6 +300,12 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitBlockExpression(BoundBlockExpression blockExpression)
     {
+        this.EmitBlockExpressionPrefix(blockExpression);
+        this.EmitExpression(blockExpression.Expression);
+    }
+
+    private void EmitBlockExpressionPrefix(BoundBlockExpression blockExpression)
+    {
         // Labels introduced inside an expression-position block (e.g. the
         // short-circuit gate emitted by InterpolatedStringHandlerLowerer)
         // are not seen by the function-level CollectStatements pre-pass,
@@ -322,8 +328,6 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitStatement(statement);
         }
-
-        this.EmitExpression(blockExpression.Expression);
     }
 
     private void EmitStatement(BoundStatement statement)

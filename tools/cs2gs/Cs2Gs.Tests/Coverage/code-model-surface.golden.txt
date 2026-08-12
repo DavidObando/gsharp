@@ -9,6 +9,7 @@ ArrayLiteralExpression
 AssignmentExpression
 AwaitExpression
 BinaryExpression
+BlockExpression
 CheckedExpression
 CollectionInitializerExpression
 CompositeLiteralExpression

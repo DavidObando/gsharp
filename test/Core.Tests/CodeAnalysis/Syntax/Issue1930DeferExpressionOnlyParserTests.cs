@@ -14,9 +14,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// a single expression operand, per ADR-0030 ("Add <c>defer call(arg1,
 /// arg2, …)</c> as a statement"). The fix keeps the parser as the source of
 /// truth — a single call-expression operand — and updates the cs2gs code
-/// model/printer to match instead of teaching the parser a block form. These
-/// tests pin down the parser's expression-only contract so it cannot drift
-/// back out of sync with the printer again.
+/// model/printer to match instead of teaching the parser a statement-body
+/// form. Issue #3355 later made a trailing-value block an expression in its
+/// own right; that remains within defer's expression-only contract.
 /// </summary>
 public class Issue1930DeferExpressionOnlyParserTests
 {
@@ -45,17 +45,27 @@ public class Issue1930DeferExpressionOnlyParserTests
     }
 
     [Fact]
-    public void DoesNotParse_DeferWithBlockBody()
+    public void Parses_DeferWithBlockExpressionOperand()
     {
-        // The block form the cs2gs printer used to emit before the #1930 fix.
         const string source = """
             package P
             {
-                defer { }
+                defer {
+                    let value = cleanup()
+                    value
+                }
             }
             """;
         var tree = SyntaxTree.Parse(source);
 
-        Assert.NotEmpty(tree.Diagnostics);
+        Assert.Empty(tree.Diagnostics);
+        var deferStmt = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(g => g.Statement)
+            .OfType<BlockStatementSyntax>()
+            .SelectMany(b => b.Statements)
+            .OfType<DeferStatementSyntax>()
+            .Single();
+        Assert.IsType<BlockExpressionSyntax>(deferStmt.Expression);
     }
 }

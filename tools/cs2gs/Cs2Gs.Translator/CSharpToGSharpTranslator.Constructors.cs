@@ -332,7 +332,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // ExplicitConstructor.gs; ADR-0115 §B.13). This is how a custom
                     // exception forwards its message to System.Exception's ctor.
                     baseArguments = this.TranslateNullSeamArguments(
-                        node.Initializer.ArgumentList.Arguments, symbol);
+                        node.Initializer.ArgumentList.Arguments);
                 }
                 else
                 {
@@ -341,7 +341,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // arguments are retained on the constructor model so its
                     // canonical lowering always emits `init(args)` first.
                     delegatingArguments = this.TranslateNullSeamArguments(
-                        node.Initializer.ArgumentList.Arguments, symbol);
+                        node.Initializer.ArgumentList.Arguments);
                 }
             }
 
@@ -1052,8 +1052,8 @@ public sealed partial class CSharpToGSharpTranslator
         // C# requires every attribute argument to be a
         // compile-time constant (or a `typeof`/array of constants), and
         // neither an `is` pattern-match nor a `x[a..b]` range-slice is ever a
-        // constant expression. So the double-evaluation gap this file
-        // otherwise guards against has no way to reach this call site.
+        // constant expression. Native block-expression spilling therefore
+        // cannot be needed at this call site.
         private GExpression MapAttributeArgumentValue(AttributeArgumentSyntax argument)
         {
             Optional<object> constant = this.context.SemanticModel.GetConstantValue(argument.Expression);

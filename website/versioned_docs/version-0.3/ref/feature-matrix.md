@@ -97,6 +97,7 @@ This matrix summarizes feature support in the compiler emit path (`gsc`) and the
 | Calls and generic calls | Supported | Supported | Bracketed type arguments. |
 | Named arguments | Supported | Supported | `Foo(timeout: 30, retries: 3)` for free functions, user methods/constructors, extension functions, and inherited CLR methods (including delegate `Invoke`). The legacy `Foo(timeout = 30)` shape is deprecated and emits `GS0315`; both spellings still parse for one release. Indirect calls through a function-typed variable and variadic targets are excluded. Diagnostics `GS0244`–`GS0247`, `GS0315`. |
 | Conditional (`?:`) ternary expression | Supported | Supported | `cond ? a : b` is a normal expression. `GS0263` covers the "no common type" failure. |
+| General block expressions | Supported | Supported | `{ statements... trailingExpression }` works in any expression position, with lexical scope, target typing, async/iterator spilling, and exactly-once evaluation. Missing tail: `GS0277`; expression trees: `GS0473`. |
 | Conditional ref-arguments (`ref cond ? a : b`) | Supported | Supported | Branches must produce same-typed lvalues. Diagnostics `GS0260`–`GS0262`. |
 | Struct, array, and map literals | Supported | Supported | Map literals bind to `Dictionary[K,V]` backing. |
 | Indexing and index assignment | Supported | Supported | Arrays, slices, maps, and imported CLR indexers. |

@@ -850,8 +850,12 @@ internal sealed partial class DeclarationBinder
                         }
                         else
                         {
-                            var boundConst = bindExpression(fieldSyntax.Initializer);
-                            var convertedConst = conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
+                            var boundConst = fieldSyntax.Initializer is BlockExpressionSyntax
+                                ? conversions.BindConversion(fieldSyntax.Initializer, fieldType)
+                                : bindExpression(fieldSyntax.Initializer);
+                            var convertedConst = fieldSyntax.Initializer is BlockExpressionSyntax
+                                ? boundConst
+                                : conversions.BindConversion(fieldSyntax.Initializer.Location, boundConst, fieldType);
                             if (TryFoldConstantFieldValue(convertedConst, fieldType, out var constValue))
                             {
                                 constField.SetConstantValue(constValue);
@@ -871,8 +875,12 @@ internal sealed partial class DeclarationBinder
 
                     if (fieldSyntax.Initializer != null)
                     {
-                        var boundInit = bindExpression(fieldSyntax.Initializer);
-                        var convertedInit = conversions.BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
+                        var boundInit = fieldSyntax.Initializer is BlockExpressionSyntax
+                            ? conversions.BindConversion(fieldSyntax.Initializer, fieldType)
+                            : bindExpression(fieldSyntax.Initializer);
+                        var convertedInit = fieldSyntax.Initializer is BlockExpressionSyntax
+                            ? boundInit
+                            : conversions.BindConversion(fieldSyntax.Initializer.Location, boundInit, fieldType);
                         initializersBuilder[fieldSymbol] = convertedInit;
                     }
 

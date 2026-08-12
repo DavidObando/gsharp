@@ -592,6 +592,70 @@ internal sealed partial class ExpressionBinder
         return result;
     }
 
+    private static bool TryResolveTargetDependentBlockTarget(
+        IReadOnlyList<ParameterInfo[]> candidateParameterLists,
+        int parameterOffset,
+        int sourceArgumentCount,
+        int sourceArgumentIndex,
+        string? argumentName,
+        ExpressionSyntax syntax,
+        [NotNullWhen(true)] out TypeSymbol? target)
+    {
+        target = null;
+        foreach (var parameters in candidateParameterLists)
+        {
+            var visibleParameterCount = parameters.Length - parameterOffset;
+            var hasParams = parameters.Length > parameterOffset
+                && ClrOverloadResolution.IsParamsArrayParameter(parameters[^1]);
+            var requiredCount = parameters
+                .Skip(parameterOffset)
+                .Take(hasParams ? visibleParameterCount - 1 : visibleParameterCount)
+                .Count(parameter => !parameter.IsOptional);
+            if (sourceArgumentCount < requiredCount
+                || (!hasParams && sourceArgumentCount > visibleParameterCount))
+            {
+                continue;
+            }
+
+            var parameterIndex = sourceArgumentIndex + parameterOffset;
+            if (!string.IsNullOrEmpty(argumentName))
+            {
+                parameterIndex = Array.FindIndex(
+                    parameters,
+                    parameter => string.Equals(parameter.Name, argumentName, StringComparison.Ordinal));
+            }
+
+            if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+            {
+                continue;
+            }
+
+            var parameterType = parameters[parameterIndex].ParameterType;
+            if (parameterType.ContainsGenericParameters)
+            {
+                continue;
+            }
+
+            var candidateTarget = TypeSymbol.FromClrType(parameterType);
+            if (!CanTargetDependentBlockArgument(syntax, candidateTarget))
+            {
+                continue;
+            }
+
+            if (target == null)
+            {
+                target = candidateTarget;
+            }
+            else if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(target, candidateTarget))
+            {
+                target = null;
+                return false;
+            }
+        }
+
+        return target != null;
+    }
+
     /// <summary>
     /// Issue #891: infers the target delegate type for each deferred un-typed
     /// arrow lambda argument of a member-style call by probing the applicable
@@ -2276,6 +2340,31 @@ internal sealed partial class ExpressionBinder
             if (inner is RefArgumentExpressionSyntax refArg)
             {
                 boundArguments.Add(BindRefArgumentExpression(refArg, parameter: null));
+            }
+            else if (IsTargetDependentBlockArgumentSyntax(inner))
+            {
+                if (!delegateTargetCandidatesComputed)
+                {
+                    delegateTargetCandidatesComputed = true;
+                    delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(
+                        receiver,
+                        classSymbol,
+                        methodName);
+                }
+
+                var argumentName = argumentNames.IsDefault ? null : argumentNames[argSlot];
+                boundArguments.Add(TryResolveTargetDependentBlockTarget(
+                    Invariant.Required(
+                        delegateTargetCandidateParams,
+                        "target-dependent block resolution has collected candidate parameter lists"),
+                    parameterOffset: 0,
+                    ce.Arguments.Count,
+                    argSlot,
+                    argumentName,
+                    inner,
+                    out var blockTarget)
+                        ? BindExpression(inner, blockTarget)
+                        : new BoundErrorExpression(inner));
             }
             else if (IsUntypedArrowLambda(inner))
             {

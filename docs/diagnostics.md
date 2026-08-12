@@ -504,7 +504,7 @@ See [ADR-0064](adr/0064-if-expression-and-block-expression.md). `if` used as a v
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. | `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). Applies to chained `else if` shapes too: every chain must end in a terminal `else`. |
-| GS0277 | Error | A block in an if-expression value position must end with a value-producing expression. | `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out. |
+| GS0277 | Error | A block expression in value position must end with a value-producing expression. | `let x = { let y = 1 }` or `let x = if cond { } else { 1 }`. Add a trailing value (`{ let y = 1 y }`). Also fires when the last item is a non-expression form (`for`, `while`, etc.). |
 
 Both codes apply verbatim to the ADR-0151 [`if let` expression](adr/0151-if-let-expressions.md) (`let x = if let v = maybe { v } else { fallback }`), as does GS0263 for non-unifying branch tails; a non-nullable binding initializer additionally reports GS0296.
 
@@ -639,6 +639,12 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | GS0528 | Error | `Rectangular array rank <rank> exceeds CLR maximum rank 32.` | A type or allocation with 33 dimensions. |
 | GS0529 | Error | `Rectangular array initializer dimensions must be non-negative int32 constants.` | `let n = 2; let a = [n, 2]int32{1, 2, 3, 4}` |
 | GS0530 | Error | `Rectangular array initializer requires <expected> element(s), but <actual> were supplied.` | `let a = [2, 3]int32{1, 2, 3}` |
+
+## Constructor initializer instance access (GS0531)
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0531 | Error | `Constructor initializer arguments cannot reference instance member '<name>' before the delegated or base constructor has run.` | `init() : base({ let self = this 1 }) { }` |
 
 ## Default-interface-method diagnostics (GS0318–GS0321)
 

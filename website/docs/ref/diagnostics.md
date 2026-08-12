@@ -573,12 +573,12 @@ Cause/fix:
 | Code | Severity | Message | Example trigger |
 |------|----------|--------------------------|-----------------|
 | GS0276 | Error | An if-expression in value position must have an `else` branch so that all code paths produce a value. | `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). Applies to chained `else if` shapes too: every chain must end in a terminal `else`. |
-| GS0277 | Error | A block in an if-expression value position must end with a value-producing expression. | `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out. |
+| GS0277 | Error | A block expression in value position must end with a value-producing expression. | `let x = { let y = 1 }` or `let x = if cond { } else { 1 }`. Add a trailing value (`{ let y = 1 y }`). Also fires when the last item is a non-expression form (`for`, `while`, etc.). |
 
 Cause/fix examples:
 
 - **GS0276** — `let x = if cond { 1 }` — the if has no `else`, so when `cond` is false there is no value to bind. Add a terminal `else { … }`, or use the statement form (`if cond { x = 1 }`). The same rule applies to chained `else if` shapes: every chain must end in a terminal `else`.
-- **GS0277** — `let x = if cond { } else { 1 }` — the then-block is empty. Replace the empty block with `{ <expr> }`, or fall through with an explicit value (`{ 0 }`). Also fires when the block's last statement is a non-expression form (`for`, `while`, etc.) and there is no trailing expression to lift out.
+- **GS0277** — `let x = { let y = 1 }` or `let x = if cond { } else { 1 }` has no tail value. Add one, such as `{ let y = 1 y }`.
 - **GS0263** also covers if-expression branches with no common result type (e.g. `if cond { true } else { "no" }`). Mirrors the ternary diagnostic since both forms share `ComputeConditionalCommonType`.
 - All three codes apply verbatim to the ADR-0151 **`if let` expression** (`let x = if let v = maybe { v } else { fallback }`): the terminal `else` is required, each branch block must end in a value, and the tails must unify. A non-nullable binding initializer additionally reports GS0296.
 
@@ -783,6 +783,12 @@ field initializers (`p with { x = 10 }`) parse on separate paths and are unaffec
 | GS0528 | Error | `Rectangular array rank <rank> exceeds CLR maximum rank 32.` | A type or allocation with 33 dimensions. |
 | GS0529 | Error | `Rectangular array initializer dimensions must be non-negative int32 constants.` | `let n = 2; let a = [n, 2]int32{1, 2, 3, 4}` |
 | GS0530 | Error | `Rectangular array initializer requires <expected> element(s), but <actual> were supplied.` | `let a = [2, 3]int32{1, 2, 3}` |
+
+## Constructor initializer instance access (GS0531)
+
+| ID | Severity | Message | Example |
+|---|---|---|---|
+| GS0531 | Error | `Constructor initializer arguments cannot reference instance member '<name>' before the delegated or base constructor has run.` | `init() : base({ let self = this 1 }) { }` |
 
 ## `null` identifier "did you mean nil?" diagnostic (GS0273)
 

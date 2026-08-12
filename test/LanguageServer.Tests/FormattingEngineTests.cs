@@ -148,6 +148,20 @@ public class FormattingEngineTests
     }
 
     [Fact]
+    public void Format_GeneralBlockExpression_IsIdempotentAndParseable()
+    {
+        const string input = "func run()int32{\nlet x={\nlet y=40\ny+2\n}\nreturn 2*{let z=x\nz}\n}\n";
+
+        var once = FormattingEngine.Format(input);
+        var twice = FormattingEngine.Format(once);
+
+        Assert.Equal(once, twice);
+        Assert.Contains("let x = {", once);
+        Assert.Contains("return 2 * {", once);
+        Assert.Empty(SyntaxTree.Parse(once).Diagnostics);
+    }
+
+    [Fact]
     public void Format_WhileLetHeaderAndBody()
     {
         const string input = "func run(maybe string?){\nwhile let value=maybe{\nvar length=value.Length\n}\n}\n";

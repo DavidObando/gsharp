@@ -545,6 +545,13 @@ public partial class Parser
     {
         switch (Current.Kind)
         {
+            case SyntaxKind.OpenBraceToken:
+                // Issue #3355: a block with a trailing expression is a
+                // general primary expression. Statement-body parsers consume
+                // their opening brace before entering the expression
+                // pipeline, so this case is reached only from value position.
+                return ParsePostfixChain(ParseBlockExpression(valueRequired: true));
+
             case SyntaxKind.OpenParenthesisToken:
                 // ADR-0074 / issue #714: `(p1 T1, p2 T2) -> body` is a lambda
                 // expression. Disambiguated by bounded look-ahead — see

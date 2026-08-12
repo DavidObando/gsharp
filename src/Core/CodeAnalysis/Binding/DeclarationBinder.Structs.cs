@@ -3131,6 +3131,7 @@ internal sealed partial class DeclarationBinder
             TypeSymbol.Void)
         {
             IsStatic = true,
+            IsExpressionInitializer = true,
             StaticOwnerType = owner,
         };
         return context;
@@ -3225,8 +3226,12 @@ internal sealed partial class DeclarationBinder
     {
         var initializer = fieldSyntaxNode.Initializer
             ?? throw new InvalidOperationException("A deferred const field initializer must have an initializer expression.");
-        var boundInit = bindExpression(initializer);
-        var convertedInit = conversions.BindConversion(initializer.Location, boundInit, fieldType);
+        var boundInit = initializer is BlockExpressionSyntax
+            ? conversions.BindConversion(initializer, fieldType)
+            : bindExpression(initializer);
+        var convertedInit = initializer is BlockExpressionSyntax
+            ? boundInit
+            : conversions.BindConversion(initializer.Location, boundInit, fieldType);
         var bound = boundInit is BoundErrorExpression || convertedInit is BoundErrorExpression
             ? (BoundExpression)new BoundErrorExpression(initializer)
             : convertedInit;
@@ -3542,8 +3547,12 @@ internal sealed partial class DeclarationBinder
                 var staticInitBuilder = ImmutableDictionary.CreateBuilder<FieldSymbol, BoundExpression>();
                 foreach (var (fieldSym, initSyntax, fieldType) in staticFieldInitializers)
                 {
-                    var boundInit = bindExpression(initSyntax);
-                    var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                    var boundInit = initSyntax is BlockExpressionSyntax
+                        ? conversions.BindConversion(initSyntax, fieldType)
+                        : bindExpression(initSyntax);
+                    var convertedInit = initSyntax is BlockExpressionSyntax
+                        ? boundInit
+                        : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
                     staticInitBuilder[fieldSym] = convertedInit;
                 }
 
@@ -3603,8 +3612,12 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                var boundInit = bindExpression(initSyntax);
-                var convertedInit = conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+                var boundInit = initSyntax is BlockExpressionSyntax
+                    ? conversions.BindConversion(initSyntax, fieldType)
+                    : bindExpression(initSyntax);
+                var convertedInit = initSyntax is BlockExpressionSyntax
+                    ? boundInit
+                    : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
                 instanceInitBuilder[fieldSym] = convertedInit;
             }
 

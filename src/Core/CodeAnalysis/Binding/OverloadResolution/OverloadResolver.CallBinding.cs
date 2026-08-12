@@ -95,6 +95,11 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private ParameterSymbol? GetEffectiveThisParameter()
     {
+        if (binderCtx.InConstructorInitializer)
+        {
+            return null;
+        }
+
         var current = getCurrentFunction();
         if (current?.ThisParameter != null)
         {
@@ -102,6 +107,12 @@ internal sealed partial class OverloadResolver
         }
 
         return Scope.TryLookupSymbol("this") as ParameterSymbol;
+    }
+
+    private StructSymbol? GetConstructorInitializerReceiverType()
+    {
+        return (getCurrentFunction()?.ReceiverType as StructSymbol)
+            ?? ((Scope.TryLookupSymbol("this") as ParameterSymbol)?.Type as StructSymbol);
     }
 
     /// <summary>
@@ -545,6 +556,49 @@ internal sealed partial class OverloadResolver
             && IsAllExtensionOverloadSet(syntax.Identifier.Text);
         if (symbol == null || resolvedIsExtensionOnly)
         {
+            if (binderCtx.InConstructorInitializer
+                && GetConstructorInitializerReceiverType() is { } initializerReceiverType)
+            {
+                var staticMethods = TypeMemberModel.GetMethods(
+                    initializerReceiverType,
+                    syntax.Identifier.Text,
+                    MemberQuery.Static(MemberKinds.Method));
+                if (!staticMethods.IsDefaultOrEmpty)
+                {
+                    if (bindUserTypeStaticCall != null)
+                    {
+                        return bindUserTypeStaticCall(initializerReceiverType, syntax);
+                    }
+
+                    var staticMethod = SelectInstanceOverloadOrReport(
+                        staticMethods,
+                        boundArguments.ToImmutable(),
+                        syntax,
+                        syntax.Identifier.Text,
+                        argumentNames);
+                    if (staticMethod == null)
+                    {
+                        return new BoundErrorExpression(syntax);
+                    }
+
+                    return BindImplicitStaticSelfCallFallback(
+                        staticMethod,
+                        syntax,
+                        boundArguments.ToImmutable(),
+                        argumentNames);
+                }
+                else if (!TypeMemberModel.GetMethods(
+                        initializerReceiverType,
+                        syntax.Identifier.Text,
+                        MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty)
+                {
+                    Diagnostics.ReportConstructorInitializerCannotReferenceInstanceMember(
+                        syntax.Identifier.Location,
+                        syntax.Identifier.Text);
+                    return new BoundErrorExpression(syntax);
+                }
+            }
+
             // Implicit `this`: if we are inside an instance method body and the
             // name matches a sibling method on the receiver type, dispatch via
             // `this.<method>(args)` automatically.

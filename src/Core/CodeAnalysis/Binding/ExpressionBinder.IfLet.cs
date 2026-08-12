@@ -116,7 +116,7 @@ internal sealed partial class ExpressionBinder
                 guard = BindExpression(syntax.Guard, TypeSymbol.Bool);
             }
 
-            whenTrue = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid);
+            whenTrue = BindBlockExpressionValue(syntax.ThenBlock, canBeVoid, targetType);
         }
         finally
         {
@@ -127,7 +127,7 @@ internal sealed partial class ExpressionBinder
 
         // Bound AFTER the binding scope/frame is popped: the else branch never
         // sees the bindings.
-        var whenFalse = BindIfLetElseBranch(syntax.ElseExpression, canBeVoid);
+        var whenFalse = BindIfLetElseBranch(syntax.ElseExpression, canBeVoid, targetType);
 
         if (anyInvalid
             || bound.Count == 0
@@ -245,6 +245,9 @@ internal sealed partial class ExpressionBinder
     /// <c>else if let</c>, or a plain block expression. Delegates to the
     /// ADR-0064 helper, which already recognises both chain kinds.
     /// </summary>
-    private BoundExpression BindIfLetElseBranch(ExpressionSyntax elseSyntax, bool canBeVoid)
-        => BindIfExpressionElseBranch(elseSyntax, canBeVoid);
+    private BoundExpression BindIfLetElseBranch(
+        ExpressionSyntax elseSyntax,
+        bool canBeVoid,
+        TypeSymbol? targetType = null)
+        => BindIfExpressionElseBranch(elseSyntax, canBeVoid, targetType);
 }

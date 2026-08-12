@@ -295,31 +295,22 @@ namespace Demo
 
     // --- N1: null-seam expression contexts (field/property initializers and
     // base(...)/this(...) constructor-call arguments have no ambient
-    // statement seam of their own, AND — unlike a lambda/local-function body
-    // — G# has no expression-only way to host a spill `let` there at all: a
-    // bare block-with-trailing-expression is only legal directly inside a
-    // lambda arrow body or an if/else branch, and G# has no "invoke an
-    // arbitrary parenthesized expression" postfix form to smuggle one in as
-    // an immediately-invoked lambda either. #1731 settled for REPORTING the
-    // gap (TranslationSeverity.Unsupported) instead of silently
-    // double-evaluating. Issue #1849 closes the gap for real for a
-    // non-trivial `is`-pattern scrutinee: the whole null-seam
-    // initializer/argument is lowered to a call to a synthesized private
-    // static helper method, so the non-trivial operand is evaluated exactly
-    // once (by the caller, as the helper-call argument) instead of
-    // re-embedded — see Issue1849NullSeamHelperLoweringTests for the full
-    // helper-lowering coverage (all four sites, static-vs-instance/ctor-
-    // parameter passthrough, name uniquification). Issue #1896 then closed
+    // statement seam of their own. #1731 settled for REPORTING the gap
+    // (TranslationSeverity.Unsupported) instead of silently double-evaluating.
+    // Issue #3355 closes the gap with a native G# block
+    // expression: spill `let` statements and the translated value stay at
+    // the original initializer/argument site, with no synthesized helper or
+    // expression-type dependency. Issue #1896 separately closed
     // the range-slice half of the original N1 gap a different way: the
     // native `recv[start..end]` range-index form embeds each bound exactly
     // once in ANY context, so a range-slice null-seam operand no longer
-    // needs the #1849 helper (or any spill) at all — see the two
+    // needs a block spill at all — see the two
     // RangeSlice* cases below, kept here as the exact reproducers #1731 N1
     // originally reported as unsupported, updated to assert the current
     // native-form behavior. ------------------------------------------------
 
     [Fact]
-    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_LowersToHelper()
+    public void FieldInitializer_PatternScrutineeSideEffectingReceiver_LowersToNativeBlock()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -338,12 +329,10 @@ namespace Demo
     }
 }");
 
-        // Issue #1849: the field initializer is lowered to a call to a
-        // synthesized private static helper, so `GetA()` is evaluated exactly
-        // once (as the helper-call argument) instead of once per sub-pattern
-        // test (the #1731 N1 gap this used to report as Unsupported).
+        // Issue #3355: the field initializer hosts its spill directly.
         Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
-        Assert.Contains("__init0(", printed);
+        Assert.Contains("let __spill", printed);
+        Assert.DoesNotContain("__init", printed);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));
@@ -379,7 +368,7 @@ namespace Demo
     }
 
     [Fact]
-    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_LowersToHelper()
+    public void BaseConstructorArgument_PatternScrutineeSideEffectingReceiver_LowersToNativeBlock()
     {
         (string printed, TranslationContext context) = TranslateUnitWithContext(@"
 namespace Demo
@@ -404,7 +393,9 @@ namespace Demo
 }");
 
         Assert.Equal(2, CountOccurrences(printed, "GetA()")); // 1 declaration + 1 call-site use
-        Assert.Contains(": base(__init0(", printed);
+        Assert.Contains(": base({", printed);
+        Assert.Contains("let __spill", printed);
+        Assert.DoesNotContain("__init", printed);
         Assert.DoesNotContain(
             context.Diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("1731 N1"));

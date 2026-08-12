@@ -268,6 +268,14 @@ internal sealed class ConversionClassifier
     /// already reported).</returns>
     public BoundExpression BindConversion(ExpressionSyntax syntax, TypeSymbol type, bool allowExplicit = false)
     {
+        // Issue #3355: bind a block against its target before converting so
+        // target-only trailing forms (`default`, untyped lambdas, branchy
+        // expressions) receive their expected type.
+        if (syntax is BlockExpressionSyntax)
+        {
+            return bindExpressionWithTargetType(syntax, type);
+        }
+
         // ADR-0055 Tier 4: contextual conversion of an interpolated string to
         // IFormattable/FormattableString. Handled here, before eager string
         // lowering, so the format/alignment intent is preserved.

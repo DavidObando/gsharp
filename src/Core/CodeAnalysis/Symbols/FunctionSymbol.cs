@@ -452,6 +452,9 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
     internal bool IsStaticInitializer { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether statements are being bound inside a field or constructor-initializer expression.</summary>
+    internal bool IsExpressionInitializer { get; set; }
+
     internal NullableSequenceSpecializationKind NullableSequenceSpecialization { get; set; }
 
     /// <summary>

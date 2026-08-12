@@ -231,7 +231,8 @@ internal sealed partial class ExpressionBinder
             && (syntax is IfExpressionSyntax
                 || syntax is IfLetExpressionSyntax
                 || syntax is ConditionalExpressionSyntax
-                || syntax is SwitchExpressionSyntax))
+                || syntax is SwitchExpressionSyntax
+                || syntax is BlockExpressionSyntax))
         {
             return BindExpression(syntax, nonNullTargetType);
         }
